@@ -1506,6 +1506,7 @@ export function InterceptPage(): JSX.Element {
    <div>
     <PageHeader
      title="Intercept"
+     settingsSection="proxy"
      actions={
       <>
        <Badge tone={data?.wired ? "good" : "warn"}>{data?.wired ? "wired" : "not wired"}</Badge>

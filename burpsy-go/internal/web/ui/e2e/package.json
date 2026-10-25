@@ -6,7 +6,8 @@
   "scripts": {
     "test": "playwright test",
     "typecheck": "tsc --noEmit -p .",
-    "browsers": "playwright install chromium"
+    "browsers": "playwright install chromium",
+    "uat": "playwright test -c playwright.uat.config.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.12.1",

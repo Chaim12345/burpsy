@@ -66,6 +66,8 @@ import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
 import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
 import { FileLoggingSection } from "./settings.logging";
 import { ScanConfigDetail } from "./settings.scanconfig";
+import { autoBackupSchema, backupNowSchema, probeSchema } from "../lib/form-schemas";
+import { useZodForm } from "../lib/use-zod-form";
 
 const THEMES: { value: Theme; label: string }[] = [
  { value: "system", label: "Follow the system" },
@@ -270,43 +272,40 @@ export function ScopeSection(): JSX.Element {
  );
 }
 
-function ProtocolSection(): JSX.Element {
+export function ProtocolSection(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useProtocols();
  const probe = useSendFrameProgram();
- const [host, setHost] = useState("");
- const [port, setPort] = useState("443");
- const [tls, setTls] = useState(true);
+ // The probe form (vlrh): text fields, validated and converted by probeSchema.
+ const form = useZodForm(probeSchema, { host: "", port: "443", tls: true });
  const [result, setResult] = useState<FrameProgramResponse | null>(null);
 
  const downgrades = Object.entries(data?.downgrades ?? {});
 
  // Shown beside the disabled Probe button (z2l5): the host placeholder is an example, not a value.
- const probePort = Number(port.trim());
- const probeMissing = !host.trim() ? "needs a host" : !Number.isInteger(probePort) || probePort <= 0 ? "needs a port" : null;
+ const probeCheck = probeSchema.safeParse(form.watch());
+ const probeMissing = probeCheck.success ? null : probeCheck.error.issues[0]?.path[0] === "host" ? "needs a host" : "needs a port";
 
- const runProbe = () => {
-  const parsedPort = Number(port.trim());
-  if (!host.trim() || !Number.isInteger(parsedPort) || parsedPort <= 0) {
-   toast.error("A probe needs a host and a port");
-   return;
-  }
-  probe.mutate(
-   // No frames: the preface goes out and the reply is read, which is what
-   // reports the negotiated protocol. Still authorised against scope server-side.
-   { host: host.trim(), port: parsedPort, tls, preface: true, read_for_ms: 750, frames: [] },
-   {
-    onSuccess: (response) => {
-     setResult(response);
-     if (response.error) toast.error(response.error);
-     else toast.success(`Negotiated ${response.negotiated || "nothing"} with ${host.trim()}`);
+ const runProbe = form.handleSubmit(
+  ({ host, port, tls }) => {
+   probe.mutate(
+    // No frames: the preface goes out and the reply is read, which is what
+    // reports the negotiated protocol. Still authorised against scope server-side.
+    { host, port, tls, preface: true, read_for_ms: 750, frames: [] },
+    {
+     onSuccess: (response) => {
+      setResult(response);
+      if (response.error) toast.error(response.error);
+      else toast.success(`Negotiated ${response.negotiated || "nothing"} with ${host}`);
+     },
+     onError: (failure: unknown) => {
+      setResult(null);
+      toast.error(failure instanceof Error ? failure.message : "Probe failed");
+     },
     },
-    onError: (failure: unknown) => {
-     setResult(null);
-     toast.error(failure instanceof Error ? failure.message : "Probe failed");
-    },
-   },
-  );
- };
+   );
+  },
+  () => toast.error("A probe needs a host and a port"),
+ );
 
  return (
   <Card>
@@ -377,23 +376,17 @@ function ProtocolSection(): JSX.Element {
    />
    <Toolbar>
     <Field label="Host">
-     {(id) => <Input id={id} value={host} placeholder="api.example.com" onChange={(event) => setHost(event.target.value)} />}
+     {(id) => <Input id={id} placeholder="api.example.com" {...form.register("host")} />}
     </Field>
     <Field label="Port">
      {(id) => (
-      <Input
-       id={id}
-       value={port}
-       inputMode="numeric"
-       onChange={(event) => setPort(event.target.value)}
-       style={{ maxWidth: "var(--w-xs)" }}
-      />
+      <Input id={id} inputMode="numeric" style={{ maxWidth: "var(--w-xs)" }} {...form.register("port")} />
      )}
     </Field>
     <Field label="TLS" htmlFor="protocol-probe-tls">
-     <Switch id="protocol-probe-tls" label="Use TLS for the probe" checked={tls} onCheckedChange={setTls} />
+     <Switch id="protocol-probe-tls" label="Use TLS for the probe" checked={form.watch("tls")} onCheckedChange={(on) => form.setValue("tls", on)} />
     </Field>
-    <NeedsValueButton onClick={runProbe} disabled={probe.isPending} missing={probeMissing}>
+    <NeedsValueButton onClick={() => void runProbe()} disabled={probe.isPending} missing={probeMissing}>
      <Radar size={13} />
      {probe.isPending ? "Probing…" : "Probe negotiation"}
     </NeedsValueButton>
@@ -2241,10 +2234,20 @@ function MessageEditorSection(): JSX.Element {
  * code — a scheduled backup and a clicked one are one path, so the scheduled one cannot be the
  * version nobody watches.
  */
-function ProjectBackupSection(): JSX.Element {
+export function ProjectBackupSection(): JSX.Element {
  const backup = useBackupNow();
- const [dir, setDir] = useState("");
- const [retention, setRetention] = useState("7");
+ const form = useZodForm(backupNowSchema, { dir: "", retention: "7" });
+ const runBackup = form.handleSubmit((options) =>
+  backup.mutate(options, {
+   onSuccess: (result) =>
+    // The warning is surfaced rather than swallowed: "backed up, but beside the live
+    // database" and "backed up" are different outcomes.
+    result.warning
+     ? toast.warning(`Snapshot written to ${result.path} — ${result.warning}`)
+     : toast.success(`Snapshot written to ${result.path}; kept ${result.kept}, pruned ${result.pruned}`),
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Backup failed"),
+  }),
+ );
 
  return (
   <Card>
@@ -2259,8 +2262,7 @@ function ProjectBackupSection(): JSX.Element {
      id="backup-dir"
      aria-label="Backup directory"
      placeholder="blank writes beside the live database — worst place if the disk is what fails"
-     value={dir}
-     onChange={(event) => setDir(event.target.value)}
+     {...form.register("dir")}
     />
     <label htmlFor="backup-retention">Keep</label>
     <Input
@@ -2268,32 +2270,17 @@ function ProjectBackupSection(): JSX.Element {
      aria-label="How many snapshots to keep"
      type="number"
      min={-1}
-     value={retention}
-     onChange={(event) => setRetention(event.target.value)}
+     aria-invalid={form.formState.errors.retention ? true : undefined}
+     {...form.register("retention")}
     />
    </div>
+   {form.formState.errors.retention ? (
+    <p className="field-hint" role="alert">
+     {form.formState.errors.retention.message}
+    </p>
+   ) : null}
    <Toolbar>
-    <Button
-     size="small"
-     disabled={backup.isPending}
-     onClick={() =>
-      backup.mutate(
-       { dir: dir.trim() || undefined, retention: Number(retention) || undefined },
-       {
-        onSuccess: (result) =>
-         // The warning is surfaced rather than swallowed: "backed up, but beside the live
-         // database" and "backed up" are different outcomes.
-         result.warning
-          ? toast.warning(`Snapshot written to ${result.path} — ${result.warning}`)
-          : toast.success(
-           `Snapshot written to ${result.path}; kept ${result.kept}, pruned ${result.pruned}`,
-          ),
-        onError: (failure: unknown) =>
-         toast.error(failure instanceof Error ? failure.message : "Backup failed"),
-       },
-      )
-     }
-    >
+    <Button size="small" disabled={backup.isPending} onClick={() => void runBackup()}>
      {backup.isPending ? "Backing up…" : "Back up now"}
     </Button>
     <span style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
@@ -2324,43 +2311,32 @@ function ProjectBackupSection(): JSX.Element {
 function AutomaticBackup(): JSX.Element {
  const config = useBackupConfig();
  const save = useSaveBackupConfig();
- // Drafts start null so a background refetch cannot clobber an in-progress edit; they fall back to the
- // saved value until the operator types.
- const [intervalDraft, setIntervalDraft] = useState<string | null>(null);
- const [dirDraft, setDirDraft] = useState<string | null>(null);
- const [retentionDraft, setRetentionDraft] = useState<string | null>(null);
-
  const saved = config.data;
- const interval = intervalDraft ?? (saved ? String(saved.interval_minutes) : "0");
- const autoDir = dirDraft ?? (saved?.dir ?? "");
- const autoRetention = retentionDraft ?? (saved ? String(saved.retention) : "7");
+ // Saved values fill the fields until the operator types; a background refetch never clobbers an
+ // edit in progress (keepDirtyValues in useZodForm).
+ const form = useZodForm(
+  autoBackupSchema,
+  { interval: "0", dir: "", retention: "7" },
+  saved ? { interval: String(saved.interval_minutes), dir: saved.dir ?? "", retention: String(saved.retention) } : undefined,
+ );
  const deleteOnShutdown = saved?.delete_on_shutdown ?? false;
- const dirty = intervalDraft !== null || dirDraft !== null || retentionDraft !== null;
+ const dirty = form.formState.isDirty;
 
- const commit = (patch: { delete_on_shutdown?: boolean }) => {
-  const minutes = Number(interval);
-  if (!Number.isInteger(minutes) || minutes < 0) {
-   toast.error("The backup interval must be a whole number of minutes (0 turns it off).");
-   return;
-  }
-  save.mutate(
-   {
-    interval_minutes: minutes,
-    dir: autoDir.trim(),
-    retention: Number(autoRetention) || 0,
-    delete_on_shutdown: patch.delete_on_shutdown ?? deleteOnShutdown,
-   },
-   {
-    onSuccess: () => {
-     setIntervalDraft(null);
-     setDirDraft(null);
-     setRetentionDraft(null);
-     toast.success(minutes === 0 ? "Automatic backup turned off." : `Automatic backup every ${minutes} minute${minutes === 1 ? "" : "s"}.`);
-    },
-    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save the backup setting"),
-   },
-  );
- };
+ const commit = (patch: { delete_on_shutdown?: boolean }) =>
+  void form.handleSubmit(
+   ({ interval_minutes, dir, retention }) =>
+    save.mutate(
+     { interval_minutes, dir, retention, delete_on_shutdown: patch.delete_on_shutdown ?? deleteOnShutdown },
+     {
+      onSuccess: () => {
+       form.reset(form.getValues());
+       toast.success(interval_minutes === 0 ? "Automatic backup turned off." : `Automatic backup every ${interval_minutes} minute${interval_minutes === 1 ? "" : "s"}.`);
+      },
+      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save the backup setting"),
+     },
+    ),
+   (errors) => toast.error(errors.interval?.message ?? errors.retention?.message ?? "Check the backup settings."),
+  )();
 
  return (
   <div className="stack" style={{ marginBottom: "var(--gap)" }}>
@@ -2373,8 +2349,7 @@ function AutomaticBackup(): JSX.Element {
       type="number"
       min={0}
       style={{ maxWidth: 120 }}
-      value={interval}
-      onChange={(event) => setIntervalDraft(event.target.value)}
+      {...form.register("interval")}
      />
      <span className="cell-dim">minutes — 0 is off</span>
     </div>
@@ -2383,8 +2358,7 @@ function AutomaticBackup(): JSX.Element {
      id="auto-backup-dir"
      aria-label="Automatic backup directory"
      placeholder="blank writes beside the live database"
-     value={autoDir}
-     onChange={(event) => setDirDraft(event.target.value)}
+     {...form.register("dir")}
     />
     <label htmlFor="auto-backup-retention">Keep</label>
     <Input
@@ -2393,8 +2367,7 @@ function AutomaticBackup(): JSX.Element {
      type="number"
      min={-1}
      style={{ maxWidth: 120 }}
-     value={autoRetention}
-     onChange={(event) => setRetentionDraft(event.target.value)}
+     {...form.register("retention")}
     />
    </div>
    <Switch

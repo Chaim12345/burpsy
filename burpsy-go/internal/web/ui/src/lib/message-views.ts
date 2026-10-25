@@ -173,9 +173,9 @@ export function charIndexToByteOffset(value: string, charIndex: number): number 
  * Map a position in a CodeMirror document back to the position it names in the raw
  * `value` string (burpsy-react-ui-c6oq).
  *
- * CM6 normalises line breaks in the document: "\r\n" and "\r" both become "\n"
- * (the editor's rawTextRef comment says so), so an editor selection indexes the
- * NORMALISED text while the audit span the server wants indexes the raw bytes. Every
+ * The editor's document counts a line break as ONE position whatever its spelling
+ * (lineSeparator, lib/editor-eol.ts), so an editor selection indexes the
+ * SHORTENED text while the audit span the server wants indexes the raw bytes. Every
  * "\r" between the two spellings is a one-byte shift: a selection on the third header
  * line of a CRLF request is two ahead in the document of where it sits in the request.
  *
@@ -617,8 +617,8 @@ export function paramsOf(raw: string): ParamReport {
 
 /**
  * The line-ending glyphs Burp's \n toggle names (burpsy-react-ui-1e4): which break bytes
- * actually separate the lines of this text, in order. CodeMirror normalises CRLF to LF the
- * moment it parses a document, so the document can no longer tell a CRLF message from an LF
+ * actually separate the lines of this text, in order. CodeMirror joins lines with its
+ * separator rather than the message's own spelling when read with doc.toString(), so that cannot tell a CRLF message from an LF
  * one - and certifying "LF only" on a CRLF message is the one wrong answer this toggle must
  * never give. Reading the breaks off the raw message text keeps the glyphs honest; the raw
  * text and the rendered document agree line-for-line (every break spelling still breaks

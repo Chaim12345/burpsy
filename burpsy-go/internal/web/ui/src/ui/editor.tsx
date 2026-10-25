@@ -1,8 +1,8 @@
 import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
-import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
-import { normalizeEol, realText, realTextOf, reconcile, selectionText, selectionTransformSpec } from "../lib/editor-eol";
-import CodeMirror from "@uiw/react-codemirror";
+import { EditorState, Prec, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
+import { documentText, lineSeparatorFor, selectionText, selectionTransformSpec } from "../lib/editor-eol";
+import CodeMirror, { ExternalChange } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -44,6 +44,7 @@ import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { extraEditorTabs } from "../lib/editor-extra-tabs";
+import { inlineDiffExtension } from "../lib/inline-diff";
 import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
 import { INTROSPECTION_QUERY, LEGACY_INTROSPECTION_QUERY, setGraphQLQuery } from "../lib/graphql-introspection";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
@@ -359,30 +360,32 @@ class EOLMarker extends WidgetType {
  }
 }
 
-function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
+function buildEOLMarkers(view: EditorView): DecorationSet {
  const builder = new RangeSetBuilder<Decoration>();
  const doc = view.state.doc;
- const glyphs = breakGlyphs(raw);
+ // Every line of this document ends in the message's separator (EditorState.lineSeparator, set in
+ // markedExtensions), so naming it names every break; a break of another kind inside a line is a
+ // character, drawn by nonPrintingGlyphs.
+ const glyph = breakGlyphs(view.state.lineBreak)[0];
  for (let lineNo = 1; lineNo <= doc.lines; lineNo += 1) {
   const line = doc.line(lineNo);
   // The final line has no break after it (a document ending in a break grows an empty
   // final line instead), so there is nothing to name there.
   if (line.to >= doc.length) break;
-  const glyph = glyphs[lineNo - 1];
   if (glyph) builder.add(line.to, line.to, Decoration.widget({ widget: new EOLMarker(glyph), side: 1 }));
  }
  return builder.finish();
 }
 
-function nonPrintingEOLPlugin(rawRef: { current: string }) {
+function nonPrintingEOLPlugin() {
  return ViewPlugin.fromClass(
   class {
    decorations: DecorationSet;
    constructor(view: EditorView) {
-    this.decorations = buildEOLMarkers(view, rawRef.current);
+    this.decorations = buildEOLMarkers(view);
    }
    update(update: ViewUpdate) {
-    if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view, rawRef.current);
+    if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view);
    }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -505,8 +508,8 @@ const burpEditorKeys = Prec.high(
    if (event.altKey && !event.shiftKey && event.code === "KeyC") {
     event.preventDefault();
     const sel = view.state.selection.main;
-    // Real text, CR bytes included (burpsy-react-ui-eslt): the document alone has every CRLF as "\n".
-    const text = sel.empty ? prettyMessage(realTextOf(view.state) ?? view.state.doc.toString()) : selectionText(view.state);
+    // The message's own text, CR bytes included (burpsy-react-ui-elam).
+    const text = sel.empty ? prettyMessage(documentText(view.state)) : selectionText(view.state);
     void copyToClipboard(text).then(() => toast.success(sel.empty ? "Copied the message, prettified" : "Copied the selection"));
     return true;
    }
@@ -636,6 +639,7 @@ export function HttpEditor({
  menuGroups,
  payloadMarks,
  changeMarks,
+ compareWith,
  saveGraphQLToSiteMap,
  auditSelection,
  onBodyBytesChange,
@@ -688,6 +692,13 @@ export function HttpEditor({
   * the wrong thing there.
   */
  changeMarks?: ChangeMark[];
+ /**
+  * The previous response, to lay over this one as an inline diff (burpsy-react-ui-6ibj,
+  * lib/inline-diff.ts). Raw view only, where the document is the message itself; Pretty and the
+  * charset override show a different text, so a diff there would name the wrong lines. Replaces
+  * `changeMarks` while set: the two highlight the same changes in different ways.
+  */
+ compareWith?: string;
  /**
   * Burp's GraphQL > "Save GraphQL queries to site map" (7v1e). Given by a surface that knows the
   * exchange behind the message (Repeater); `enabled` says whether that exchange's response is an
@@ -780,7 +791,9 @@ export function HttpEditor({
  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
  // listener closes over it; per-editor, so two editors do not fight over one marker.
  const lastSearchSpecRef = useRef("");
- const rawTextRef = useRef("");
+ // The text this editor last handed to onChange, and the separator its state was built with.
+ const emittedRef = useRef<string | null>(null);
+ const separatorRef = useRef<"\r\n" | "\r" | "\n">("\n");
  // onRawSelection's inputs, refreshed every render (below, once `active` exists) so the selection
  // listener inside the memoised extensions reads the current callback, view and text.
  const rawSelectionRef = useRef<{
@@ -844,9 +857,6 @@ export function HttpEditor({
     },
    ),
    burpEditorKeys,
-   // The message's real text beside CodeMirror's CR-less document, for every read and write that
-   // must keep its line endings (lib/editor-eol.ts, burpsy-react-ui-eslt).
-   realText.of(rawTextRef),
    EditorView.contentAttributes.of({ "aria-label": label }),
    // Keeps the codec menu entries honest about whether they have anything to act on.
    EditorView.updateListener.of((update) => {
@@ -897,7 +907,7 @@ export function HttpEditor({
    }),
   ];
   if (wrap) base.push(EditorView.lineWrapping);
-  if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
+  if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin());
   // URL-encode as you type (burpsy-react-ui-js1). A transaction filter, added only when the
   // persisted toggle is on: it rewrites the user's typed insert through the same
   // urlEncodeKeyChars the ctrl+U chord uses, so the operator sees %26 land under their cursor
@@ -1144,13 +1154,12 @@ export function HttpEditor({
  const hiding = active === "pretty" && hideList.length > 0 && (hidePicked ?? hideHeadersByDefault);
  const shown =
   active === "pretty" && hiding ? hideHeadersIn(prettied, hideList) : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
- // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
- // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
- // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
- // whole extension set on every keystroke. This must stay outside that useMemo: its factory
- // runs on mount, before this line exists, which is a first-render TDZ crash.
- rawTextRef.current = shown;
- const shownDoc = useMemo(() => normalizeEol(shown), [shown]);
+ // The line separator CodeMirror splits this message on (lib/editor-eol.ts, burpsy-react-ui-elam).
+ // It is fixed when the state is built, so it is re-derived only when the text changed under the
+ // editor (a new message, a tab switch) and never from the operator's own typing: pasting a CRLF
+ // into an LF message must not rebuild the editor and drop the caret and the undo history.
+ if (shown !== emittedRef.current) separatorRef.current = lineSeparatorFor(shown);
+ const separator = separatorRef.current;
  // Raw edits are the bytes; a Pretty edit is the operator editing the readable form, written back
  // through compactMessage so the wire keeps the body compacted exactly as it was
  // (burpsy-react-ui-dmf) — the same deal Burp offers ("In this tab, you can access all the same
@@ -1173,9 +1182,11 @@ export function HttpEditor({
     : undefined;
  const cmOnChange = useMemo(() => {
   if (!writeDoc || !onChange) return undefined;
-  return (doc: string, update: ViewUpdate) => {
-   const next = reconcile(rawTextRef.current, update.transactions) ?? doc;
-   rawTextRef.current = next;
+  return (_doc: string, update: ViewUpdate) => {
+   // sliceDoc joins lines with the state's separator, so the message comes back byte for byte;
+   // the `doc` string the wrapper passes joins with "\n" whatever the separator is.
+   const next = documentText(update.state);
+   emittedRef.current = next;
    onChange(writeDoc === "pretty" ? compactMessage(next) : next);
   };
  }, [writeDoc, onChange]);
@@ -1188,10 +1199,12 @@ export function HttpEditor({
  // The change marks join the extensions only on the unconverted Raw text, where `value` and the
  // document are the same characters (CRLF aside, which changeDecorations maps).
  const markedExtensions = useMemo(() => {
-  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return extensions;
-  const docLength = value.length - (value.match(/\r\n/g)?.length ?? 0);
-  return [...extensions, changeDecorations(value, docLength, changeMarks)];
- }, [extensions, changeMarks, active, charsetActive, value]);
+  const withSeparator = [...extensions, EditorState.lineSeparator.of(separator)];
+  if (compareWith != null && active === "raw" && !charsetActive) return [...withSeparator, inlineDiffExtension(compareWith, separator)];
+  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return withSeparator;
+  const docLength = value.length - (separator === "\r\n" ? (value.match(/\r\n/g)?.length ?? 0) : 0);
+  return [...withSeparator, changeDecorations(value, docLength, changeMarks)];
+ }, [extensions, changeMarks, compareWith, active, charsetActive, value, separator]);
  const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
@@ -1212,6 +1225,18 @@ export function HttpEditor({
  const cmViewRef = useRef<EditorView | null>(null);
  const [cmEpoch, setCmEpoch] = useState(0);
  const [reveal, setReveal] = useState<{ from: number; to: number } | null>(null);
+ // Keeps the document equal to `shown`. Compared as the message's own text (documentText), so a
+ // CRLF message is not "different" on every render, and written with ExternalChange so the
+ // wrapper does not echo it back through onChange; kept out of undo history, which is the
+ // operator's edits only.
+ useEffect(() => {
+  const cm = cmViewRef.current;
+  if (!cm || documentText(cm.state) === shown) return;
+  cm.dispatch({
+   changes: { from: 0, to: cm.state.doc.length, insert: shown },
+   annotations: [ExternalChange.of(true), Transaction.addToHistory.of(false)],
+  });
+ }, [shown, cmEpoch]);
  useEffect(() => {
   if (!reveal || active !== "raw") return;
   const cm = cmViewRef.current;
@@ -1874,10 +1899,11 @@ export function HttpEditor({
       <AttributesTab raw={value} />
      ) : (
       <CodeMirror
-       // The CR-less form CodeMirror builds its document from anyway. Handing it the CRLF text made
-       // its value sync see a mismatch on every render; with the real text now kept through edits
-       // (cmOnChange) that would replace the whole document, and the caret with it, after each keystroke.
-       value={shownDoc}
+       // The separator is baked into the state, so a different one means a new editor.
+       key={JSON.stringify(separator)}
+       // No `value`: the wrapper compares it with doc.toString(), which joins lines with "\n" whatever
+       // the separator, so a CRLF message would look changed on every render. The document is synced
+       // from `shown` by the effect above, comparing real text (documentText) instead.
        onChange={cmOnChange}
        editable={editable && !charsetActive && !hiding && (active === "raw" || active === "pretty")}
        readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}

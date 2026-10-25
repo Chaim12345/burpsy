@@ -1,7 +1,9 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { Component, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { cn } from "../lib/cn";
+import { requestSettingsSection, type SettingsSectionId } from "../lib/settings-sections";
+import { useApp } from "../lib/store";
 import { Button, IconButton, Spinner } from "./primitives";
 import { Columns2, Rows2, Square } from "lucide-react";
 
@@ -14,12 +16,30 @@ export function PageHeader({
  eyebrow,
  description,
  actions,
+ settingsSection,
 }: {
  title: string;
  eyebrow?: string;
  description?: string;
  actions?: ReactNode;
+ /**
+  * Burp puts a settings icon on each tool that opens that tool's settings in place (zpka). Here it
+  * takes the operator to the named Settings section, the one place those settings live.
+  */
+ settingsSection?: SettingsSectionId;
 }): JSX.Element {
+ const setRoute = useApp((state) => state.setRoute);
+ const cog = settingsSection ? (
+  <IconButton
+   label={`Open ${title} settings`}
+   onClick={() => {
+    requestSettingsSection(settingsSection);
+    setRoute("settings");
+   }}
+  >
+   <SlidersHorizontal size={14} />
+  </IconButton>
+ ) : null;
  return (
   <div className="page-header">
    <div className="page-header-text">
@@ -29,7 +49,12 @@ export function PageHeader({
     </h1>
     {description ? <p>{description}</p> : null}
    </div>
-   {actions ? <div className="page-actions">{actions}</div> : null}
+   {actions || cog ? (
+    <div className="page-actions">
+     {actions}
+     {cog}
+    </div>
+   ) : null}
   </div>
  );
 }

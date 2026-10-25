@@ -16,5 +16,5 @@
     // that does not compile is a test that is not running.
     "types": ["bun"]
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

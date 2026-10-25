@@ -1,3 +1,4 @@
+import { cn } from "./lib/cn";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { PlatformAuthPrompt } from "./ui/platform-auth-prompt";
 import { scopeAllowsEverything } from "./lib/scope-state";
@@ -51,7 +52,8 @@ import {
  serializeAttackConfig,
 } from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
-import { settingsPaletteActions } from "./lib/settings-sections";
+import { requestSettingsSection, settingsPaletteActions } from "./lib/settings-sections";
+import { helpMenuGroups } from "./lib/help-menu";
 import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
 import { THEME_SLOTS, themeTokenVars } from "./lib/theme-import";
 import type { Exchange, MessageView } from "./lib/types";
@@ -60,9 +62,10 @@ import { useChord, useCommandChord, useKeymap } from "./lib/keymap";
 import { commandsVersion, hasCommand, runCommand, subscribeCommands, unavailableReason, useCommandHandler } from "./lib/commands";
 import { catalogueCommands } from "./lib/palette-commands";
 import { usePluginHotkeys } from "./lib/plugin-hotkeys";
-import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
+import { clearHiddenToolTabs, clearToolTabOrder, moveToolTab, orderToolTabs, readHiddenToolTabs, readToolTabOrder, writeHiddenToolTabs, writeToolTabOrder } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
+import { BottomDock } from "./ui/bottom-dock";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
@@ -324,6 +327,24 @@ function App(): JSX.Element {
  // this lives; the tab keeps working when hidden — hotkeys, the palette and links into its routes
  // all still reach it — so hiding is a statement about chrome, never about capability.
  const [hiddenTools, setHiddenTools] = useState<string[]>(() => readHiddenToolTabs());
+ // The operator's tab order (sk29): dragging a tab along the strip, remembered across reloads.
+ const [toolOrder, setToolOrder] = useState<string[]>(() => readToolTabOrder());
+ const [draggedTool, setDraggedTool] = useState<string | null>(null);
+ const [dragOverTool, setDragOverTool] = useState<string | null>(null);
+ const orderedTools = orderToolTabs(TOOLS, toolOrder);
+ const dropTool = (onto: string) => {
+  if (draggedTool && draggedTool !== onto) {
+   const next = moveToolTab(
+    orderedTools.map((entry) => entry.id),
+    draggedTool,
+    onto,
+   );
+   setToolOrder(next);
+   writeToolTabOrder(next);
+  }
+  setDraggedTool(null);
+  setDragOverTool(null);
+ };
  const setToolHidden = (id: string, hidden: boolean) => {
   const next = hidden ? [...new Set([...hiddenTools, id])] : hiddenTools.filter((entry) => entry !== id);
   setHiddenTools(next);
@@ -1129,6 +1150,8 @@ function App(): JSX.Element {
  }, [themeChord, navigate, requestRepeaterTabSearch, repeaterTabSearchChord, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
+ // The Dashboard already shows both lists in full, so the dock would only repeat it there.
+ const showDock = route !== "dashboard";
 
  /**
   * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files;
@@ -1347,7 +1370,7 @@ function App(): JSX.Element {
      // a navigate: a hidden tab is still reachable by hotkey and by the command palette.
      title: "Top-level tabs",
      actions: [
-      ...TOOLS.map((entry) => ({
+      ...orderedTools.map((entry) => ({
        id: `tab-${entry.id}`,
        label: entry.label,
        checked: !hiddenTools.includes(entry.id),
@@ -1358,11 +1381,13 @@ function App(): JSX.Element {
        id: "restore-tabs",
        label: "Restore default tab layout",
        icon: RotateCcw,
-       disabled: hiddenTools.length === 0,
+       disabled: hiddenTools.length === 0 && toolOrder.length === 0,
        onSelect: () => {
         clearHiddenToolTabs();
+        clearToolTabOrder();
         setHiddenTools([]);
-        toast.success("Showing every top-level tab");
+        setToolOrder([]);
+        toast.success("Showing every top-level tab in the default order");
        },
       },
      ],
@@ -1423,15 +1448,15 @@ function App(): JSX.Element {
   },
   {
    label: "Help",
-   groups: [
-    {
-     id: "help",
-     actions: [
-      { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
-      { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: () => setPaletteOpen(true) },
-     ],
+   groups: helpMenuGroups({
+    openShortcuts: () => setShortcutsOpen(true),
+    openPalette: () => setPaletteOpen(true),
+    openDocumentation: () => navigate("discover"),
+    openDiagnostics: () => {
+     requestSettingsSection("diagnostics");
+     navigate("settings");
     },
-   ],
+   }),
   },
  ];
 
@@ -1440,7 +1465,7 @@ function App(): JSX.Element {
    <a className="skip-link" href="#main-content">
     Skip to workspace
    </a>
-   <div className={hasSubTabs ? "app-shell has-subtabs" : "app-shell"}>
+   <div className={`app-shell${hasSubTabs ? " has-subtabs" : ""}${showDock ? " has-dock" : ""}`}>
     {/* Menu bar, above the tool tabs as in Burp. Hidden on narrow viewports,
             where the command palette reaches the same actions. */}
     <div className="menu-bar">
@@ -1465,7 +1490,7 @@ function App(): JSX.Element {
       <span className="brand-name">burpsy</span>
      </div>
      <nav className="tool-tabs" aria-label="Tools">
-      {TOOLS.filter((entry) => !hiddenTools.includes(entry.id)).map((entry) => {
+      {orderedTools.filter((entry) => !hiddenTools.includes(entry.id)).map((entry) => {
        const Icon = entry.icon;
        const current = entry.id === tool.id;
        const signal = attentionFor(attention, entry.id);
@@ -1498,7 +1523,29 @@ function App(): JSX.Element {
         >
          <button
           type="button"
-          className={current ? "tool-tab tool-tab-active" : "tool-tab"}
+          className={cn(current ? "tool-tab tool-tab-active" : "tool-tab", dragOverTool === entry.id && draggedTool !== entry.id && "tool-tab-dragover")}
+          // Drag a tab along the strip to reorder it (sk29); the order is saved per browser.
+          draggable
+          onDragStart={(event) => {
+           setDraggedTool(entry.id);
+           event.dataTransfer.effectAllowed = "move";
+           event.dataTransfer.setData("text/plain", entry.id);
+          }}
+          onDragOver={(event) => {
+           if (!draggedTool) return;
+           event.preventDefault();
+           event.dataTransfer.dropEffect = "move";
+           setDragOverTool(entry.id);
+          }}
+          onDragLeave={() => setDragOverTool((over) => (over === entry.id ? null : over))}
+          onDrop={(event) => {
+           event.preventDefault();
+           dropTool(entry.id);
+          }}
+          onDragEnd={() => {
+           setDraggedTool(null);
+           setDragOverTool(null);
+          }}
           aria-current={current ? "page" : undefined}
           // The count is in the tab before the tooltip is read, because a tooltip is not a
           // signal: it needs a hover, and the operator is on another page with a stalled
@@ -1581,6 +1628,8 @@ function App(): JSX.Element {
       <ActivePage key={projectEpoch} />
      </ErrorBoundary>
     </main>
+
+    {showDock ? <BottomDock /> : null}
 
     {/* The status bar as a landmark (burpsy-react-ui-4t8a): a <footer> gives
             screen-reader users a navigable contentinfo region, so the status text is

@@ -1139,6 +1139,7 @@ export function SequencerPage(): JSX.Element {
   <div className="page">
    <PageHeader
     title="Sequencer"
+    settingsSection="network"
     actions={
      <>
       <Badge tone="info">{source === "paste" ? `${pastedCount} pasted` : `${captured.length} captured`}</Badge>
