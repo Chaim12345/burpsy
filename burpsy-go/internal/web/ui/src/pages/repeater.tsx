@@ -2325,6 +2325,10 @@ function WsHandshakeEditor({ tab, mode }: { tab: RepeaterTab; mode: WsConnection
  // or a retarget must not edit yesterday's bytes.
  useEffect(() => {
   let cancelled = false;
+  // Clear the previous preview while the new authority's head loads: showing the old bytes under
+  // a new target would be editing yesterday's handshake (ws3e review). The stored edit itself is
+  // dropped by updateRepeaterTab when the authority fields change.
+  setPreview(null);
   setError(null);
   const params =
    mode === "clone" && tab.wsSocket !== undefined
@@ -2353,6 +2357,11 @@ function WsHandshakeEditor({ tab, mode }: { tab: RepeaterTab; mode: WsConnection
       placeholder={error ?? "Loading the handshake this send would dial..."}
       onChange={(event) => updateRepeaterTab(tab.id, { wsHandshake: event.target.value })}
      />
+     <p className="text-xs text-foreground-muted">
+      Sent as shown, except the wire invariants, which refresh at send time: Sec-WebSocket-Key gets
+      a fresh nonce (RFC 6455), any extension offer is removed, and the target line goes
+      origin-form. Every other byte is dialed exactly as written.
+     </p>
      {edited !== undefined ? (
       <Button variant="outline" size="small" onClick={() => updateRepeaterTab(tab.id, { wsHandshake: undefined })}>
        Reset to the {mode === "clone" ? "captured" : "synthetic"} handshake

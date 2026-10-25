@@ -91,8 +91,11 @@ type repeaterWsSendReq struct {
 	// and everything else reaches the wire byte for byte, because the edit IS the test. The dial
 	// authority comes from Socket (that connection's target) or Target, never from the edited
 	// Host line - which the operator may legitimately change under test. Refuses Clone: one send
-	// cannot take its negotiation request from two places.
-	Handshake string `json:"handshake,omitempty"`
+	// cannot take its negotiation request from two places. A pointer because an absent field and
+	// an explicitly empty one must not read the same: absent sends the captured or synthetic head,
+	// while "" is an edit that erased the request - refused with its reason rather than silently
+	// dialling a negotiation the operator did not write.
+	Handshake *string `json:"handshake,omitempty"`
 }
 
 // repeaterWsSendResp is the reply.
@@ -283,7 +286,7 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (plan wsSendPlan, code int
 	if err != nil {
 		return wsSendPlan{}, http.StatusBadRequest, err
 	}
-	if req.Handshake != "" {
+	if req.Handshake != nil {
 		return s.prepareWsEditedHandshake(req, opcode)
 	}
 	if req.Clone {

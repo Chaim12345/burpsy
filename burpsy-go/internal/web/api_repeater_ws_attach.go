@@ -172,6 +172,11 @@ func (s *Server) prepareWsClone(req repeaterWsSendReq, opcode core.WsOpcode) (ws
 // Host line stays the operator's to change under test. The gate sees the bytes that will go on
 // the wire, refreshed included, because those are the bytes being authorised.
 func (s *Server) prepareWsEditedHandshake(req repeaterWsSendReq, opcode core.WsOpcode) (wsSendPlan, int, error) {
+	if strings.TrimSpace(*req.Handshake) == "" {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("handshake is present but empty: an " +
+			"edited negotiation request must carry the request to dial. To send the captured or " +
+			"synthetic head instead, clear the edit so the field is absent, not empty")
+	}
 	if req.Clone {
 		return wsSendPlan{}, http.StatusBadRequest, errors.New("clone replays the captured handshake " +
 			"and handshake replaces it - one send cannot take its negotiation request from two places")
@@ -211,7 +216,7 @@ func (s *Server) prepareWsEditedHandshake(req repeaterWsSendReq, opcode core.WsO
 		return wsSendPlan{}, http.StatusBadRequest, errors.New("an edited handshake still needs the " +
 			"authority to dial: a socket whose target to use, or an explicit target")
 	}
-	handshake, err := wsclient.CloneHandshake([]byte(req.Handshake))
+	handshake, err := wsclient.CloneHandshake([]byte(*req.Handshake))
 	if err != nil {
 		return wsSendPlan{}, http.StatusUnprocessableEntity, fmt.Errorf("the edited handshake cannot go on the wire: %v", err)
 	}

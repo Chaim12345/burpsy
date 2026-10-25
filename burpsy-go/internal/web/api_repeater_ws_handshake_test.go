@@ -162,3 +162,44 @@ func TestRepeaterWsHandshakePreviewRefusesBothAndNeither(t *testing.T) {
 		t.Errorf("unknown socket: %d, want 404", rec.Code)
 	}
 }
+
+func TestRepeaterWsSendRefusesAnEmptyEditedHandshake(t *testing.T) {
+	// A cleared editor posts handshake:"" - an edit that erased the request, not the absence of
+	// one. Dialling the captured or synthetic head anyway would send a negotiation the operator
+	// did not write, so the send is refused with the distinction named.
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"target": "ws://placeholder.test", "handshake": "", "opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty handshake: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "present but empty") {
+		t.Errorf("the refusal does not name the empty edit: %s", rec.Body.String())
+	}
+}
+
+func TestRepeaterWsEditedHandshakeRefusesSocketAndTarget(t *testing.T) {
+	// The dial authority is socket XOR target: both naming it is two answers to one question.
+	s := newTestServer()
+	socket := uint64(7)
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"socket": socket, "target": "ws://placeholder.test", "handshake": editedHandshake(),
+		"opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "give one") {
+		t.Fatalf("socket+target: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRepeaterWsEditedHandshakeRefusesAMessageResend(t *testing.T) {
+	// message names a frame to resend; handshake replaces the negotiation request - one send
+	// cannot do both.
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"message": 1, "handshake": editedHandshake(), "opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "give one") {
+		t.Fatalf("message+handshake: %d %s", rec.Code, rec.Body.String())
+	}
+}

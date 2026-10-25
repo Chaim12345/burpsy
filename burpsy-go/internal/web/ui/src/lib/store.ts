@@ -1180,6 +1180,21 @@ export const useApp = create<AppState>()(
       ) {
        next.h2Headers = undefined;
       }
+      // The same rule for a ws tab's edited negotiation request (burpsy-react-ui-ws3e): the edit
+      // was previewed against one authority - a captured connection's or an explicit target's -
+      // so a patch that re-aims the tab (mode, socket, target or path) without itself supplying a
+      // handshake edit drops the stored one rather than dialling yesterday's bytes at today's
+      // target. The editor's own keystrokes patch only wsHandshake and keep it.
+      if (
+       (patch.wsMode !== undefined ||
+        patch.wsSocket !== undefined ||
+        patch.target !== undefined ||
+        patch.wsPath !== undefined) &&
+       !("wsHandshake" in patch) &&
+       tab.wsHandshake !== undefined
+      ) {
+       next.wsHandshake = undefined;
+      }
       return next;
      }),
     })),
