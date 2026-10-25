@@ -35,6 +35,7 @@ package web
 // operator can compare the reply with the original.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -162,8 +163,39 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 	}
 	host, port, tls, path, opcode, payload := plan.host, plan.port, plan.tls, plan.path, plan.opcode, plan.payload
 
+	// The extension websocket hook (burpsy-react-ui-wiwh slice 3, ws_hook.go): "created"
+	// sees the authorised handshake, "message" the frame payload. A created-phase
+	// replacement re-passes the plan's raw-bytes gate against the SAME authority and
+	// must still parse, or the send is refused closed — the bytes on the wire are the
+	// bytes the scope authorised, and the dial target always comes from the plan.
+	// The hooked bytes are what is sent AND what is recorded, the plan's own contract.
+	handshake := plan.handshake
+	if res := s.applyWsHook(r.Context(), "created", handshake); res.Dropped {
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "WS-SEND", path, 0, nil, 0, "dropped by extension hook (created)", nil)
+		http.Error(w, "dropped by extension hook", http.StatusBadGateway)
+		return
+	} else if res.Changed {
+		if aerr := s.scope.AuthoriseRaw(host, port, tls, res.Raw); aerr != nil {
+			http.Error(w, "refused: the extension's handshake rewrite failed the scope gate: "+aerr.Error(), http.StatusForbidden)
+			return
+		}
+		hookPath, perr := wsHandshakePath(res.Raw)
+		if perr != nil {
+			http.Error(w, "refused: the extension's handshake rewrite does not parse: "+perr.Error(), http.StatusForbidden)
+			return
+		}
+		handshake, path = res.Raw, hookPath
+	}
+	if res := s.applyWsHook(r.Context(), "message", payload); res.Dropped {
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "WS-SEND", path, 0, nil, 0, "dropped by extension hook (message)", nil)
+		http.Error(w, "dropped by extension hook", http.StatusBadGateway)
+		return
+	} else if res.Changed {
+		payload = res.Raw
+	}
+
 	started := time.Now()
-	reply, err := wsclient.SendFrameWithHandshake(r.Context(), s.sender, host, port, tls, plan.handshake, wsclient.Frame{Opcode: opcode, Payload: payload})
+	reply, err := wsclient.SendFrameWithHandshake(r.Context(), s.sender, host, port, tls, handshake, wsclient.Frame{Opcode: opcode, Payload: payload})
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 		// The tool log row is written for the same reason the HTTP send writes one: a send
@@ -174,7 +206,7 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.recordWsSend(host, port, tls, path, plan.handshake, opcode, payload, reply, started)
+	resp := s.recordWsSend(host, port, tls, path, handshake, opcode, payload, reply, started)
 	resp.ElapsedMs = elapsed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -190,6 +222,21 @@ type wsSendPlan struct {
 	handshake []byte
 	opcode    core.WsOpcode
 	payload   []byte
+}
+
+// wsHandshakePath re-reads the request line of a hook-rewritten handshake, the rule
+// the proxy's refreshedRequestLine states: what is recorded must agree with what is
+// sent, so a "created" replacement moves the recorded path to the hooked one.
+func wsHandshakePath(handshake []byte) (string, error) {
+	line, _, ok := bytes.Cut(handshake, []byte("\r\n"))
+	if !ok {
+		return "", errors.New("no request line")
+	}
+	parts := strings.Fields(string(line))
+	if len(parts) < 2 || !strings.HasPrefix(parts[1], "/") {
+		return "", fmt.Errorf("request line %q is not an origin-form ws handshake", line)
+	}
+	return parts[1], nil
 }
 
 // wsOpcodeOf parses the opcode a send may carry: data frames only.

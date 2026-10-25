@@ -125,6 +125,8 @@ type Server struct {
 	loginRuns    *sessionLoginRuns
 	intercept    *intercept.Engine
 	persist      *persist.Store
+	// wsHook is the extension websocket seam; see ws_hook.go.
+	wsHook wsHookState
 	// seqSettings is Burp's sequencer.* analysis configuration (burpsy-react-ui-nm81), project-level:
 	// restored by WithPersist, so a project switch brings the incoming project's settings. A nil map
 	// means "never set" and reads as sequencer.DefaultSettings. Guarded by seqMu.

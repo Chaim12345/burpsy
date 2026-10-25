@@ -750,6 +750,14 @@ func main() {
 	// every active-audit probe, and a settings panel that covered the proxy listener but not these
 	// would be the same half-covered defect from the other side.
 	webServer := web.NewServer(store, scope).
+		// Extension websocket handlers see the Repeater's ws sends (burpsy-react-ui-wiwh
+		// slice 3): "created" carries the authorised handshake, "message" the frame. The
+		// adapter keeps internal/web free of the extension package, the same rule as the
+		// sender and proxy adapters.
+		WithWsHook(wsHookFunc(func(ctx context.Context, phase string, raw []byte) web.WsHookResult {
+			res := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindWebSocketHandler, Phase: phase, Raw: raw})
+			return web.WsHookResult{Raw: res.Raw, Changed: res.Changed, Dropped: res.Dropped, Applied: res.Applied, Failures: len(res.Failures)}
+		})).
 		// First in the chain, so everything downstream — including WithPersist's restore and
 		// its save sink — is wired to the log the proxy is already recording into.
 		WithToolLog(toolLog).
@@ -1116,6 +1124,14 @@ func startBlindXSS(ctx context.Context, bind, baseURL string, logger *zap.Logger
 type trafficHookFunc func(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult
 
 func (f trafficHookFunc) HookTraffic(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult {
+	return f(ctx, phase, raw)
+}
+
+// wsHookFunc adapts a plain function to web.WsHook, the way trafficHookFunc does
+// for the proxy's seam.
+type wsHookFunc func(ctx context.Context, phase string, raw []byte) web.WsHookResult
+
+func (f wsHookFunc) HookWs(ctx context.Context, phase string, raw []byte) web.WsHookResult {
 	return f(ctx, phase, raw)
 }
 
