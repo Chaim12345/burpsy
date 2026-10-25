@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { decodeProtobuf, encodeProtobuf, type ProtoField, type ProtoFrame } from "../lib/data.protobuf";
+import {
+ decodeProtobuf,
+ encodeProtobuf,
+ reflectDecodeProtobuf,
+ type ProtoDecodeResponse,
+ type ProtoField,
+ type ProtoFrame,
+ type ProtoReflectTarget,
+} from "../lib/data.protobuf";
 import { useApp } from "../lib/store";
-import { Badge, Button, Input, Select, Textarea } from "./primitives";
+import { Badge, Button, Checkbox, Input, Select, Textarea } from "./primitives";
 
 /**
  * The schemaless protobuf / gRPC field view (burpsy-react-ui-3x2g). An opaque binary body is decoded
@@ -40,11 +48,16 @@ export function ProtobufView({
  const chosen = useApp((state) => state.protoMessages[direction]) ?? "";
  const [messages, setMessages] = useState<string[]>([]);
  const [resolved, setResolved] = useState("");
+ // Set only by a reflection fetch: the names on screen are then the target's claims, not a schema the
+ // operator supplied. Any change of body, schema or message goes back to the local decode below.
+ const [reflected, setReflected] = useState<{ target: string; files: string[] } | null>(null);
+ const [decodeNonce, setDecodeNonce] = useState(0);
 
  useEffect(() => {
   let live = true;
   setError(null);
   setDirty(false);
+  setReflected(null);
   const schema = protoSchema ? { proto: protoSchema.text, message: chosen || undefined, rpc_path: rpcPath, direction } : {};
   decodeProtobuf(bodyBase64, grpc, schema)
    .then((res) => {
@@ -59,7 +72,7 @@ export function ProtobufView({
   return () => {
    live = false;
   };
- }, [bodyBase64, grpc, protoSchema, chosen, rpcPath, direction]);
+ }, [bodyBase64, grpc, protoSchema, chosen, rpcPath, direction, decodeNonce]);
 
  const patchFrame = (fi: number, fields: ProtoField[]) => {
   setFrames((cur) => (cur ? cur.map((f, i) => (i === fi ? { ...f, fields } : f)) : cur));
@@ -79,7 +92,26 @@ export function ProtobufView({
    .finally(() => setApplying(false));
  };
 
- const schemaBar = <SchemaBar direction={direction} messages={messages} resolved={resolved} rpcPath={rpcPath} />;
+ const schemaBar = (
+  <>
+   <SchemaBar direction={direction} messages={messages} resolved={resolved} rpcPath={rpcPath} />
+   <ReflectBar
+    bodyBase64={bodyBase64}
+    grpc={grpc}
+    rpcPath={rpcPath}
+    onResult={(res, target) => {
+     setFrames(res.frames);
+     setMessages(res.messages ?? []);
+     setResolved(res.message ?? "");
+     setError(null);
+     setDirty(false);
+     // Every answer from the reflect call is the target's claim, whether or not the server marked it.
+     setReflected({ target, files: res.schema_files ?? [] });
+    }}
+   />
+   {reflected ? <ReflectionProvenance reflected={reflected} onDiscard={() => setDecodeNonce((n) => n + 1)} /> : null}
+  </>
+ );
 
  if (error) {
   return (
@@ -125,7 +157,7 @@ export function ProtobufView({
      ) : frame.text !== undefined ? (
       <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{frame.text}</pre>
      ) : (
-      <FieldTree fields={frame.fields ?? []} onChange={onApply ? (next) => patchFrame(fi, next) : undefined} />
+      <FieldTree fields={frame.fields ?? []} claimed={reflected !== null} onChange={onApply ? (next) => patchFrame(fi, next) : undefined} />
      )}
     </div>
    ))}
@@ -141,7 +173,16 @@ export function ProtobufView({
 }
 
 /** The recursive field editor. `onChange` absent means read-only (every input disabled). */
-function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fields: ProtoField[]) => void }): JSX.Element {
+function FieldTree({
+ fields,
+ onChange,
+ claimed,
+}: {
+ fields: ProtoField[];
+ onChange?: (fields: ProtoField[]) => void;
+ /** The names came from a target's reflection service, not from the operator's schema. */
+ claimed?: boolean;
+}): JSX.Element {
  const patch = (i: number, changes: Partial<ProtoField>) => {
   if (!onChange) return;
   onChange(fields.map((f, j) => (j === i ? { ...f, ...changes } : f)));
@@ -154,7 +195,17 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
       <td style={{ verticalAlign: "top", whiteSpace: "nowrap", padding: "2px 8px 2px 0" }}>
        {field.name ? (
         <>
-         <code title={`field ${field.number}`}>{field.name}</code>{" "}
+         {claimed ? (
+          <code
+           data-name-source="reflection"
+           title={`field ${field.number} - named by the target's reflection service, not by your schema`}
+           style={{ borderBottom: "1px dashed currentColor", fontStyle: "italic" }}
+          >
+           {field.name}
+          </code>
+         ) : (
+          <code title={`field ${field.number}`}>{field.name}</code>
+         )}{" "}
          <span className="cell-dim">
           {field.type} · #{field.number}
          </span>
@@ -167,7 +218,7 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
       </td>
       <td style={{ width: "100%", padding: "2px 0" }}>
        {field.len_kind === "message" ? (
-        <FieldTree fields={field.message ?? []} onChange={onChange ? (next) => patch(i, { message: next }) : undefined} />
+        <FieldTree fields={field.message ?? []} claimed={claimed} onChange={onChange ? (next) => patch(i, { message: next }) : undefined} />
        ) : (
         <FieldValue field={field} disabled={!onChange} onChange={(changes) => patch(i, changes)} />
        )}
@@ -365,6 +416,111 @@ function SchemaBar({
      </Button>
     </>
    )}
+  </div>
+ );
+}
+
+/**
+ * Reflection (burpsy-react-ui-mup0, API 47id): ask the TARGET for its own schema when no .proto is to
+ * hand. Never automatic: the operator names the target and the service, and the button says it sends
+ * a request. The target is never guessed. The service is prefilled from a gRPC call path because that
+ * is the operator's own traffic naming it.
+ */
+function ReflectBar({
+ bodyBase64,
+ grpc,
+ rpcPath,
+ onResult,
+}: {
+ bodyBase64: string;
+ grpc: boolean;
+ rpcPath?: string;
+ onResult: (res: ProtoDecodeResponse, target: string) => void;
+}): JSX.Element {
+ const [open, setOpen] = useState(false);
+ const [target, setTarget] = useState("");
+ const [service, setService] = useState(() => serviceOf(rpcPath));
+ const [tls, setTls] = useState(true);
+ const [busy, setBusy] = useState(false);
+ const [failure, setFailure] = useState<string | null>(null);
+
+ if (!open) {
+  return (
+   <div>
+    <Button size="small" variant="outline" onClick={() => setOpen(true)}>
+     Fetch schema by reflection
+    </Button>
+   </div>
+  );
+ }
+
+ const go = () => {
+  const reflect: ProtoReflectTarget = { target: target.trim(), service: service.trim(), tls };
+  setBusy(true);
+  setFailure(null);
+  reflectDecodeProtobuf(bodyBase64, grpc, reflect)
+   .then((res) => onResult(res, reflect.target))
+   .catch((err) => setFailure(err instanceof Error ? err.message : String(err)))
+   .finally(() => setBusy(false));
+ };
+
+ return (
+  <div className="stack" role="group" aria-label="Fetch schema by reflection">
+   <div className="cell-dim">
+    Fetching sends one request to the target you name, which must be in scope, and asks it for the schema of one service. No session
+    credentials are sent. What it answers with is the target's claim.
+   </div>
+   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+    <Input aria-label="Reflection target (host:port)" placeholder="host:port" value={target} onChange={(e) => setTarget(e.target.value)} />
+    <Input aria-label="gRPC service" placeholder="pkg.Service" value={service} onChange={(e) => setService(e.target.value)} />
+    <Checkbox label="Use TLS" checked={tls} onCheckedChange={(on) => setTls(on === true)} />
+    <Button size="small" onClick={go} disabled={busy || target.trim() === "" || service.trim() === ""}>
+     {busy ? "Fetching…" : "Fetch and decode"}
+    </Button>
+    <Button size="small" variant="outline" onClick={() => setOpen(false)}>
+     Close
+    </Button>
+   </div>
+   {failure ? <div className="notice notice-warn">{failure}</div> : null}
+  </div>
+ );
+}
+
+/** "/pkg.Service/Method" -> "pkg.Service"; "" when the path is not a gRPC call path. */
+function serviceOf(rpcPath?: string): string {
+ const m = /^\/([^/]+)\/[^/]+$/.exec(rpcPath ?? "");
+ return m?.[1] ?? "";
+}
+
+/** What reads differently about reflected names: who claimed them, and the files they came from. */
+function ReflectionProvenance({
+ reflected,
+ onDiscard,
+}: {
+ reflected: { target: string; files: string[] };
+ onDiscard: () => void;
+}): JSX.Element {
+ return (
+  <div className="notice notice-warn" role="note" aria-label="Schema provenance">
+   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <Badge tone="warn">target-claimed names</Badge>
+    <span>
+     These field names were served by <code>{reflected.target}</code> over gRPC reflection. This is the target's schema, not your schema.
+     The target controls them: treat them as untrusted text.
+    </span>
+    <Button size="small" variant="outline" onClick={onDiscard}>
+     Discard reflected names
+    </Button>
+   </div>
+   {reflected.files.length > 0 ? (
+    <ul aria-label="Files the target served" style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+     {reflected.files.map((file) => (
+      <li key={file}>
+       <code>{file}</code>
+      </li>
+     ))}
+    </ul>
+   ) : null}
   </div>
  );
 }
