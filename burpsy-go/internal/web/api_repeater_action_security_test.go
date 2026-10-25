@@ -480,3 +480,44 @@ func TestRepeaterActionIsConfirmationGated(t *testing.T) {
 		t.Errorf("confirmed PUT = %d, want 200: %s", rec.Code, rec.Body)
 	}
 }
+
+// The PUT body is capped BEFORE decode: over 128 KiB is 413 without the decoder or the script
+// check running (a valid-JSON over-cap body would otherwise reach the 64 KiB script cap as a 400).
+func TestRepeaterActionPutBodyIsCappedBeforeDecode(t *testing.T) {
+	s := newTestServer()
+	big := strings.Repeat("x", 200*1024)
+	rec := putJSON(t, s, "/api/repeater/tabs/tab-p/action", map[string]any{"script": big})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("a 200 KiB action body answered %d, want 413 before any decode: %s", rec.Code, rec.Body)
+	}
+	// N: at the cap the body decodes (and then fails on the script's own 64 KiB limit - a 400,
+	// proving the decode ran).
+	under := strings.Repeat("x", 120*1024)
+	rec = putJSON(t, s, "/api/repeater/tabs/tab-p/action", map[string]any{"script": under})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a 120 KiB body holding an over-limit script answered %d, want the 400 script refusal", rec.Code)
+	}
+}
+
+// A corrupt saved action never blocks the others: it is skipped at restore (logged and counted)
+// while the valid rows come back.
+func TestRepeaterActionRestoreSkipsACorruptRow(t *testing.T) {
+	p, err := persist.Open(filepath.Join(t.TempDir(), "p.db"), zap.NewNop())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer p.Close()
+	if err := p.SaveRepeaterAction("good-tab", `log("x")`, true); err != nil {
+		t.Fatalf("save good: %v", err)
+	}
+	if err := p.SaveRepeaterAction("bad-tab", `this is not javascript(`, false); err != nil {
+		t.Fatalf("save bad: %v", err)
+	}
+	s := newTestServer().WithPersist(p)
+	if rec := get(t, s, "/api/repeater/tabs/good-tab/action"); rec.Code != http.StatusOK {
+		t.Errorf("the valid action did not restore: %d", rec.Code)
+	}
+	if rec := get(t, s, "/api/repeater/tabs/bad-tab/action"); rec.Code != http.StatusNotFound {
+		t.Errorf("a script the sandbox refuses must not come back to life: %d", rec.Code)
+	}
+}

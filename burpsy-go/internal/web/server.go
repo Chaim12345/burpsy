@@ -114,9 +114,12 @@ type Server struct {
 	repeaterH2Once sync.Once
 	// repeaterActions is each Repeater tab's custom action (1944): the script, its store, its
 	// last run, and the tab's latest exchange for on-demand runs.
-	repeaterActionsMu  sync.Mutex
-	repeaterActions    map[string]*repeaterTabActionState
-	sessionCoordinator *session.Coordinator
+	repeaterActionsMu sync.Mutex
+	repeaterActions   map[string]*repeaterTabActionState
+	// repeaterActionRestoreSkips counts saved actions skipped at project open (a corrupt row or a
+	// failed load): the restore must be loud, never a silent swallow.
+	repeaterActionRestoreSkips atomic.Uint64
+	sessionCoordinator         *session.Coordinator
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
 	// seam, and the answer arrives here from the console's modal. Constructed in NewServer like

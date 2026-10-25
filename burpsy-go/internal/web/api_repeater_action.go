@@ -17,7 +17,10 @@ package web
 //
 // # Bounds, stated precisely
 //
-//   - CPU: the run's 500ms interrupt is a WALL-CLOCK interrupt, not a CPU budget.
+//   - CPU: NO bound is guaranteed. The 500ms timer asks the VM to interrupt, and the VM honors
+//     that when control returns to JavaScript execution - a call into a host helper runs to
+//     completion first, and the run thread is waited out either way. This is neither a CPU
+//     budget nor a wall-clock completion guarantee.
 //   - Egress: none by construction - run() binds no host objects, pinned by runtime probes and a
 //     global-object enumeration whitelist in jsexec's tests.
 //   - Inputs are capped BEFORE the run (1 MiB per body, header blocks bounded, flagged).
@@ -30,6 +33,9 @@ package web
 //   - Installs are bounded globally: 32 actions, 1 MiB of persisted script. A gated installer can
 //     still squat IDs that are not live tabs - bounded, visible, deletable through the gated verbs,
 //     and accepted as a stated residual. A server-owned tab registry is a separate bead if wanted.
+//   - RETAINED BYTES (stated residual, not a bound): each tracked tab retains its latest request
+//     and response verbatim for the next run - at most 32 tabs, but one exchange's size is
+//     whatever the send carried. Worst case is 32 x (one request + one response) as captured.
 
 import (
 	"bytes"
@@ -65,6 +71,12 @@ const (
 	maxScriptInputHeaderTotal = 64 * 1024
 	maxRenderedDraftBytes     = 1 << 20
 )
+
+// maxRepeaterActionBodyBytes caps the PUT body BEFORE decode: the script itself is capped at
+// 64 KiB (jsexec.MaxRequestScriptBytes), so 128 KiB admits it with generous JSON overhead and no
+// more. The server's blanket 16 MiB cap (server.go, ListenAndServe) also applies in production,
+// but tests drive the mux directly, so the route enforces its own.
+const maxRepeaterActionBodyBytes = 128 * 1024
 
 // errActionChangedMidRun discards a run whose action was replaced or removed while it executed:
 // committing it would write a new script's output into the old script's state.
@@ -384,7 +396,12 @@ func (s *Server) handleRepeaterTabAction(w http.ResponseWriter, r *http.Request)
 		_ = json.NewEncoder(w).Encode(def)
 	case http.MethodPut:
 		var action repeaterTabAction
-		if err := requestJSON(w, r, nil).Decode(&action); err != nil {
+		var maxErr *http.MaxBytesError
+		if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRepeaterActionBodyBytes)).Decode(&action); err != nil {
+			if errors.As(err, &maxErr) {
+				http.Error(w, "The action body is over the 128 KiB limit", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -507,15 +524,24 @@ func (s *Server) handleRepeaterTabActionRun(w http.ResponseWriter, r *http.Reque
 
 // restoreRepeaterActions installs the project's saved actions (config only - a run log describes
 // traffic from a session that is gone, so nothing but the script and its switch comes back).
+// A row that no longer validates is logged, counted and SKIPPED: one corrupt row never blocks
+// the other actions, and a script the sandbox would refuse never comes back to life.
 func (s *Server) restoreRepeaterActions(p *persist.Store) {
 	rows, err := p.LoadRepeaterActions()
 	if err != nil {
 		s.logger.Error("repeater actions: restore failed", zap.Error(err))
+		s.repeaterActionRestoreSkips.Add(1)
 		return
 	}
 	s.repeaterActionsMu.Lock()
 	defer s.repeaterActionsMu.Unlock()
 	for _, row := range rows {
+		if err := jsexec.CheckRequestScript(row.Script); err != nil {
+			skips := s.repeaterActionRestoreSkips.Add(1)
+			s.logger.Error("repeater actions: skipping a saved action that no longer validates",
+				zap.String("tab", row.TabID), zap.Error(err), zap.Uint64("skips", skips))
+			continue
+		}
 		s.repeaterActions[row.TabID] = &repeaterTabActionState{
 			action: repeaterTabAction{Script: row.Script, AutoRun: row.AutoRun},
 			store:  map[string]string{},
