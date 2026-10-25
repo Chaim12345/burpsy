@@ -18,6 +18,10 @@
 #     80% of the cap so the GC works harder before the kernel kills anything.
 #   - Says so plainly when the cap killed the run, rather than leaving a bare "signal: killed".
 #
+# A signal to the wrapper is passed on to the whole run (its cgroup, or else its process group). A
+# run that ignores TERM is sent KILL after BURPSY_KILL_GRACE seconds (default 10); a signalled
+# wrapper exits 143, and a signal that arrives before the run has started stops it from starting.
+#
 # Where cgroups cannot be created (no permission, read-only cgroupfs) it still applies the Go
 # settings and the slot, and says the hard limits are off. CI does not use it: each Actions job
 # already has a runner to itself.
@@ -30,6 +34,8 @@ mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
 cpus=${BURPSY_RUN_CPUS:-$(( ncpu / 2 > 0 ? ncpu / 2 : 1 ))}
 mem=${BURPSY_RUN_MEM:-$(( mem_kb / 2 ))K}
 slots=${BURPSY_RUN_SLOTS:-}
+lockdir=${BURPSY_RUN_LOCKDIR:-/tmp}
+grace=${BURPSY_KILL_GRACE:-10}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,12 +63,12 @@ mem_bytes=$(to_bytes "$mem")
 # Take the first free slot; when every slot is busy, wait on one of them.
 exec {lockfd}>/dev/null
 for i in $(seq 0 $(( slots - 1 ))); do
-  exec {lockfd}>"/tmp/burpsy-heavy.$i.lock"
+  exec {lockfd}>"$lockdir/burpsy-heavy.$i.lock"
   if flock -n "$lockfd"; then slot=$i; break; fi
 done
 if [ -z "${slot:-}" ]; then
   slot=$(( $$ % slots ))
-  exec {lockfd}>"/tmp/burpsy-heavy.$slot.lock"
+  exec {lockfd}>"$lockdir/burpsy-heavy.$slot.lock"
   echo "capped-run: all $slots slots busy; waiting for slot $slot" >&2
   flock "$lockfd"
 fi
@@ -78,21 +84,35 @@ run_pids() {
   for d in "$v2_cg" "$mem_cg"; do
     if [ -n "$d" ] && [ -f "$d/cgroup.procs" ]; then cat "$d/cgroup.procs"; return; fi
   done
-  if [ -n "$child" ]; then echo "$child"; fi
+  if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then echo "$child"; fi
 }
 # shellcheck disable=SC2329 # used by the traps
 signal_run() {
   local p
   for p in $(run_pids); do kill -"$1" "$p" 2>/dev/null || true; done
+  # Without a cgroup only the child is known; it leads its own process group (see the launch), so
+  # its descendants are reached through the group.
+  if [ -z "$v2_cg$mem_cg" ] && [ -n "$child" ]; then kill -"$1" -- "-$child" 2>/dev/null || true; fi
 }
 
 # A signal to this wrapper (a harness killing its PID on a timeout, say) is passed on to the whole
 # run, and the wrapper then waits for the run to end before it lets go of the slot: otherwise the
 # run kept going with no supervisor and its slot free for the next one. TERM is what is passed on,
 # whatever arrived — a non-interactive shell starts background jobs with INT ignored, so a forwarded
-# INT would do nothing.
+# INT would do nothing. A run that ignores TERM is killed after $grace seconds. A signal before the
+# run has started means it never starts. Either way the wrapper exits 143.
+got_signal=""
+killer=""
 # shellcheck disable=SC2329 # invoked by the traps
-on_signal() { signal_run TERM; }
+on_signal() {
+  got_signal=1
+  if [ -z "$child" ]; then exit 143; fi
+  signal_run TERM
+  if [ -z "$killer" ]; then
+    ( sleep "$grace"; signal_run KILL ) >/dev/null 2>&1 </dev/null &
+    killer=$!
+  fi
+}
 trap on_signal INT TERM HUP
 
 # shellcheck disable=SC2329 # invoked by the EXIT trap
@@ -100,6 +120,7 @@ cleanup() {
   # Whatever outlived the command (a stray Chrome) is still in the cgroup, and a cgroup with members
   # cannot be removed: end it first.
   local i
+  if [ -n "$killer" ]; then kill "$killer" 2>/dev/null || true; fi
   for i in 1 2 3 4 5 6 7 8 9 10; do
     [ -z "$(run_pids)" ] && break
     signal_run KILL
@@ -152,9 +173,13 @@ set +e
       echo "capped-run: could not join $d; this run is NOT hard-capped" >&2
     fi
   done
+  # Its own process group, so a signal reaches what the run starts even without a cgroup.
+  if command -v setsid >/dev/null 2>&1; then exec setsid "$@"; fi
   exec "$@"
 ) {lockfd}>&- &
 child=$!
+# A signal that landed between the fork and the line above is passed on now.
+if [ -n "$got_signal" ]; then signal_run TERM; fi
 # wait returns early when a trapped signal arrives; keep waiting until the run itself has ended.
 while :; do
   wait "$child"
@@ -162,6 +187,7 @@ while :; do
   kill -0 "$child" 2>/dev/null || break
 done
 set -e
+if [ -n "$got_signal" ]; then rc=143; fi
 
 oom=0
 if [ -n "$v2_cg" ] && [ -f "$v2_cg/memory.events" ]; then
