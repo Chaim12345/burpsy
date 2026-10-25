@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,11 +74,14 @@ func TestWriteJSONEmitsAnEmptyArrayForANilSliceBody(t *testing.T) {
 // The route sweep the bead asks for, with its coverage stated exactly: every manifest GET route
 // WITHOUT path variables, against an empty-state server. Routes with path variables have no
 // empty-state sample and are counted, not claimed. A response must be valid JSON to be judged;
-// non-JSON answers (downloads, upgrades, HTML) and error statuses are named in their own lists
-// below, so joining either list is a loud, cited decision. Streaming routes that never return
-// (server-sent events) are named too. Within a JSON 2xx body, EVERY null is asserted justified:
-// the deliberate nulls are matched per JSON path with their contracts cited - a new null
-// anywhere else fails the test.
+// non-JSON answers are named in two asserted lists below (assets must answer 200 with their
+// documented shape; error-list entries must answer an error status), so joining either list is
+// a loud, cited decision. Only the named streaming route may take the per-route timeout - any
+// other route hanging fails. Within every JSON body, EVERY null is asserted justified: the
+// deliberate nulls are matched per JSON path with their contracts cited - a new null anywhere
+// else fails the test. A JSON error body is walked too, but only at the exact status its named
+// list entry binds; today that list is empty, so the first JSON error status a route serves
+// fails until it is named.
 func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	s := newTestServer()
 	patterns, _ := registeredPatterns(t)
@@ -85,7 +89,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	// Deliberate nulls by JSON path, each with its contract. writeJSON deliberately leaves nil
 	// pointers and interfaces alone for exactly these; the normaliser must never erase them.
 	deliberateNull := map[string]string{
-		"/api/scanner/configs.configs":                "same null-inherits-default override shape, under each named config (api_scanner_configs.go:57 and neighbours)",
+		"/api/scanner/configs.configs[*].resolved":    "Resolved is the auditConfigView override shape: null inherits the engine default (api_scanner_configs.go:426, field contract at :57 and neighbours)",
 		"/api/scanner/configs.default":                "scanner config overrides: null inherits the engine default (api_scanner_configs.go:57 and neighbours)",
 		"/api/collaborator/interactions.interactions": "null distinguishes 'no channel configured' from an empty list (api_collaborator.go:941)",
 		"/api/collaborator/status.last_read":          "nullable pointer by contract",
@@ -94,13 +98,14 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/extensions.policy.registry":             "the documented no-registry signal (api_extensions.go:21)",
 		"/api/config/export.scope.rules":              "bundle null = absent, do-not-touch on import; [] would mean wipe (api_config.go export/import contract)",
 	}
-	// GET routes whose answer is not JSON on empty state: two static assets and the routes
-	// whose empty-state answer is a plain-text error (a required parameter, a resource that
-	// does not exist yet, or a process component the test server does not attach). Each entry
-	// names what the route actually serves; a route joining the list is a loud, cited decision.
-	nonJSON := map[string]string{
-		"/":                                  "the console's HTML shell",
-		"/api/engagement/clickbandit.js":     "the Clickbandit JavaScript payload",
+	// GET routes whose empty-state answer is not JSON, in two asserted classes; a route joins a
+	// list only as a loud, cited decision. Assets must answer 200 with their documented shape -
+	// a 200 on an error-listed route, or malformed content on an asset route, fails.
+	nonJSONAsset := map[string]string{
+		"/":                              "<!doctype html",
+		"/api/engagement/clickbandit.js": "text/javascript",
+	}
+	nonJSONError := map[string]string{
 		"/api/advisories/":                   "plain-text 400/404: a type index is required",
 		"/api/crawl/live":                    "plain-text 400: task id is required",
 		"/api/engagement/":                   "plain-text 404: an engagement kind is required",
@@ -123,8 +128,19 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ca.crt":                            "plain-text 404: TLS interception is off in the test server",
 		"/reissue/":                          "plain-text 410: no live re-issue token",
 	}
+	// Routes that never return on empty state because they stream. Any other route that takes
+	// the two-second timeout is a hang, not a stream, and fails.
+	streaming := map[string]string{
+		"/api/events": "the SSE event feed",
+	}
+	// GET routes whose empty-state answer is a JSON error body, with the exact status each
+	// serves. Their bodies are walked for unjustified nulls like any other JSON - an error DTO
+	// has no unjustified nulls either - but the status is bound: a new error status, a changed
+	// status, or an unlisted route answering one all fail. Currently empty: no route serves a
+	// JSON error on empty state.
+	errorJSONStatus := map[string]int{}
 	var nulls, streamed []string
-	var sampled, skipped int
+	var sampled, errorSampled, skipped int
 	seen := map[string]bool{}
 	for _, pattern := range patterns {
 		method, path := splitPattern(pattern)
@@ -162,35 +178,65 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			streamed = append(streamed, path)
+			if why, ok := streaming[path]; ok {
+				streamed = append(streamed, path+" ("+why+")")
+			} else {
+				t.Errorf("%s did not answer within two seconds and is not a named streaming route", path)
+			}
 			continue
 		}
-		// Error statuses on empty state are not skipped: their bodies are walked too when they
-		// are JSON (an error DTO has no unjustified nulls either), and named when they are not.
 		var body interface{}
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			if _, ok := nonJSON[path]; !ok {
-				t.Errorf("%s answered %d with a non-JSON body and is not on the named non-JSON list: %.80q",
+			if marker, ok := nonJSONAsset[path]; ok {
+				bodyText := rec.Body.String()
+				if rec.Code != http.StatusOK ||
+					!strings.Contains(bodyText, marker) && !strings.Contains(rec.Header().Get("Content-Type"), marker) {
+					t.Errorf("%s answered %d without its documented shape (%s): %.80q",
+						path, rec.Code, marker, bodyText)
+				}
+			} else if why, ok := nonJSONError[path]; ok {
+				if rec.Code < http.StatusBadRequest {
+					t.Errorf("%s answered %d, want the error status its list entry cites (%s)", path, rec.Code, why)
+				}
+			} else {
+				t.Errorf("%s answered %d with a non-JSON body and is on neither named non-JSON list: %.80q",
 					path, rec.Code, rec.Body.String())
 			}
 			continue
 		}
-		sampled++
+		if rec.Code >= http.StatusBadRequest {
+			want, ok := errorJSONStatus[path]
+			if !ok {
+				t.Errorf("%s answered a JSON error body with status %d and is not on the named error-status list", path, rec.Code)
+			} else if want != rec.Code {
+				t.Errorf("%s answered status %d, want the %d its list entry binds", path, rec.Code, want)
+			}
+			errorSampled++
+		} else {
+			sampled++
+		}
 		walkNulls(body, path, deliberateNull, &nulls)
 	}
 	if len(nulls) > 0 {
 		t.Errorf("%d unjustified null value(s) in GET sample output:\n%s", len(nulls), strings.Join(nulls, "\n"))
 	}
-	t.Logf("sampled %d GET routes on empty state; %d skipped (path variables or no GET verb); streaming: %v",
-		sampled, skipped, streamed)
+	t.Logf("sampled %d GET routes on empty state (%d of them named JSON error statuses); %d skipped (path variables or no GET verb); streaming: %v",
+		sampled+errorSampled, errorSampled, skipped, streamed)
 }
 
 // walkNulls reports every null in the decoded body - the root, map values, and array elements -
-// unless the JSON path falls under a cited deliberate null (exact path or anything beneath it).
+// unless the JSON path falls under a cited deliberate null. An exception matches the exact path
+// or anything beneath it, and "[*]" in an exception matches any one array index, so an exception
+// can name a shape inside every element of an array without naming the whole array.
+var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
+
 func nullPathIsDeliberate(path string, deliberate map[string]string) bool {
+	wild := arrayIndexPattern.ReplaceAllString(path, "[*]")
 	for prefix := range deliberate {
-		if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(path, prefix+"[") {
-			return true
+		for _, candidate := range []string{path, wild} {
+			if candidate == prefix || strings.HasPrefix(candidate, prefix+".") || strings.HasPrefix(candidate, prefix+"[") {
+				return true
+			}
 		}
 	}
 	return false
@@ -232,7 +278,7 @@ func walkNulls(v interface{}, path string, deliberate map[string]string, nulls *
 // W12 extraction probes: the shapes the normaliser must NOT touch. A top-level untyped nil
 // encoded as null before and must not panic now; a nil []byte is a base64 string when present,
 // so null stays null; a nil json.RawMessage is null, not an invalid empty document; and a type
-// that marshals itself never has its state rewritten under it.
+// implementing json.Marshaler or encoding.TextMarshaler never has its state rewritten under it.
 func TestWriteJSONLeavesTheNonSliceShapesAlone(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeJSON(rec, http.StatusOK, nil)
@@ -258,6 +304,25 @@ func TestWriteJSONLeavesTheNonSliceShapesAlone(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"items":null}` {
 		t.Errorf("self-marshalling type encoded as %q, want its own null", got)
 	}
+
+	rec = httptest.NewRecorder()
+	writeJSON(rec, http.StatusOK, map[string]textMarshalling{"k": {Items: nil}})
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"k":"nil"}` {
+		t.Errorf("text-marshalling type encoded as %q, want its own view of the nil slice", got)
+	}
+}
+
+// textMarshalling reports through MarshalText whether its slice is nil; the normaliser must not
+// change what it sees (encoding/json honours encoding.TextMarshaler too).
+type textMarshalling struct {
+	Items []string
+}
+
+func (tm textMarshalling) MarshalText() ([]byte, error) {
+	if tm.Items == nil {
+		return []byte("nil"), nil
+	}
+	return []byte("not-nil"), nil
 }
 
 type selfMarshalling struct {
@@ -311,6 +376,33 @@ func TestNormalisationPreservesAliases(t *testing.T) {
 	// Slice headers alias the same backing array; the normalised copies must too.
 	if &out.C[0] != &out.D[0] {
 		t.Error("two fields sharing one backing array stopped sharing it")
+	}
+
+	// Maps: two fields holding the same map hold one shared clone afterwards.
+	sharedMap := map[string][]string{"k": nil}
+	type mapDto struct {
+		M1 map[string][]string
+		M2 map[string][]string
+	}
+	mout := normalizeNilSlices(reflect.ValueOf(mapDto{M1: sharedMap, M2: sharedMap})).Interface().(mapDto)
+	mout.M1["k2"] = []string{}
+	if _, ok := mout.M2["k2"]; !ok {
+		t.Error("two fields sharing one map stopped sharing it")
+	}
+	if sharedMap["k"] != nil {
+		t.Error("the input map was mutated")
+	}
+
+	// Same start and length, different spare capacity: NOT aliases - each gets its own clone.
+	base := make([]string, 1, 4)
+	capped := base[:1:1]
+	type capDto struct {
+		X []string
+		Y []string
+	}
+	cout := normalizeNilSlices(reflect.ValueOf(capDto{X: base[:1], Y: capped})).Interface().(capDto)
+	if cap(cout.X) != 4 || cap(cout.Y) != 1 {
+		t.Errorf("capacities collapsed: X cap %d, Y cap %d", cap(cout.X), cap(cout.Y))
 	}
 }
 

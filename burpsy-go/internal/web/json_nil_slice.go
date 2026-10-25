@@ -4,16 +4,21 @@ package web
 // collections as arrays - "tree":null crashed it until 2f8c1f7d fixed that one route by hand.
 // writeJSON routes every response through normalizeNilSlices, which rebuilds the value with each
 // nil slice replaced by an empty slice of the same type. Only nil slices change: nil pointers,
-// nil maps, nil interfaces, byte slices (they encode as base64 strings, so null and "" are both
-// typed strings, not arrays) and anything a type marshals itself keep their old encoding,
-// because those nulls carry meaning where a nil slice's never did.
+// nil maps, nil interfaces, byte slices (a nil []byte encodes as null, an empty one as "" - a
+// string either way, never an array) and the state of types implementing json.Marshaler or
+// encoding.TextMarshaler keep their old encoding, because those nulls carry meaning where a nil
+// slice's never did.
 
 import (
+	"encoding"
 	"encoding/json"
 	"reflect"
 )
 
-var marshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+var (
+	marshalerType     = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+)
 
 // cloneVisit identifies one pointer, map or slice header so repeated references share one clone
 // (alias identity is preserved) and a cyclic graph terminates instead of recursing forever. The
@@ -22,6 +27,7 @@ type cloneVisit struct {
 	typ reflect.Type
 	ptr uintptr
 	len int
+	cap int
 }
 
 type nilSliceNormaliser struct {
@@ -34,8 +40,9 @@ type nilSliceNormaliser struct {
 //
 // Supported-DTO contract (pinned by json_nil_slice_test.go): the value is a response DTO built
 // for encoding/json - exported fields, no functions/channels/unsafe pointers. Untouched by
-// design: nil pointers/maps/interfaces; byte slices (base64 strings on the wire); anything a
-// type marshals itself (json.Marshaler); unexported fields; map keys. Aliased pointers, maps
+// design: nil pointers/maps/interfaces; byte slices (base64 strings on the wire); the state of
+// types implementing json.Marshaler or encoding.TextMarshaler; unexported fields; map keys.
+// Aliased pointers, maps
 // and slice headers share one clone, so identity is preserved and a cyclic graph terminates
 // here and is reported by the encoder exactly as it would have been on the original value.
 func normalizeNilSlices(v reflect.Value) reflect.Value {
@@ -48,8 +55,10 @@ func normalizeNilSlices(v reflect.Value) reflect.Value {
 
 func (n *nilSliceNormaliser) walk(v reflect.Value) reflect.Value {
 	// A type that marshals itself owns its encoding, including what it does with a nil slice;
-	// walking into it would let the normaliser change what its MarshalJSON observes.
-	if v.Type().Implements(marshalerType) || reflect.PointerTo(v.Type()).Implements(marshalerType) {
+	// walking into it would let the normaliser change what its MarshalJSON (or MarshalText -
+	// encoding/json honours both) observes.
+	if v.Type().Implements(marshalerType) || reflect.PointerTo(v.Type()).Implements(marshalerType) ||
+		v.Type().Implements(textMarshalerType) || reflect.PointerTo(v.Type()).Implements(textMarshalerType) {
 		return v
 	}
 	switch v.Kind() {
@@ -57,7 +66,7 @@ func (n *nilSliceNormaliser) walk(v reflect.Value) reflect.Value {
 		if v.IsNil() {
 			return v
 		}
-		key := cloneVisit{v.Type(), v.Pointer(), 0}
+		key := cloneVisit{v.Type(), v.Pointer(), 0, 0}
 		if seen, ok := n.clones[key]; ok {
 			return seen
 		}
@@ -79,11 +88,15 @@ func (n *nilSliceNormaliser) walk(v reflect.Value) reflect.Value {
 		if v.IsNil() {
 			return reflect.MakeSlice(v.Type(), 0, 0)
 		}
-		key := cloneVisit{v.Type(), v.Pointer(), v.Len()}
+		// cap is in the key: two headers can share a start and length with different spare
+		// capacity, and sharing one clone would collapse that difference.
+		key := cloneVisit{v.Type(), v.Pointer(), v.Len(), v.Cap()}
 		if seen, ok := n.clones[key]; ok {
 			return seen
 		}
-		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		// The clone mirrors the source header's len and cap; a clone with less capacity than the
+		// original would let a later append behave differently than it would on the input.
+		out := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
 		n.clones[key] = out
 		for i := 0; i < v.Len(); i++ {
 			out.Index(i).Set(n.walk(v.Index(i)))
@@ -108,7 +121,7 @@ func (n *nilSliceNormaliser) walk(v reflect.Value) reflect.Value {
 		if v.IsNil() {
 			return v
 		}
-		key := cloneVisit{v.Type(), v.Pointer(), 0}
+		key := cloneVisit{v.Type(), v.Pointer(), 0, 0}
 		if seen, ok := n.clones[key]; ok {
 			return seen
 		}
