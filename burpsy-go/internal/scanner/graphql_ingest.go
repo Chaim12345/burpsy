@@ -86,7 +86,8 @@ func graphQLDecodings(doc string) []string {
 }
 
 // graphQLPercentDecode decodes %XX escapes and nothing else: '+' is an ordinary byte, not
-// a space, and an escape that is not two hex digits survives verbatim. This replicates
+// a space. An escape with no hex digits survives as-is; a partial hex scan (%2G) decodes its
+// valid prefix (0x02) - fmt.Sscanf semantics, NOT verbatim preservation. This replicates
 // internal/bcheck/insertion.go's percentDecode - unexported there - which matches the
 // project's own percentEscape (which escapes '+') and so keeps the round trip stable.
 // net/url's QueryUnescape drifts on both counts.

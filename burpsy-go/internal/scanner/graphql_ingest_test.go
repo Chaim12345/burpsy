@@ -214,9 +214,10 @@ func TestGraphQLIngestDecodesLikeBcheck(t *testing.T) {
 	if graphQLDocumentValid(`{book(title:+"Dune"){author}}`) {
 		t.Fatal("the decoder translated '+' to space; url.QueryUnescape semantics are not bcheck's")
 	}
-	// Malformed escapes preserved: %2G survives verbatim, so the document stays malformed.
+	// Malformed escapes stay malformed: %2G partial-scans to 0x02 (Sscanf semantics, shared
+	// with bcheck), so the document never parses.
 	if graphQLDocumentValid(`{book(title:%2G){author}}`) {
-		t.Fatal("a malformed percent escape vanished; the decoder must preserve it verbatim")
+		t.Fatal("a malformed percent escape vanished; the decoder must not make it parseable")
 	}
 	// Legitimate escapes still decode: %22 quotes make the document valid under bcheck's
 	// decoder too.
