@@ -76,19 +76,8 @@ describe("themeTokenVars", () => {
  });
 });
 
-describe("theme persistence is safe by construction (burpsy-react-ui-fpew)", () => {
- // Structural, the ui-scale.test.ts style: a kept theme must survive a reload, but a live preview
- // must NOT — a preview that made the console unreadable is escaped only because a reload drops it.
- const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
-
- test("the kept theme is persisted", () => {
-  expect(store).toMatch(/customTheme: state\.customTheme/);
- });
-
- test("the live preview is deliberately not persisted", () => {
-  expect(store).not.toMatch(/themePreview: state\.themePreview/);
- });
-});
+// Theme persistence (the kept theme is saved, a live preview is not) is pinned by rendering the hook
+// that applies it: ui/use-theme-effect.test.tsx (vln1).
 
 describe("the severity family is themeable (burpsy-react-ui-axm9)", () => {
  test("a theme may set a severity slot, and it lands on the --severity-* token", () => {
