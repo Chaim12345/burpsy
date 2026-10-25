@@ -317,6 +317,61 @@ code {
   grid-template-rows: var(--menubar-h) var(--toolbar-h) var(--subtab-h) minmax(0, 1fr) var(--statusbar-h);
 }
 
+.app-shell.has-dock {
+  grid-template-rows: var(--menubar-h) var(--toolbar-h) minmax(0, 1fr) auto var(--statusbar-h);
+}
+
+.app-shell.has-subtabs.has-dock {
+  grid-template-rows: var(--menubar-h) var(--toolbar-h) var(--subtab-h) minmax(0, 1fr) auto var(--statusbar-h);
+}
+
+/* --- bottom dock (08wx) ---------------------------------------------------- */
+
+.bottom-dock {
+  background: var(--chrome);
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+
+.bottom-dock-bar {
+  display: flex;
+  gap: var(--s1);
+  padding: 0 var(--s1);
+}
+
+.bottom-dock-tab,
+.bottom-dock-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+  padding: var(--s1) var(--s2);
+  cursor: pointer;
+}
+
+.bottom-dock-tab[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.bottom-dock-close {
+  margin-left: auto;
+}
+
+.bottom-dock-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s1) var(--s2);
+  max-height: 22vh;
+  overflow: auto;
+  font-size: var(--fs-sm);
+}
+
+.bottom-dock-host,
+.bottom-dock-empty {
+  color: var(--text-soft);
+}
+
 /* --- menu bar ------------------------------------------------------------ */
 
 .menu-bar {
@@ -3467,6 +3522,12 @@ tbody td {
   }
   .app-shell.has-subtabs {
     grid-template-rows: var(--toolbar-h) var(--subtab-h) minmax(0, 1fr) var(--statusbar-h);
+  }
+  .app-shell.has-dock {
+    grid-template-rows: var(--toolbar-h) minmax(0, 1fr) auto var(--statusbar-h);
+  }
+  .app-shell.has-subtabs.has-dock {
+    grid-template-rows: var(--toolbar-h) var(--subtab-h) minmax(0, 1fr) auto var(--statusbar-h);
   }
   .tool-tab span {
     display: none;

@@ -65,6 +65,7 @@ import { usePluginHotkeys } from "./lib/plugin-hotkeys";
 import { clearHiddenToolTabs, clearToolTabOrder, moveToolTab, orderToolTabs, readHiddenToolTabs, readToolTabOrder, writeHiddenToolTabs, writeToolTabOrder } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
+import { BottomDock } from "./ui/bottom-dock";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
@@ -1149,6 +1150,8 @@ function App(): JSX.Element {
  }, [themeChord, navigate, requestRepeaterTabSearch, repeaterTabSearchChord, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
+ // The Dashboard already shows both lists in full, so the dock would only repeat it there.
+ const showDock = route !== "dashboard";
 
  /**
   * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files;
@@ -1462,7 +1465,7 @@ function App(): JSX.Element {
    <a className="skip-link" href="#main-content">
     Skip to workspace
    </a>
-   <div className={hasSubTabs ? "app-shell has-subtabs" : "app-shell"}>
+   <div className={`app-shell${hasSubTabs ? " has-subtabs" : ""}${showDock ? " has-dock" : ""}`}>
     {/* Menu bar, above the tool tabs as in Burp. Hidden on narrow viewports,
             where the command palette reaches the same actions. */}
     <div className="menu-bar">
@@ -1625,6 +1628,8 @@ function App(): JSX.Element {
       <ActivePage key={projectEpoch} />
      </ErrorBoundary>
     </main>
+
+    {showDock ? <BottomDock /> : null}
 
     {/* The status bar as a landmark (burpsy-react-ui-4t8a): a <footer> gives
             screen-reader users a navigable contentinfo region, so the status text is
