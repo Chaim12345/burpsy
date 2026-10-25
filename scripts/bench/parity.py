@@ -67,7 +67,7 @@ def compare(burpsy, reference, truth=None):
     classes = defaultdict(lambda: {"both": [], "reference_only": [], "burpsy_only": []})
     for k in sorted(set(b) | set(r)):
         bucket = "both" if k in b and k in r else ("burpsy_only" if k in b else "reference_only")
-        classes[k[2]][bucket].append({"endpoint": k[0], "parameter": k[1], "technique": (b.get(k) or r.get(k))})
+        classes[k[2]][bucket].append({"endpoint": k[0], "parameter": k[1], "technique": (b.get(k) if k in b else r.get(k))})
     report = {"classes": {c: classes[c] for c in sorted(classes)}}
     if t is not None:
         by_class = defaultdict(lambda: {"burpsy": set(), "reference": set(), "truth": set()})

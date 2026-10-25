@@ -34,6 +34,7 @@ class Parity(unittest.TestCase):
         self.assertEqual(len(rep["classes"]["sqli"]["both"]), 1)
         self.assertEqual(rep["classes"]["sqli"]["reference_only"][0]["endpoint"], "/only-r")
         self.assertEqual(rep["classes"]["xss"]["burpsy_only"][0]["endpoint"], "/only-b")
+        self.assertEqual(rep["classes"]["xss"]["burpsy_only"][0]["technique"], "")  # never null in the JSON
 
     def test_duplicates_collapse(self):
         rep = parity.compare([f("/a", "p", "xss"), f("/a?x=1", "p", "xss")], [f("/a", "p", "xss")])
@@ -47,6 +48,34 @@ class Parity(unittest.TestCase):
         bs, rs = rep["truth"]["xss"]["burpsy"], rep["truth"]["xss"]["reference"]
         self.assertEqual((bs["tp"], bs["fp"], bs["fn"], bs["precision"], bs["recall"]), (1, 1, 1, 0.5, 0.5))
         self.assertEqual((rs["precision"], rs["recall"]), (1.0, 1.0))
+
+    def test_recall_and_precision_when_fp_and_fn_differ(self):
+        truth = [f("/a", "p", "xss"), f("/b", "p", "xss"), f("/c", "p", "xss")]
+        rep = parity.compare([f("/a", "p", "xss")], [], truth)   # tp 1, fp 0, fn 2
+        s = rep["truth"]["xss"]["burpsy"]
+        self.assertEqual((s["precision"], s["recall"]), (1.0, 0.333))
+
+    def test_truth_total_keeps_each_tool_apart(self):
+        truth = [f("/a", "p", "xss"), f("/b", "p", "sqli")]
+        rep = parity.compare([f("/a", "p", "xss")], [f("/a", "p", "xss"), f("/b", "p", "sqli")], truth)
+        self.assertEqual(rep["truth_total"]["burpsy"]["recall"], 0.5)
+        self.assertEqual(rep["truth_total"]["reference"]["recall"], 1.0)
+
+    def test_markdown_names_the_tool_and_counts_each_bucket_in_its_column(self):
+        rep = parity.compare([f("/a", "p", "xss"), f("/x", "p", "xss"), f("/y", "p", "xss")], [f("/a", "p", "xss"), f("/r", "p", "xss")])
+        md = parity.markdown(rep, "sqlmap")
+        self.assertIn("| class | both | sqlmap-only (burpsy miss) | burpsy-only (verify) |", md)
+        self.assertIn("| xss | 1 | 1 | 2 |", md)   # both, reference-only, burpsy-only
+        self.assertNotIn("ground truth", md)
+
+    def test_markdown_has_the_ground_truth_section_with_each_tool_in_its_column(self):
+        truth = [f("/a", "p", "xss"), f("/b", "p", "xss")]
+        rep = parity.compare([f("/a", "p", "xss")], [f("/a", "p", "xss"), f("/b", "p", "xss")], truth)
+        md = parity.markdown(rep, "sqlmap")
+        self.assertIn("## Against ground truth", md)
+        self.assertIn("| class | cases | burpsy P / R | sqlmap P / R |", md)
+        self.assertIn("| xss | 2 | 1.0 / 0.5 | 1.0 / 1.0 |", md)
+        self.assertIn("| **all** | | 1.0 / 0.5 | 1.0 / 1.0 |", md)
 
     def test_cli_writes_json_and_markdown_and_rejects_bad_input(self):
         tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity.py")
