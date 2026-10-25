@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -99,5 +100,106 @@ func TestRepeaterWsHandshakeAndCloneNameTwoSourcesOfBytes(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("clone + handshake: %d %s, want 400 - one send cannot take its negotiation "+
 			"request from two places", rec.Code, rec.Body.String())
+	}
+}
+
+// The preview route hands the editor the exact head a send would dial with, so what-you-edit-is-
+// what-is-sent has one source of truth: the server, not a client-side template.
+func TestRepeaterWsHandshakePreviewShowsTheRefreshedClone(t *testing.T) {
+	target, _ := cloneTarget(t)
+	host, port := repeaterWsTargetOf(target)
+	s := newTestServer()
+	socket := seedHandshake(t, s, host, port)
+
+	rec := getJSON(t, s, "/api/repeater/ws-handshake-preview?socket="+itoa64(uint64(socket)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp repeaterWsHandshakePreviewResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Source != "clone" {
+		t.Errorf("source = %q, want clone", resp.Source)
+	}
+	if !strings.Contains(resp.Handshake, "Cookie: session=abc123") {
+		t.Errorf("the preview lost the captured handshake's Cookie:\n%s", resp.Handshake)
+	}
+	if strings.Contains(resp.Handshake, "dGhlIHNhbXBsZSBub25jZQ==") {
+		t.Errorf("the preview shows the stale nonce - the send would refresh it, and what-you-edit "+
+			"must be what-is-sent:\n%s", resp.Handshake)
+	}
+}
+
+func TestRepeaterWsHandshakePreviewBuildsANewConnectionsHead(t *testing.T) {
+	s := newTestServer()
+	rec := getJSON(t, s, "/api/repeater/ws-handshake-preview?target="+
+		url.QueryEscape("ws://chat.test:8080")+"&path="+url.QueryEscape("/room?x=1"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp repeaterWsHandshakePreviewResp
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Source != "new" {
+		t.Errorf("source = %q, want new", resp.Source)
+	}
+	for _, want := range []string{"GET /room?x=1 HTTP/1.1\r\n", "Host: chat.test:8080\r\n", "Upgrade: websocket\r\n"} {
+		if !strings.Contains(resp.Handshake, want) {
+			t.Errorf("the synthetic head lacks %q:\n%s", want, resp.Handshake)
+		}
+	}
+}
+
+func TestRepeaterWsHandshakePreviewRefusesBothAndNeither(t *testing.T) {
+	s := newTestServer()
+	if rec := getJSON(t, s, "/api/repeater/ws-handshake-preview"); rec.Code != http.StatusBadRequest {
+		t.Errorf("neither: %d, want 400", rec.Code)
+	}
+	if rec := getJSON(t, s, "/api/repeater/ws-handshake-preview?socket=1&target=x"); rec.Code != http.StatusBadRequest {
+		t.Errorf("both: %d, want 400", rec.Code)
+	}
+	if rec := getJSON(t, s, "/api/repeater/ws-handshake-preview?socket=999"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown socket: %d, want 404", rec.Code)
+	}
+}
+
+func TestRepeaterWsSendRefusesAnEmptyEditedHandshake(t *testing.T) {
+	// A cleared editor posts handshake:"" - an edit that erased the request, not the absence of
+	// one. Dialling the captured or synthetic head anyway would send a negotiation the operator
+	// did not write, so the send is refused with the distinction named.
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"target": "ws://placeholder.test", "handshake": "", "opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty handshake: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "present but empty") {
+		t.Errorf("the refusal does not name the empty edit: %s", rec.Body.String())
+	}
+}
+
+func TestRepeaterWsEditedHandshakeRefusesSocketAndTarget(t *testing.T) {
+	// The dial authority is socket XOR target: both naming it is two answers to one question.
+	s := newTestServer()
+	socket := uint64(7)
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"socket": socket, "target": "ws://placeholder.test", "handshake": editedHandshake(),
+		"opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "give one") {
+		t.Fatalf("socket+target: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRepeaterWsEditedHandshakeRefusesAMessageResend(t *testing.T) {
+	// message names a frame to resend; handshake replaces the negotiation request - one send
+	// cannot do both.
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"message": 1, "handshake": editedHandshake(), "opcode": "text", "payload": "x",
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "give one") {
+		t.Fatalf("message+handshake: %d %s", rec.Code, rec.Body.String())
 	}
 }

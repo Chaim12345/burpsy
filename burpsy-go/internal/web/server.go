@@ -1134,6 +1134,7 @@ func (s *Server) setupRoutes() {
 	// Tools
 	s.route("/api/repeater/send", s.handleRepeaterSend)
 	s.route("/api/repeater/ws-send", s.handleRepeaterWsSend)
+	s.route("/api/repeater/ws-handshake-preview", s.handleRepeaterWsHandshakePreview)
 	s.route("/api/repeater/ws-attach", s.handleRepeaterWsAttach)
 	s.route("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
 	// The re-issue fetch is served outside /api on purpose: it is the URL the operator's

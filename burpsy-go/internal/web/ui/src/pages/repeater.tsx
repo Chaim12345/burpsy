@@ -39,6 +39,7 @@ import {
  SendCancelled,
  useKettleAnswer,
  useRepeaterSend,
+ fetchWsHandshakePreview,
  useRepeaterWsAttach,
  useRepeaterWsSend,
  useResponseChanges,
@@ -1875,6 +1876,11 @@ export function RepeaterPage(): JSX.Element {
        )}
       </Field>
      ) : null}
+     {active.kind === "ws" && activeWsMode !== "attach" ? (
+      /* Burp's "manipulate the negotiation request" (ws3e): the head this send will dial,
+       * editable. Attach has no negotiation request, so the editor does not show there. */
+      <WsHandshakeEditor tab={active} mode={activeWsMode} />
+     ) : null}
      {active.kind === "ws" ? (
       /* Burp's direction choice, on the tab that has it (6ex). Both directions are
        * offered: "to client" is refused by the wire with the reason it cannot run on a
@@ -2300,6 +2306,72 @@ function WsAttachedFrame({ row }: { row: WsRow }): JSX.Element {
    value={value}
    filename={`ws-message-${row.id}.txt`}
   />
+ );
+}
+
+/**
+ * The negotiation-request editor (burpsy-react-ui-ws3e). It opens on the exact head the send will
+ * dial - the refreshed clone of the captured handshake for a connection the tab came from, the
+ * synthetic head for a new one - fetched from the server so the edit starts from what-is-sent,
+ * never from a client-side reconstruction. An untouched editor sends the wuwf behavior (clone or
+ * new as the chooser says); the first keystroke makes the edit the request, and Reset returns the
+ * tab to the captured or synthetic head.
+ */
+function WsHandshakeEditor({ tab, mode }: { tab: RepeaterTab; mode: WsConnectionMode }) {
+ const edited = tab.wsHandshake;
+ const [preview, setPreview] = useState<string | null>(null);
+ const [error, setError] = useState<string | null>(null);
+ // One load per authority: a clone's head and a new connection's head differ, and a mode switch
+ // or a retarget must not edit yesterday's bytes.
+ useEffect(() => {
+  let cancelled = false;
+  // Clear the previous preview while the new authority's head loads: showing the old bytes under
+  // a new target would be editing yesterday's handshake (ws3e review). The stored edit itself is
+  // dropped by updateRepeaterTab when the authority fields change.
+  setPreview(null);
+  setError(null);
+  const params =
+   mode === "clone" && tab.wsSocket !== undefined
+    ? { socket: tab.wsSocket }
+    : { target: tab.target, ...(tab.wsPath ? { path: tab.wsPath } : {}) };
+  fetchWsHandshakePreview(params)
+   .then((result) => {
+    if (!cancelled) setPreview(result.handshake);
+   })
+   .catch((err: unknown) => {
+    if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+   });
+  return () => {
+   cancelled = true;
+  };
+ }, [mode, tab.wsSocket, tab.target, tab.wsPath]);
+ return (
+  <Field label={`Negotiation request - ${mode === "clone" ? "cloned" : "new"} connection`}>
+   {(id) => (
+    <div>
+     <Textarea
+      id={id}
+      rows={8}
+      aria-label="Edit the negotiation request this connection opens with"
+      value={edited ?? preview ?? ""}
+      placeholder={error ?? "Loading the handshake this send would dial..."}
+      onChange={(event) => updateRepeaterTab(tab.id, { wsHandshake: event.target.value })}
+     />
+     <p className="text-xs text-foreground-muted">
+      Sent as shown, except the wire invariants, which refresh at send time: Sec-WebSocket-Key gets
+      a fresh nonce (RFC 6455), any extension offer is removed, the target line goes origin-form,
+      and Content-Length, Transfer-Encoding and anything after the header block are dropped.
+      Every other byte is dialed exactly as written. Changing the connection, target or path
+      clears your edit; an edit given together with the new target applies to that target.
+     </p>
+     {edited !== undefined ? (
+      <Button variant="outline" size="small" onClick={() => updateRepeaterTab(tab.id, { wsHandshake: undefined })}>
+       Reset to the {mode === "clone" ? "captured" : "synthetic"} handshake
+      </Button>
+     ) : null}
+    </div>
+   )}
+  </Field>
  );
 }
 

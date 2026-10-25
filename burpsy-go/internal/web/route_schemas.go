@@ -153,9 +153,14 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
 	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
-	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
-	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
-	"POST /api/repeater/ws-send":         {body: typeOf[repeaterWsSendReq]()},
+	"POST /api/repeater/send":       {body: typeOf[repeaterSendReq]()},
+	"POST /api/repeater/send-group": {body: typeOf[repeaterGroupSendReq]()},
+	"POST /api/repeater/ws-send":    {body: typeOf[repeaterWsSendReq]()},
+	"GET /api/repeater/ws-handshake-preview": {query: []queryParam{
+		{name: "socket", kind: "integer", desc: "preview the refreshed clone of this WebSocket ID's captured handshake"},
+		{name: "target", kind: "string", desc: "preview a new connection's synthetic head for this ws:// or host:port target"},
+		{name: "path", kind: "string", desc: "the request path for a target preview; omitted means /"},
+	}},
 	"POST /api/repeater/ws-attach":       {body: typeOf[repeaterWsAttachReq]()},
 	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
 	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},

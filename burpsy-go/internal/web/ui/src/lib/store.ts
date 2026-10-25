@@ -214,6 +214,12 @@ export interface RepeaterTab {
  wsPath?: string;
  /** Which connection Send uses — lib/repeater-ws-connection.ts. Absent = "new". */
  wsMode?: "new" | "clone" | "attach";
+ /**
+  * The operator's edited negotiation request (burpsy-react-ui-ws3e). Set, Send dials from these
+  * bytes instead of the captured (clone) or synthetic (new) head; absent, the wuwf behavior
+  * stands. Attach ignores it — an attached frame needs no handshake.
+  */
+ wsHandshake?: string;
  /** The exchange this tab was opened from, sent back as the resend's parent so lineage survives.
   *  Undefined for a tab the operator started by hand — there is no antecedent to record. */
  fromExchange?: number;
@@ -881,6 +887,7 @@ interface AppState {
   wsSocket?: number;
   wsPath?: string;
   wsMode?: "new" | "clone" | "attach";
+  wsHandshake?: string;
   note?: string;
  }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
@@ -1184,6 +1191,25 @@ export const useApp = create<AppState>()(
        requestHeadChanged(tab.request, next.request)
       ) {
        next.h2Headers = undefined;
+      }
+      // The same rule for a ws tab's edited negotiation request (burpsy-react-ui-ws3e): the edit
+      // was previewed against one authority - a captured connection's or an explicit target's -
+      // so a change to the tab's aim (mode, socket, target or path, including clearing one to
+      // undefined) drops a stored edit rather than dialling yesterday's bytes at today's target.
+      // The comparison is by value, so a patch restating the current aim keeps a legitimate edit.
+      // The atomic pair is the exception and is correct operator semantics: a patch carrying a
+      // NEW wsHandshake together with the new aim means that edit for that target, so it is
+      // kept - what must never ride a retarget is the STALE edit the operator did not resupply.
+      // The editor's own keystrokes patch only wsHandshake and keep it.
+      if (
+       tab.wsHandshake !== undefined &&
+       !("wsHandshake" in patch) &&
+       (("wsMode" in patch && patch.wsMode !== tab.wsMode) ||
+        ("wsSocket" in patch && patch.wsSocket !== tab.wsSocket) ||
+        ("target" in patch && patch.target !== tab.target) ||
+        ("wsPath" in patch && patch.wsPath !== tab.wsPath))
+      ) {
+       next.wsHandshake = undefined;
       }
       return next;
      }),
