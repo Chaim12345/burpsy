@@ -105,4 +105,3 @@ func (a *AuthorisedSender) hookResponse(ctx context.Context, resp []byte) []byte
 	}
 	return resp
 }
-
