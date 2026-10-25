@@ -206,6 +206,14 @@ type ScanConfig struct {
 	// compiled-in corpus is attached; WithConfig can switch it off. Off with a corpus attached
 	// audits the built-ins alone, which is the honest opt-out.
 	CheckCorpus bool
+	// CheckGraphQLIngest gates the nested GraphQL argument insertion points on a real parse
+	// (graphql_ingest.go): at ingestion, gqlparser validates the parent document of every
+	// derived argument point, and a document no GraphQL server would accept yields no
+	// argument points - probing inside it would measure the server's parser error path, not
+	// a resolver. On by default, matching the other insertion-point families (nested points
+	// ship enabled unless the operator narrows them); switch it off to audit exactly the
+	// string-scan shape bcheck derives unvalidated.
+	CheckGraphQLIngest bool
 	// CheckExtendedCoverage admits every remaining catalog TypeIndex the registry declares — the
 	// Task 6 completeness sweep's native (header/CORS/CSP, cache poisoning/deception) and explicit
 	// declined rows. Off by default: these rows have no individual ScanConfig switch of their own
