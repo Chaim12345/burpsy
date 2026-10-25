@@ -42,7 +42,7 @@ func enumerateBodyPoints(t *testing.T, raw []byte) []bcheck.InsertionPoint {
 func TestGraphQLIngestRejectsMalformedDocuments(t *testing.T) {
 	malformed := []string{
 		`{book(title: "Dune"){author}} trailing-junk`, // garbage after the operation
-		`{book(9title: "Dune"){author}}`,             // argument name starts with a digit
+		`{book(9title: "Dune"){author}}`,              // argument name starts with a digit
 		`query { book(title: "Dune") {author} } garbage`,
 	}
 	for _, doc := range malformed {
@@ -137,7 +137,7 @@ func TestGraphQLIngestGateAtDispatch(t *testing.T) {
 	valid := vulnapp.Endpoint{Path: "/graphql-ok", Method: http.MethodPost, ContentType: "application/json",
 		Body: `{"query":"{book(title: \"Dune\"){author}}"}`}
 
-	cfgOn := &ScanConfig{CheckGraphQLIngest: true, MaxConcurrency: 2, Timeout: time.Minute}
+	cfgOn := &ScanConfig{MaxConcurrency: 2, Timeout: time.Minute} // gate on by the zero value
 	ct := newCheckTarget(t, handler, cfgOn, malformed, valid)
 
 	harnessPoints := func(path string) []bcheck.InsertionPoint {
@@ -161,7 +161,7 @@ func TestGraphQLIngestGateAtDispatch(t *testing.T) {
 		t.Fatalf("dispatch lost the valid document's argument point: %v", got)
 	}
 
-	ctOff := newCheckTarget(t, handler, &ScanConfig{MaxConcurrency: 2, Timeout: time.Minute}, malformed)
+	ctOff := newCheckTarget(t, handler, &ScanConfig{DisableGraphQLIngest: true, MaxConcurrency: 2, Timeout: time.Minute}, malformed)
 	ex, err := ctOff.rt.store.GetExchange(ctOff.rt.exchanges["/graphql-mal"])
 	if err != nil {
 		t.Fatal(err)
@@ -174,5 +174,53 @@ func TestGraphQLIngestGateAtDispatch(t *testing.T) {
 	}
 	if got := graphQLPointNames(h.Points()); len(got) == 0 {
 		t.Fatal("with the switch off the gate changed the dispatch anyway")
+	}
+}
+
+// The gate survives a zero-value ScanConfig: WithConfig(&ScanConfig{}) replaces the whole
+// struct, so a default-on switch declared as a bare bool would silently go off. The gate is
+// ingestion hygiene, not a check family - it must take a deliberate DisableGraphQLIngest to
+// audit the unvalidated string-scan shape.
+func TestGraphQLIngestSurvivesZeroValueConfig(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"book":{"author":"Herbert"}}}`)
+	})
+	malformed := vulnapp.Endpoint{Path: "/graphql-mal", Method: http.MethodPost, ContentType: "application/json",
+		Body: `{"query":"{book(title: \"Dune\"){author}} trailing-junk"}`}
+	ct := newCheckTarget(t, handler, &ScanConfig{}, malformed)
+	ex, err := ct.rt.store.GetExchange(ct.rt.exchanges["/graphql-mal"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	h, err := NewProbeHarness(ctx, NewCheckContext(ct.scan, ex, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := graphQLPointNames(h.Points()); len(got) != 0 {
+		t.Fatalf("zero-value ScanConfig switched the gate off; dispatch carries argument points for a malformed document: %v", got)
+	}
+}
+
+// The gate decodes the way bcheck decodes (internal/bcheck/insertion.go percentDecode,
+// insertion_graphql.go jsonStringContentDecode): '+' is NOT a space, and malformed escapes
+// survive verbatim. url.QueryUnescape drifts on both - it would translate the '+' in
+// `title:+"Dune"` into the whitespace that makes the document parse, keeping argument points
+// bcheck's own decode of the wire value never probes.
+func TestGraphQLIngestDecodesLikeBcheck(t *testing.T) {
+	// '+' preserved: {book(title:+"Dune"){author}} is not valid GraphQL, and only a
+	// plus-to-space translation makes it one.
+	if graphQLDocumentValid(`{book(title:+"Dune"){author}}`) {
+		t.Fatal("the decoder translated '+' to space; url.QueryUnescape semantics are not bcheck's")
+	}
+	// Malformed escapes preserved: %2G survives verbatim, so the document stays malformed.
+	if graphQLDocumentValid(`{book(title:%2G){author}}`) {
+		t.Fatal("a malformed percent escape vanished; the decoder must preserve it verbatim")
+	}
+	// Legitimate escapes still decode: %22 quotes make the document valid under bcheck's
+	// decoder too.
+	if !graphQLDocumentValid(`{book(title:%22Dune%22){author}}`) {
+		t.Fatal("a valid percent-encoded document lost its argument points; the decoder overcorrected")
 	}
 }

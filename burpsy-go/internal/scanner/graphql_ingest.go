@@ -24,7 +24,7 @@ package scanner
 
 import (
 	"encoding/json"
-	"net/url"
+	"fmt"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -47,26 +47,78 @@ const graphQLIngestMaxDocumentLen = 64 << 10
 const graphQLIngestTokenLimit = 1 << 18
 
 // graphQLDocumentValid reports whether doc parses as a GraphQL executable document under
-// every wire decoding it could plausibly carry: as-is first (a JSON string value bcheck
-// already decoded, or a form value that needed no escapes), then percent-decoded (a form or
-// query-string value), then JSON-string-content decoded (escapes a JSON carrier re-encoded).
-// "Valid under any decoding" keeps the gate conservative in the direction of coverage: only
-// a document malformed under EVERY decoding loses its points.
+// any of the wire decodings bcheck could have read it through. "Valid under any decoding"
+// keeps the gate conservative in the direction of coverage: only a document malformed under
+// EVERY decoding loses its points. bcheck decodes by the parent's coding, a field this
+// package cannot read, so the gate tries each decoding bcheck's GraphQL expansion uses and
+// trusts the union; the decoding bcheck itself used is always in the set.
 func graphQLDocumentValid(doc string) bool {
-	if len(doc) > graphQLIngestMaxDocumentLen {
-		return true // over-cap: bcheck derived nothing, nothing to gate
-	}
-	if graphQLParses(doc) {
-		return true
-	}
-	if un, err := url.QueryUnescape(doc); err == nil && un != doc && graphQLParses(un) {
-		return true
-	}
-	var un string
-	if err := json.Unmarshal([]byte(`"`+doc+`"`), &un); err == nil && un != doc && graphQLParses(un) {
-		return true
+	for _, cand := range graphQLDecodings(doc) {
+		// The cap bounds the parser's work on the DECODED document - the same measurement
+		// bcheck applies before scanning one for arguments. A candidate past it is skipped,
+		// not trusted; the decoding bcheck itself used is always under it (bcheck scanned
+		// the decoded document, which its own 64KB cap bounds), so the skip can only bite
+		// a document bcheck never derived argument points from.
+		if len(cand) > graphQLIngestMaxDocumentLen {
+			continue
+		}
+		if graphQLParses(cand) {
+			return true
+		}
 	}
 	return false
+}
+
+// graphQLDecodings returns the candidate decodings of a wire value, deduplicated: the value
+// as it sits on the wire, then percent-decoded, then as the content of a JSON string
+// literal. Each decoding matches bcheck's exactly - bcheck owns decode semantics, and the
+// gate follows, or it would keep points bcheck's own decode of the value never probes.
+func graphQLDecodings(doc string) []string {
+	out := make([]string, 0, 3)
+	seen := map[string]bool{}
+	for _, cand := range []string{doc, graphQLPercentDecode(doc), graphQLJSONStringContentDecode(doc)} {
+		if !seen[cand] {
+			seen[cand] = true
+			out = append(out, cand)
+		}
+	}
+	return out
+}
+
+// graphQLPercentDecode decodes %XX escapes and nothing else: '+' is an ordinary byte, not
+// a space, and an escape that is not two hex digits survives verbatim. This replicates
+// internal/bcheck/insertion.go's percentDecode - unexported there - which matches the
+// project's own percentEscape (which escapes '+') and so keeps the round trip stable.
+// net/url's QueryUnescape drifts on both counts.
+func graphQLPercentDecode(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			var b byte
+			if _, err := fmt.Sscanf(s[i+1:i+3], "%02X", &b); err == nil {
+				sb.WriteByte(b)
+				i += 2
+				continue
+			}
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
+}
+
+// graphQLJSONStringContentDecode unescapes the content of a JSON string literal (the bytes
+// between its quotes). Content that does not unescape is returned unchanged, exactly as
+// internal/bcheck/insertion_graphql.go's jsonStringContentDecode behaves.
+func graphQLJSONStringContentDecode(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var out string
+	if err := json.Unmarshal([]byte(`"`+s+`"`), &out); err != nil {
+		return s
+	}
+	return out
 }
 
 func graphQLParses(doc string) bool {
@@ -90,7 +142,7 @@ func filterGraphQLPointsByValidation(points []bcheck.InsertionPoint) []bcheck.In
 		}
 	}
 	valid := map[string]bool{}
-	out := points[:0]
+	out := make([]bcheck.InsertionPoint, 0, len(points))
 	for _, p := range points {
 		i := strings.Index(p.Name, graphQLIngestMarker)
 		if i < 0 {

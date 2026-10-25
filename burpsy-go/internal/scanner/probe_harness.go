@@ -182,7 +182,7 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	// parse yields no argument points - probing inside it measures the server's parser
 	// error path, never a resolver. Off, the harness ships the string-scan shape bcheck
 	// derives unvalidated.
-	if s.ConfigSnapshot().CheckGraphQLIngest {
+	if !s.ConfigSnapshot().DisableGraphQLIngest {
 		h.points = filterGraphQLPointsByValidation(h.points)
 	}
 

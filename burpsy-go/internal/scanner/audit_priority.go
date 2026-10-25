@@ -192,7 +192,7 @@ func (s *ActiveScanner) priorityItemFor(slot int, id core.ExchangeID, cfg AuditC
 	points, _ := bcheck.EnumerateWith(raw, cfg.insertionKinds(), cfg.enumerateOptions())
 	// The priority ledger reflects the same ingestion shape the dispatch sees: a rejected
 	// GraphQL document's argument points are not coverage the audit is about to run.
-	if s.ConfigSnapshot().CheckGraphQLIngest {
+	if !s.ConfigSnapshot().DisableGraphQLIngest {
 		points = filterGraphQLPointsByValidation(points)
 	}
 	for _, p := range points {
