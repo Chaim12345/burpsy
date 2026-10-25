@@ -298,11 +298,13 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "session", group: groupConfig,
-		short: "Reads the cookie jar, session rules and login, replays a login, resolves a recovery prompt, and reads, saves, removes or replays recorded login sequences.",
+		short: "Reads the cookie jar, session rules, token rules and login, replays a login, resolves a recovery prompt, and reads, saves, removes or replays recorded login sequences.",
 		ops: []string{
 			"GET /api/session/cookies", "POST /api/session/cookies", "POST /api/session/login",
 			"POST /api/session/prompts/", "GET /api/session/rules", "POST /api/session/rules",
 			"PUT /api/session/rules/", "DELETE /api/session/rules/", "POST /api/session/rules/",
+			"GET /api/session/token-rules", "POST /api/session/token-rules",
+			"PUT /api/session/token-rules/", "DELETE /api/session/token-rules/",
 			"GET /api/crawl/logins", "POST /api/crawl/logins", "DELETE /api/crawl/logins", "POST /api/crawl/logins/replay",
 		},
 	},

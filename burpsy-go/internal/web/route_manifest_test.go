@@ -429,6 +429,10 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		// which is the same authority as the other routes in this class — hence credential, not local.
 		"/api/session/prompts/",
 		"/api/session/rules", "/api/session/rules/",
+		// A token rule names the header and value pattern of a credential and hands burpsy the
+		// authority to replay it into later requests unattended; its GET returns the configured
+		// extraction of that credential. Same authority as the session rules beside it.
+		"/api/session/token-rules", "/api/session/token-rules/",
 		"/api/settings/triage",
 	}
 	equal := func(name string, got, want []string) {
