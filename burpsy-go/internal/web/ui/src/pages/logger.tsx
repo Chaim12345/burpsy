@@ -921,7 +921,7 @@ export function LoggerPage(): JSX.Element {
         detail={
          term || tool
           ? "Relax the search or switch back to all tools."
-          : "Every request burpsy makes or relays is recorded here — Repeater, Intruder, Scanner, Sequencer, the crawler and the proxy listener. HTTP history is the same traffic seen as browser requests."
+          : "Every request burpsy makes or relays is recorded here — Repeater, Intruder, Scanner, Sequencer, extensions (a plugin's http.send), the crawler and the proxy listener. HTTP history is the same traffic seen as browser requests."
         }
        />
       }
