@@ -273,21 +273,36 @@ func TestSubtaskCannotWidenScopeOrLoosenPolicy(t *testing.T) {
 }
 
 func TestSubtaskDepthAndCountLimits(t *testing.T) {
-	var spawn func(Task, SpawnRequest) Planner
 	s := newSup(&fakeInvoker{}, nil, Policy{})
 	s.MaxDepth, s.MaxChildren = 1, 2
-	spawn = func(Task, SpawnRequest) Planner {
+	s.ChildPlanner = func(Task, SpawnRequest) Planner {
 		return &scriptedPlanner{turns: []Proposal{{Spawns: []SpawnRequest{{Goal: "grandchild"}}, AwaitChildren: true}}}
 	}
-	s.ChildPlanner = spawn
 	parent := &scriptedPlanner{turns: []Proposal{{Spawns: []SpawnRequest{{Goal: "1"}, {Goal: "2"}, {Goal: "3"}}, AwaitChildren: true}}}
 	r := runTask(t, s, parent, Task{ID: "p"})
 	snap := r.Snapshot()
 	if len(snap.Children) != 2 {
 		t.Fatalf("MaxChildren 2: got %v", snap.Children)
 	}
-	for _, id := range snap.Children {
-		_ = id
+	var limited bool
+	for _, e := range snap.Transcript {
+		limited = limited || (e.Kind == EventRefused && strings.Contains(e.Message, "sub-task limit"))
+	}
+	if !limited {
+		t.Error("the third spawn must be refused and recorded")
+	}
+	for _, k := range r.children {
+		ks := k.Snapshot()
+		if len(ks.Children) != 0 {
+			t.Fatalf("MaxDepth 1: a child spawned %v", ks.Children)
+		}
+		var deep bool
+		for _, e := range ks.Transcript {
+			deep = deep || (e.Kind == EventRefused && strings.Contains(e.Message, "depth limit"))
+		}
+		if !deep {
+			t.Errorf("child %s: the grandchild spawn must be refused for depth", ks.ID)
+		}
 	}
 }
 

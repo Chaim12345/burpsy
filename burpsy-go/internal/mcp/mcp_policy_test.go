@@ -114,7 +114,7 @@ func TestAskSettingRaisesRequiresConfirmationAndNeverLowersIt(t *testing.T) {
 func TestManualModeMarksEveryNonReadToolAsRequiringConfirmation(t *testing.T) {
 	got := listWith(t, Options{Policy: policyFn(agent.Policy{Mode: agent.ModeManual})})
 	for _, g := range got {
-		if !policyExempt(g.Name) && !g.Annotations.ReadOnly && !g.Annotations.RequiresConfirmation {
+		if g.Name != "burpsy_confirm" && g.Name != "burpsy_task_status" && !g.Annotations.ReadOnly && !g.Annotations.RequiresConfirmation {
 			t.Errorf("%s writes but does not require confirmation in Manual mode", g.Name)
 		}
 	}
@@ -165,11 +165,73 @@ func TestIsPolicyPath(t *testing.T) {
 	for p, want := range map[string]bool{
 		"/api/settings/agent-policy": true, "/api/settings/agent-policy/": true, "/API/Settings/Agent-Policy": true,
 		"/api/settings//agent-policy": true, "/api/settings/x/../agent-policy": true,
-		"/api/settings/agent-policy?x=1": true,
-		"/api/settings/triage":           false, "/api/history": false,
+		"/api/settings/agent-policy?x=1": true, "/api/settings/agent-policy/x": true, "/api/settings/agent-policyx": false,
+		"/api/settings/triage": false, "/api/history": false,
 	} {
 		if got := isPolicyPath(p); got != want {
 			t.Errorf("%q: got %v want %v", p, got, want)
 		}
+	}
+}
+
+// One server, the policy changing underneath it: the stored descriptors must not carry an earlier
+// policy's changes into the next listing.
+func TestPolicyIsReadLiveAndNeverLeaksIntoTheStoredDescriptors(t *testing.T) {
+	all := listWith(t, Options{})
+	var read groupedTool
+	for _, g := range all {
+		if !g.Annotations.RequiresConfirmation {
+			read = g
+			break
+		}
+	}
+	cur := agent.Policy{Tools: map[string]agent.ToolSetting{read.Name: agent.SettingAsk}}
+	opts := Options{BaseURL: "http://127.0.0.1:1", Policy: func() agent.Policy { return cur }}
+	var out strings.Builder
+	opts.In, opts.Out = strings.NewReader(""), &out
+	s, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	find := func() groupedTool {
+		var lst struct {
+			Tools []groupedTool `json:"tools"`
+		}
+		raw, _ := json.Marshal(map[string]any{"tools": s.visibleTools()})
+		if err := json.Unmarshal(raw, &lst); err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range lst.Tools {
+			if g.Name == read.Name {
+				return g
+			}
+		}
+		return groupedTool{}
+	}
+	if !find().Annotations.RequiresConfirmation {
+		t.Fatal("Ask must raise requiresConfirmation")
+	}
+	cur = agent.Policy{}
+	if g := find(); g.Name == "" || g.Annotations.RequiresConfirmation {
+		t.Fatalf("after the policy relaxed the descriptor must be the manifest's again: %+v", g)
+	}
+}
+
+func TestTheTransportsOwnToolsAreNotSubjectToPolicy(t *testing.T) {
+	pol := agent.Policy{Mode: agent.ModeManual, Tools: map[string]agent.ToolSetting{confirmToolName: agent.SettingDisabled, taskStatusToolName: agent.SettingDisabled}}
+	var seen int
+	for _, g := range listWith(t, Options{Policy: policyFn(pol)}) {
+		switch g.Name {
+		case confirmToolName:
+			seen++
+			if g.Annotations.RequiresConfirmation {
+				t.Error("burpsy_confirm must not advertise requiresConfirmation: it is the mint step")
+			}
+		case taskStatusToolName:
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("burpsy_confirm and burpsy_task_status must stay listed whatever the policy says, saw %d", seen)
 	}
 }

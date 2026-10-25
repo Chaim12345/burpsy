@@ -70,6 +70,9 @@ type ExploreReport struct {
 // BuildReport reads a finished run's snapshot.
 func BuildReport(s Snapshot) ExploreReport {
 	rep := ExploreReport{RunID: s.ID, Status: s.Status, Summary: s.Summary, Vectors: s.Vectors, Attempts: []Attempt{}}
+	if rep.Vectors == nil {
+		rep.Vectors = []string{}
+	}
 	for _, st := range s.Steps {
 		if st.Risk == RiskRead {
 			continue
