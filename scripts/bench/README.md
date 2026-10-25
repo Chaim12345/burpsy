@@ -198,6 +198,27 @@ turns that tool's own output into this shape. Output is `parity.json` plus `pari
     python3 scripts/bench/parity.py --burpsy B.json --reference R.json [--truth T.json] --out DIR --ref-name sqlmap
     python3 scripts/bench/parity_test.py
 
-Not built yet: the reference-tool adapters and pinned, hash-checked installs, the containerised
-public suites (OWASP Benchmark, WAVSEP, DVWA, Juice Shop), and the nightly job that runs them under
-`scripts/capped-run.sh` and stores results.
+## Parity harness (j1mk.1)
+
+`parity_run.py` is the harness every class bead uses: one class spec in `parity_specs.CLASSES`
+(seed targets, the scanner rows the comparison counts, the reference tool's argv, ground truth
+where the target declares it), then per class it collects burpsy's findings through the proxy and
+audit API, runs the pinned reference tool (`parity_tools.py` — pinned URL + SHA-256 + stamp, same
+discipline as `ci-install-tools.sh`, each pin's note recording the tool's maintenance status when
+checked), adapts both sides to the shared finding shape (`parity_adapters.py`), and diffs them
+with `parity.py`. Output per class: `burpsy.json`, `reference.json`, `reference.raw.txt`,
+`truth.json` when given, `parity.json`, `parity.md`; plus one line per run in `history.jsonl`, so
+the nightly trend is readable without digging artifacts.
+
+    python3 scripts/bench/parity_run.py --list
+    python3 scripts/bench/parity_run.py --all --out /tmp/parity \
+      --burpsy-web http://127.0.0.1:18081 --burpsy-proxy http://127.0.0.1:18080
+
+Nightly: the `bench-parity` job in `.github/workflows/nightly.yml` (report, not a gate);
+`nightly-parity.sh` is the capped local/agent entry point (it wraps `scripts/capped-run.sh`, which
+CI deliberately does not use).
+
+Not built yet: the containerised public suites (OWASP Benchmark, WAVSEP, DVWA, Juice Shop) — they
+need Docker, which the agent sandboxes do not have — and the per-class specs, which land with
+their beads (j1mk.13 hidden parameters vs Arjun, j1mk.14 CORS vs Corsy, j1mk.15 CRLF vs crlfuzz,
+...).
