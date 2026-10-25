@@ -265,9 +265,16 @@ export function RepeaterPage(): JSX.Element {
  // response history and the view position only ever hold keys for tabs that still exist.
  useEffect(() => {
   const alive = new Set(tabs.map((tab) => tab.id));
-  setHistory((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
-  setViewing((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
-  setPreviousEncoding((current) => Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id))));
+  // Hand back the SAME object when no key is dead: this runs on every keystroke (a draft edit
+  // replaces `tabs`), and a fresh object each time is a state update each time, which React counts
+  // as a nested passive update and stops at 50 ("Maximum update depth exceeded").
+  const pruned = <T,>(current: Record<string, T>): Record<string, T> =>
+   Object.keys(current).every((id) => alive.has(id))
+    ? current
+    : Object.fromEntries(Object.entries(current).filter(([id]) => alive.has(id)));
+  setHistory(pruned);
+  setViewing(pruned);
+  setPreviousEncoding(pruned);
  }, [tabs]);
 
  const [renamingTab, setRenamingTab] = useState<string | null>(null);
