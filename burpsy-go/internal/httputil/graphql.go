@@ -2,9 +2,11 @@ package httputil
 
 // GraphQL carrier codecs (burpsy-react-ui-4xqt.3). A GraphQL request carries its query inside
 // one string - a JSON body field or a URL/form parameter - and the Repeater's query editor must
-// decode that string to edit and re-encode it to send, with EXACTLY the semantics the scanner's
-// ingest gate uses, or the operator edits one document and the scanner proves another. These
-// are body-identical to the project's two existing copies, which are unexported:
+// decode that string to edit and re-encode it to send, with the scanner's ingest gate's
+// semantics, or the operator edits one document and the scanner proves another. Semantically
+// identical to the project's two existing unexported copies - the ENCODED form differs only
+// where the JSON grammar does (U+2028/U+2029 and invalid UTF-8, which Go's encoder escapes
+// and a byte-level decode does not): the same document, not always the same bytes:
 // internal/bcheck/insertion.go's percentDecode/percentEscape and
 // internal/scanner/graphql_ingest.go's graphQLPercentDecode (itself a copy of bcheck's), and
 // bcheck insertion_graphql.go's jsonStringContentDecode. The parity tests pin the shared
@@ -14,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 // GraphQLPercentDecode decodes %XX escapes and nothing else: '+' is an ordinary byte, not a
@@ -110,20 +111,20 @@ func GraphQLJSONStringContentEncode(s string) string {
 // an index lands on an operation the operator never saw, so any change here is a change
 // there.
 func LooksLikeGraphQLDocument(text string) bool {
-	trimmed := strings.TrimLeftFunc(text, unicode.IsSpace)
+	trimmed := strings.TrimLeftFunc(text, isJSWhitespace)
 	for strings.HasPrefix(trimmed, "#") {
 		nl := strings.IndexByte(trimmed, '\n')
 		if nl < 0 {
 			return false
 		}
-		trimmed = strings.TrimLeftFunc(trimmed[nl+1:], unicode.IsSpace)
+		trimmed = strings.TrimLeftFunc(trimmed[nl+1:], isJSWhitespace)
 	}
 	if trimmed == "" {
 		return false
 	}
 	for _, kw := range []string{"query", "mutation", "subscription", "fragment"} {
 		if rest, ok := strings.CutPrefix(trimmed, kw); ok {
-			if rest == "" || !isGraphQLNameRune(rune(rest[0])) {
+			if rest == "" || !isJSWordByte(rest[0]) {
 				return true
 			}
 		}
@@ -134,8 +135,21 @@ func LooksLikeGraphQLDocument(text string) bool {
 	return !json.Valid([]byte(trimmed))
 }
 
-// isGraphQLNameRune mirrors the \b in the console's keyword test: a keyword followed by a
-// name character (a letter, digit, '_' or '$') is a longer word, not the keyword.
-func isGraphQLNameRune(r rune) bool {
-	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r)
+// isJSWhitespace is JavaScript's WhiteSpace + LineTerminator set - what the console's
+// trimStart and \s strip. Notably IN: U+FEFF (the BOM); notably OUT: U+0085 (NEL), which
+// unicode.IsSpace would strip and JavaScript does not. The two predicates index the same
+// operation list, so "leading whitespace" is one set, spelled twice.
+func isJSWhitespace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', 0x00A0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200A
+}
+
+// isJSWordByte mirrors the \b in the console's keyword test: JavaScript's \w is ASCII-only
+// ([A-Za-z0-9_] - no '$', no accented letters), so the boundary check is a byte check and a
+// multibyte rune's first byte is already non-word, exactly what \b says there.
+func isJSWordByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

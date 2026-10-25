@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectGraphQL, looksLikeGraphQLDocument } from "./message-views";
+import { detectGraphQL, graphQLPercentDecode, looksLikeGraphQLDocument } from "./message-views";
 
 // The console half of the 4xqt.3 review fixes: the list the console shows is the list the
 // edit-apply route indexes, in the route's carrier precedence - the URL query parameter
@@ -19,6 +19,67 @@ describe("the GraphQL document filter", () => {
   expect(looksLikeGraphQLDocument('{"a":1}')).toBe(false);
   expect(looksLikeGraphQLDocument("# a comment\nquery Q { a }")).toBe(true);
   expect(looksLikeGraphQLDocument("querystring { a }")).toBe(false);
+ });
+});
+
+describe("the document filter is one predicate on both sides", () => {
+ // The same probe table as TestLooksLikeGraphQLDocumentMatchesTheConsolePredicate in Go.
+ const probes: [string, boolean][] = [
+  ["{ a }", true],
+  ['{"a":1}', false],
+  ["query Q { a }", true],
+  ["mutation M { a }", true],
+  ["subscription S { a }", true],
+  ["fragment F on T { a }", true],
+  ["# a comment\nquery Q { a }", true],
+  ["# a comment without a newline", false],
+  ["", false],
+  ["   ", false],
+  ["https://example.test/graphql", false],
+  ["query$bad", true],
+  ["queryé", true],
+  ["queryx", false],
+  ["query_2", false],
+  ["query2", false],
+  ["\ufeff{a}", true],
+  ["\u0085{a}", false],
+  ["\u00a0{a}", true],
+ ];
+ test("every shared probe reads the same as the Go predicate", () => {
+  for (const [input, want] of probes) {
+   expect(looksLikeGraphQLDocument(input)).toBe(want);
+  }
+ });
+});
+
+describe("the URL carrier is read with the server's decode", () => {
+ test("'+' is data, not a space", () => {
+  const doc = detectGraphQL(
+   "POST /graphql?query=query+%7Ba%7D HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+  );
+  expect(doc?.source).toBe("query string");
+  expect(doc?.operations[0]?.query).toBe("query+{a}");
+ });
+
+ test("a partial escape decodes its valid prefix or survives, Sscanf semantics", () => {
+  const doc = detectGraphQL(
+   "POST /graphql?query=%7Ba%7D%2 HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+  );
+  expect(doc?.operations[0]?.query).toBe("{a}%2");
+ });
+
+ test("an encoded parameter name is not the carrier", () => {
+  const doc = detectGraphQL(
+   "POST /graphql?%71uery=%7Ba%7D HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+  );
+  expect(doc).toBeNull();
+ });
+
+ test("the first query= pair wins", () => {
+  const doc = detectGraphQL(
+   "POST /graphql?query=%7Ba%7D&query=%7Bb%7D HTTP/1.1\r\nHost: shop.example\r\n\r\n",
+  );
+  expect(doc?.operations[0]?.query).toBe("{a}");
  });
 });
 

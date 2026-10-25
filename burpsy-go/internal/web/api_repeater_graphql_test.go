@@ -212,3 +212,40 @@ func TestRepeaterGraphQLQueryNamesTheCarriersItWillNotEdit(t *testing.T) {
 		t.Errorf("the form carrier was not refused by name: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRepeaterGraphQLQueryCountsDuplicateKeysLikeJSONParse(t *testing.T) {
+	s := newTestServer()
+	// JSON.parse reads a duplicate key last-wins, so the console's list carries {b}; the
+	// server's index 0 must name the same operation, not the shadowed {a}.
+	raw := "POST /graphql HTTP/1.1\r\nHost: shop.example\r\nContent-Length: 32\r\n\r\n" +
+		`{"query":"{a}","query":"{b}"}`
+	rec := postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": raw, "index": 0, "query": "{c}",
+	})
+	var resp repeaterGraphQLQueryResp
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp.Request, `{"query":"{a}","query":"{c}"}`) {
+		t.Errorf("a duplicate key did not resolve last-wins like JSON.parse:\n%s", resp.Request)
+	}
+	// Inside a batch the rule is per element: the shadowed key of element one does not
+	// shift element two.
+	batch := "POST /graphql HTTP/1.1\r\nHost: shop.example\r\nContent-Length: 52\r\n\r\n" +
+		`[{"query":"{a}","query":"{b}"},{"query":"{c}"}]`
+	rec = postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": batch, "index": 1, "query": "{d}",
+	})
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp.Request, `[{"query":"{a}","query":"{b}"},{"query":"{d}"}]`) {
+		t.Errorf("a duplicate key in one batch element shifted the next element's index:\n%s", resp.Request)
+	}
+	// A trailing duplicate that is not a document EMPTIES the slot (JSON.parse would hand
+	// the console a non-operation): the first key is not editable either.
+	shadowed := "POST /graphql HTTP/1.1\r\nHost: shop.example\r\nContent-Length: 33\r\n\r\n" +
+		`{"query":"{a}","query":"note"}`
+	rec = postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": shadowed, "index": 0, "query": "{c}",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("a shadowed query key stayed editable: %d %s", rec.Code, rec.Body.String())
+	}
+}

@@ -60,9 +60,12 @@ export function GraphQLView({
   <div className="typed-view">
    <p className="typed-source">Carried in the {doc.source}.</p>
    {raw !== undefined && onChange !== undefined && !carrierEditable ? (
+    // The server's own refusal (graphQLUneditableCarrierReason), verbatim - the route names
+    // the carrier, and the screen says the same words, so keep the two strings in step.
     <Note>
-     The edit path rewrites the URL query parameter and JSON body carriers only - edit this one on
-     the Raw view.
+     {doc.source === "application/graphql body"
+      ? "uneditable carrier: the body IS the GraphQL document (application/graphql) - the edit path rewrites the URL query parameter and JSON body carriers only; edit it on the Raw view instead"
+      : "uneditable carrier: the GraphQL document rides a url-encoded form field - the edit path rewrites the URL query parameter and JSON body carriers only; edit it on the Raw view instead"}
     </Note>
    ) : null}
    {doc.operations.map((operation, index) => (
@@ -111,11 +114,12 @@ export function GraphQLView({
 }
 
 /**
- * One operation's editable query (burpsy-react-ui-4xqt.3). Check parses the draft with the
- * server's pinned gqlparser - the scanner's own parser and limit, so a document that passes
- * here is a document the scanner's gate would read - and Apply rewrites exactly this
- * operation's query inside the carrier, server-side, so no client re-serialisation can drift
- * the bytes around the edit. Nothing applies itself: both steps are the operator's click.
+ * One operation's editable query (burpsy-react-ui-4xqt.3). Check is SYNTAX-ONLY: the
+ * server's pinned gqlparser with the scanner's token limit, without the ingest gate's 64KiB
+ * document cap and union-of-decodings, so a document that passes here can still be one the
+ * gate declines. Apply rewrites exactly this operation's query inside the carrier,
+ * server-side, so no client re-serialisation can drift the bytes around the edit. Nothing
+ * applies itself: both steps are the operator's click.
  */
 function GraphQLOperationEditor({
  raw,
@@ -141,8 +145,21 @@ function GraphQLOperationEditor({
   setApplyError(null);
  }, [operation.query]);
  // Apply resolves asynchronously; a draft the operator has since typed over must not be
- // overwritten by the older resolution (the rsu2 pick-batch generation guard).
+ // overwritten by the older resolution (the rsu2 pick-batch generation guard). Typing bumps
+ // the generation; so does the raw prop moving under the pending Apply (a Raw-view edit),
+ // and so does the unmount - the guard is the only thing a dead component's promise still
+ // shares with the live one.
  const applyGen = useRef(0);
+ const rawRef = useRef(raw);
+ useEffect(() => {
+  if (rawRef.current !== raw) {
+   rawRef.current = raw;
+   applyGen.current++;
+  }
+ }, [raw]);
+ useEffect(() => () => {
+  applyGen.current++;
+ }, []);
  const dirty = draft !== operation.query;
  const check = () => {
   setBusy(true);

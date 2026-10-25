@@ -480,6 +480,30 @@ function operationFrom(record: Record<string, unknown>): GraphQLOperation | null
 }
 
 /**
+ * The server's percent decode (httputil.GraphQLPercentDecode), spelled in TS: %XX escapes
+ * decode and nothing else - '+' is an ordinary byte, not a space, a partial escape decodes
+ * its valid prefix (Sscanf semantics), and an escape with no hex digit survives as-is. The
+ * console reads the URL carrier with the server's decode so the document it shows is the
+ * document the edit route indexes.
+ */
+export function graphQLPercentDecode(text: string): string {
+ let out = "";
+ for (let i = 0; i < text.length; i++) {
+  if (text[i] === "%" && i + 2 < text.length) {
+   const h1 = parseInt(text.charAt(i + 1), 16);
+   if (!Number.isNaN(h1)) {
+    const h2 = parseInt(text.charAt(i + 2), 16);
+    out += String.fromCharCode(Number.isNaN(h2) ? h1 : h1 * 16 + h2);
+    i += 2;
+    continue;
+   }
+  }
+  out += text[i];
+ }
+ return out;
+}
+
+/**
  * The GraphQL document a request carries, or null when it carries none.
  *
  * The precedence is the server's edit precedence (burpsy-react-ui-4xqt.3): the URL query
@@ -498,23 +522,33 @@ export function detectGraphQL(raw: string): GraphQLDocument | null {
  const body = parsed.body;
 
  // GET /graphql?query={__typename} — the server's first carrier, whatever the body holds.
+ // The pair walk is the server's own (graphQLParamSpans): the name matches the raw bytes
+ // ("query=" only - an encoded name like %71uery is not the carrier), the FIRST matching
+ // pair wins, and the value is read with the server's percent decode ('+' stays data).
  const target = parsed.startLine.split(/\s+/)[1] ?? "";
- const inQuery = queryOf(target);
- const queryParam = inQuery.find(([name]) => name === "query")?.[1];
- if (queryParam !== undefined && looksLikeGraphQLDocument(queryParam)) {
-  const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
-  const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
-  return {
-   source: "query string",
-   operations: [
-    {
-     operationName: nameRaw ?? null,
-     query: queryParam,
-     variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
-     extensions: null,
-    },
-   ],
-  };
+ const question = target.indexOf("?");
+ if (question >= 0) {
+  for (const pair of target.slice(question + 1).split("&")) {
+   if (!pair.startsWith("query=")) continue;
+   const queryParam = graphQLPercentDecode(pair.slice("query=".length));
+   if (looksLikeGraphQLDocument(queryParam)) {
+    const inQuery = queryOf(target);
+    const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
+    const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
+    return {
+     source: "query string",
+     operations: [
+      {
+       operationName: nameRaw ?? null,
+       query: queryParam,
+       variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
+       extensions: null,
+      },
+     ],
+    };
+   }
+   break;
+  }
  }
 
  if (body.length <= GRAPHQL_BODY_LIMIT && body.includes("query")) {

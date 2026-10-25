@@ -253,6 +253,13 @@ func graphQLJSONSpans(body string) []graphQLQuerySpan {
 	depth := 0
 	inString := false
 	escaped := false
+	// JSON.parse reads a duplicate key last-wins, so the console's operation list carries one
+	// "query" per operation object - the last one. The walk must count the same way or a
+	// duplicate key shifts every index after it: one slot per operation object, the last
+	// "query" key of that object taking it, a non-document or non-string value emptying it.
+	objectSeq := 0
+	slots := map[int]graphQLQuerySpan{}
+	var order []int
 	for i := off; i < len(body); i++ {
 		c := body[i]
 		switch {
@@ -270,20 +277,35 @@ func graphQLJSONSpans(body string) []graphQLQuerySpan {
 				// is this same filter - one predicate, httputil.LooksLikeGraphQLDocument): a
 				// batch element whose "query" is a URL or a note is data, not an operation,
 				// and indexing it would land the edit on an entry the operator never saw.
-				if vs, ve, ok := graphQLStringValueSpan(body, end); ok &&
-					httputil.LooksLikeGraphQLDocument(httputil.GraphQLJSONStringContentDecode(body[vs:ve])) {
-					spans = append(spans, graphQLQuerySpan{start: vs, end: ve, source: "body"})
-					// The value is consumed through its closing quote: leave string state and
-					// skip the content, so a "query" inside it is data, not a key.
+				if vs, ve, ok := graphQLStringValueSpan(body, end); ok {
+					// The value is consumed through its closing quote: leave string state
+					// and skip the content, so a "query" inside it is data, not a key.
 					inString = false
 					i = ve
+					if httputil.LooksLikeGraphQLDocument(httputil.GraphQLJSONStringContentDecode(body[vs:ve])) {
+						if _, seen := slots[objectSeq]; !seen {
+							order = append(order, objectSeq)
+						}
+						slots[objectSeq] = graphQLQuerySpan{start: vs, end: ve, source: "body"}
+					} else {
+						delete(slots, objectSeq)
+					}
 					continue
 				}
+				delete(slots, objectSeq)
 			}
 		case !inString && (c == '{' || c == '['):
 			depth++
+			if c == '{' && depth == wantDepth {
+				objectSeq++
+			}
 		case !inString && (c == '}' || c == ']'):
 			depth--
+		}
+	}
+	for _, seq := range order {
+		if span, ok := slots[seq]; ok {
+			spans = append(spans, span)
 		}
 	}
 	return spans

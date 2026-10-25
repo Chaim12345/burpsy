@@ -49,3 +49,43 @@ func TestGraphQLJSONStringContentCodecRoundTrips(t *testing.T) {
 		t.Errorf("invalid escape = %q, want unchanged", got)
 	}
 }
+
+// The console's looksLikeGraphQLDocument (message-views.ts) is the other spelling of this
+// predicate; the two index one operation list, so the shared probe table must read the same
+// on both sides. The TS test carries the same table.
+func TestLooksLikeGraphQLDocumentMatchesTheConsolePredicate(t *testing.T) {
+	probes := []struct {
+		in   string
+		want bool
+	}{
+		{"{ a }", true},
+		{`{"a":1}`, false},
+		{"query Q { a }", true},
+		{"mutation M { a }", true},
+		{"subscription S { a }", true},
+		{"fragment F on T { a }", true},
+		{"# a comment\nquery Q { a }", true},
+		{"# a comment without a newline", false},
+		{"", false},
+		{"   ", false},
+		{"https://example.test/graphql", false},
+		// The keyword boundary is JavaScript's \b: ASCII \w only - '$' and non-ASCII
+		// letters END the word there, so these read as the keyword.
+		{"query$bad", true},
+		{"queryé", true},
+		{"queryx", false},
+		{"query_2", false},
+		{"query2", false},
+		// Leading-whitespace parity: the BOM is JavaScript whitespace, NEL (U+0085) is
+		// not, and neither is a raw 0x85 byte.
+		{"\ufeff{a}", true},
+		{"\u0085{a}", false},
+		{"\u00a0{a}", true},
+	}
+	for _, probe := range probes {
+		if got := LooksLikeGraphQLDocument(probe.in); got != probe.want {
+			t.Errorf("LooksLikeGraphQLDocument(%q) = %v, want %v (the console reads %v)",
+				probe.in, got, probe.want, probe.want)
+		}
+	}
+}
