@@ -107,9 +107,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      # Depth 2: the new-issues-only golangci-lint run compares with HEAD^1 (the base tip on a pull
+      # request's merge commit) or with the commit a push moved past.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Fetch the pushed-over commit
+        if: github.event_name == 'push'
+        working-directory: .
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: git fetch --no-tags --depth=1 origin "$BEFORE" || echo "could not fetch $BEFORE; golangci-lint falls back to HEAD^1"
       - uses: ./.github/actions/burpsy-test-env
         id: env
         with:
@@ -127,6 +137,16 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
+      # golangci-lint (v2) on the lines this change touches only: the findings already in the tree
+      # are a backlog, not a gate (scripts/ci/golangci.yml has the linter set and the reasons).
+      - name: golangci-lint (new issues only)
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: ../scripts/ci-lint.sh lint "$BASE"
+      # govulncheck: fails on a reachable vulnerability that is not in
+      # scripts/ci/govulncheck-baseline.txt, so a NEW one blocks and the known ones are tracked.
+      - name: govulncheck (new reachable vulnerabilities only)
+        run: ../scripts/ci-lint.sh vuln
       - name: Save the Go cache (lint)
         if: always() && github.event_name != 'pull_request' && steps.env.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
