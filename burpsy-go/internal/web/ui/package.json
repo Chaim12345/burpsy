@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@codemirror/language": "^6",
+    "@codemirror/merge": "^6.12.3",
     "@codemirror/search": "^6",
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",

@@ -747,6 +747,8 @@ export function RepeaterPage(): JSX.Element {
    * message, and painting the first response's diff over it would mark the wrong bytes.
    */
   const [highlightChanges, setHighlightChanges] = useState(true);
+  // Burp-style inline diff over the Raw view (6ibj), client-side, so it needs no server round trip.
+  const [inlineDiff, setInlineDiff] = useState(false);
   const previousHttp = (() => {
     for (let index = viewIndex - 1; index >= 0; index--) {
       const entry = activeHistory[index];
@@ -1423,6 +1425,13 @@ export function RepeaterPage(): JSX.Element {
                   ) : null}
                 </>
               ) : null}
+              {httpResult && previousHttp && chainResponse == null ? (
+                <Tooltip content="Show the previous send's response and what changed in place, in the Raw view (deleted lines above inserted ones)">
+                  <Button variant="outline" size="small" aria-pressed={inlineDiff} onClick={() => setInlineDiff((on) => !on)}>
+                    {inlineDiff ? "Inline diff: on" : "Inline diff"}
+                  </Button>
+                </Tooltip>
+              ) : null}
               {httpResult && previousHttp ? (
                 <Tooltip
                   content={
@@ -2047,7 +2056,8 @@ export function RepeaterPage(): JSX.Element {
                     ? httpResult.response_unpacked_body_base64
                     : httpResult?.response_body_base64
               }
-              changeMarks={highlightChanges && chainResponse == null ? changeMarks?.marks : undefined}
+              changeMarks={highlightChanges && chainResponse == null && !(inlineDiff && previousHttp) ? changeMarks?.marks : undefined}
+              compareWith={inlineDiff && previousHttp && chainResponse == null ? shownResponse(previousHttp) : undefined}
               saveGraphQLToSiteMap={saveGraphQLToSiteMap}
               requestPath={requestTargetPath(viewedRequest ?? active.request)}
               filename="repeater-response.txt"

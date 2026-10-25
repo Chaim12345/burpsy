@@ -44,6 +44,7 @@ import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { extraEditorTabs } from "../lib/editor-extra-tabs";
+import { inlineDiffExtension } from "../lib/inline-diff";
 import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
 import { INTROSPECTION_QUERY, LEGACY_INTROSPECTION_QUERY, setGraphQLQuery } from "../lib/graphql-introspection";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
@@ -638,6 +639,7 @@ export function HttpEditor({
  menuGroups,
  payloadMarks,
  changeMarks,
+ compareWith,
  saveGraphQLToSiteMap,
  auditSelection,
  onBodyBytesChange,
@@ -690,6 +692,13 @@ export function HttpEditor({
   * the wrong thing there.
   */
  changeMarks?: ChangeMark[];
+ /**
+  * The previous response, to lay over this one as an inline diff (burpsy-react-ui-6ibj,
+  * lib/inline-diff.ts). Raw view only, where the document is the message itself; Pretty and the
+  * charset override show a different text, so a diff there would name the wrong lines. Replaces
+  * `changeMarks` while set: the two highlight the same changes in different ways.
+  */
+ compareWith?: string;
  /**
   * Burp's GraphQL > "Save GraphQL queries to site map" (7v1e). Given by a surface that knows the
   * exchange behind the message (Repeater); `enabled` says whether that exchange's response is an
@@ -1191,10 +1200,11 @@ export function HttpEditor({
  // document are the same characters (CRLF aside, which changeDecorations maps).
  const markedExtensions = useMemo(() => {
   const withSeparator = [...extensions, EditorState.lineSeparator.of(separator)];
+  if (compareWith != null && active === "raw" && !charsetActive) return [...withSeparator, inlineDiffExtension(compareWith, separator)];
   if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return withSeparator;
   const docLength = value.length - (separator === "\r\n" ? (value.match(/\r\n/g)?.length ?? 0) : 0);
   return [...withSeparator, changeDecorations(value, docLength, changeMarks)];
- }, [extensions, changeMarks, active, charsetActive, value, separator]);
+ }, [extensions, changeMarks, compareWith, active, charsetActive, value, separator]);
  const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict

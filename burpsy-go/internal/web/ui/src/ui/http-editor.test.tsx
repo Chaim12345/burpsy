@@ -45,3 +45,20 @@ describe("HttpEditor line endings", () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe("HttpEditor inline diff (6ibj)", () => {
+  test("compareWith lays the previous response over the Raw view", async () => {
+    const previous = "HTTP/1.1 200 OK\r\nA: 1\r\n\r\nbody";
+    const current = "HTTP/1.1 200 OK\r\nA: 2\r\n\r\nbody";
+    const { container } = render(<HttpEditor value={current} readOnly label="Response" compareWith={previous} />);
+    await waitFor(() => expect(viewOf(container).state.sliceDoc(0)).toBe(current));
+    await waitFor(() => expect(container.querySelector(".cm-deletedChunk")).not.toBeNull());
+    expect(container.querySelector(".cm-deletedChunk")?.textContent).toContain("A: 1");
+  });
+
+  test("without compareWith there is no diff", async () => {
+    const { container } = render(<HttpEditor value="x" readOnly label="Response" />);
+    await waitFor(() => expect(viewOf(container).state.sliceDoc(0)).toBe("x"));
+    expect(container.querySelector(".cm-deletedChunk")).toBeNull();
+  });
+});
