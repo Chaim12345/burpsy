@@ -20,21 +20,17 @@ const SKELETON_BAR_WIDTHS = [28, 44, 110, 78, 36, 52];
  * rather than a single grey block. See `skeleton-row.jsx`.
  */
 export function SkeletonRows({ count = 6, label = "Loading" }: { count?: number; label?: string }): JSX.Element {
-  return (
-    <div className="skeleton-rows" role="status" aria-busy="true" aria-label={label}>
-      {Array.from({ length: count }, (_, rowIndex) => (
-        <div
-          key={rowIndex}
-          className="skeleton-row"
-          style={{ "--row-skeleton": `var(--skeleton-${(rowIndex % 4) + 1})` } as CSSProperties}
-        >
-          {SKELETON_BAR_WIDTHS.map((width, barIndex) => (
-            <span key={barIndex} className="skeleton-bar" style={{ width }} />
-          ))}
-        </div>
-      ))}
+ return (
+  <div className="skeleton-rows" role="status" aria-busy="true" aria-label={label}>
+   {Array.from({ length: count }, (_, rowIndex) => (
+    <div key={rowIndex} className="skeleton-row" style={{ "--row-skeleton": `var(--skeleton-${(rowIndex % 4) + 1})` } as CSSProperties}>
+     {SKELETON_BAR_WIDTHS.map((width, barIndex) => (
+      <span key={barIndex} className="skeleton-bar" style={{ width }} />
+     ))}
     </div>
-  );
+   ))}
+  </div>
+ );
 }
 
 /**
@@ -44,11 +40,11 @@ export function SkeletonRows({ count = 6, label = "Loading" }: { count?: number;
  * there is one spinner implementation in the app, not two that can drift.
  */
 export function LoadingState({ title, detail }: { title: string; detail?: string }): JSX.Element {
-  return (
-    <div className={cn("loading-state")} aria-busy="true">
-      <Spinner label={detail ?? title} />
-      <strong>{title}</strong>
-      {detail ? <p>{detail}</p> : null}
-    </div>
-  );
+ return (
+  <div className={cn("loading-state")} aria-busy="true">
+   <Spinner label={detail ?? title} />
+   <strong>{title}</strong>
+   {detail ? <p>{detail}</p> : null}
+  </div>
+ );
 }

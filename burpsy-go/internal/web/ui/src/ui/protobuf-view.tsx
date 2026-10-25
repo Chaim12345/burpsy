@@ -95,13 +95,21 @@ export function ProtobufView({
   );
  }
  if (!frames) {
-  return <div className="cell-dim" style={{ padding: 12 }}>Decoding…</div>;
+  return (
+   <div className="cell-dim" style={{ padding: 12 }}>
+    Decoding…
+   </div>
+  );
  }
 
  return (
   <div className="stack" style={{ padding: 12, overflow: "auto" }}>
    {schemaBar}
-   {grpc ? <div className="cell-dim">gRPC body — {frames.length} frame{frames.length === 1 ? "" : "s"}.</div> : null}
+   {grpc ? (
+    <div className="cell-dim">
+     gRPC body — {frames.length} frame{frames.length === 1 ? "" : "s"}.
+    </div>
+   ) : null}
    {frames.map((frame, fi) => (
     <div key={fi} style={{ borderLeft: frames.length > 1 ? "2px solid var(--border)" : undefined, paddingLeft: frames.length > 1 ? 8 : 0 }}>
      {frames.length > 1 ? (
@@ -171,7 +179,15 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
  );
 }
 
-function FieldValue({ field, disabled, onChange }: { field: ProtoField; disabled: boolean; onChange: (changes: Partial<ProtoField>) => void }): JSX.Element {
+function FieldValue({
+ field,
+ disabled,
+ onChange,
+}: {
+ field: ProtoField;
+ disabled: boolean;
+ onChange: (changes: Partial<ProtoField>) => void;
+}): JSX.Element {
  const label = field.name ? `${field.name} (field ${field.number})` : `field ${field.number}`;
  if (field.wire_type === 0) {
   return (
@@ -188,16 +204,40 @@ function FieldValue({ field, disabled, onChange }: { field: ProtoField; disabled
   );
  }
  if (field.wire_type === 1) {
-  return <Input aria-label={`${label} i64`} value={field.i64 ?? ""} disabled={disabled} onChange={(e) => onChange({ i64: e.target.value })} />;
+  return (
+   <Input aria-label={`${label} i64`} value={field.i64 ?? ""} disabled={disabled} onChange={(e) => onChange({ i64: e.target.value })} />
+  );
  }
  if (field.wire_type === 5) {
-  return <Input aria-label={`${label} i32`} value={String(field.i32 ?? 0)} disabled={disabled} onChange={(e) => onChange({ i32: Number(e.target.value) || 0 })} />;
+  return (
+   <Input
+    aria-label={`${label} i32`}
+    value={String(field.i32 ?? 0)}
+    disabled={disabled}
+    onChange={(e) => onChange({ i32: Number(e.target.value) || 0 })}
+   />
+  );
  }
  if (field.len_kind === "string") {
-  return <Input aria-label={`${label} string`} value={field.string ?? ""} disabled={disabled} onChange={(e) => onChange({ string: e.target.value })} />;
+  return (
+   <Input
+    aria-label={`${label} string`}
+    value={field.string ?? ""}
+    disabled={disabled}
+    onChange={(e) => onChange({ string: e.target.value })}
+   />
+  );
  }
  if (field.len_kind === "bytes") {
-  return <Input aria-label={`${label} bytes (hex)`} value={field.bytes_hex ?? ""} disabled={disabled} onChange={(e) => onChange({ bytes_hex: e.target.value })} placeholder="hex" />;
+  return (
+   <Input
+    aria-label={`${label} bytes (hex)`}
+    value={field.bytes_hex ?? ""}
+    disabled={disabled}
+    onChange={(e) => onChange({ bytes_hex: e.target.value })}
+    placeholder="hex"
+   />
+  );
  }
  return <span className="cell-dim">—</span>;
 }
@@ -264,7 +304,13 @@ function SchemaBar({
  if (pasting) {
   return (
    <div className="stack">
-    <Textarea aria-label=".proto source" rows={8} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={'syntax = "proto3";\npackage acme.v1;\nmessage User { int32 user_id = 1; string name = 2; }'} />
+    <Textarea
+     aria-label=".proto source"
+     rows={8}
+     value={draft}
+     onChange={(e) => setDraft(e.target.value)}
+     placeholder={'syntax = "proto3";\npackage acme.v1;\nmessage User { int32 user_id = 1; string name = 2; }'}
+    />
     <div style={{ display: "flex", gap: 8 }}>
      <Button
       size="small"
@@ -291,12 +337,10 @@ function SchemaBar({
    {protoSchema ? (
     <>
      <span className="cell-dim">Schema:</span> <code>{protoSchema.name}</code>
-     <Select
-      aria-label={`Message type for the ${direction}`}
-      value={chosen}
-      onChange={(e) => setProtoMessage(direction, e.target.value)}
-     >
-      <option value="">{resolved ? `Automatic (${resolved})` : rpcPath ? "Automatic — no rpc matches this call" : "Automatic — choose a message"}</option>
+     <Select aria-label={`Message type for the ${direction}`} value={chosen} onChange={(e) => setProtoMessage(direction, e.target.value)}>
+      <option value="">
+       {resolved ? `Automatic (${resolved})` : rpcPath ? "Automatic — no rpc matches this call" : "Automatic — choose a message"}
+      </option>
       {messages.map((m) => (
        <option key={m} value={m}>
         {m}

@@ -60,10 +60,7 @@ export function MacroRecorder({
   const needle = term.trim().toLowerCase();
   if (needle === "") return all;
   return all.filter(
-   (row) =>
-    row.host.toLowerCase().includes(needle) ||
-    row.path.toLowerCase().includes(needle) ||
-    row.method.toLowerCase().includes(needle),
+   (row) => row.host.toLowerCase().includes(needle) || row.path.toLowerCase().includes(needle) || row.method.toLowerCase().includes(needle),
   );
  }, [history.data, term]);
 
@@ -85,11 +82,7 @@ export function MacroRecorder({
     onSuccess: (result) => {
      if (result.steps.length > 0) {
       onRecord(result.steps);
-      toast.success(
-       result.steps.length === 1
-        ? "Recorded 1 step from history"
-        : `Recorded ${result.steps.length} steps from history`,
-      );
+      toast.success(result.steps.length === 1 ? "Recorded 1 step from history" : `Recorded ${result.steps.length} steps from history`);
      }
      // Reported rather than hidden, and reported even when some steps succeeded: the operator has
      // to know which rows did not make it before they save the rule.
@@ -102,8 +95,7 @@ export function MacroRecorder({
      }
      if (result.steps.length > 0) close();
     },
-    onError: (failure: unknown) =>
-     toast.error(failure instanceof Error ? failure.message : "Could not record a macro from history"),
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not record a macro from history"),
    },
   );
  };
@@ -117,18 +109,15 @@ export function MacroRecorder({
    wide
   >
    <Field label="Filter history" hint="Matches host, path and method.">
-    {(id) => (
-     <Input id={id} value={term} placeholder="shop.test" onChange={(event) => setTerm(event.target.value)} />
-    )}
+    {(id) => <Input id={id} value={term} placeholder="shop.test" onChange={(event) => setTerm(event.target.value)} />}
    </Field>
 
-   <Field label="Request to record" hint="A macro replays what actually travelled. The other readings are for diagnosing a Match & Replace rule.">
+   <Field
+    label="Request to record"
+    hint="A macro replays what actually travelled. The other readings are for diagnosing a Match & Replace rule."
+   >
     {(id) => (
-     <Select
-      id={id}
-      value={variant}
-      onChange={(event) => setVariant(event.target.value as "edited" | "original" | "auto-modified")}
-     >
+     <Select id={id} value={variant} onChange={(event) => setVariant(event.target.value as "edited" | "original" | "auto-modified")}>
       <option value="edited">As sent (after edits)</option>
       <option value="auto-modified">Before manual edit (after rules)</option>
       <option value="original">Original (before rules)</option>
@@ -154,11 +143,7 @@ export function MacroRecorder({
       return (
        <tr key={row.id}>
         <td>
-         <Checkbox
-          label={`Select exchange ${row.id}`}
-          checked={position >= 0}
-          onCheckedChange={(on) => toggle(row.id, on)}
-         />
+         <Checkbox label={`Select exchange ${row.id}`} checked={position >= 0} onCheckedChange={(on) => toggle(row.id, on)} />
         </td>
         <td>{position >= 0 ? position + 1 : ""}</td>
         <td>{row.method}</td>

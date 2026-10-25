@@ -133,7 +133,10 @@ export function ReportSettingsDialog({
    description="Burp's reporting wizard: what the exported HTML and XML reports carry. Title, organisation and contents are HTML-only; sections and messages apply to both."
   >
    <div className="stack">
-    <Field label="Report title" hint={titleOk ? "replaces “burpsy scan report” as the document's heading" : "the title is capped at 200 characters"}>
+    <Field
+     label="Report title"
+     hint={titleOk ? "replaces “burpsy scan report” as the document's heading" : "the title is capped at 200 characters"}
+    >
      {(id) => (
       <Input
        id={id}
@@ -148,7 +151,11 @@ export function ReportSettingsDialog({
 
     <Field label="Organise issues by" hint="severity is the reader-first default; each group still leads with its worst finding">
      {(id) => (
-      <Select id={id} value={draft.organiseBy} onChange={(event) => setDraft((d) => ({ ...d, organiseBy: event.target.value as ReportSettings["organiseBy"] }))}>
+      <Select
+       id={id}
+       value={draft.organiseBy}
+       onChange={(event) => setDraft((d) => ({ ...d, organiseBy: event.target.value as ReportSettings["organiseBy"] }))}
+      >
        <option value="severity">Severity</option>
        <option value="type">Issue type</option>
        <option value="url">URL</option>
@@ -158,7 +165,11 @@ export function ReportSettingsDialog({
 
     <Field label="Contents" hint="levels of detail in the table of contents">
      {(id) => (
-      <Select id={id} value={String(draft.tocDepth)} onChange={(event) => setDraft((d) => ({ ...d, tocDepth: Number(event.target.value) as ReportSettings["tocDepth"] }))}>
+      <Select
+       id={id}
+       value={String(draft.tocDepth)}
+       onChange={(event) => setDraft((d) => ({ ...d, tocDepth: Number(event.target.value) as ReportSettings["tocDepth"] }))}
+      >
        <option value="0">No table of contents</option>
        <option value="1">Groups only</option>
        <option value="2">Groups and findings</option>
@@ -198,8 +209,8 @@ export function ReportSettingsDialog({
       draft.messageMode === "relevant"
        ? "the header block of each evidence message, labelled as an extract — burpsy's findings carry no highlight spans, so Burp's highlighted extract cannot be located (gaps.md)"
        : draft.messageMode === "full"
-        ? "whole messages, bounded by the maximum length"
-        : "the bulk export's rule: a scan-wide report that inlined every request body would be unusable as a document"
+         ? "whole messages, bounded by the maximum length"
+         : "the bulk export's rule: a scan-wide report that inlined every request body would be unusable as a document"
      }
     >
      {() => (
