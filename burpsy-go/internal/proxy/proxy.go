@@ -757,6 +757,9 @@ type ProxyConfig struct {
 	// leg of an intercepted connection. Nil — the default — means none is ever
 	// offered. See WithClientCerts.
 	clientCerts alpn.ClientCertSource
+	// tlsFingerprints selects the ClientHello the upstream leg presents per target host.
+	// Nil — the default — presents Go's own hello everywhere. See WithTLSFingerprints.
+	tlsFingerprints *sender.TLSFingerprints
 	// options is the live, operator-editable option set: the response modification
 	// rules, the Accept-Encoding strip and the WebSocket handshake strip. Never nil
 	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
@@ -1039,6 +1042,18 @@ func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 // answer to it.
 func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
 	c.clientCerts = source
+	return c
+}
+
+// WithTLSFingerprints binds host patterns to browser ClientHello fingerprints for the upstream
+// leg (63pf-followup). It is the intercepted-traffic half of the sender's 63pf setting: an
+// operator who bound a browser to a host gets that browser's hello from Repeater and from an
+// intercepted session alike, instead of Go's hello giving the proxy away on one leg and not the
+// other. Nil — the default — keeps Go's own hello on every dial, byte-identical to before the
+// option existed. There is deliberately no implicit sharing with SenderConfig.TLSFingerprints:
+// the two legs are wired explicitly, per the integrator ruling.
+func (c *ProxyConfig) WithTLSFingerprints(fingerprints *sender.TLSFingerprints) *ProxyConfig {
+	c.tlsFingerprints = fingerprints
 	return c
 }
 
