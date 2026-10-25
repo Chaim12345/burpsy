@@ -70,8 +70,13 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		parsed, perr := grpcproto.ParseProto(body.Proto)
 		if perr != nil {
 			// 400, not a silent schemaless fallback: an operator who pasted a schema and sees unnamed
-			// fields would assume the schema did not match the body, when it did not parse.
-			http.Error(w, perr.Error(), http.StatusBadRequest)
+			// fields would assume the schema did not match the body, when it did not parse. Per the
+			// 0rrb integrator ruling this holds for unresolved imports too - the error names the
+			// exact import string (a decode built on a partial schema would not read as partial,
+			// and a wrong field attribution in a security tool reads as evidence). The schemaless
+			// fallback stays reachable, and the error says so: resubmit without the proto. A
+			// multi-file upload bead (P3, web lane) is the planned resolution for multi-file schemas.
+			http.Error(w, perr.Error()+"; the body still decodes without a schema (omit the proto)", http.StatusBadRequest)
 			return
 		}
 		schema = parsed

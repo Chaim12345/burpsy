@@ -290,3 +290,13 @@ service Users {
 		}
 	}
 }
+
+func TestParseProtoNamesTheUnresolvedImport(t *testing.T) {
+	// 0rrb, integrator ruling: an unresolved import is a hard fail that names the
+	// exact import string - a silently skipped import builds a decode on a partial
+	// schema that does not read as partial.
+	_, err := ParseProto("syntax = \"proto3\";\nimport \"acme/missing.proto\";\nmessage M { int32 a = 1; }")
+	if err == nil || !strings.Contains(err.Error(), "acme/missing.proto") {
+		t.Fatalf("the error must name the unresolved import: %v", err)
+	}
+}
