@@ -530,6 +530,22 @@ func main() {
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
+		// Extension proxy handlers see every message this listener relays (burpsy-react-ui-wiwh).
+		// The adapter composes the two kinds in Burp's order for proxied traffic - HTTP handlers
+		// first, proxy handlers second on whatever the HTTP kind produced - and keeps
+		// internal/proxy free of the extension package, the same rule as the sender adapter below.
+		WithTrafficHook(trafficHookFunc(func(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult {
+			httpRes := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindHTTPHandler, Phase: phase, Raw: raw})
+			proxyRes := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindProxyHandler, Phase: phase, Raw: httpRes.Raw})
+			return proxy.TrafficHookResult{
+				Raw:       proxyRes.Raw,
+				Changed:   httpRes.Changed || proxyRes.Changed,
+				Dropped:   proxyRes.Dropped,
+				Intercept: proxyRes.Intercept,
+				Applied:   append(httpRes.Applied, proxyRes.Applied...),
+				Failures:  len(httpRes.Failures) + len(proxyRes.Failures),
+			}
+		})).
 		// The shared cookie jar, fed by traffic through this listener — Burp's "by default, the
 		// cookie jar is updated based on traffic from the Proxy". The same coordinator the web
 		// server and the scanner hold, so a session an operator establishes in their browser is the
@@ -1095,6 +1111,14 @@ func startBlindXSS(ctx context.Context, bind, baseURL string, logger *zap.Logger
 // and this is the one place a shell must not appear — the executable is run directly so that an
 // argument containing shell metacharacters is data. A plugin that needs an interpreter should be an
 // executable script with a shebang, which is what every language runtime already supports.
+// trafficHookFunc adapts a plain function to proxy.TrafficHook, the way
+// sender.HTTPHookFunc does for the sender's seam.
+type trafficHookFunc func(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult
+
+func (f trafficHookFunc) HookTraffic(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult {
+	return f(ctx, phase, raw)
+}
+
 func pluginSpecs(allowlist map[string]string) map[string]extension.PluginSpec {
 	if len(allowlist) == 0 {
 		return nil

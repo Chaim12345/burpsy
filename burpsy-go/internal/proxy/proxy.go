@@ -778,6 +778,8 @@ type ProxyConfig struct {
 	// send. Set before NewServer rather than after: the field is read by every relay
 	// goroutine, so a later write would be a data race, not a late binding.
 	toolLog *toollog.ToolLog
+	// trafficHook is the extension traffic seam; see traffic_hook.go.
+	trafficHook trafficHookState
 	// pageObserver sees each recorded exchange with its response bytes (t3zk).
 	pageObserver func(ex *core.Exchange, response []byte)
 	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
@@ -1699,11 +1701,32 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		reqStages := messageStages{original: requestData}
 		requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, reqHost, reqPort, path, reqTLS)
 		reqStages.auto = requestData
+		// The extension traffic hook, in the slot traffic_hook.go states: after the
+		// automatic rules, before the hold, so the hook's forced decision feeds the
+		// hold below and its drop mirrors the operator's own on this path — a silent
+		// close of the tunnel iteration. A replacement cannot move the destination:
+		// the dial target is this tunnel's authority, not the bytes.
+		var hookIntercept *bool
+		if res := s.applyTrafficHook(context.Background(), "request", requestData); res.Dropped {
+			return
+		} else {
+			requestData = res.Raw
+			hookIntercept = res.Intercept
+		}
 		// Intercept: hold the decrypted request before it is forwarded upstream.
-		if s.config.intercept != nil {
-			if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
+		if s.config.intercept != nil && (hookIntercept == nil || *hookIntercept) {
+			msg := withClientIP(clientConn, intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
-			))); held != nil {
+			))
+			// A hook-forced hold bypasses the operator's rules exactly; the hook's
+			// DoNotIntercept already skipped this block. See intercept.HoldForced.
+			var held *intercept.Held
+			if hookIntercept != nil {
+				held = s.config.intercept.HoldForced(msg)
+			} else {
+				held = s.config.intercept.Hold(msg)
+			}
+			if held != nil {
 				action, raw, edited, heldEdited := held.Wait()
 				requestEdited = heldEdited
 				if action == intercept.ActionDrop {
@@ -2021,6 +2044,16 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
 	respStages := messageStages{original: responseData}
+	// The extension traffic hook, first on the origin's bytes — the mirror of the
+	// request side's placement, so the operator's static rules below apply to what
+	// the extension produced. The drop is applied at the hold site below, where the
+	// serving decision lives.
+	var hookDropped bool
+	if res := s.applyTrafficHook(context.Background(), "response", responseData); res.Dropped {
+		hookDropped = true
+	} else {
+		responseData = res.Raw
+	}
 	// Apply Match & Replace on response
 	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
 	// Then the blanket response modification rules. This order, not the other one:
@@ -2053,6 +2086,13 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// why the stream was cut.
 	notes := extraNote
 	keepServing := true
+	// The extension hook's response drop suppresses the origin's bytes exactly as
+	// the operator's hold-drop does: the exchange is still recorded, with a note
+	// naming the actor, and the client receives nothing.
+	if hookDropped {
+		keepServing = false
+		notes = extensionDropNote()
+	}
 	// responseEdited is the operator's own edit to the response half, paired below with the request
 	// half this function was handed.
 	var responseEdited bool
@@ -2333,6 +2373,16 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	scheme := spec.ForceTLS
 	requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, host, port, path, scheme)
 	reqStages.auto = requestData
+	// The extension traffic hook, in the slot traffic_hook.go states. A drop answers
+	// the client the way the operator's hold-drop below does.
+	var hookIntercept *bool
+	if res := s.applyTrafficHook(context.Background(), "request", requestData); res.Dropped {
+		clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
+		return
+	} else {
+		requestData = res.Raw
+		hookIntercept = res.Intercept
+	}
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
@@ -2342,10 +2392,18 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// exchange ends in — the plain response below or a WebSocket handshake. See
 	// intercept.Held.userEdited for why it is read from the hold and not recomputed from the bytes.
 	var requestEdited bool
-	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
+	if s.config.intercept != nil && (hookIntercept == nil || *hookIntercept) {
+		msg := withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
-		))); held != nil {
+		))
+		// A hook-forced hold bypasses the operator's rules exactly; see intercept.HoldForced.
+		var held *intercept.Held
+		if hookIntercept != nil {
+			held = s.config.intercept.HoldForced(msg)
+		} else {
+			held = s.config.intercept.Hold(msg)
+		}
+		if held != nil {
 			action, raw, retarget, heldEdited := held.Wait()
 			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
@@ -2508,6 +2566,15 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
 	respStages := messageStages{original: responseData}
+	// The extension traffic hook, first on the origin's bytes — the mirror of the
+	// request side's placement, as in handleTLSResponse. The drop is applied at
+	// the hold site below, where the drop decision lives.
+	var hookDropped bool
+	if res := s.applyTrafficHook(context.Background(), "response", responseData); res.Dropped {
+		hookDropped = true
+	} else {
+		responseData = res.Raw
+	}
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
@@ -2521,6 +2588,12 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// responseEdited is the operator's own edit to the response half; requestEdited, above, is the
 	// other half of the same flag.
 	var responseEdited bool
+	// The extension hook's response drop takes the same shape as the operator's:
+	// recorded with a note naming the actor, nothing served to the client.
+	if hookDropped {
+		dropped = true
+		notes = extensionDropNote()
+	}
 	if s.config.intercept != nil {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
@@ -2609,6 +2682,15 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 // invisible in the bytes themselves. Recording nothing would let an operator
 // drop a response and leave history showing a request that was never answered —
 // the one reading of it that is definitely wrong.
+// extensionDropNote is the recorded row's explanation when an extension's proxy
+// hook dropped the response — the operator's hold-drop note's sibling, naming a
+// different actor so history never blames the operator for a plugin's decision.
+func extensionDropNote() *string {
+	note := "[burpsy] an extension dropped this response, so the client received nothing. " +
+		"The bytes recorded here are the origin's answer as it stood when it was dropped — the only record that it arrived at all."
+	return &note
+}
+
 func interceptDropNote() *string {
 	note := "[burpsy] the operator dropped this response, so the client received nothing. " +
 		"The bytes recorded here are the response as it stood when it was dropped — the origin's " +
