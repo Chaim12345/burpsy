@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -159,5 +160,74 @@ func (s *Server) prepareWsClone(req repeaterWsSendReq, opcode core.WsOpcode) (ws
 		path = "/"
 	}
 	return wsSendPlan{host: ex.Host, port: ex.Port, tls: ex.TLS, path: path, handshake: handshake,
+		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
+}
+
+// prepareWsEditedHandshake plans a send whose negotiation request the operator edited
+// (burpsy-react-ui-ws3e). The edited head is refreshed through wsclient.CloneHandshake - the same
+// wire invariants a clone gets - so what dials is legal HTTP and a legal upgrade, and what the
+// operator wrote is otherwise exactly what the target reads. The authority never comes from the
+// edited bytes: Socket names a captured connection's target, Target names one outright, and the
+// Host line stays the operator's to change under test. The gate sees the bytes that will go on
+// the wire, refreshed included, because those are the bytes being authorised.
+func (s *Server) prepareWsEditedHandshake(req repeaterWsSendReq, opcode core.WsOpcode) (wsSendPlan, int, error) {
+	if req.Clone {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("clone replays the captured handshake " +
+			"and handshake replaces it - one send cannot take its negotiation request from two places")
+	}
+	if req.Message != 0 {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("handshake replaces the negotiation " +
+			"request; message names a frame to resend - give one")
+	}
+	var host string
+	var port uint16
+	var tls bool
+	switch {
+	case req.Socket != nil && req.Target != "":
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("socket and target both name the " +
+			"authority to dial - give one")
+	case req.Socket != nil:
+		id := core.ExchangeID(*req.Socket)
+		ex, err := s.store.GetExchange(id)
+		if err != nil {
+			return wsSendPlan{}, http.StatusNotFound, fmt.Errorf("no WebSocket #%d: %v", id, err)
+		}
+		host, port, tls = ex.Host, ex.Port, ex.TLS
+	case req.Target != "":
+		wsTarget, wsTLS, wsErr := wsSchemeTarget(req.Target)
+		if wsErr != nil {
+			return wsSendPlan{}, http.StatusBadRequest, wsErr
+		}
+		h, p, t, terr := targetParts(wsTarget)
+		if terr != nil {
+			return wsSendPlan{}, http.StatusBadRequest, terr
+		}
+		if wsTLS {
+			t = true
+		}
+		host, port, tls = h, p, t
+	default:
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("an edited handshake still needs the " +
+			"authority to dial: a socket whose target to use, or an explicit target")
+	}
+	handshake, err := wsclient.CloneHandshake([]byte(req.Handshake))
+	if err != nil {
+		return wsSendPlan{}, http.StatusUnprocessableEntity, fmt.Errorf("the edited handshake cannot go on the wire: %v", err)
+	}
+	if !s.scope.MayContainHost(host, port, tls) {
+		return wsSendPlan{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "", tls))
+	}
+	if aerr := s.scope.AuthoriseRaw(host, port, tls, handshake); aerr != nil {
+		return wsSendPlan{}, http.StatusForbidden, fmt.Errorf("refused: %v", aerr)
+	}
+	// History records the path the wire carried, which the operator may have edited - read it off
+	// the refreshed head, not off the connection the dial authority came from.
+	path := "/"
+	if line, _, ok := strings.Cut(string(handshake), "\r\n"); ok {
+		if parts := strings.SplitN(line, " ", 3); len(parts) == 3 && parts[1] != "" {
+			path = parts[1]
+		}
+	}
+	return wsSendPlan{host: host, port: port, tls: tls, path: path, handshake: handshake,
 		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
 }

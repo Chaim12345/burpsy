@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intercept"
 	"go.uber.org/zap"
 )
 
@@ -105,9 +106,20 @@ type liveWsFixture struct {
 
 func openLiveWs(t *testing.T) *liveWsFixture {
 	t.Helper()
+	return openLiveWsWith(t, nil)
+}
+
+// openLiveWsWith is openLiveWs with WebSocket interception held by engine: the interception-on
+// half of the attach regression set. Nil is interception off.
+func openLiveWsWith(t *testing.T, engine *intercept.Engine) *liveWsFixture {
+	t.Helper()
 	host, port, conns := startHeldWsOrigin(t)
 	store := core.NewTrafficStore()
-	srv := NewServer(NewProxyConfig(store).WithScope(testScope()).WithLogger(zap.NewNop()))
+	cfg := NewProxyConfig(store).WithScope(testScope()).WithLogger(zap.NewNop())
+	if engine != nil {
+		cfg = cfg.WithIntercept(engine)
+	}
+	srv := NewServer(cfg)
 	proxyAddr := startProxy(t, srv)
 
 	client, err := net.Dial("tcp", proxyAddr)
