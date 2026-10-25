@@ -1567,6 +1567,13 @@ func NewSessionRule(name string, hosts []string, steps []MacroStep) *SessionRule
 type Coordinator struct {
 	mu    sync.RWMutex
 	rules map[RuleID]*SessionRule
+	// tokenRules is the project-level extraction+injection set (burpsy-react-ui-xe82); tokenValues
+	// holds the latest value each rule's extraction captured, guarded by tokenMu like the script
+	// stores - a response being observed must not hold the rule table's lock.
+	tokenRules  map[string]*TokenRule
+	tokenOrder  []string
+	tokenMu     sync.Mutex
+	tokenValues map[string]string
 	// scriptStores is each rule's pre-request script store (burpsy-react-ui-ydmj): the small string
 	// map a RunScript action reads and writes through `store`, kept across requests so a token
 	// captured from one response is there for the next request. Per rule, so two rules' scripts
@@ -2046,6 +2053,9 @@ func (c *Coordinator) handleResponseFor(req RequestIdentity, status int, hdrs ma
 			c.logger.Debug("session invalid", zap.String("rule", rule.Name), zap.String("host", req.Host))
 		}
 	}
+	// The project-level capture half (xe82): any observed response can re-issue a value the later
+	// requests of covered tools then carry.
+	c.observeTokenRules(req, hdrs, body)
 }
 
 // StepResult is what a macro step produced. Headers are the response headers
