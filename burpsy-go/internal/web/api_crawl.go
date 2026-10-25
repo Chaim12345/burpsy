@@ -859,9 +859,20 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// The five discovery switches a named configuration carries in crawler/customization
 	// (burpsy-react-ui-tyso): API definitions, SOAP WSDLs, GraphQL introspection, hidden-GraphQL
 	// guessing and fragment routing. Like the threshold, Burp exposes them nowhere but the
-	// configuration, so there is no request field to overlay them with, and a request naming no
-	// configuration — or one that does not name the key — keeps the engine's zero value, which is off.
-	var configSwitches configCrawlSwitches
+	// configuration, so there is no request field to overlay them with.
+	//
+	// burpsy-react-ui-qpdp: Burp ships parse_api_definitions and parse_soap_wsdls ON in
+	// Preferences/CrawlDefaults.json, so a request naming no configuration starts with the two
+	// document readers on, matching Burp's no-config crawl. Both are read-only against traffic the
+	// crawl already sent: the document is fetched as an ordinary linked page whatever the switch
+	// says, and the operations it declares enter through admit() as ordinary GET discoveries, so
+	// nothing here writes to the target. perform_graphql_introspection, which Burp also ships on,
+	// deliberately stays off: it is the one switch that makes the crawl originate a POST of its
+	// own initiative, and a burpsy crawl that was not asked does not write — the same rule
+	// SubmitForms carries as "a requirement rather than a default". A request naming a
+	// configuration still takes all five from the file: naming one is how the operator turns
+	// introspection on, or either reader off.
+	configSwitches := configCrawlSwitches{ParseAPIDefinitions: true, ParseSOAPWSDLs: true}
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.

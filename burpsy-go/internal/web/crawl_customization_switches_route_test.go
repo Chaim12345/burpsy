@@ -162,9 +162,11 @@ func excludePath(t *testing.T, s *Server, host, prefix string) {
 	s.scope.Add(rule)
 }
 
-// switchCase is the three crawls every switch gets: no configuration (today's operator default), a
-// configuration naming the key false (must match the default — wiring a key in may only change
-// behaviour when a configuration turns it on), and one naming it true.
+// switchCase is the three crawls every switch gets: no configuration, a configuration naming the
+// key false, and one naming it true. What "no configuration" must do is per-switch and each caller
+// asserts it: Burp ships parse_api_definitions and parse_soap_wsdls ON (burpsy-react-ui-qpdp), so
+// for those two the no-config crawl reads and the named-false crawl is the one that must NOT; the
+// other three switches default off, and for them named-false must match the default.
 func runSwitchCases(t *testing.T, s *Server, key string, seed func() string, observed func() int) (off, named, on int, onRun switchRun) {
 	t.Helper()
 	saveSwitchConfig(t, s, key+" off", key, false)
@@ -209,9 +211,14 @@ func TestParseAPIDefinitionsFromANamedConfigReachesTheCrawl(t *testing.T) {
 		func() string { return site.srv.URL + "/" },
 		func() int { return site.count("GET /api/widgets") })
 
-	if off != 0 || named != 0 {
-		t.Errorf("GET /api/widgets sent %d times with no configuration and %d under %s=false; the "+
-			"definition must not be read unless a configuration turns it on", off, named, key)
+	if off != 1 {
+		t.Errorf("GET /api/widgets sent %d times with no configuration, want 1: Burp ships %s on "+
+			"(Preferences/CrawlDefaults.json) and the no-config crawl matches it (burpsy-react-ui-qpdp); "+
+			"target saw %v", off, key, site.log())
+	}
+	if named != 0 {
+		t.Errorf("GET /api/widgets sent %d times under %s=false; a configuration naming the key off "+
+			"must turn the reader off even though the no-config default is on", named, key)
 	}
 	if on != 1 {
 		t.Errorf("GET /api/widgets sent %d times under %s=true, want 1: the reply did not list the key "+
@@ -254,7 +261,7 @@ func TestParseSOAPWSDLsFromANamedConfigReachesTheCrawl(t *testing.T) {
 	for _, tc := range []struct {
 		config string
 		want   int
-	}{{"", 0}, {"wsdl off", 0}, {"wsdl on", 1}} {
+	}{{"", 1}, {"wsdl off", 0}, {"wsdl on", 1}} {
 		r := startSwitchCrawl(t, s, site.srv.URL+"/", tc.config, 200)
 		if tc.config != "" {
 			assertApplied(t, r, key)
