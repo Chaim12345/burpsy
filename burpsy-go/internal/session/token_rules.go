@@ -20,6 +20,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -120,6 +121,40 @@ func (c *Coordinator) AddTokenRule(rule *TokenRule) (string, error) {
 	c.tokenRules[rule.ID] = rule
 	c.tokenOrder = append(c.tokenOrder, rule.ID)
 	return rule.ID, nil
+}
+
+// ErrDuplicateTokenRuleID is a restore that would install two rules under one persisted ID.
+var ErrDuplicateTokenRuleID = errors.New("a token rule with this ID already exists")
+
+// RestoreTokenRule installs one persisted rule, keeping its ID: a saved rule must come back as the
+// rule the database meant, the same reason session rules restore by id rather than being re-minted.
+// The extraction's matcher is recompiled here - storage carries its source, not the compiled form -
+// and the rule is re-validated, so a rule written before a check existed is refused on load rather
+// than silently weakening. Appends in call order, which is how Restore preserves the persisted order.
+func (c *Coordinator) RestoreTokenRule(rule *TokenRule) error {
+	if rule == nil {
+		return fmt.Errorf("no token rule")
+	}
+	if rule.ID == "" {
+		return fmt.Errorf("a restored token rule needs its persisted ID")
+	}
+	if err := rule.validate(); err != nil {
+		return err
+	}
+	if err := rule.Extract.Recompile(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tokenRules == nil {
+		c.tokenRules = map[string]*TokenRule{}
+	}
+	if _, dup := c.tokenRules[rule.ID]; dup {
+		return ErrDuplicateTokenRuleID
+	}
+	c.tokenRules[rule.ID] = rule
+	c.tokenOrder = append(c.tokenOrder, rule.ID)
+	return nil
 }
 
 // TokenRules is the registered set, in insertion order.

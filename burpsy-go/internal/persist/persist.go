@@ -253,6 +253,18 @@ CREATE TABLE IF NOT EXISTS session_rules (
 	extractions    TEXT,
 	actions        TEXT
 );
+CREATE TABLE IF NOT EXISTS token_rules (
+	id            TEXT PRIMARY KEY,
+	name          TEXT NOT NULL DEFAULT '',
+	enabled       INTEGER NOT NULL DEFAULT 1,
+	scope_hosts   TEXT NOT NULL DEFAULT '',
+	scope_tools   TEXT NOT NULL DEFAULT '',
+	extraction    TEXT NOT NULL DEFAULT '',
+	inject_header TEXT NOT NULL DEFAULT '',
+	inject_value  TEXT NOT NULL DEFAULT '',
+	inject_param  TEXT NOT NULL DEFAULT '',
+	ord           INTEGER
+);
 CREATE TABLE IF NOT EXISTS organizer_items (
 	id        INTEGER PRIMARY KEY,
 	exchange  INTEGER NOT NULL,
@@ -2173,6 +2185,76 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 	}
 }
 
+// SaveTokenRules replaces the project-level token rule set (xe82), whole-list like
+// SaveSessionRules: the set is operator-sized, and `ord` keeps the insertion order across the
+// round trip. The caller passes Coordinator.TokenRules(), which is already in order.
+func (s *Store) SaveTokenRules(rules []*session.TokenRule) {
+	if _, err := s.db.Exec(`DELETE FROM token_rules`); err != nil {
+		s.log("token rules clear", err)
+		return
+	}
+	for i, r := range rules {
+		hosts, err := json.Marshal(r.ScopeHosts)
+		if err != nil {
+			hosts = nil
+		}
+		tools, err := json.Marshal(r.ScopeTools)
+		if err != nil {
+			tools = nil
+		}
+		ex, err := json.Marshal(r.Extract)
+		if err != nil {
+			ex = nil
+		}
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO token_rules
+			 (id, name, enabled, scope_hosts, scope_tools, extraction, inject_header, inject_value, inject_param, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.ID, r.Name, boolInt(r.Enabled), hosts, tools, ex,
+			r.InjectHeader, r.InjectValue, r.InjectParam, i); err != nil {
+			s.log("token rule", err)
+			return
+		}
+	}
+}
+
+// LoadTokenRules restores token rules in their persisted insertion order. The extraction's
+// matcher is NOT recompiled here - that is the coordinator's door (RestoreTokenRule), the same
+// division LoadSessionRules keeps.
+func (s *Store) LoadTokenRules() ([]*session.TokenRule, error) {
+	rows, err := s.db.Query(
+		`SELECT id, name, enabled, scope_hosts, scope_tools, extraction, inject_header, inject_value, inject_param
+		 FROM token_rules ORDER BY COALESCE(ord, 0), id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*session.TokenRule
+	for rows.Next() {
+		r := &session.TokenRule{}
+		var enabled int
+		var hosts, tools, ex []byte
+		if err := rows.Scan(&r.ID, &r.Name, &enabled, &hosts, &tools, &ex,
+			&r.InjectHeader, &r.InjectValue, &r.InjectParam); err != nil {
+			return nil, err
+		}
+		r.Enabled = enabled != 0
+		// Empty columns read as no scope, which is unrestricted - the same fallback the session
+		// rules' scope columns take, for the same reason.
+		if len(hosts) > 0 {
+			_ = json.Unmarshal(hosts, &r.ScopeHosts)
+		}
+		if len(tools) > 0 {
+			_ = json.Unmarshal(tools, &r.ScopeTools)
+		}
+		if len(ex) > 0 {
+			_ = json.Unmarshal(ex, &r.Extract)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // LoadSessionRules restores session rules **in their persisted evaluation order**, recompiling each
 // extraction's matcher.
 //
@@ -3100,6 +3182,27 @@ func (s *Store) Restore(
 					"this database has duplicate session rule ids and one rule per collision is missing, so a "+
 					"request the missing rule covered goes out unauthenticated",
 				collided, len(sessionRules)))
+		}
+
+		// The project-level token rules (xe82) restore through the same door: persisted ids kept,
+		// insertion order kept, each rule re-validated and its extraction recompiled on install,
+		// and a refusal logged rather than aborting the restore.
+		tokenRules, err := s.LoadTokenRules()
+		if err != nil {
+			return fmt.Errorf("load token rules: %w", err)
+		}
+		tokenRefused := 0
+		for _, r := range tokenRules {
+			if err := sess.RestoreTokenRule(r); err != nil {
+				s.log("restore token rule", err)
+				tokenRefused++
+			}
+		}
+		if tokenRefused > 0 {
+			s.log("restore token rules", fmt.Errorf(
+				"%d of %d saved token rule(s) no longer validate and were not installed; the requests "+
+					"they kept authenticated go out without the value they captured",
+				tokenRefused, len(tokenRules)))
 		}
 	}
 
