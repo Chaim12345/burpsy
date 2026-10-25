@@ -1,6 +1,7 @@
 package httputil
 
 import "testing"
+
 func TestEnsureConnectionClose(t *testing.T) {
 	cases := []struct {
 		name string

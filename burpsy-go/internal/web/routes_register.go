@@ -81,4 +81,3 @@ func allowFor(spec route, pattern, urlPath string) string {
 	}
 	return strings.Join(spec.methods, ", ")
 }
-
