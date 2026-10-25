@@ -196,5 +196,29 @@ class TestRunner(unittest.TestCase):
                 parity_run.run_classes(["no-such-class"], d, FakeCtx([], ""))
 
 
+class TestSpecs(unittest.TestCase):
+    def test_registered_specs_are_complete_and_consistent(self):
+        from parity_specs import CLASSES
+        import parity_tools as pt
+        for name, spec in CLASSES.items():
+            self.assertEqual(name, spec["name"])
+            self.assertIn(spec["ref_tool"], pt.TOOLS)
+            self.assertTrue(spec["bead"].startswith("burpsy-react-ui-j1mk."))
+            self.assertTrue(spec["burpsy_rows"], name)
+            self.assertTrue(spec["targets"], name)
+            self.assertTrue(callable(spec["tool_args"]), name)
+            argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/bin/true"}, "/tmp")
+            self.assertEqual("/bin/true", argv[0])
+            for t in spec.get("truth", []):
+                self.assertEqual(name, t["class"])
+
+    def test_crlf_truth_endpoints_are_seeded_targets(self):
+        from parity_specs import CLASSES
+        spec = CLASSES["crlf-injection"]
+        seeded = {t["url"].split("?")[0] for t in spec["targets"]}
+        for t in spec["truth"]:
+            self.assertIn(t["url"].split("?")[0], seeded)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
