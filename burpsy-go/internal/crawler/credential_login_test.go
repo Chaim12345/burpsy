@@ -30,17 +30,26 @@ type loginApp struct {
 	posts []string
 	// authedPages are the paths fetched carrying the issued session cookie.
 	authedPages []string
+	// cookieHeaders are the raw Cookie headers of every request, in order.
+	cookieHeaders []string
 }
 
 func newLoginApp(t *testing.T) *loginApp {
 	t.Helper()
 	app := &loginApp{}
+	recordCookies := func(r *http.Request) {
+		app.mu.Lock()
+		app.cookieHeaders = append(app.cookieHeaders, r.Header.Get("Cookie"))
+		app.mu.Unlock()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		recordCookies(r)
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html><body><a href="/login">sign in</a></body></html>`))
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		recordCookies(r)
 		if r.Method == http.MethodPost {
 			body := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(body)
@@ -50,6 +59,9 @@ func newLoginApp(t *testing.T) *loginApp {
 			vals, _ := url.ParseQuery(string(body))
 			if vals.Get("user") == "alice" && vals.Get("pass") == "s3cret" && vals.Get("token") == "tok1" {
 				http.SetCookie(w, &http.Cookie{Name: "session", Value: "abc123", Path: "/"})
+				// A path-scoped second cookie: the jar rebuild must keep the Path, or the
+				// session goes where the application said it must not (integrator pre-review).
+				http.SetCookie(w, &http.Cookie{Name: "admin_only", Value: "zzz", Path: "/admin", HttpOnly: true})
 				w.Header().Set("Content-Type", "text/html")
 				_, _ = w.Write([]byte(`<html><body><p>welcome alice</p><a href="/account">my account</a></body></html>`))
 				return
@@ -68,6 +80,7 @@ func newLoginApp(t *testing.T) *loginApp {
 			</form></body></html>`))
 	})
 	account := func(w http.ResponseWriter, r *http.Request) {
+		recordCookies(r)
 		c, err := r.Cookie("session")
 		if err != nil || c.Value != "abc123" {
 			w.WriteHeader(http.StatusForbidden)
@@ -132,6 +145,12 @@ func TestACredentialLoginReachesThePagesBehindTheForm(t *testing.T) {
 	}
 	if rep.Login == nil {
 		t.Fatalf("the report carries no login block for a crawl that logged in")
+	}
+	for _, h := range app.cookieHeaders {
+		if strings.Contains(h, "admin_only") {
+			t.Errorf("the /admin-scoped cookie was sent outside its path — the credential jar "+
+				"dropped the cookie's Path attribute: %q", h)
+		}
 	}
 	if rep.Login.Method != "credentials" || !rep.Login.Authenticated {
 		t.Errorf("login block = %+v, want method credentials and authenticated true", rep.Login)
@@ -211,6 +230,10 @@ func TestTheLoginExchangeIsStoredWithTheCredentialValuesMasked(t *testing.T) {
 	}
 	if strings.Contains(string(loginExchange), "s3cret") {
 		t.Errorf("the stored login exchange carries the password in history: %s", loginExchange)
+	}
+	if strings.Contains(string(loginExchange), "alice") {
+		t.Errorf("the stored login exchange carries the username in history — the mask covers both "+
+			"halves of the credential: %s", loginExchange)
 	}
 }
 
@@ -342,7 +365,7 @@ func TestSelfRegistrationCreatesAnAccountAndCrawlsWithIt(t *testing.T) {
 			posts = append(posts, string(body))
 			mu.Unlock()
 			vals, _ := url.ParseQuery(string(body))
-			if vals.Get("user") != "" && vals.Get("pass") != "" && vals.Get("pass") == vals.Get("confirm") {
+			if vals.Get("user") != "" && vals.Get("pass") != "" && vals.Get("pass") == vals.Get("pass2") {
 				http.SetCookie(w, &http.Cookie{Name: "session", Value: "registered", Path: "/"})
 			}
 			w.Header().Set("Content-Type", "text/html")
@@ -356,7 +379,7 @@ func TestSelfRegistrationCreatesAnAccountAndCrawlsWithIt(t *testing.T) {
 				<form method="post" action="/register">
 				<input type="text" name="user" value="">
 				<input type="password" name="pass">
-				<input type="password" name="confirm">
+				<input type="password" name="pass2">
 				</form></body></html>`))
 		case "/account":
 			c, err := r.Cookie("session")
@@ -390,6 +413,12 @@ func TestSelfRegistrationCreatesAnAccountAndCrawlsWithIt(t *testing.T) {
 	}
 	mu.Unlock()
 	if regBody == "" {
+		for _, sk := range rep.Skips.Records {
+			t.Logf("skip: %s %s %s :: %s", sk.Reason, sk.Method, sk.URL, sk.Detail)
+		}
+		for _, f := range rep.Fetches {
+			t.Logf("fetch: %s %s -> %d", f.Method, f.URL, f.Status)
+		}
 		t.Fatalf("no generated-account registration reached /register; posts: %v", posts)
 	}
 	mu.Lock()
@@ -416,6 +445,10 @@ func TestSelfRegistrationCreatesAnAccountAndCrawlsWithIt(t *testing.T) {
 			if strings.Contains(string(msg.Raw()), gen) {
 				t.Errorf("the stored registration exchange carries the generated password: %s", msg.Raw())
 			}
+			if genUser := vals.Get("user"); strings.Contains(string(msg.Raw()), genUser) {
+				t.Errorf("the stored registration exchange carries the generated username %q: %s",
+					genUser, msg.Raw())
+			}
 		}
 	}
 }
@@ -433,6 +466,10 @@ func TestProvidedLoginsOnlySkipsSelfRegisterAndInvalidUsernames(t *testing.T) {
 	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
 	run(t, cfg)
 
+	if !app.sawPost("user=alice") || !app.sawPost("pass=s3cret") {
+		t.Fatalf("the provided credential was never submitted, so the provided-only assertions "+
+			"below would prove nothing; posts: %v", app.posts)
+	}
 	for _, p := range app.posts {
 		v, _ := url.ParseQuery(p)
 		if u := v.Get("user"); u != "alice" {
@@ -521,5 +558,64 @@ func TestACredentialSessionIsRestoredAfterItExpires(t *testing.T) {
 	}
 	if rep.Login == nil || rep.Login.Relogins != 1 || rep.Login.Attempts != 2 {
 		t.Errorf("login block = %+v, want 2 attempts with 1 relogin", rep.Login)
+	}
+}
+
+// The destructive check gates every submission kind (integrator pre-review, uzil): a login form
+// whose intent is destructive is refused even with credentials configured — the credential path
+// is the ordinary path's gates plus credentials, never a bypass around them.
+func TestADestructiveLoginFormIsRefusedEvenWithCredentials(t *testing.T) {
+	var mu sync.Mutex
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mu.Lock()
+			posts++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>
+			<form method="post" action="/login">
+			<input type="hidden" name="action" value="delete">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	rep := run(t, cfg)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if posts != 0 {
+		t.Errorf("a destructive-intent login form was submitted %d time(s) because credentials were "+
+			"configured; the destructive check gates the credential path like any other", posts)
+	}
+	found := false
+	for _, sk := range rep.Skips.Records {
+		if sk.Method == "POST" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the refusal is not in the skip ledger; skips: %+v", rep.Skips.Counts)
+	}
+}
+
+// One authentication method per scan, Burp's own rule: New refuses a crawl configured with both
+// a recorded login and credentials, rather than leaving the report unable to say which session a
+// page was reached under.
+func TestNewRefusesARecordedLoginAndCredentialsTogether(t *testing.T) {
+	h := newHarness()
+	cfg := h.config("http://127.0.0.1:1/")
+	cfg.BrowserLogin = &fakeLogin{fail: "unused"}
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	if _, err := New(cfg); err == nil {
+		t.Fatal("New accepted a recorded login AND credentials; Burp's rule is one authentication " +
+			"method per scan")
 	}
 }

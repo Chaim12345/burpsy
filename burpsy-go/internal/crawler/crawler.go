@@ -1256,6 +1256,12 @@ func New(cfg Config) (*Crawler, error) {
 	if cfg.Capture.Store == nil {
 		return nil, fmt.Errorf("a crawl needs a traffic store: CRAWL-02 requires crawled traffic to be captured through the same path as proxied traffic, and there is nowhere to capture it to")
 	}
+	if cfg.BrowserLogin != nil && len(cfg.LoginCredentials) > 0 {
+		// Burp's own rule: one authentication method per scan — a recorded login replaces
+		// credentials, never joins them. Two methods would leave the report unable to say which
+		// session a page was reached under.
+		return nil, fmt.Errorf("a crawl gets one authentication method: BrowserLogin (a recorded login) and LoginCredentials (form login) are alternatives, not a pair — set one")
+	}
 
 	seeds := make([]*url.URL, 0, len(cfg.Seeds))
 	for _, s := range cfg.Seeds {
@@ -3221,6 +3227,29 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		return
 	}
 
+	values := url.Values{}
+	for _, fl := range f.fields {
+		values.Add(fl.name, fl.value)
+	}
+	encoded := values.Encode()
+
+	// The destructive check reads the whole request intent, not just the action: a hidden
+	// `action=delete` field is the request that deletes, and an action URL alone would miss it.
+	//
+	// Placed before the credential branches below, so it gates EVERY submission kind: the
+	// ordinary placeholder submission and the credential, registration and invalid-username
+	// ones alike. The credential mapping swaps only the username/password VALUES; the signals
+	// this check reads — the action and the field names and hidden values — are identical in
+	// all of them, so one check here is the check for every kind, and a login form whose intent
+	// is destructive is refused even with credentials configured.
+	if v := classifyDestructive(u.String()+" "+encoded, f.label); v.Refused {
+		c.skips.record(SkipRecord{
+			Reason: v.Reason, URL: u.String(), Method: f.method, Text: f.label,
+			Signal: v.Signal, FoundAt: base.String(),
+		})
+		return
+	}
+
 	// A registration form (Burp's distinguishing rule: the password-carrying form with the most
 	// password fields — two or more in practice) gets a generated account when the operator opted
 	// in, never a provided credential: credentials belong to login forms.
@@ -3248,22 +3277,6 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		if handled {
 			return
 		}
-	}
-
-	values := url.Values{}
-	for _, fl := range f.fields {
-		values.Add(fl.name, fl.value)
-	}
-	encoded := values.Encode()
-
-	// The destructive check reads the whole request intent, not just the action: a hidden
-	// `action=delete` field is the request that deletes, and an action URL alone would miss it.
-	if v := classifyDestructive(u.String()+" "+encoded, f.label); v.Refused {
-		c.skips.record(SkipRecord{
-			Reason: v.Reason, URL: u.String(), Method: f.method, Text: f.label,
-			Signal: v.Signal, FoundAt: base.String(),
-		})
-		return
 	}
 
 	names := make([]string, 0, len(f.fields))

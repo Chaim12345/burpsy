@@ -185,10 +185,9 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 	cookies := cookiesFromRawResponse(item.url, rawResponse)
 	st := c.login
 	if st == nil || st.report.Method != "credentials" {
-		// The first credential login of this crawl. Replaces any recorded-login state only in a
-		// configuration that has both — one auth method per scan, Burp's own rule, and Config's
-		// BrowserLogin wins by having run first; a crawl with both is a configuration error New
-		// refuses, so this branch is the credentials-only case.
+		// The first credential login of this crawl. A crawl with both a recorded login and
+		// credentials never reaches here — New refuses it (one authentication method per scan,
+		// Burp's own rule) — so this branch is the credentials-only case.
 		st = &loginState{report: LoginReport{Method: "credentials", CookieNames: []string{}, Blocked: []string{}, RenderBlocked: []string{}}}
 		c.login = st
 		c.credLoginLocationBase = len(c.locations)
@@ -208,11 +207,21 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 	hc := make([]*http.Cookie, 0, len(cookies))
 	names := make([]string, 0, len(cookies))
 	for _, lc := range cookies {
-		hc = append(hc, &http.Cookie{Name: lc.Name, Value: lc.Value, Path: lc.Path})
+		// The full attribute set, on recorded_login.attempt's mapping: a cookie the application
+		// scoped by Domain or marked Secure/HttpOnly keeps exactly that scope in the jar — an
+		// attribute dropped here would send the session where the application said it must not
+		// go, or read as a different cookie than the one issued.
+		c := &http.Cookie{Name: lc.Name, Value: lc.Value, Path: lc.Path, Secure: lc.Secure, HttpOnly: lc.HTTPOnly}
+		if !lc.HostOnly {
+			c.Domain = lc.Domain
+		}
+		hc = append(hc, c)
 		if !loginHasString(names, lc.Name) {
 			names = append(names, lc.Name)
 		}
 	}
+	// The jar is keyed on the channel the cookie actually arrived over — unlike attempt()'s
+	// rebuild, which has only CDP's word for the cookie and guesses the scheme from Secure.
 	jar.SetCookies(&url.URL{Scheme: item.url.Scheme, Host: item.url.Host, Path: "/"}, hc)
 	st.jar = jar
 	st.report.CookieNames = names
@@ -396,8 +405,11 @@ func (c *Crawler) admitSelfRegistration(f discoveredForm, base, u *url.URL, dept
 		url: u, method: f.method, depth: depth, foundAt: base.String(), text: f.label,
 		body:        []byte(values.Encode()),
 		contentType: "application/x-www-form-urlencoded",
-		maskValues:  []string{password},
-		loginCred:   username,
+		// Both halves of the generated credential are masked in the stored exchange: "credentials
+		// never stored" is true for the account this run created exactly as for one the operator
+		// provided.
+		maskValues: []string{username, password},
+		loginCred:  username,
 	}
 	for _, fl := range f.fields {
 		item.fieldNames = append(item.fieldNames, fl.name)
