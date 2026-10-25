@@ -16,16 +16,24 @@ def f(url, param, cls, tech=""):
 
 
 class Parity(unittest.TestCase):
-    def test_endpoint_drops_host_query_and_trailing_slash(self):
-        self.assertEqual(parity.norm_endpoint("http://a.test:8080/x/y/?q=1#z"), "/x/y")
-        self.assertEqual(parity.norm_endpoint("https://a.test"), "/")
+    def test_endpoint_keeps_host_port_drops_query_and_trailing_slash(self):
+        self.assertEqual(parity.norm_endpoint("http://a.test:8080/x/y/?q=1#z"), "a.test:8080/x/y")
+        self.assertEqual(parity.norm_endpoint("https://a.test"), "a.test/")
 
-    def test_same_finding_across_hosts_case_and_technique(self):
-        b = [f("http://127.0.0.1:1/search?q=1", "Q", "XSS", "reflected")]
-        r = [f("http://localhost:9/search", "q", "xss")]
+    def test_same_finding_across_scheme_case_and_technique(self):
+        b = [f("http://app.test/search?q=1", "Q", "XSS", "reflected")]
+        r = [f("https://APP.test:443/search", "q", "xss")]
         rep = parity.compare(b, r)
         self.assertEqual(len(rep["classes"]["xss"]["both"]), 1)
         self.assertEqual(rep["classes"]["xss"]["reference_only"], [])
+
+    def test_two_hosts_with_the_same_path_do_not_merge(self):
+        b = [f("http://b.test/search", "q", "xss")]
+        r = [f("http://a.test/search", "q", "xss")]
+        rep = parity.compare(b, r)
+        self.assertEqual(rep["classes"]["xss"]["both"], [])
+        self.assertEqual(len(rep["classes"]["xss"]["reference_only"]), 1)
+        self.assertEqual(len(rep["classes"]["xss"]["burpsy_only"]), 1)
 
     def test_buckets(self):
         b = [f("/a", "p", "sqli"), f("/only-b", "p", "xss")]

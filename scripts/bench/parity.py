@@ -26,10 +26,20 @@ from urllib.parse import urlsplit
 
 
 def norm_endpoint(url):
-    path = urlsplit(url).path or "/"
+    # host + port + path. The scheme is deliberately out (http and https of one vhost is a comparison we
+    # want); the scheme's default port is dropped so http://h:80 and https://h:443 still match h.
+    u = urlsplit(url)
+    host = (u.hostname or "").lower()
+    try:
+        port = u.port
+    except ValueError:
+        port = None
+    if port in (80, 443):
+        port = None
+    path = u.path or "/"
     if len(path) > 1:
         path = path.rstrip("/")
-    return path
+    return host + (":%d" % port if port else "") + path
 
 
 def norm(f):
