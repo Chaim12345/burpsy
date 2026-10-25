@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // Burp's "Set Connection header" attack setting, and the two attack-results settings that sit
@@ -46,7 +47,7 @@ import (
 // findHeaderEnd falls back to "treat the whole buffer as head, empty body" and returns no error, so
 // Parse succeeding is not the same question as the message being well-framed.
 func setConnectionClose(raw []byte) []byte {
-	if !bytes.Contains(raw, []byte("\r\n\r\n")) && !bytes.Contains(raw, []byte("\n\n")) {
+	if _, _, _, ok := httputil.SplitHeadBody(raw); !ok {
 		return raw
 	}
 	shape, err := core.Parse(raw, core.DirectionRequest)

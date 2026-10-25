@@ -657,3 +657,14 @@ func TestATruncatedContentLengthResponseIsSalvagedNotDropped(t *testing.T) {
 		t.Errorf("the recorded exchange does not say the body was truncated; notes = %v", found.Notes)
 	}
 }
+
+// burpsy-react-ui-6858 fix round: the event-stream check reads Content-Type with the strict
+// shape the retired headerValue used.
+func Test_headIsEventStream_ignores_a_padded_content_type(t *testing.T) {
+	if headIsEventStream([]byte("HTTP/1.1 200 OK\r\nContent-Type : text/event-stream\r\n")) {
+		t.Error("a Content-Type padded before its colon was read as an event stream")
+	}
+	if !headIsEventStream([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n")) {
+		t.Error("a plain Content-Type stopped reading as an event stream")
+	}
+}
