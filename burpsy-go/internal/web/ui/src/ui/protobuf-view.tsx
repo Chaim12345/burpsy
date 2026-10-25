@@ -352,8 +352,10 @@ function SchemaBar({
     const picked = [...(event.target.files ?? [])];
     event.target.value = "";
     if (picked.length === 0) return;
+    const first = picked[0];
+    if (!first) return;
     if (picked.length === 1) {
-     const file = picked[0]!;
+     const file = first;
      void file.text().then((text) => {
       setProtoSchema({ name: file.name, text });
       toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
@@ -362,7 +364,9 @@ function SchemaBar({
     }
     void Promise.all(picked.map(async (f) => [f.name, await f.text()] as const)).then((entries) => {
      const files = Object.fromEntries(entries);
-     setProtoSchema({ name: `${picked.length} .proto files`, text: entries[0]![1], files, entry: entries[0]![0] });
+     const head = entries[0];
+     if (!head) return;
+     setProtoSchema({ name: `${picked.length} .proto files`, text: head[1], files, entry: head[0] });
      toast.success(`Loaded ${picked.length} .proto files — imports between them resolve`);
     });
    }}

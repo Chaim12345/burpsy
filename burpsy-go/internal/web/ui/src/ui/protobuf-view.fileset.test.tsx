@@ -48,7 +48,7 @@ describe("the .proto file set on the Protobuf tab", () => {
   await waitFor(() => expect(useApp.getState().protoSchema?.files).toBeTruthy());
   expect(useApp.getState().protoSchema?.entry).toBe("protos/shop.proto");
   await waitFor(() => expect(decodeCalls.length).toBeGreaterThan(0));
-  const last = decodeCalls[decodeCalls.length - 1]!;
+  const last = decodeCalls[decodeCalls.length - 1] ?? {};
   expect(last.proto).toBeUndefined();
   expect(last.proto_entry).toBe("protos/shop.proto");
   expect(Object.keys(last.proto_files as Record<string, string>).sort()).toEqual(["protos/common.proto", "protos/shop.proto"]);
@@ -60,7 +60,7 @@ describe("the .proto file set on the Protobuf tab", () => {
   await waitFor(() => expect(useApp.getState().protoSchema?.text).toContain("message A"));
   expect(useApp.getState().protoSchema?.files).toBeUndefined();
   await waitFor(() => expect(decodeCalls.length).toBeGreaterThan(0));
-  const last = decodeCalls[decodeCalls.length - 1]!;
+  const last = decodeCalls[decodeCalls.length - 1] ?? {};
   expect(last.proto).toContain("message A");
   expect(last.proto_files).toBeUndefined();
  });
