@@ -26,7 +26,7 @@ func TestFetchServiceDescriptorsWalksTheImportGraph(t *testing.T) {
 	// A file compiled by protocompile, registered into the global registry the
 	// reflection server answers from. The path and package are unique to this
 	// test because the global registry has no unregister.
-	compiled, err := compileProto(reflectTestProto, "reflecttest/sightings.proto")
+	compiled, err := CompileProto(reflectTestProto, "reflecttest/sightings.proto")
 	if err != nil {
 		t.Fatalf("compile the fixture: %v", err)
 	}

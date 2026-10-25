@@ -109,6 +109,9 @@ var uiRouteMissingSurface = map[string]string{
 	// /api/intruder/attacks/{task_id}/{pause|resume|stop}, so those two entries came off this list —
 	// which is this test working, not the list dying. A route that *should* be operator-facing but is
 	// not belongs back here, with the issue id that will force it shut.
+	"/api/protobuf/reflect-decode": "burpsy-react-ui-mup0 (P3, W2 lane, child of 47id): the Protobuf " +
+		"tab's reflect-decode affordance, with the reflection provenance rendered visibly. The API " +
+		"shipped first by integrator sequencing; this entry closes when the console half lands.",
 }
 
 // uiSourceDirForRoutes is the console source tree.

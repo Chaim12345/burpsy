@@ -30,10 +30,11 @@ func parseProtoDescriptors(src string) (*Schema, error) {
 	return parseProtoDescriptorsFile(src, "input.proto")
 }
 
-// compileProto compiles a single in-memory .proto into its linked descriptor,
-// resolving imports against the well-known types. The reflection test registers
-// the result into a protoregistry; ParseProto builds a Schema from it.
-func compileProto(src, filePath string) (protoreflect.FileDescriptor, error) {
+// CompileProto compiles a single in-memory .proto into its linked descriptor,
+// resolving imports against the well-known types. Exported for the reflection
+// surfaces' tests (registering a fixture schema into a protoregistry) and the
+// multi-file upload bead (rsu2); ParseProto builds a Schema from it.
+func CompileProto(src, filePath string) (protoreflect.FileDescriptor, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
 			Accessor: func(path string) (io.ReadCloser, error) {
@@ -56,7 +57,7 @@ func compileProto(src, filePath string) (protoreflect.FileDescriptor, error) {
 // parseProtoDescriptorsFile is parseProtoDescriptors with the file's own path
 // named, so registries key it correctly.
 func parseProtoDescriptorsFile(src, filePath string) (*Schema, error) {
-	fd, err := compileProto(src, filePath)
+	fd, err := CompileProto(src, filePath)
 	if err != nil {
 		return nil, err
 	}
