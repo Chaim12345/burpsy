@@ -113,7 +113,7 @@ const (
 	// do differently.
 	RefusalPaddingRunsPastPayload
 	// RefusalHeaderBlockDoesNotDecode is a header block this package's HPACK decoder cannot decode: a
-	// bad index, a string length overrunning the block, the Huffman seam. This is where a hand-written
+	// bad index, a string length overrunning the block, malformed Huffman. This is where a hand-written
 	// raw header-block fragment lands. Not "invalid HPACK is banned" — a fragment that *does* decode is
 	// authorisable however it was built — but a block we cannot read is a block whose `:path` we cannot
 	// check, and the peer will read something.

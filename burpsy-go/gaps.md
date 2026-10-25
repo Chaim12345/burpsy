@@ -55,9 +55,10 @@
 > session.
 >
 > - **Gap 1's raw frame layer** — `internal/http2/{frame,hpack,malformed}.go`
->   (1,849 lines against 1,640 of tests). The HPACK Huffman seam is *identical in
->   Rust* (`HuffmanNotImplemented`, "slice 2b's seam"), so it is parity rather
->   than a Go shortfall. No send path, deliberately.
+>   (1,849 lines against 1,640 of tests). No send path, deliberately.
+>   UPDATE 2026-10-25 (bead cgim): the HPACK Huffman seam is closed in Go —
+>   string literals decode through x/net/http2/hpack, malformed Huffman is
+>   HpackHuffmanInvalid; the Rust port keeps its seam (documented divergence).
 > - **Gap 3 (audit engine)** — ledger, dispatch scope, dispositions, budgets and
 >   both circuit breakers, wired into the real audit path. Its tests caught two
 >   genuine semantic defects in the first implementation (inverted per-URL dedup;

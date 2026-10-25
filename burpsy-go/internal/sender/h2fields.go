@@ -195,9 +195,10 @@ func responseHeaders(fields, trailers []burpsyhttp2.HeaderField) []burpsyhttp2.H
 type h2FieldsExchange struct {
 	conn net.Conn
 	br   *bufio.Reader
-	// decoder reads the server's blocks. x/net's decoder rather than burpsy's own: a server Huffman-codes
-	// its strings as a matter of course, and internal/http2's decoder refuses Huffman rather than
-	// guess. The request side needs no decoder — it is written literally.
+	// decoder reads the server's blocks. x/net's decoder rather than burpsy's own: this path wants a
+	// conformant read of a well-formed peer, and internal/http2's decoder exists for showing a tester
+	// exactly what a peer sent, malformed bits included. The request side needs no decoder — it is
+	// written literally.
 	decoder *hpack.Decoder
 
 	connWindow, streamWindow int64

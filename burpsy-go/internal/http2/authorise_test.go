@@ -223,14 +223,15 @@ func TestARawFragmentThatDoesNotDecodeIsRefusedByName(t *testing.T) {
 	}
 }
 
-func TestAHuffmanCodedFragmentIsRefusedByNameRatherThanGuessed(t *testing.T) {
-	// A literal with an incremental index and a Huffman-coded name: the seam hpack.go documents.
+func TestAnInvalidHuffmanFragmentIsRefusedByNameRatherThanGuessed(t *testing.T) {
+	// A literal with an incremental index whose name is two zero octets under the Huffman flag:
+	// malformed Huffman (no EOS-prefix padding), which the decoder refuses by name.
 	program := NewH2FrameProgram(
 		NewFrameSpec(TypeHeaders, FlagEndHeaders, 1, []byte{0x40, 0x82, 0x00, 0x00}),
 	)
 	r := refusalOf(t, program, RefusalHeaderBlockDoesNotDecode)
 	if !strings.Contains(r.Detail, "Huffman") {
-		t.Fatalf("want the Huffman seam named, got %q", r.Detail)
+		t.Fatalf("want the Huffman fault named, got %q", r.Detail)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+
+	xnetHpack "golang.org/x/net/http2/hpack"
 )
 
 // HPACK (RFC 7541): the primitive integer and string encodings, the static and dynamic tables, and a
@@ -19,20 +21,21 @@ import (
 // leaning on it would put the malformed-input path back behind the wall this layer exists to get
 // around.
 //
-// # Huffman is a named seam, in both languages
+// # Huffman: borrowed table, hand-written framing
 //
-// decodeHpackString bounds-checks and slices every string literal regardless of its Huffman flag,
-// but a set flag reports HpackHuffmanNotImplemented rather than decoding it. crates/http2/src/hpack.rs
-// does exactly the same and calls that arm "slice 2b's seam"; this port carries the seam across
-// rather than closing it, so the two implementations decode the same inputs and refuse the same
-// ones. Passing the raw Huffman-coded octets through as though they were the literal value would be
-// worse than refusing them — it would silently hand a caller bytes that are not the header value
-// they claim to be.
+// decodeHpackString bounds-checks and slices every string literal regardless of its Huffman flag;
+// a set flag decodes through golang.org/x/net/http2/hpack, which the sender path already links.
+// The Huffman code table is the one part of RFC 7541 where a transcription error buys nothing and
+// a maintained library already exists — everything AROUND the table (length prefixes, bounds,
+// representation framing) stays hand-written, because that is where a malformed block needs
+// reporting rather than rejection. Malformed Huffman is HpackHuffmanInvalid, not a raw-octet
+// pass-through: handing a caller bytes that are not the header value they claim to be would be
+// worse than refusing them.
 //
-// The practical consequence is worth stating plainly, because it bounds what this decoder is useful
-// for today: real peers Huffman-code most header strings, so decoding a *captured* block off the
-// wire will frequently stop at this error. Blocks this package's Encoder produced always decode,
-// because that encoder never sets H=1.
+// This is a deliberate divergence from crates/http2/src/hpack.rs, which keeps the seam (its
+// HuffmanNotImplemented arm): the Go decoder now reads captured blocks the Rust one refuses, and
+// real peers Huffman-code most header strings, so a captured block off the wire decodes here.
+// Blocks this package's Encoder produced always decode, because that encoder never sets H=1.
 //
 // # One codec per (connection, direction)
 //
@@ -56,8 +59,9 @@ import (
 // match reuses the name and inserts the pair; otherwise both strings are literal and the pair is
 // inserted. It never emits "without indexing" (§6.2.2) or "never indexed" (§6.2.3) — those exist for
 // a sender who wants a field to skip the table, which is not a distinction this encoder's callers
-// currently need to express — and it never emits Huffman-coded strings, for the same reason
-// decodeHpackString never decodes them. Every string this encoder writes sets H=0, which is
+// currently need to express — and it never emits Huffman-coded strings, because an encoder's job
+// here is legibility of what it wrote, not wire compactness. Every string this encoder writes
+// sets H=0, which is
 // spec-legal (Huffman is always optional) and costs bytes on the wire versus a real encoder, not a
 // bug.
 //
@@ -208,9 +212,9 @@ const (
 	// HpackStringLengthOverrun means a string literal's declared length (§5.2) reaches past the end
 	// of the block.
 	HpackStringLengthOverrun
-	// HpackHuffmanNotImplemented means a string literal's Huffman flag is set. The named seam — see
-	// the module docs.
-	HpackHuffmanNotImplemented
+	// HpackHuffmanInvalid means a string literal's Huffman flag is set and its octets are not valid
+	// Huffman coding (a code that matches nothing, or padding that is not an EOS prefix).
+	HpackHuffmanInvalid
 	// HpackZeroIndex means index 0 in an indexed header field representation (§6.1) — reserved,
 	// never valid.
 	HpackZeroIndex
@@ -258,10 +262,10 @@ func (e *HpackError) Error() string {
 		return fmt.Sprintf("the string literal at byte %d declares %d byte(s) but only %d remain "+
 			"in the block — the length is corrupt or the block was truncated",
 			e.At, e.Declared, e.Remaining)
-	case HpackHuffmanNotImplemented:
-		return fmt.Sprintf("the string literal at byte %d sets the Huffman flag, which this decoder "+
-			"does not yet implement — refusing to hand back its raw octets as though they were the "+
-			"literal value", e.At)
+	case HpackHuffmanInvalid:
+		return fmt.Sprintf("the string literal at byte %d sets the Huffman flag but its octets are "+
+			"not valid Huffman coding — refusing to hand back a guess as though it were the literal "+
+			"value", e.At)
 	case HpackZeroIndex:
 		return fmt.Sprintf("the indexed header field at byte %d names index 0, which RFC 7541 §6.1 "+
 			"reserves — no table entry ever occupies it", e.At)
@@ -336,9 +340,10 @@ func decodeHpackInt(block []byte, at int, prefixBits uint) (uint64, int, *HpackE
 // against what remains in block **before** slicing — a declared length is attacker-influenced and
 // must never reach a slice operation unchecked.
 //
-// A set Huffman flag is HpackHuffmanNotImplemented — the named seam, see the module docs.
-// Bounds-checking happens first regardless of the flag, so a too-long Huffman string is still
-// reported as a length overrun rather than masked by the not-implemented error.
+// A set Huffman flag decodes through x/net/http2/hpack (the module docs say why the table alone
+// is borrowed); malformed Huffman is HpackHuffmanInvalid. Bounds-checking happens first
+// regardless of the flag, so a too-long Huffman string is still reported as a length overrun
+// rather than masked by a Huffman error.
 func decodeHpackString(block []byte, at int) ([]byte, int, *HpackError) {
 	length, intLen, err := decodeHpackInt(block, at, 7)
 	if err != nil {
@@ -363,10 +368,16 @@ func decodeHpackString(block []byte, at int) ([]byte, int, *HpackError) {
 		}
 	}
 	if huffman {
-		// SEAM: replace this arm with the Huffman decode of block[dataAt : dataAt+declared].
-		// Everything above it — the length prefix, the bounds check against remaining — is unchanged
-		// by that replacement. Mirrors the same seam in crates/http2/src/hpack.rs.
-		return nil, 0, &HpackError{Kind: HpackHuffmanNotImplemented, At: at}
+		// The one piece of RFC 7541 this package does not hand-write: x/net's hpack carries the
+		// code table, and a table is a thing you transcribe, not a thing you reason about — the
+		// malformed-input case the hand-written layer exists for is the *framing* around the
+		// string, all of which is still checked above. The Rust port keeps its seam here
+		// (crates/http2/src/hpack.rs), so Go now decodes strictly more than Rust does.
+		decoded, derr := xnetHpack.HuffmanDecodeToString(block[dataAt : dataAt+declared])
+		if derr != nil {
+			return nil, 0, &HpackError{Kind: HpackHuffmanInvalid, At: at}
+		}
+		return []byte(decoded), intLen + declared, nil
 	}
 	out := make([]byte, declared)
 	copy(out, block[dataAt:dataAt+declared])

@@ -334,14 +334,39 @@ func TestAnEntryLargerThanTheWholeDynamicTableEmptiesItAndIsNotInserted(t *testi
 	}
 }
 
-func TestAHuffmanFlaggedStringReturnsHuffmanNotImplemented(t *testing.T) {
-	// 0x14 = literal never indexed, indexed name (:path, static index 4).
-	// 0x85 = H=1, length 5, at byte 1.
+func TestAHuffmanFlaggedStringDecodes(t *testing.T) {
+	// 0x14 = literal never indexed, indexed name (:path, static index 4). The value is RFC 7541
+	// appendix C.4.1's worked example: 12 octets of Huffman coding for "www.example.com".
 	d := NewDecoder(4096)
-	_, err := d.Decode([]byte{0x14, 0x85, 0, 0, 0, 0, 0})
-	wantHpackError(t, err, HpackError{Kind: HpackHuffmanNotImplemented, At: 1},
-		"a Huffman-flagged string must not be treated as raw octets, and the offset must name the "+
-			"string's own length octet rather than the representation's start")
+	fields, err := d.Decode([]byte{0x14, 0x8c,
+		0xf1, 0xe3, 0xc2, 0xe5, 0xf2, 0x3a, 0x6b, 0xa0, 0xab, 0x90, 0xf4, 0xff})
+	if err != nil {
+		t.Fatalf("a real peer's Huffman-coded string must decode: %v", err)
+	}
+	if len(fields) != 1 || string(fields[0].Name) != ":path" || string(fields[0].Value) != "www.example.com" {
+		t.Fatalf("decoded %+v, want :path: www.example.com", fields)
+	}
+
+	// A second vector (C.6.1's "no-cache") as a header NAME: 0x00 = literal without indexing, new
+	// name; 0x86 = H=1, length 6; then a one-octet raw value.
+	d2 := NewDecoder(4096)
+	fields2, err := d2.Decode([]byte{0x00, 0x86, 0xa8, 0xeb, 0x10, 0x64, 0x9c, 0xbf, 0x01, 'x'})
+	if err != nil {
+		t.Fatalf("a Huffman-coded name must decode: %v", err)
+	}
+	if len(fields2) != 1 || string(fields2[0].Name) != "no-cache" || string(fields2[0].Value) != "x" {
+		t.Fatalf("decoded %+v, want no-cache: x", fields2)
+	}
+}
+
+func TestAnInvalidHuffmanStringIsRefusedByName(t *testing.T) {
+	// 0x14 = literal never indexed, indexed name. 0x82 = H=1, length 2, at byte 1; two zero octets
+	// are not a code with EOS-prefix padding, so this is malformed Huffman, not a value.
+	d := NewDecoder(4096)
+	_, err := d.Decode([]byte{0x14, 0x82, 0, 0})
+	wantHpackError(t, err, HpackError{Kind: HpackHuffmanInvalid, At: 1},
+		"malformed Huffman must be refused by name, and the offset must name the string's own "+
+			"length octet rather than the representation's start")
 }
 
 // Defends the seam's ordering rule: bounds-checking happens before the Huffman refusal, so a
