@@ -30,7 +30,15 @@ newAuditRun puts run state on the context and newCheckContextForRun overrides cc
    path, so the one carrier serves all three techniques.
 2. web (integrator): scannerAuditReq gains `second_identity` — a web-local struct with the four
    string fields and real json tags (scanner's own type is json:"-" by pin, so the request type
-   cannot be reused; the mapping is field-by-field and explicit). Both single-exchange handlers
+   cannot be reused; the mapping is field-by-field and explicit). The pinned request shape, which
+   the web seam and W2's form both build against:
+
+     {"second_identity": {"cookie_header": "session=...; ...",
+                          "authorization_header": "Bearer ...",
+                          "api_key_header": "X-API-Key",
+                          "api_key_value": "..."}}
+
+   Field order and names mirror scanner.SecondIdentity one-for-one, snake_cased. Both single-exchange handlers
    and the audit-items path map it onto cfg.SecondIdentity. Empty second_identity (all fields
    blank) is a 400 — a credential carrying nothing is a config error, not an inert run. The
    switches stay where W1 put them: /api/scanner/config PUT + the saved-config library, no
