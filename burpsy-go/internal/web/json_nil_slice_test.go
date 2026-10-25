@@ -136,9 +136,9 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	// GET routes whose empty-state answer is a JSON error body, with the exact status each
 	// serves. Their bodies are walked for unjustified nulls like any other JSON - an error DTO
 	// has no unjustified nulls either - but the status is bound: a new error status, a changed
-	// status, or an unlisted route answering one all fail. The list is asserted below, not
-	// just initialized: today it must be EMPTY, because no route serves a JSON error on empty
-	// state, and the end of the test fails if any route did.
+	// status, or an unlisted route answering one all fail. The end of the test asserts this
+	// list is EMPTY - not just observes it - because the empty-state contract is that no
+	// route serves a JSON error at all.
 	errorJSONStatus := map[string]int{}
 	var nulls, streamed []string
 	var sampled, errorSampled, skipped int
@@ -221,11 +221,14 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	if len(nulls) > 0 {
 		t.Errorf("%d unjustified null value(s) in GET sample output:\n%s", len(nulls), strings.Join(nulls, "\n"))
 	}
-	// The empty error-status list is a checked claim, not an initial value: zero routes served
-	// a JSON error on empty state. (A route doing so also fails above as unlisted; this pins
-	// the list's emptiness itself.)
-	if len(errorJSONStatus) == 0 && errorSampled != 0 {
-		t.Errorf("%d route(s) served a JSON error status on empty state, so the error-status list may not stay empty", errorSampled)
+	// The error-status list must be EMPTY: no route serves a JSON error on empty state, and
+	// keeping it that way is a checked claim, not an initial value. Naming a route here is a
+	// deliberate, cited decision that starts by retiring this assertion.
+	if len(errorJSONStatus) != 0 {
+		t.Errorf("error-status list has %d entries; the empty-state contract is that no route serves a JSON error - retire this assertion as part of naming one", len(errorJSONStatus))
+	}
+	if errorSampled != 0 {
+		t.Errorf("%d route(s) served a JSON error status on empty state; each must be named on the error-status list with its exact status", errorSampled)
 	}
 	t.Logf("sampled %d GET routes on empty state (%d of them named JSON error statuses); %d skipped (path variables or no GET verb); streaming: %v",
 		sampled+errorSampled, errorSampled, skipped, streamed)
