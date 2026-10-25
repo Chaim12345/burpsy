@@ -52,3 +52,31 @@ func (s *Server) handleDomMessageWorker(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, s.domMessages.Poll(body.FrameToken, time.Now()))
 	}
 }
+
+// domWorkerRoutes is the ONLY cross-origin worker exception set. The guarded-handler
+// exception derives only from this declaration; literal route registrations remain
+// visible to the repository route-manifest verifier.
+var domWorkerRoutes = map[string]bool{
+	"/api/dominvader/messages/register": true,
+	"/api/dominvader/messages/report":   true,
+	"/api/dominvader/messages/poll":     true,
+}
+
+func (s *Server) domWorkerException(w http.ResponseWriter, r *http.Request) (bool, bool) {
+	if r.Method != http.MethodPost || !domWorkerRoutes[r.URL.Path] {
+		if r.Header.Get(domWorkerHeader) != "" {
+			http.Error(w, crossSiteRefusal, http.StatusForbidden)
+			return true, false
+		}
+		return false, false
+	}
+	if !s.acceptsHost(r.Host) {
+		http.Error(w, crossSiteRefusal, http.StatusForbidden)
+		return true, false
+	}
+	if !s.domInvader.WorkerAuthorized(r.Header.Get(domWorkerHeader)) {
+		http.Error(w, "worker capability required", http.StatusUnauthorized)
+		return true, false
+	}
+	return true, true
+}

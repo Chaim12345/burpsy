@@ -113,3 +113,66 @@ func TestDomMessageWorkerRegistrationRequiresCapabilityAndDoesNotExposeItToConso
 		}
 	}
 }
+
+func TestDomWorkerExceptionThroughGuardedHandlerIsExactAndCapabilityBound(t *testing.T) {
+	s := newTestServer()
+	old := s.domInvader.BeginWorkerLaunch("http://localhost/hit")
+	current := s.domInvader.BeginWorkerLaunch("http://localhost/hit")
+	for _, tc := range []struct {
+		path, capability string
+		want             int
+	}{
+		{"/api/dominvader/messages/register", current.WorkerCapability, 200},
+		{"/api/dominvader/messages/register", old.WorkerCapability, 401},
+		{"/api/dominvader/messages/register", "", 401},
+		{"/api/dominvader/messages/register", "wrong", 401},
+		{"/api/dominvader/messages/fourth", current.WorkerCapability, 403},
+		{"/api/dominvader", current.WorkerCapability, 403},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081"+tc.path, strings.NewReader(`{"tab":4,"frame":"0"}`))
+		req.Header.Set("Origin", "chrome-extension://test-extension")
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		if tc.capability != "" {
+			req.Header.Set(domWorkerHeader, tc.capability)
+		}
+		rec := httptest.NewRecorder()
+		s.guarded.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("%s guarded status %d want %d", tc.path, rec.Code, tc.want)
+		}
+	}
+}
+
+func TestDomWorkerExceptionSetHasExactlyThreeNonControllerRoutes(t *testing.T) {
+	if len(domWorkerRoutes) != 3 {
+		t.Fatal("worker exception set changed; a fourth route requires a new security decision")
+	}
+	for _, path := range []string{"/api/dominvader/messages/register", "/api/dominvader/messages/report", "/api/dominvader/messages/poll"} {
+		if !domWorkerRoutes[path] {
+			t.Fatalf("required worker route missing: %s", path)
+		}
+	}
+	s := newTestServer()
+	capability := s.domInvader.BeginWorkerLaunch("http://localhost/hit").WorkerCapability
+	req := httptest.NewRequest(http.MethodPost, "http://evil.example/api/dominvader/messages/register", strings.NewReader(`{}`))
+	req.Header.Set(domWorkerHeader, capability)
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("worker capability bypassed Host validation: %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodPut, "http://127.0.0.1:8081/api/dominvader", strings.NewReader(`{"enabled":true}`))
+	req.Header.Set("Origin", "https://evil.example")
+	rec = httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("cross-site controller was accepted: %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodPut, "http://127.0.0.1:8081/api/dominvader", strings.NewReader(`{"enabled":true}`))
+	req.Header.Set(domWorkerHeader, capability)
+	rec = httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	if rec.Code != 403 {
+		t.Fatalf("worker capability was worth something on controller: %d", rec.Code)
+	}
+}

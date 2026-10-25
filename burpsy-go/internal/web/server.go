@@ -1477,6 +1477,12 @@ func gatedRoutePatterns() []string {
 // rebinding case each one covers, and the token that is deliberately not implemented here.
 func (s *Server) sameOriginOnly(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handled, allowed := s.domWorkerException(w, r); handled {
+			if allowed {
+				h.ServeHTTP(w, r)
+			}
+			return
+		}
 		if !s.requireSameOrigin(w, r) {
 			return
 		}
