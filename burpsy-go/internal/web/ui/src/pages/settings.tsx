@@ -3453,6 +3453,14 @@ function RestApiSection(): JSX.Element {
      ". The bind address is unknown to this view."
     )}
    </p>
+   <p className="field-hint">
+    The machine-readable form of this inventory is the{" "}
+    <a href="/api/openapi.json" target="_blank" rel="noreferrer">
+     OpenAPI 3.1 document
+    </a>{" "}
+    at <code>/api/openapi.json</code> — generated from the same manifest and the handlers&apos; own
+    request and response types (burpsy-react-ui-pg5a), so it cannot drift from them either.
+   </p>
    <div className="stack">
     {classes.map((cls) => {
      const patterns = (byClass.get(cls.id) ?? []).sort();

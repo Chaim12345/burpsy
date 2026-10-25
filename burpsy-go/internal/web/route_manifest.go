@@ -665,6 +665,13 @@ var manifest = map[string]route{
 	// is not made visible by the traffic at the moment it is made, which is exactly when an unattended
 	// caller should have to confirm. Classifying a saved-limits editor as an ordinary local write
 	// would be reading "sends nothing itself" as "harmless".
+	"/api/openapi.json": {
+		// The document this route serves is generated from this manifest and the route schema table,
+		// so it carries nothing an attacker could not read off the binary — and it is the same shape
+		// the MCP surface already publishes tool-by-tool. riskRead by that argument.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the OpenAPI 3.1 document for this whole API, generated from the route manifest and schema table (burpsy-react-ui-pg5a)",
+	},
 	"/api/pools": {
 		methods: []string{"GET", "POST"}, risk: riskScope,
 		summary: "the saved named resource pools, with which of each pool's bounds every tool path can " +

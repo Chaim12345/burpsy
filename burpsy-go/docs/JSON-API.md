@@ -11,6 +11,25 @@ with the code, the code wins and the doc is a defect; please file it back.
 > or change what the engagement is allowed to touch. Only drive them against
 > targets you are authorized to test.
 
+## The OpenAPI document (burpsy-react-ui-pg5a)
+
+`GET /api/openapi.json` serves the whole surface as an OpenAPI 3.1 document,
+generated at request time from the route manifest and the route schema table —
+the same declarations the agent-strictness sweep proves against the handlers —
+so it cannot drift from the server without a test failing. Each operation
+carries its risk class as `x-burpsy-risk`; anything not `read` still needs a
+minted confirmation token, as below. Responses marked
+`x-burpsy-declared: false` have no verified shape yet and publish an empty
+schema rather than a guess; the verified set is declared in
+`internal/web/route_schemas.go`.
+
+The console's typed client is generated from this document:
+`internal/web/ui/src/lib/api-schema.d.ts` (via `bun run gen:api-types`, checked
+stale-or-fresh by `bun run check:api-types` in `bun run check`) and
+`src/lib/typed-api.ts`, an openapi-fetch client whose mutations mint through
+the same `gatedFetch` as the rest of the console. `cmd/openapi-dump` prints the
+document without booting a server.
+
 ## Who may call this API (burpsy-react-ui-s19k)
 
 **There is no authentication and no token.** The console binds to `127.0.0.1` by

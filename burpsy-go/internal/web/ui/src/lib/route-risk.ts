@@ -94,6 +94,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/network/proxy": "riskLocal",
  "/api/network/server-certificates": "riskLocal",
  "/api/network/settings": "riskScope",
+ "/api/openapi.json": "riskRead",
  "/api/pools": "riskScope",
  "/api/pools/": "riskScope",
  "/api/project": "riskRead",

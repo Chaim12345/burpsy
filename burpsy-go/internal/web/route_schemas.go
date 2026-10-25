@@ -24,10 +24,35 @@ import (
 // route cannot reach the MCP surface untyped. GET entries are optional and carry query parameters.
 var routeSchemas = map[string]opSchema{
 	// ---- reads with query parameters ----------------------------------------------------------
-	"GET /api/advisories": {query: []queryParam{
-		{name: "q", kind: "string", desc: "substring filter over name and type index"},
-		{name: "severity", kind: "string", desc: "only definitions of this typical severity"},
-	}},
+	"GET /api/advisories": {
+		query: []queryParam{
+			{name: "q", kind: "string", desc: "substring filter over name and type index"},
+			{name: "severity", kind: "string", desc: "only definitions of this typical severity"},
+		},
+		// CONFIRMED (code read): handleAdvisories encodes advisoryCatalogueView.
+		response: typeOf[advisoryCatalogueView](),
+	},
+	"GET /api/advisories/": {
+		// CONFIRMED (code read): handleAdvisoryDetail encodes advisoryDetailView, which returns
+		// issueAdvisoryView.
+		response: typeOf[issueAdvisoryView](),
+	},
+	"GET /api/stats": {
+		// CONFIRMED (code read): handleStats encodes StatsView.
+		response: typeOf[StatsView](),
+	},
+	"GET /api/config/export": {
+		// CONFIRMED (code read): handleConfigExport encodes configBundle.
+		response: typeOf[configBundle](),
+	},
+	"GET /api/network/proxy": {
+		// CONFIRMED (code read): writeNetworkProxy encodes networkProxyView.
+		response: typeOf[networkProxyView](),
+	},
+	"GET /api/ws/connections": {
+		// CONFIRMED (code read): handleWSConnections encodes []wsConnectionView.
+		response: typeOf[[]wsConnectionView](),
+	},
 	"GET /api/crawl": {query: []queryParam{{name: "task", kind: "integer", desc: "a crawl or API-scan task id; omitted means the latest"}}},
 	"GET /api/datasets/": {query: []queryParam{
 		{name: "pattern", kind: "string", desc: "RE2 regex a row must match (in any column, or in columns)"},
@@ -55,14 +80,18 @@ var routeSchemas = map[string]opSchema{
 		{name: "limit", kind: "integer", desc: "most lines to return"},
 	}},
 	"GET /api/hidden-inputs": {query: []queryParam{{name: "task", kind: "integer", desc: "one guessing run by task id; omitted lists the retained runs"}}},
-	"GET /api/history": {query: []queryParam{
-		{name: "limit", kind: "integer", desc: "most rows to return, newest first (default 300)"},
-		{name: "q", kind: "string", desc: "a burpsy-query filter expression over host/path/method/status"},
-		{name: "search", kind: "string", desc: "Burp's Search box: a term matched over row columns and both messages"},
-		{name: "search_case", kind: "boolean", desc: "case-sensitive search"},
-		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
-		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
-	}},
+	"GET /api/history": {
+		query: []queryParam{
+			{name: "limit", kind: "integer", desc: "most rows to return, newest first (default 300)"},
+			{name: "q", kind: "string", desc: "a burpsy-query filter expression over host/path/method/status"},
+			{name: "search", kind: "string", desc: "Burp's Search box: a term matched over row columns and both messages"},
+			{name: "search_case", kind: "boolean", desc: "case-sensitive search"},
+			{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
+			{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
+		},
+		// CONFIRMED (code read): historyGet encodes []*ExchangeView.
+		response: typeOf[[]*ExchangeView](),
+	},
 	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
 	"GET /api/message/{id}": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},

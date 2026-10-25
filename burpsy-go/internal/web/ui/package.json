@@ -14,10 +14,12 @@
     "build:js": "bun build src/app.tsx --outdir dist --minify",
     "build:css": "bun build src/styles.css --outfile style.css --minify",
     "build": "bun run gen:tokens && bun run build:js && bun run build:css",
-    "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run check:gated-routes && bun run test:scripts && bun run test:lib && bun run lint && bun run test:components",
+    "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run check:gated-routes && bun run check:api-types && bun run test:scripts && bun run test:lib && bun run lint && bun run test:components",
     "lint": "biome lint",
     "format:check": "biome format",
-    "test:components": "bun test --preload ./test/dom-preload.ts src/ui src/pages"
+    "test:components": "bun test --preload ./test/dom-preload.ts src/ui src/pages",
+    "gen:api-types": "node scripts/gen-api-types.mjs",
+    "check:api-types": "node scripts/gen-api-types.mjs --check"
   },
   "dependencies": {
     "@codemirror/language": "^6",
@@ -58,6 +60,7 @@
     "@types/react-dom": "^19.2.4",
     "commander": "^15.0.0",
     "mcporter": "^0.13.4",
+    "openapi-fetch": "^0.17.0",
     "typescript": "^7.0.2"
   }
 }

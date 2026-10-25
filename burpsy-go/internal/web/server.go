@@ -1117,6 +1117,8 @@ func (s *Server) setupRoutes() {
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one
 	// definition in full. ServeMux picks the longest match regardless of registration order.
 	s.route("/api/advisories", s.handleAdvisories)
+	// The generated OpenAPI 3.1 document for everything registered here (pg5a).
+	s.route("/api/openapi.json", s.handleOpenAPI)
 	s.route("/api/advisories/", s.handleAdvisoryDetail)
 	// Engagement tools over the site map (burpsy-react-ui-1s07): Find comments, Find scripts
 	// and Find references, Burp's three site-map searches, computed over stored responses.
