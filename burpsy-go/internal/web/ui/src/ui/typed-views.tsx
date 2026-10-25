@@ -144,37 +144,44 @@ function GraphQLOperationEditor({
   setErrors(null);
   setApplyError(null);
  }, [operation.query]);
- // Apply resolves asynchronously; a draft the operator has since typed over must not be
- // overwritten by the older resolution (the rsu2 pick-batch generation guard). Typing bumps
- // the generation; so does the raw prop moving under the pending Apply (a Raw-view edit),
- // and so does the unmount - the guard is the only thing a dead component's promise still
- // shares with the live one.
- const applyGen = useRef(0);
+ // Check and Apply both resolve asynchronously onto the draft; a resolution that lands
+ // after the operator moved on - typed over the draft, edited the Raw view, or left the
+ // message - must not write (the rsu2 pick-batch generation guard, on both promises).
+ // Typing bumps the generation; so does the raw prop moving, and so does the unmount -
+ // the guard is the only thing a dead component's promise still shares with the live one.
+ const draftGen = useRef(0);
  const rawRef = useRef(raw);
  useEffect(() => {
   if (rawRef.current !== raw) {
    rawRef.current = raw;
-   applyGen.current++;
+   draftGen.current++;
   }
  }, [raw]);
  useEffect(() => () => {
-  applyGen.current++;
+  draftGen.current++;
  }, []);
  const dirty = draft !== operation.query;
  const check = () => {
+  const gen = ++draftGen.current;
   setBusy(true);
   validateGraphQLQuery(draft)
-   .then((result) => setErrors(result.errors))
-   .catch((failure: unknown) => setErrors([{ message: failure instanceof Error ? failure.message : String(failure) }]))
+   .then((result) => {
+    if (gen !== draftGen.current) return;
+    setErrors(result.errors);
+   })
+   .catch((failure: unknown) => {
+    if (gen !== draftGen.current) return;
+    setErrors([{ message: failure instanceof Error ? failure.message : String(failure) }]);
+   })
    .finally(() => setBusy(false));
  };
  const apply = () => {
-  const gen = ++applyGen.current;
+  const gen = ++draftGen.current;
   setBusy(true);
   setApplyError(null);
   applyGraphQLQuery(raw, index, draft)
    .then((result) => {
-    if (gen !== applyGen.current) {
+    if (gen !== draftGen.current) {
      setApplyError("The draft changed while Apply was running - the request was left alone; Apply again to land it.");
      return;
     }
@@ -191,7 +198,7 @@ function GraphQLOperationEditor({
     rows={Math.min(18, Math.max(6, draft.split("\n").length + 1))}
     value={draft}
     onChange={(event) => {
-     applyGen.current++;
+     draftGen.current++;
      setDraft(event.target.value);
      setErrors(null);
     }}

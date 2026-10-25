@@ -480,31 +480,37 @@ function operationFrom(record: Record<string, unknown>): GraphQLOperation | null
 }
 
 /**
- * The server's percent decode (httputil.GraphQLPercentDecode), spelled in TS: %XX escapes
- * decode and nothing else - '+' is an ordinary byte, not a space, a partial escape decodes
- * its valid prefix (Sscanf semantics), and an escape with no hex digit survives as-is. The
- * console reads the URL carrier with the server's decode so the document it shows is the
- * document the edit route indexes.
+ * The server's percent decode (httputil.GraphQLPercentDecode), spelled in TS and pinned
+ * against Go with probes: literal segments go through TextEncoder as RUNS (a surrogate pair
+ * is one rune's four bytes, never two replacement chars), escapes decode by the Sscanf
+ * window rule, and the assembled bytes materialize with Go's UTF-8 reading - a valid
+ * sequence is its rune, an invalid byte is one U+FFFD, PER BYTE (Go ranges that way: a
+ * truncated prefix like E2 82 is two U+FFFD, where one WHATWG TextDecoder pass collapses
+ * them to one, so the materialization is per-candidate, not one pass). A BOM decodes to
+ * U+FEFF, kept, as Go keeps it (ignoreBOM: true).
  */
 export function graphQLPercentDecode(text: string): string {
- // The byte stream first (Go decodes bytes, and a Go string IS its bytes): %XX escapes by
- // the server's Sscanf semantics, every other char as its UTF-8 bytes.
  const bytes: number[] = [];
+ let literal = "";
+ const flushLiteral = () => {
+  if (literal !== "") {
+   for (const b of new TextEncoder().encode(literal)) bytes.push(b);
+   literal = "";
+  }
+ };
  for (let i = 0; i < text.length; i++) {
   if (text[i] === "%" && i + 2 < text.length) {
    const b = sscanfHex2(text.slice(i + 1, i + 3));
    if (b !== null) {
+    flushLiteral();
     bytes.push(b);
     i += 2;
     continue;
    }
   }
-  const code = text.charCodeAt(i);
-  if (code < 0x80) bytes.push(code);
-  else for (const b of new TextEncoder().encode(text[i]!)) bytes.push(b);
+  literal += text[i];
  }
- // Then UTF-8, Go's reading: a valid sequence is its rune (no mojibake), an undecodable
- // byte stands alone.
+ flushLiteral();
  let out = "";
  for (let i = 0; i < bytes.length; ) {
   const b = bytes[i]!;
@@ -513,27 +519,31 @@ export function graphQLPercentDecode(text: string): string {
    i++;
    continue;
   }
-  const len = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
-  if (i + len <= bytes.length) {
+  const len = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+  if (len > 1 && i + len <= bytes.length) {
    try {
-    out += new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes.slice(i, i + len)));
+    out += utf8Fatal.decode(new Uint8Array(bytes.slice(i, i + len)));
     i += len;
     continue;
    } catch {
-    // An invalid sequence's lead byte stands alone, as Go's bytes do.
+    // Not a valid sequence: the byte is one U+FFFD, Go's per-byte granularity.
    }
   }
-  out += String.fromCharCode(b);
+  out += "\uFFFD";
   i++;
  }
  return out;
 }
 
-// fmt.Sscanf(window, "%02X"), exactly: leading whitespace is skipped, then one or two hex
-// digits read greedily - "% 2", "%\t2" and "%2 " all decode to 0x02, "%G2" does not decode.
+// One decoder for the materialization: fatal per candidate sequence, BOM kept as U+FEFF.
+const utf8Fatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+// fmt.Sscanf(window, "%02X"), exactly: the scan skips space, tab, CR, VT and FF - and stops
+// for newline, NBSP and NEL, which stay literal - then reads one or two hex digits greedily.
+// Probed against Go: "% 2" "%\t2" "%\r2" "%\v2" "%\f2" parse, "%\n2" "% 2" "%2" do not.
 function sscanfHex2(window: string): number | null {
  let i = 0;
- while (i < window.length && /\s/.test(window[i]!)) i++;
+ while (i < window.length && (window[i] === " " || window[i] === "\t" || window[i] === "\r" || window[i] === "\v" || window[i] === "\f")) i++;
  let value = 0;
  let digits = 0;
  for (; i < window.length && digits < 2; i++) {

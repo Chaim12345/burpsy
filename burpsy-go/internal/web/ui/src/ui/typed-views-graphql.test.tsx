@@ -16,14 +16,21 @@ const DOC: GraphQLDocument = {
 
 const originalFetch = globalThis.fetch;
 let resolveApply: ((response: Response) => void) | null = null;
+let resolveCheck: ((response: Response) => void) | null = null;
 
 beforeEach(() => {
  resolveApply = null;
+ resolveCheck = null;
  globalThis.fetch = (async (input: RequestInfo | URL) => {
   const path = new URL(String(input), "http://localhost").pathname;
   if (path === "/api/repeater/graphql-query") {
    return await new Promise<Response>((resolve) => {
     resolveApply = resolve;
+   });
+  }
+  if (path === "/api/repeater/graphql-validate") {
+   return await new Promise<Response>((resolve) => {
+    resolveCheck = resolve;
    });
   }
   return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
@@ -73,5 +80,33 @@ describe("a pending Apply never overwrites a newer edit", () => {
   await startPendingApply((next) => applied.push(next));
   resolveApply?.(appliedResponse("POST /graphql HTTP/1.1\r\n\r\n{\"query\":\"{b}\"}"));
   await waitFor(() => expect(applied).toEqual(['POST /graphql HTTP/1.1\r\n\r\n{"query":"{b}"}']));
+ });
+});
+
+describe("a pending Check never lands on a newer draft", () => {
+ test("a raw prop move under the pending Check voids the resolution", async () => {
+  const { rerender } = renderWithProviders(<GraphQLView document={DOC} raw={RAW} onChange={() => undefined} />);
+  fireEvent.change(screen.getByLabelText("Edit this operation's GraphQL query"), { target: { value: "{b}" } });
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  await waitFor(() => expect(resolveCheck).not.toBeNull());
+  rerender(<GraphQLView document={DOC} raw={RAW + "\r\n"} onChange={() => undefined} />);
+  resolveCheck?.(new Response(JSON.stringify({ ok: true, errors: [] }), {
+   status: 200,
+   headers: { "content-type": "application/json" },
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(screen.queryByText("The document parses.")).toBeNull();
+ });
+
+ test("a Check that lands before anything moved still reports", async () => {
+  renderWithProviders(<GraphQLView document={DOC} raw={RAW} onChange={() => undefined} />);
+  fireEvent.change(screen.getByLabelText("Edit this operation's GraphQL query"), { target: { value: "{b}" } });
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+  await waitFor(() => expect(resolveCheck).not.toBeNull());
+  resolveCheck?.(new Response(JSON.stringify({ ok: true, errors: [] }), {
+   status: 200,
+   headers: { "content-type": "application/json" },
+  }));
+  await waitFor(() => expect(screen.getByText("The document parses.")).toBeTruthy());
  });
 });

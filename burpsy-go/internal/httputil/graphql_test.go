@@ -100,7 +100,24 @@ func TestGraphQLPercentDecodeSscanfAndUTF8Edges(t *testing.T) {
 		{"%2G", "\x02"},  // one hex digit then a non-hex stop
 		{"%G2", "%G2"},   // no hex digit: the escape survives
 		{"%C3%A9", "é"},  // a UTF-8 sequence decodes to its rune, not mojibake
-		{"%FF", "\xff"},  // an undecodable byte stands alone
+		{"%FF", "\xff"},  // an undecodable byte stands alone (one U+FFFD when ranged)
+		// whitespace shapes: CR, VT and FF parse; newline, NBSP and NEL break the scan
+		{"%\n2", "%\n2"},
+		{"%\r2", "\x02"},
+		{"%\v2", "\x02"},
+		{"%\f2", "\x02"},
+		{"%\u00a02", "%\u00a02"},
+		{"%\u00852", "%\u00852"},
+		// UTF-8 shapes: non-BMP, BOM kept, NUL, overlong, lone continuation, truncated, mixed
+		{"%F0%9F%98%80", "😀"},
+		{"😀", "😀"},
+		{"%EF%BB%BF", "\ufeff"},
+		{"%00", "\x00"},
+		{"%C0%80", "\xc0\x80"},     // per-BYTE granularity when ranged: two U+FFFD
+		{"%A9", "\xa9"},            // a lone continuation byte
+		{"%E2%82", "\xe2\x82"},     // a truncated prefix: two U+FFFD, not one
+		{"%C3%A9%FF%41", "é\xffA"}, // valid + invalid + valid
+		{"query+%C3%A9+{a}", "query+é+{a}"},
 	}
 	for _, c := range cases {
 		if got := GraphQLPercentDecode(c.in); got != c.want {

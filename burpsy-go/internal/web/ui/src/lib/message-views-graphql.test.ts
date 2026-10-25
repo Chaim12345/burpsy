@@ -84,18 +84,45 @@ describe("the URL carrier is read with the server's decode", () => {
 });
 
 describe("the percent codec matches the server byte-for-byte", () => {
- // The same edges as TestGraphQLPercentDecodeSscanfAndUTF8Edges in Go.
- test("Sscanf whitespace and prefix semantics", () => {
-  expect(graphQLPercentDecode("% 2")).toBe("\x02");
-  expect(graphQLPercentDecode("%\t2")).toBe("\x02");
-  expect(graphQLPercentDecode("%2 ")).toBe("\x02");
-  expect(graphQLPercentDecode("%2G")).toBe("\x02");
-  expect(graphQLPercentDecode("%G2")).toBe("%G2");
+ // The same edge table as TestGraphQLPercentDecodeSscanfAndUTF8Edges in Go, probed against
+ // the server: Sscanf window semantics, per-byte U+FFFD granularity, BOM kept, UTF-8 runs.
+ const rows: [string, string][] = [
+  // the original seven
+  ["% 2", "\x02"],
+  ["%\t2", "\x02"],
+  ["%2 ", "\x02"],
+  ["%2G", "\x02"],
+  ["%G2", "%G2"],
+  ["%C3%A9", "é"],
+  ["%FF", "\uFFFD"],
+  // the class rows: whitespace shapes - newline, NBSP and NEL break the scan
+  ["%\n2", "%\n2"],
+  ["%\r2", "\x02"],
+  ["%\v2", "\x02"],
+  ["%\f2", "\x02"],
+  ["%\u00a02", "%\u00a02"],
+  ["%\u00852", "%\u00852"],
+  // UTF-8 shapes: non-BMP, BOM, NUL, overlong, lone continuation, truncated, mixed
+  ["%F0%9F%98%80", "😀"],
+  ["😀", "😀"], // a literal non-BMP char is one rune's bytes, not two replacements
+  ["%EF%BB%BF", "\uFEFF"],
+  ["%00", "\x00"],
+  ["%C0%80", "\uFFFD\uFFFD"], // overlong: per-BYTE granularity, like Go's range
+  ["%A9", "\uFFFD"], // a lone continuation byte
+  ["%E2%82", "\uFFFD\uFFFD"], // a truncated prefix is two U+FFFD, not one
+  ["%C3%A9%FF%41", "é\uFFFDA"], // valid + invalid + valid
+  ["query+%C3%A9+{a}", "query+é+{a}"],
+ ];
+ test("every edge row reads as the server reads it", () => {
+  for (const [input, want] of rows) {
+   expect(graphQLPercentDecode(input)).toBe(want);
+  }
  });
- test("UTF-8 sequences decode to their rune, invalid bytes stand alone", () => {
-  expect(graphQLPercentDecode("%C3%A9")).toBe("é");
-  expect(graphQLPercentDecode("%FF")).toBe("ÿ");
-  expect(graphQLPercentDecode("query+%C3%A9+{a}")).toBe("query+é+{a}");
+ test("T1 negative control: an unterminated or hex-less escape never decodes", () => {
+  expect(graphQLPercentDecode("%")).toBe("%");
+  expect(graphQLPercentDecode("%2")).toBe("%2");
+  expect(graphQLPercentDecode("%zz")).toBe("%zz");
+  expect(graphQLPercentDecode("100%")).toBe("100%");
  });
 });
 
