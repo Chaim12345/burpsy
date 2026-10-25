@@ -641,6 +641,9 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckPassivePosture:  true,
 			CheckPassiveAnalysis: true,
 			CheckHostDiscovery:   true,
+			// GraphQL ingestion validation ships on, matching the other insertion-point
+			// families: nested points are validated unless the operator narrows them.
+			CheckGraphQLIngest: true,
 		},
 		findings: make([]*Finding, 0),
 		pathCov:  newPathCoverage(),

@@ -11,26 +11,118 @@ package scanner
 // probe measures the parser, not the code under test.
 //
 // This file gates those points on a real parse: vektah/gqlparser's parser validates the
-// parent document at ingestion, and a document no GraphQL server would accept yields no
-// argument points. The flat parent point stays - a payload replacing the whole document is
-// still a meaningful probe - but the derived argument positions are rejected. A valid
-// document keeps exactly the positions the enumerator derived, and a non-GraphQL item
-// takes a nil parse path: no candidate document, no parser call, bytes unchanged.
+// parent document of every derived argument point at ingestion, and a document no GraphQL
+// server would accept yields no argument points. The flat parent point stays - a payload
+// replacing the whole document is still a meaningful probe - but the derived argument
+// positions are rejected. A valid document keeps exactly the positions the enumerator
+// derived, and a non-GraphQL item takes a nil parse path: no candidate document, no parser
+// call, bytes unchanged.
 //
 // The gate arbitrates real grammar, which cuts both ways: gqlparser also ACCEPTS what a
 // stricter hand rule would refuse - `{book(title: "Dune" ,,){author}}` is valid because
 // GraphQL's commas are insignificant - so nothing the grammar allows is lost to a guess.
 
 import (
+	"encoding/json"
+	"net/url"
+	"strings"
+
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
+// graphQLIngestMarker joins a parent point's name to the argument the nested point carries,
+// the same "[graphql:" naming bcheck gives the nested points it derives.
+const graphQLIngestMarker = "[graphql:"
+
+// graphQLIngestMaxDocumentLen mirrors bcheck's maxGraphQLDocumentLen: a document past the
+// cap was never scanned for arguments, so there are no derived points to gate and the
+// parser is never asked to chew a generated megabyte.
+const graphQLIngestMaxDocumentLen = 64 << 10
+
+// graphQLIngestTokenLimit bounds the parser's work on one document. The 64KB document cap
+// implies well under this many tokens; the limit is the hard stop that keeps a hostile
+// document's pathological nesting from buying parser CPU the audit never budgeted.
+const graphQLIngestTokenLimit = 1 << 18
+
+// graphQLDocumentValid reports whether doc parses as a GraphQL executable document under
+// every wire decoding it could plausibly carry: as-is first (a JSON string value bcheck
+// already decoded, or a form value that needed no escapes), then percent-decoded (a form or
+// query-string value), then JSON-string-content decoded (escapes a JSON carrier re-encoded).
+// "Valid under any decoding" keeps the gate conservative in the direction of coverage: only
+// a document malformed under EVERY decoding loses its points.
+func graphQLDocumentValid(doc string) bool {
+	if len(doc) > graphQLIngestMaxDocumentLen {
+		return true // over-cap: bcheck derived nothing, nothing to gate
+	}
+	if graphQLParses(doc) {
+		return true
+	}
+	if un, err := url.QueryUnescape(doc); err == nil && un != doc && graphQLParses(un) {
+		return true
+	}
+	var un string
+	if err := json.Unmarshal([]byte(`"`+doc+`"`), &un); err == nil && un != doc && graphQLParses(un) {
+		return true
+	}
+	return false
+}
+
+func graphQLParses(doc string) bool {
+	_, err := parser.ParseQueryWithTokenLimit(&ast.Source{Input: doc}, graphQLIngestTokenLimit)
+	return err == nil
+}
+
 // filterGraphQLPointsByValidation drops the nested GraphQL argument points whose parent
-// document no decoding parses as a valid GraphQL executable document. Every other point
-// passes through unchanged, in order.
-//
-// STUB (red commit): the identity. The gate lands in the green commit; the tests pin the
-// required behavior against this signature now.
+// document no decoding parses as a valid GraphQL executable document. Every other point -
+// the flat parent included - passes through unchanged, in order. Each distinct parent is
+// validated once.
 func filterGraphQLPointsByValidation(points []bcheck.InsertionPoint) []bcheck.InsertionPoint {
-	return points
+	// parents maps a parent point (kind + name) to its wire value, for the nested points
+	// that name it. The flat point always enumerates with its nested ones, but a parent
+	// that never appears leaves its nested points unproven rather than rejected: dropping
+	// on absence would punish coverage for the gate's own blind spot.
+	parents := make(map[bcheck.InsertionPoint]string, len(points))
+	for _, p := range points {
+		if !strings.Contains(p.Name, graphQLIngestMarker) {
+			parents[p] = p.BaseValue
+		}
+	}
+	valid := map[string]bool{}
+	out := points[:0]
+	for _, p := range points {
+		i := strings.Index(p.Name, graphQLIngestMarker)
+		if i < 0 {
+			out = append(out, p)
+			continue
+		}
+		parentName, ok := lookupGraphQLParent(parents, p, i)
+		if !ok {
+			out = append(out, p) // unproven, not rejected - see parents above
+			continue
+		}
+		v, seen := valid[parentName]
+		if !seen {
+			v = graphQLDocumentValid(parentName)
+			valid[parentName] = v
+		}
+		if v {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// lookupGraphQLParent finds the flat point a nested GraphQL argument point was derived
+// from: same kind, name exactly the nested point's name up to the marker. It returns the
+// parent's wire value (the document to validate).
+func lookupGraphQLParent(parents map[bcheck.InsertionPoint]string, nested bcheck.InsertionPoint, marker int) (string, bool) {
+	want := nested.Name[:marker]
+	for p, base := range parents {
+		if p.Kind == nested.Kind && p.Name == want {
+			return base, true
+		}
+	}
+	return "", false
 }

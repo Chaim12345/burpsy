@@ -775,6 +775,7 @@ func runtimeScanConfig() *ScanConfig {
 		CheckJwtWeak:            true,
 		CheckJSVulns:            true,
 		CheckHeaders:            true,
+		CheckGraphQLIngest:      true,
 		CheckCachePoisoning:     true,
 		CheckReflectionProbes:   true,
 		CheckHostDiscovery:      true,

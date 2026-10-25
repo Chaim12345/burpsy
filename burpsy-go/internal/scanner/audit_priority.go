@@ -190,6 +190,11 @@ func (s *ActiveScanner) priorityItemFor(slot int, id core.ExchangeID, cfg AuditC
 	raw := msg.Raw()
 	endpoint := strings.ToLower(ex.Host) + "\x00" + strings.SplitN(ex.Path, "?", 2)[0]
 	points, _ := bcheck.EnumerateWith(raw, cfg.insertionKinds(), cfg.enumerateOptions())
+	// The priority ledger reflects the same ingestion shape the dispatch sees: a rejected
+	// GraphQL document's argument points are not coverage the audit is about to run.
+	if s.ConfigSnapshot().CheckGraphQLIngest {
+		points = filterGraphQLPointsByValidation(points)
+	}
 	for _, p := range points {
 		it.points = append(it.points, endpoint+"\x00"+string(p.Kind)+"\x00"+p.Name)
 	}

@@ -139,7 +139,7 @@ func TestTheQueueRowClassifiesAsTheOperatorSkip(t *testing.T) {
 	rows, _ := auditItemPoints([]byte(skipFixture), []string{"any"}, bcheck.EnumerateOptions{
 		Max:                       bcheck.DefaultMaxInsertionPoints,
 		SkipAllTestsForParameters: []string{"user"},
-	})
+	}, true)
 	var operatorSkips int
 	for _, r := range rows {
 		if r.Status == AuditItemPointSkippedOperator {
