@@ -70,14 +70,16 @@ type route struct {
 	// operator reaches.
 	subPath string
 	// actionPaths are the ACTION sub-paths under a subtree pattern, each with its own allowed-method
-	// set — "1/cancel": {"POST"} under "/api/tasks/". subPath alone cannot express these: one
-	// subtree can route "/api/tasks/1" to DELETE and "/api/tasks/1/cancel" to POST, and a single
-	// concrete path tests exactly one of them.
+	// set — "1/run": {"POST"} under "/api/session/rules/". subPath alone cannot express these: one
+	// subtree can route "/api/session/rules/1" to PUT and "/api/session/rules/1/run" to POST, and a
+	// single concrete path tests exactly one of them.
 	//
 	// This exists because that gap shipped a bug. The /api/tasks/ entry's subPath was narrowed from
 	// "{id}/cancel" to "1" in the same commit that moved cancel into an inline branch with no verb
 	// guard, so GET /api/tasks/pause answered 200 and set the suite-wide pause
 	// (burpsy-react-ui-0gg5). Naming each action path here is what makes the 405 sweep reach them.
+	// (The tasks family itself is per-pattern routes since fxxm batch 2; the subtrees below that
+	// still dispatch by suffix keep this field.)
 	actionPaths map[string][]string
 	// pathValidatedFirst marks a handler that resolves its path segment *before* checking the method,
 	// so a bogus segment answers 404 rather than 405 whatever the verb. Correct behaviour — "there is
@@ -1162,30 +1164,46 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",
 	},
-	"/api/tasks/": {
+	"/api/tasks/pause": {
+		// The suite-wide gate (burpsy-react-ui-8gw): Burp's dashboardPauseAllTasksButton. A literal
+		// beside the {id} patterns - ServeMux resolves it ahead of "/api/tasks/{id}", so this never
+		// parses "pause" as an id (TestTasksSuiteWidePauseResumeAreLiterals pins the precedence).
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "hold every running task at its next gate; the answer's count says how many were holding",
+	},
+	"/api/tasks/resume": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "release the suite-wide hold; the answer's count says how many were holding",
+	},
+	"/api/tasks/{id}": {
 		// DELETE is riskLocal, not riskDestructive, and the line matters: it removes a ROW from the
 		// task list, not any evidence the row pointed at. The crawl's findings, the exchanges it
 		// captured and its coverage report all live elsewhere and survive it — the list entry is
-		// burpsy's own state about past work, which is riskLocal's definition. POST {id}/again is
-		// riskLocal too by its route: it starts a crawl, but /api/crawl — the same act from the New
+		// burpsy's own state about past work, which is riskLocal's definition.
+		// GET reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
+		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal, subPath: "1",
+		summary: "GET: one task's row and an async task's finished body. " +
+			"DELETE removes a finished task's row (a running task answers 409 — cancel first)",
+	},
+	"/api/tasks/{id}/again": {
+		// riskLocal by its route: it starts a crawl, but /api/crawl — the same act from the New
 		// scan dialog — is classified by what the crawl does after the start, which the confirmation
 		// gate already covers at its own route.
-		// GET {id} reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
-		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
-		actionPaths: map[string][]string{
-			"1/cancel": {"POST"},
-			"1/pause":  {"POST"},
-			"1/resume": {"POST"},
-			"pause":    {"POST"},
-			"resume":   {"POST"},
-		},
-		summary: "GET {id}: one task's row and an async task's finished body. " +
-			"POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
-			"POST {id}/pause and {id}/resume hold one task at its next gate and release it (a task kind that " +
-			"never reaches a gate answers 409; g0ba); " +
-			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
-			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "re-run a crawl task at its target (only crawl kind re-runs; 409 otherwise)",
+	},
+	"/api/tasks/{id}/cancel": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "ask a running task to stop (unknown or finished id answers 404)",
+	},
+	"/api/tasks/{id}/pause": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "hold one task at its next gate (a task kind that never reaches a gate answers 409; g0ba)",
+	},
+	"/api/tasks/{id}/resume": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "release one task's hold (a task kind that never reaches a gate answers 409; g0ba)",
 	},
 	"/api/tools/compare": {
 		methods: []string{"POST"}, risk: riskRead,

@@ -1312,7 +1312,18 @@ func (s *Server) setupRoutes() {
 	s.route("/api/sitemap", s.handleSitemap)
 	// Record a captured exchange into the map by id — Burp's add_to_sitemap (4bfp).
 	s.route("/api/sitemap/record", s.handleSitemapRecord)
-	s.route("/api/tasks/", s.handleTaskCancel)
+	// The tasks family (fxxm batch 2): one pattern per action, so the manifest says what each
+	// route is and the mux owns every 405. The suite-wide pause/resume are literals beside the
+	// {id} patterns; ServeMux resolves a literal ahead of a wildcard, so POST /api/tasks/pause
+	// gates the suite and never parses "pause" as an id (api_tasks_cancel.go carries the
+	// suite-wide handlers; TestTasksSuiteWidePauseResumeAreLiterals pins the precedence).
+	s.route("/api/tasks/{id}", s.handleTaskByID)
+	s.route("/api/tasks/{id}/again", s.handleTaskAgain)
+	s.route("/api/tasks/{id}/cancel", s.handleTaskCancel)
+	s.route("/api/tasks/{id}/pause", s.handleTaskPause)
+	s.route("/api/tasks/{id}/resume", s.handleTaskResume)
+	s.route("/api/tasks/pause", s.handleTasksPauseAll)
+	s.route("/api/tasks/resume", s.handleTasksResumeAll)
 	s.route("/api/crawl", s.handleCrawl)
 	// Recorded login sequences (burpsy-react-ui-xhtk): the library, and Burp's "Replay".
 	// The live crawl view (burpsy-react-ui-1l3x): what the crawl is fetching now, its recent fetches,

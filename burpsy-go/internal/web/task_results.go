@@ -3,7 +3,6 @@ package web
 import (
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -62,8 +61,7 @@ type taskReadView struct {
 
 // handleTaskGet serves GET /api/tasks/{id}: the task row, and the finished body when there is one.
 func (s *Server) handleTaskGet(w http.ResponseWriter, r *http.Request) {
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/tasks/"), "/")
-	id, err := strconv.ParseUint(rest, 10, 64)
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "GET /api/tasks/{id} takes a numeric task id", http.StatusNotFound)
 		return

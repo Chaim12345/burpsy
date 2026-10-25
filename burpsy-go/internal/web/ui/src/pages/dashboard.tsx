@@ -363,7 +363,9 @@ function TaskTile({
 function usePauseAllTasks(paused: boolean) {
  const queryClient = useQueryClient();
  return useMutation<{ paused: boolean; running: number }, Error, void>({
-  mutationFn: () => api(`/api/tasks/${paused ? "resume" : "pause"}`, json("POST", {})),
+  // The literals named, not one interpolated path: the route-reachability test scans ui/src for
+  // each manifest pattern verbatim, and an interpolated `${paused ? ... : ...}` hides both.
+  mutationFn: () => api(paused ? "/api/tasks/resume" : "/api/tasks/pause", json("POST", {})),
   onSuccess: (result) => {
    toast.success(result.paused ? `Tasks paused (${result.running} running)` : "Tasks resumed");
    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
