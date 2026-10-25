@@ -396,6 +396,12 @@ func registerUpload(mux *http.ServeMux) {
 	// safe stores serve downloads.
 	serve := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
+			if strings.HasPrefix(r.URL.Path, "/fu/trustct/files/") {
+				// A delete API that accepts and does nothing: the file is served afterwards
+				// exactly as before.
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			if !strings.HasPrefix(r.URL.Path, "/fu/files/") {
 				http.Error(w, "no delete is exposed here", http.StatusMethodNotAllowed)
 				return

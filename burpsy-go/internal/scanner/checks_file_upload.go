@@ -86,10 +86,14 @@ func fileUploadEnabled(c *ScanConfig) bool { return c != nil && c.CheckFileUploa
 // a reference upload plus up to maxUploadProbesPerPoint more requests.
 const maxUploadPointsPerRequest = 2
 
-// maxUploadProbesPerPoint bounds the requests (uploads, fetches, deletes) one file part may cost.
-// The polyglot class and its keep-probing variants, plus one delete and one verification fetch per
-// stored file, raised the worst case past the original 60.
+// maxUploadProbesPerPoint bounds the requests (uploads and fetches) one file part may cost.
+// The polyglot class and its keep-probing variants raised the worst case past the original 60.
 const maxUploadProbesPerPoint = 90
+
+// maxUploadCleanupRequests bounds the deletes and verification fetches of the cleanup pass
+// SEPARATELY: a chatty endpoint may spend the whole probe budget and still owes every stored
+// marker its removal attempt, so cleanup can never be starved by the probing it follows.
+const maxUploadCleanupRequests = 40
 
 // storedXSSOrFileUpload runs the "Cross-site scripting (stored)" row's two techniques, each behind its
 // own switch: the second-order canary check (CheckStored) and the file-upload check (CheckFileUpload).
@@ -195,6 +199,8 @@ type uploadProber struct {
 	// stored is every URL a confirmed-stored probe file was read back from or named at, so the
 	// run can try to remove them afterwards.
 	stored []string
+	// cleanupSent counts cleanup's own requests against maxUploadCleanupRequests.
+	cleanupSent int
 }
 
 // uploadAttempt is one upload and what became of it.
@@ -275,7 +281,18 @@ func (p *uploadProber) fetch(ctx context.Context, target *url.URL) (ProbeRespons
 
 // request sends one bare method against a stored-file URL through the scope-enforcing gate.
 func (p *uploadProber) request(ctx context.Context, method string, target *url.URL) (ProbeResponse, error) {
-	if err := p.spend(); err != nil {
+	return p.requestKind(ctx, method, target, false)
+}
+
+// requestKind is request with the counter named: probing spends the probe budget, cleanup spends
+// its own (see maxUploadCleanupRequests).
+func (p *uploadProber) requestKind(ctx context.Context, method string, target *url.URL, cleanup bool) (ProbeResponse, error) {
+	if cleanup {
+		if p.cleanupSent >= maxUploadCleanupRequests {
+			return ProbeResponse{}, errUploadBudget
+		}
+		p.cleanupSent++
+	} else if err := p.spend(); err != nil {
 		return ProbeResponse{}, err
 	}
 	host := target.Hostname()
@@ -739,7 +756,13 @@ func (p *uploadProber) traversal(ctx context.Context, safe string) *Finding {
 	ct := uploadToken()
 	missing := "bfudir" + randomLetters(8)
 	ctrl, err := p.upload(ctx, missing+"/"+ct+"."+safe, mimeForExt(safe), uploadMarker(ct)+"\n", ct, uploadMarker(ct))
-	if err != nil || p.storedLike(ctx, ctrl) {
+	if err != nil {
+		return nil
+	}
+	if p.storedLike(ctx, ctrl) {
+		// The control was stored (the endpoint flattens names): no traversal, but the stored
+		// control file is this run's marker to account for like any other.
+		p.track(ctrl)
 		return nil
 	}
 	tt := uploadToken()
@@ -797,18 +820,33 @@ func (p *uploadProber) track(a *uploadAttempt) {
 // and every location that remains for the tester to clean up by hand - to each finding. With no
 // findings the removal still runs, silently: a quiet endpoint is not a reason to leave markers.
 func (p *uploadProber) sweep(ctx context.Context, findings []*Finding) {
-	removed, remaining := p.cleanup(ctx)
-	if len(removed) == 0 && len(remaining) == 0 {
+	verified, unverified, remaining := p.cleanup(ctx)
+	if len(verified) == 0 && len(unverified) == 0 && len(remaining) == 0 {
 		return
 	}
-	note := uploadCleanupNote(removed, remaining)
+	note := uploadCleanupNote(verified, unverified, remaining)
 	for _, f := range findings {
 		f.Description += note
 	}
 }
 
-// cleanup tries DELETE on every stored probe URL through the same scope-enforcing gate.
-func (p *uploadProber) cleanup(ctx context.Context) (removed, remaining []string) {
+// removal is what one delete attempt established.
+type removal int
+
+const (
+	// removalFailed: no delete is exposed, it was refused, or the file is still served afterwards.
+	removalFailed removal = iota
+	// removalVerified: the delete was accepted AND the re-fetch says the file is gone (404/410).
+	removalVerified
+	// removalUnverified: the delete was accepted but the re-fetch could not say - a network error
+	// or a status that is neither "gone" nor a served file. The file is probably gone; "probably"
+	// is not "verified", and the finding says which it got.
+	removalUnverified
+)
+
+// cleanup tries DELETE on every stored probe URL through the same scope-enforcing gate, on its own
+// request budget (maxUploadCleanupRequests).
+func (p *uploadProber) cleanup(ctx context.Context) (verified, unverified, remaining []string) {
 	seen := map[string]bool{}
 	for _, raw := range p.stored {
 		if seen[raw] {
@@ -820,41 +858,52 @@ func (p *uploadProber) cleanup(ctx context.Context) (removed, remaining []string
 			remaining = append(remaining, raw)
 			continue
 		}
-		if p.remove(ctx, target) {
-			removed = append(removed, raw)
-		} else {
+		switch p.remove(ctx, target) {
+		case removalVerified:
+			verified = append(verified, raw)
+		case removalUnverified:
+			unverified = append(unverified, raw)
+		default:
 			remaining = append(remaining, raw)
 		}
 	}
-	return removed, remaining
+	return verified, unverified, remaining
 }
 
-// remove deletes one stored probe file and verifies the removal by re-fetching. A delete the
-// application refuses - most expose none - or a file still served afterwards reports false. When
-// the delete was accepted but the budget ran out before the verification fetch, the removal is
-// taken on the accepted delete.
-func (p *uploadProber) remove(ctx context.Context, target *url.URL) bool {
-	resp, err := p.request(ctx, "DELETE", target)
+// remove deletes one stored probe file and reports what the outcome proves.
+func (p *uploadProber) remove(ctx context.Context, target *url.URL) removal {
+	resp, err := p.requestKind(ctx, "DELETE", target, true)
 	if err != nil || resp.Status < 200 || resp.Status >= 300 {
-		return false
+		return removalFailed
 	}
-	check, err := p.fetch(ctx, target)
+	check, err := p.requestKind(ctx, "GET", target, true)
 	if err != nil {
-		return true
+		return removalUnverified
 	}
-	return check.Status < 200 || check.Status >= 300
+	if check.Status == 404 || check.Status == 410 {
+		return removalVerified
+	}
+	if check.Status >= 200 && check.Status < 300 {
+		// Still served after an accepted delete: the delete was a no-op.
+		return removalFailed
+	}
+	return removalUnverified
 }
 
 // uploadCleanupNote is the finding paragraph reporting the probe-file cleanup.
-func uploadCleanupNote(removed, remaining []string) string {
+func uploadCleanupNote(verified, unverified, remaining []string) string {
 	var b strings.Builder
 	b.WriteString("\n\nStored probe files: ")
-	if len(removed) > 0 {
+	if len(verified) > 0 {
 		fmt.Fprintf(&b, "this check removed %d file(s) it had uploaded, each verified gone by re-fetching: %s. ",
-			len(removed), strings.Join(removed, ", "))
+			len(verified), strings.Join(verified, ", "))
+	}
+	if len(unverified) > 0 {
+		fmt.Fprintf(&b, "the application accepted a delete for %d file(s) but the removal could not be verified (the re-fetch did not come back clean); confirm by hand: %s. ",
+			len(unverified), strings.Join(unverified, ", "))
 	}
 	if len(remaining) > 0 {
-		fmt.Fprintf(&b, "the application exposes no delete for %d stored probe file(s), which remain for the tester to clean up: %s. ",
+		fmt.Fprintf(&b, "%d stored probe file(s) remain for the tester to clean up - no delete is exposed for them, it was refused, or the file is still served afterwards: %s. ",
 			len(remaining), strings.Join(remaining, ", "))
 	}
 	b.WriteString("Every file was an inert marker string; none of them can execute.")

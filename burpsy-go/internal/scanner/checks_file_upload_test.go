@@ -211,6 +211,11 @@ func TestFileUploadPolyglotRendersWhenTheServerTrustsTheDeclaredType(t *testing.
 	if !strings.Contains(f.Evidence, ".gif") || !strings.Contains(f.Evidence, "text/html") {
 		t.Errorf("the evidence does not show the polyglot served as a document: %q", f.Evidence)
 	}
+	// trustct's delete accepts and does nothing, so the stored probes must be reported as
+	// remaining - a delete that was accepted but did not remove is not a cleanup.
+	if !strings.Contains(f.Description, "/fu/trustct/files/") || !strings.Contains(f.Description, "still served") {
+		t.Errorf("the no-op delete was not reported as leaving the files behind: %q", f.Description)
+	}
 }
 
 // TestFileUploadRemovesItsProbeFilesWhenDeleteIsExposed: on an endpoint with a delete, every
@@ -252,5 +257,22 @@ func TestGifHTMLPolyglotIsAnImageToASniffer(t *testing.T) {
 	}
 	if !strings.Contains(body, "<!DOCTYPE html>") || !strings.Contains(body, canary) {
 		t.Errorf("the HTML face or the canary is missing from the polyglot: %q", body)
+	}
+}
+
+// TestUploadCleanupNoteSaysExactlyWhatWasProved pins the three outcomes apart: verified gone,
+// accepted-but-unverified, and remaining.
+func TestUploadCleanupNoteSaysExactlyWhatWasProved(t *testing.T) {
+	note := uploadCleanupNote(
+		[]string{"http://h/files/a.html"},
+		[]string{"http://h/files/b.gif"},
+		[]string{"http://h/files/c.gif"},
+	)
+	for _, want := range []string{"removed 1 file(s)", "verified gone", "a.html",
+		"accepted a delete for 1 file(s)", "could not be verified", "b.gif",
+		"1 stored probe file(s) remain", "c.gif"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("cleanup note is missing %q: %q", want, note)
+		}
 	}
 }
