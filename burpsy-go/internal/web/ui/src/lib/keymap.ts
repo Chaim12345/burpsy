@@ -23,75 +23,75 @@ let current: Keymap = load();
 const listeners = new Set<() => void>();
 
 function load(): Keymap {
- try {
-  const raw = localStorage.getItem(KEYMAP_STORAGE_KEY);
-  if (raw === null) return {};
-  const parsed: unknown = JSON.parse(raw);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-  // Only string-or-null values survive. A stored map that has drifted into another shape is
-  // discarded per-entry rather than wholesale, so one bad row cannot cost every binding.
-  const out: Keymap = {};
-  for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-   if (value === null || typeof value === "string") out[id] = value;
+  try {
+    const raw = localStorage.getItem(KEYMAP_STORAGE_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    // Only string-or-null values survive. A stored map that has drifted into another shape is
+    // discarded per-entry rather than wholesale, so one bad row cannot cost every binding.
+    const out: Keymap = {};
+    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (value === null || typeof value === "string") out[id] = value;
+    }
+    return out;
+  } catch {
+    return {};
   }
-  return out;
- } catch {
-  return {};
- }
 }
 
 function persist(next: Keymap): void {
- try {
-  localStorage.setItem(KEYMAP_STORAGE_KEY, JSON.stringify(next));
- } catch {
-  // Non-fatal by design: the override still applies for this session, and the Settings table
-  // says so rather than pretending the write succeeded.
- }
+  try {
+    localStorage.setItem(KEYMAP_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Non-fatal by design: the override still applies for this session, and the Settings table
+    // says so rather than pretending the write succeeded.
+  }
 }
 
 function announce(): void {
- for (const listener of listeners) listener();
+  for (const listener of listeners) listener();
 }
 
 /** Read the map without subscribing. For one-shot reads outside React. */
 export function keymapSnapshot(): Keymap {
- return current;
+  return current;
 }
 
 /** Assign a chord to an action, or null to unbind it. */
 export function setChord(id: string, chord: Chord | null): void {
- current = { ...current, [id]: chord };
- persist(current);
- announce();
+  current = { ...current, [id]: chord };
+  persist(current);
+  announce();
 }
 
 /** Drop an override so the action returns to its shipped default. */
 export function resetChord(id: string): void {
- const next = { ...current };
- delete next[id];
- current = next;
- persist(current);
- announce();
+  const next = { ...current };
+  delete next[id];
+  current = next;
+  persist(current);
+  announce();
 }
 
 /** Drop every override. */
 export function resetAllChords(): void {
- current = {};
- persist(current);
- announce();
+  current = {};
+  persist(current);
+  announce();
 }
 
 /** Subscribe to the map. Returns the live map, re-rendering on every change. */
 export function useKeymap(): Keymap {
- const [, bump] = useState(0);
- useEffect(() => {
-  const listener = () => bump((n) => n + 1);
-  listeners.add(listener);
-  return () => {
-   listeners.delete(listener);
-  };
- }, []);
- return current;
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const listener = () => bump((n) => n + 1);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
+  return current;
 }
 
 /**
@@ -103,29 +103,29 @@ export function useKeymap(): Keymap {
  * keeps its old key.
  */
 export function useChord(id: string): Chord {
- const keymap = useKeymap();
- return chordFor(keymap, id) ?? "";
+  const keymap = useKeymap();
+  return chordFor(keymap, id) ?? "";
 }
 
 /** Whether the operator has overridden this action. Drives the per-row Reset control. */
 export function useIsOverridden(id: string): boolean {
- const keymap = useKeymap();
- return Object.prototype.hasOwnProperty.call(keymap, id);
+  const keymap = useKeymap();
+  return Object.prototype.hasOwnProperty.call(keymap, id);
 }
 
 /** Read a keystroke off a keydown event as a chord this registry can store. */
 export function chordFromEvent(event: KeyboardEvent | React.KeyboardEvent): string {
- const parts: string[] = [];
- if (event.ctrlKey || event.metaKey) parts.push("mod");
- if (event.altKey) parts.push("alt");
- if (event.shiftKey) parts.push("shift");
- const key = event.key;
- // Modifier-only presses produce no key part, which validateChord then refuses with a
- // readable reason rather than storing a chord that can never fire.
- if (!["Control", "Meta", "Alt", "Shift"].includes(key)) {
-  parts.push(key.length === 1 ? key.toLowerCase() : key.toLowerCase());
- }
- return parts.join("+");
+  const parts: string[] = [];
+  if (event.ctrlKey || event.metaKey) parts.push("mod");
+  if (event.altKey) parts.push("alt");
+  if (event.shiftKey) parts.push("shift");
+  const key = event.key;
+  // Modifier-only presses produce no key part, which validateChord then refuses with a
+  // readable reason rather than storing a chord that can never fire.
+  if (!["Control", "Meta", "Alt", "Shift"].includes(key)) {
+    parts.push(key.length === 1 ? key.toLowerCase() : key.toLowerCase());
+  }
+  return parts.join("+");
 }
 
 /**
@@ -136,17 +136,17 @@ export function chordFromEvent(event: KeyboardEvent | React.KeyboardEvent): stri
  * available here — Close tab outside Repeater — still reaches the browser instead of dying.
  */
 export function useCommandChord(id: string): void {
- const chord = useChord(id);
- useHotkeys(
-  chord,
-  (event) => {
-   if (!hasCommand(id)) return;
-   event.preventDefault();
-   runCommand(id);
-  },
-  { enableOnFormTags: true, enableOnContentEditable: true },
-  [chord, id],
- );
+  const chord = useChord(id);
+  useHotkeys(
+    chord,
+    (event) => {
+      if (!hasCommand(id)) return;
+      event.preventDefault();
+      runCommand(id);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [chord, id],
+  );
 }
 
 /** A stable no-op, for binding an action whose handler is not on this page. */

@@ -15,12 +15,12 @@
 
 /** The wire field for one bound, given the raw text of its form field. */
 export function crawlBound(key: string, raw: string): Record<string, number> {
- if (raw.trim() === "") return {};
- const n = Number(raw);
- // Non-numeric and negative values are omitted rather than sent. The server refuses a negative
- // bound with a 400 that names the field and says what a bound is, and pre-empting that with a
- // client-side guess about what the operator meant would replace a real error with a silent
- // default — the same confusion this module exists to remove, one layer up.
- if (!Number.isFinite(n) || n < 0) return {};
- return { [key]: n };
+  if (raw.trim() === "") return {};
+  const n = Number(raw);
+  // Non-numeric and negative values are omitted rather than sent. The server refuses a negative
+  // bound with a 400 that names the field and says what a bound is, and pre-empting that with a
+  // client-side guess about what the operator meant would replace a real error with a silent
+  // default — the same confusion this module exists to remove, one layer up.
+  if (!Number.isFinite(n) || n < 0) return {};
+  return { [key]: n };
 }

@@ -13,17 +13,17 @@ import { HIGHLIGHTS } from "../lib/types";
  * HighlightPicker uses, so the swatch in the menu and the swatch in the pane cannot drift.
  */
 export const HIGHLIGHT_ICONS: Record<string, ComponentType<{ size?: number }>> = Object.fromEntries(
- HIGHLIGHTS.map((name) => {
-  const isNone = name === "none";
-  const Swatch = (): JSX.Element => (
-   <span
-    className={isNone ? "menu-swatch menu-swatch-none" : "menu-swatch"}
-    style={isNone ? undefined : ({ "--swatch-color": `var(--highlight-${name})` } as CSSProperties)}
-   />
-  );
-  Swatch.displayName = `HighlightIcon(${name})`;
-  return [name, Swatch];
- }),
+  HIGHLIGHTS.map((name) => {
+    const isNone = name === "none";
+    const Swatch = (): JSX.Element => (
+      <span
+        className={isNone ? "menu-swatch menu-swatch-none" : "menu-swatch"}
+        style={isNone ? undefined : ({ "--swatch-color": `var(--highlight-${name})` } as CSSProperties)}
+      />
+    );
+    Swatch.displayName = `HighlightIcon(${name})`;
+    return [name, Swatch];
+  }),
 );
 
 /**
@@ -35,10 +35,10 @@ export const HIGHLIGHT_ICONS: Record<string, ComponentType<{ size?: number }>> =
  * name, resolved by the tab's own border, so changing the theme changes both together.
  */
 export const TAB_COLOURS: { value: string; label: string; icon: ComponentType<{ size?: number }> }[] = [
- { value: "", label: "No colour", icon: HIGHLIGHT_ICONS.none as ComponentType<{ size?: number }> },
- ...HIGHLIGHTS.filter((name) => name !== "none").map((name) => ({
-  value: name,
-  label: name.charAt(0).toUpperCase() + name.slice(1),
-  icon: HIGHLIGHT_ICONS[name] as ComponentType<{ size?: number }>,
- })),
+  { value: "", label: "No colour", icon: HIGHLIGHT_ICONS.none as ComponentType<{ size?: number }> },
+  ...HIGHLIGHTS.filter((name) => name !== "none").map((name) => ({
+    value: name,
+    label: name.charAt(0).toUpperCase() + name.slice(1),
+    icon: HIGHLIGHT_ICONS[name] as ComponentType<{ size?: number }>,
+  })),
 ];

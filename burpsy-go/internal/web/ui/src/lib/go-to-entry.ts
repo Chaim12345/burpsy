@@ -13,24 +13,24 @@
 
 /** "1843", "#1843", " 1843 " → 1843. Anything else, including 0 and negatives, is null. */
 export function parseEntryNumber(raw: string): number | null {
- const match = /^\s*#?\s*(\d{1,12})\s*$/.exec(raw);
- if (!match) return null;
- const n = Number(match[1]);
- return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  const match = /^\s*#?\s*(\d{1,12})\s*$/.exec(raw);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 export type GoToOutcome = "shown" | "filtered" | "beyond-limit" | "missing";
 
 export function classifyEntry(input: {
- id: number;
- /** Ids of the rows the table is displaying now. */
- displayed: ReadonlySet<number>;
- /** Whether the store answered for this id. */
- exists: boolean;
- /** Whether any filter (not the row limit) is narrowing the table. */
- filtered: boolean;
+  id: number;
+  /** Ids of the rows the table is displaying now. */
+  displayed: ReadonlySet<number>;
+  /** Whether the store answered for this id. */
+  exists: boolean;
+  /** Whether any filter (not the row limit) is narrowing the table. */
+  filtered: boolean;
 }): GoToOutcome {
- if (input.displayed.has(input.id)) return "shown";
- if (!input.exists) return "missing";
- return input.filtered ? "filtered" : "beyond-limit";
+  if (input.displayed.has(input.id)) return "shown";
+  if (!input.exists) return "missing";
+  return input.filtered ? "filtered" : "beyond-limit";
 }

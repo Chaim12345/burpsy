@@ -70,16 +70,12 @@ export function ExtractorManager({
   }
   try {
    await onSave(drafts.map(draftToExtractor));
-   toast.success(
-    drafts.length === 0 ? "Cleared the extractor columns" : `Saved ${drafts.length} extractor column${drafts.length === 1 ? "" : "s"}`,
-   );
+   toast.success(drafts.length === 0 ? "Cleared the extractor columns" : `Saved ${drafts.length} extractor column${drafts.length === 1 ? "" : "s"}`);
    onOpenChange(false);
   } catch (cause) {
    // The server's own message — a bad regex, an unsupported JSON path, a duplicate it caught — shown
    // inline so it sits beside the rows that produced it rather than disappearing as a toast.
-   setServerError(
-    cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : "The server refused the extractors.",
-   );
+   setServerError(cause instanceof ApiError ? cause.message : cause instanceof Error ? cause.message : "The server refused the extractors.");
   }
  };
 
@@ -94,8 +90,8 @@ export function ExtractorManager({
    <div className="stack">
     {drafts.length === 0 ? (
      <p className="field-hint">
-      No extractor columns yet. Add one to pull a field — a CSRF token, a user id, a rate-limit header — out of every response and read it
-      as a column.
+      No extractor columns yet. Add one to pull a field — a CSRF token, a user id, a rate-limit
+      header — out of every response and read it as a column.
      </p>
     ) : (
      <div className="stack-tight" role="list" aria-label="Extractor columns">
@@ -179,7 +175,9 @@ export function ExtractorManager({
       <Plus size={13} />
       Add extractor
      </Button>
-     {drafts.length > 1 ? <small className="field-hint">Reorder the columns by dragging their headers in the table.</small> : null}
+     {drafts.length > 1 ? (
+      <small className="field-hint">Reorder the columns by dragging their headers in the table.</small>
+     ) : null}
     </div>
 
     {/* The one place an error lives: a client-side mistake until the operator saves, then the
@@ -237,41 +235,12 @@ export function ExtractorCell({
  noResponseTitle?: string;
 }): JSX.Element {
  if (value === undefined) {
-  if (!hasResponse)
-   return (
-    <span className="cell-dim" title={noResponseTitle}>
-     —
-    </span>
-   );
-  if (loading)
-   return (
-    <span className="cell-dim" title="Running the extractors…">
-     …
-    </span>
-   );
-  if (failed)
-   return (
-    <span className="cell-dim" title="The extractor run failed — see the notice above the table">
-     —
-    </span>
-   );
-  return (
-   <span className="cell-dim" title="No value for this row">
-    —
-   </span>
-  );
+  if (!hasResponse) return <span className="cell-dim" title={noResponseTitle}>—</span>;
+  if (loading) return <span className="cell-dim" title="Running the extractors…">…</span>;
+  if (failed) return <span className="cell-dim" title="The extractor run failed — see the notice above the table">—</span>;
+  return <span className="cell-dim" title="No value for this row">—</span>;
  }
- if (value === null)
-  return (
-   <span className="cell-dim" title="No match in the response">
-    —
-   </span>
-  );
- if (value === "")
-  return (
-   <span className="cell-dim" title="Captured an empty string">
-    &quot;&quot;
-   </span>
-  );
+ if (value === null) return <span className="cell-dim" title="No match in the response">—</span>;
+ if (value === "") return <span className="cell-dim" title="Captured an empty string">&quot;&quot;</span>;
  return <span title={value}>{value}</span>;
 }

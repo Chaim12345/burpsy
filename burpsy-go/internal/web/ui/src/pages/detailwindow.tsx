@@ -58,10 +58,10 @@ export function detailExchangeId(): number | null {
  */
 export function openDetailWindow(exchange: Exchange): boolean {
  // The hash is the ROUTE, so it must be the detail leaf — `#history` here mounted the ordinary
- // history table in the new window, with no exchange selected, and left this whole page unreachable
- // except by hand-typing the hash (burpsy-react-ui-76ea). The query carries the id; the hash names
- // the page that reads it.
- const url = `${location.pathname}${location.search ? `${location.search}&` : "?"}exchange=${exchange.id}#exchange-detail`;
+// history table in the new window, with no exchange selected, and left this whole page unreachable
+// except by hand-typing the hash (burpsy-react-ui-76ea). The query carries the id; the hash names
+// the page that reads it.
+const url = `${location.pathname}${location.search ? `${location.search}&` : "?"}exchange=${exchange.id}#exchange-detail`;
  const opened = window.open(url, `burpsy-exchange-${exchange.id}`, "noopener,noreferrer");
  if (opened) return true;
  // A refused popup is not an error the operator can act on except by taking the fallback, so the
@@ -188,18 +188,20 @@ export function DetailWindowPage(): JSX.Element {
     description={`Exchange #${exchange.id} in a window of its own.`}
     actions={
      <>
-      <Badge tone={exchange.status != null && exchange.status < 400 ? "good" : "warn"}>{exchange.status ?? "pending"}</Badge>
+      <Badge tone={exchange.status != null && exchange.status < 400 ? "good" : "warn"}>
+       {exchange.status ?? "pending"}
+      </Badge>
       <Badge>{formatDuration(exchange.duration_ms)}</Badge>
       <Badge>{exchange.protocol}</Badge>
-      {/* The same downgrade signal the in-page detail head carries (burpsy-react-ui-y0l2). The
+     {/* The same downgrade signal the in-page detail head carries (burpsy-react-ui-y0l2). The
       detached window is where an operator ends up when comparing two exchanges, and a protocol
       badge that reads HTTP/1.1 on both sides of a comparison cannot distinguish a target that only
       speaks HTTP/1.1 from one interception moved off h2. */}
-      {isProtocolDowngrade(exchange.notes) ? (
-       <Badge tone="warn" title={exchange.notes ?? undefined}>
-        HTTP/2 downgraded
-       </Badge>
-      ) : null}
+     {isProtocolDowngrade(exchange.notes) ? (
+      <Badge tone="warn" title={exchange.notes ?? undefined}>
+       HTTP/2 downgraded
+      </Badge>
+     ) : null}
       <Badge>{formatBytes(exchange.response_len ?? 0)}</Badge>
       <Button variant="outline" size="small" onClick={() => void actions.sendToRepeater(exchange)}>
        <Repeat2 size={13} />
@@ -234,7 +236,11 @@ export function DetailWindowPage(): JSX.Element {
      <Inspector
       raw={(inspectorSide === "request" ? request.data?.text : response.data?.text) ?? ""}
       readOnlyNote="A captured exchange: this window shows the bytes as they were received."
-      onSwitch={exchange.response ? () => setInspectorSide((current) => (current === "request" ? "response" : "request")) : undefined}
+      onSwitch={
+       exchange.response
+        ? () => setInspectorSide((current) => (current === "request" ? "response" : "request"))
+        : undefined
+      }
       switchLabel={inspectorSide === "request" ? "Response" : "Request"}
      />
     ) : null}

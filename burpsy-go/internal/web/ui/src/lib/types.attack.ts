@@ -80,25 +80,25 @@ export interface InterceptRuleSpec {
   * into disagreeing about what a list can see.
   */
  field:
-  | "host"
-  | "path"
-  | "extension"
-  | "method"
-  | "url"
-  | "status_code"
-  | "content_type"
-  | "port"
-  | "protocol"
-  | "request_body"
-  | "response_body"
-  // The four member axes (ajpn): a named header or cookie. Burp offers them as four match types
-  // (Zpkq the header list, Zpky/Zpkc a cookie's name and value) and they are the last ones an
-  // operator reaches for on a real engagement — the proxy-header injection and the session being
-  // re-issued are both rules about a named member, not about the message as a whole.
-  | "request_header"
-  | "response_header"
-  | "request_cookie"
-  | "response_cookie";
+ | "host"
+ | "path"
+ | "extension"
+ | "method"
+ | "url"
+ | "status_code"
+ | "content_type"
+ | "port"
+ | "protocol"
+ | "request_body"
+ | "response_body"
+ // The four member axes (ajpn): a named header or cookie. Burp offers them as four match types
+ // (Zpkq the header list, Zpky/Zpkc a cookie's name and value) and they are the last ones an
+ // operator reaches for on a real engagement — the proxy-header injection and the session being
+ // re-issued are both rules about a named member, not about the message as a whole.
+ | "request_header"
+ | "response_header"
+ | "request_cookie"
+ | "response_cookie";
  category: "regex" | "literal";
  string_match: string;
  /**
@@ -414,25 +414,25 @@ export interface ScannerCoverage {
  * worse than an honest zero.
  */
 export interface CorpusCheckView {
- name: string;
- active?: boolean;
- passive?: boolean;
- loaded?: boolean;
- run_count?: number;
- disabled?: boolean;
- severity?: string;
- author?: string;
- description?: string;
- /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks. */
- origin?: "console" | "file";
- file?: string;
+  name: string;
+  active?: boolean;
+  passive?: boolean;
+  loaded?: boolean;
+  run_count?: number;
+  disabled?: boolean;
+  severity?: string;
+  author?: string;
+  description?: string;
+  /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks. */
+  origin?: "console" | "file";
+  file?: string;
 }
 
 export interface CorpusChecks {
- enabled: boolean;
- passive_count?: number;
- active_count?: number;
- checks?: CorpusCheckView[];
+  enabled: boolean;
+  passive_count?: number;
+  active_count?: number;
+  checks?: CorpusCheckView[];
 }
 
 /* --- scanner: live active audit ------------------------------------------ */

@@ -39,9 +39,7 @@ function write(record: Record<string, number>): void {
   // Bound the ledger: an operator who never repeats a command would otherwise grow it for
   // the life of the profile. The least-recently-run entries are the ones dropped, and 64
   // covers every command anyone actually cycles through.
-  const entries = Object.entries(record)
-   .sort((a, b) => a[1] - b[1])
-   .slice(-MAX_ENTRIES);
+  const entries = Object.entries(record).sort((a, b) => a[1] - b[1]).slice(-MAX_ENTRIES);
   window.localStorage.setItem(KEY, JSON.stringify(Object.fromEntries(entries)));
  } catch {
   // localStorage unavailable (private mode, quota): ordering simply never persists.
@@ -77,7 +75,11 @@ export function recordPaletteUse(actionId: string): void {
  * operator's storage — offering it would be a Recents row that cannot run. Filtering here rather
  * than at the display site keeps "recent" one notion: the ledger the palette already sorts by.
  */
-export function recentActionIds(ledger: Record<string, number>, known: Iterable<string>, limit: number): string[] {
+export function recentActionIds(
+ ledger: Record<string, number>,
+ known: Iterable<string>,
+ limit: number,
+): string[] {
  const available = new Set(known);
  return Object.entries(ledger)
   .filter(([id]) => available.has(id))

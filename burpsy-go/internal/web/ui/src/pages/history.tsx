@@ -1,35 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { parseListenerPorts } from "../lib/listener-filter";
-import {
- BookOpen,
- Columns3,
- Combine,
- Crosshair,
- Download,
- Hash,
- HelpCircle,
- Repeat2,
- ScanText,
- Search,
- Trash2,
- Upload,
- X,
-} from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, Hash, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
-import {
- api,
- downloadText,
- formatBytes,
- formatCount,
- formatDuration,
- historyToCSV,
- isProtocolDowngrade,
- mimeLabel,
- relativeTime,
- statusTone,
-} from "../lib/api";
+import { api, downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useImportHar, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
@@ -48,24 +22,7 @@ import { classifyEntry, parseEntryNumber } from "../lib/go-to-entry";
 import { differsFromDefaults, FILTER_DEFAULTS, HISTORY_POPOVER_KEYS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
 import { FilterPresetsMenu } from "../ui/filter-presets";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
-import {
- Badge,
- Button,
- Checkbox,
- Empty,
- ErrorNotice,
- Field,
- IconButton,
- Input,
- Modal,
- Select,
- Tabs,
- TabsContent,
- TabsList,
- TabsTrigger,
- Toolbar,
- Tooltip,
-} from "../ui/primitives";
+import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
@@ -112,12 +69,8 @@ function mimeMatches(row: Exchange, value: string): boolean {
  const exMime = row.mime.toLowerCase();
  if (value === "binary") {
   return !(
-   exMime.includes("text") ||
-   exMime.includes("json") ||
-   exMime.includes("xml") ||
-   exMime.includes("javascript") ||
-   exMime.includes("css") ||
-   exMime.includes("html")
+   exMime.includes("text") || exMime.includes("json") || exMime.includes("xml") ||
+   exMime.includes("javascript") || exMime.includes("css") || exMime.includes("html")
   );
  }
  return exMime.includes(value);
@@ -615,8 +568,7 @@ export function HistoryPage(): JSX.Element {
     const description = errors && errors.length > 0 ? `Notes: ${errors.slice(0, 3).join("; ")}` : undefined;
     const summary = `Imported ${imported}${skipped > 0 ? `, skipped ${skipped}` : ""}`;
     // Zero imported is not a success — say so. Any skips make it a warning rather than a clean win.
-    if (imported === 0)
-     toast.error(skipped > 0 ? `${summary} — nothing was imported` : "Nothing in the file could be imported", { description });
+    if (imported === 0) toast.error(skipped > 0 ? `${summary} — nothing was imported` : "Nothing in the file could be imported", { description });
     else if (skipped > 0) toast.warning(summary, { description });
     else toast.success(summary, { description });
     // The hook already invalidates the history prefix; this refetches the view immediately so the
@@ -668,13 +620,10 @@ export function HistoryPage(): JSX.Element {
  // refetch, the effect that injects the fragment always sees the server's actual state.
  const injectedFragment = useRef<string | null>(null);
  const scopeFragment = useMemo(() => scopeToQueryFragment(scope.data), [scope.data]);
- const handleScopeToggle = useCallback(
-  async (pressed: boolean) => {
-   if (pressed) await scope.refetch();
-   setScopeOnly(pressed);
-  },
-  [scope],
- );
+ const handleScopeToggle = useCallback(async (pressed: boolean) => {
+  if (pressed) await scope.refetch();
+  setScopeOnly(pressed);
+ }, [scope]);
  useEffect(() => {
   const wanted = scopeOnly ? scopeFragment : null;
   if (injectedFragment.current === wanted) return;
@@ -747,10 +696,7 @@ export function HistoryPage(): JSX.Element {
  // Extension lists, normalised once: lower-cased, dot-stripped, blanks dropped, so "PNG", ".png"
  // and " png " are one entry.
  const parseExtList = (raw: string) =>
-  raw
-   .split(",")
-   .map((e) => e.trim().toLowerCase().replace(/^\./, ""))
-   .filter((e) => e !== "");
+  raw.split(",").map((e) => e.trim().toLowerCase().replace(/^\./, "")).filter((e) => e !== "");
  const showList = useMemo(() => parseExtList(showExtensions), [showExtensions]);
  const hideList = useMemo(() => parseExtList(hideExtensions), [hideExtensions]);
  // Listener ports, normalised the same way and for the same reason: " 8080, 8080 " is one entry,
@@ -764,12 +710,10 @@ export function HistoryPage(): JSX.Element {
  // invalid regex is the case that matters: silently matching nothing would read as "no such
  // traffic", which is the difference between an empty result and a broken filter.
 
+
  const filtersActive =
-  (onlyParameterized ? 1 : 0) +
-  (onlyCommented ? 1 : 0) +
-  (onlyHighlighted ? 1 : 0) +
-  (showList.length > 0 ? 1 : 0) +
-  (hideList.length > 0 ? 1 : 0) +
+  (onlyParameterized ? 1 : 0) + (onlyCommented ? 1 : 0) + (onlyHighlighted ? 1 : 0) +
+  (showList.length > 0 ? 1 : 0) + (hideList.length > 0 ? 1 : 0) +
   (searchText.trim() !== "" ? 1 : 0);
 
  /**
@@ -811,20 +755,8 @@ export function HistoryPage(): JSX.Element {
   if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
   return names;
  }, [
-  debouncedTerm,
-  method,
-  mimeSet,
-  statusSet,
-  hideNoResponse,
-  scopeOnly,
-  searchText,
-  searchNegate,
-  debouncedSearchText,
-  onlyParameterized,
-  onlyCommented,
-  onlyHighlighted,
-  showList,
-  hideList,
+  debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchText, searchNegate, debouncedSearchText,
+  onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
  ]);
  // ovow: names describe the *applied* filters; suspended, there are none to name no matter
  // what the controls hold. Computed above, filtered here, so the empty states and the status
@@ -876,20 +808,8 @@ export function HistoryPage(): JSX.Element {
    return true;
   });
  }, [
-  data,
-  method,
-  statusSet,
-  mimeSet,
-  filterOn,
-  hideNoResponse,
-  scopeOnly,
-  scopeFragment,
-  scope.data,
-  onlyParameterized,
-  onlyCommented,
-  onlyHighlighted,
-  showList,
-  hideList,
+  data, method, statusSet, mimeSet, filterOn, hideNoResponse, scopeOnly, scopeFragment, scope.data,
+  onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
  ]);
 
  // How many rows the parameterized filter cannot have a verdict about: a row written before the
@@ -918,14 +838,7 @@ export function HistoryPage(): JSX.Element {
  // response-presence is part of the list, a row that was pending and later answered re-enters it and
  // gets run rather than staying empty. Debounced so a filter edit or a burst of new rows does not fire
  // a request per keystroke.
- const extractIdsKey = useMemo(
-  () =>
-   baseRows
-    .filter((row) => row.response !== null)
-    .map((row) => row.id)
-    .join(","),
-  [baseRows],
- );
+ const extractIdsKey = useMemo(() => baseRows.filter((row) => row.response !== null).map((row) => row.id).join(","), [baseRows]);
  const debouncedExtractIdsKey = useDebounced(extractIdsKey, 300);
  const extractIds = useMemo(
   () => (debouncedExtractIdsKey === "" ? [] : debouncedExtractIdsKey.split(",").map(Number)),
@@ -936,15 +849,15 @@ export function HistoryPage(): JSX.Element {
  // Loading is "we do not yet have values for the current definitions": a true first fetch, or a
  // placeholder still showing the PREVIOUS id-set's values. isPlaceholderData is counted because during
  // it a row absent from the previous map has an undefined value that is loading, not "no value".
- const extractLoading = savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+ const extractLoading =
+  savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
  const extractFailed = extractValues.isError;
 
  // Active client-side extractor filters, by name. An empty/whitespace box is not a filter.
  const activeExtractorFilters = useMemo(
-  () =>
-   savedExtractors
-    .map((extractor) => ({ name: extractor.name, query: (extractorFilters[extractor.name] ?? "").trim().toLowerCase() }))
-    .filter((entry) => entry.query !== ""),
+  () => savedExtractors
+   .map((extractor) => ({ name: extractor.name, query: (extractorFilters[extractor.name] ?? "").trim().toLowerCase() }))
+   .filter((entry) => entry.query !== ""),
   [savedExtractors, extractorFilters],
  );
 
@@ -1115,18 +1028,8 @@ export function HistoryPage(): JSX.Element {
 
  // A reading the server did not resolve falls back to the bytes that travelled rather than
  // fetching nothing, so a pane is never empty while the picker claims a reading exists.
- const requestId = variantMessageId(
-  selected?.request ?? null,
-  selected?.variants?.request_original,
-  selected?.variants?.request_auto_modified,
-  requestVariant,
- );
- const responseId = variantMessageId(
-  selected?.response ?? null,
-  selected?.variants?.response_original,
-  selected?.variants?.response_auto_modified,
-  responseVariant,
- );
+ const requestId = variantMessageId(selected?.request ?? null, selected?.variants?.request_original, selected?.variants?.request_auto_modified, requestVariant);
+ const responseId = variantMessageId(selected?.response ?? null, selected?.variants?.response_original, selected?.variants?.response_auto_modified, responseVariant);
 
  const request = useMessage(requestId);
  const response = useMessage(responseId);
@@ -1169,12 +1072,7 @@ export function HistoryPage(): JSX.Element {
  // for a message with no encoding, so the common case keeps the editor grid's DOM as it was. A
  // decoded pane says so in words — the head above the body still reads Content-Encoding: gzip and
  // a compressed Content-Length, and without the marker the pane would look like the wire.
- const decodeStrip = (
-  label: string,
-  reading: MessageReading | undefined,
-  preferRaw: boolean,
-  setPreferRaw: (next: boolean) => void,
- ): JSX.Element | null => {
+ const decodeStrip = (label: string, reading: MessageReading | undefined, preferRaw: boolean, setPreferRaw: (next: boolean) => void): JSX.Element | null => {
   if (!reading || (!reading.encoding && !reading.decodeError && !reading.canDecode)) return null;
   if (reading.decodeError) {
    return (
@@ -1183,8 +1081,8 @@ export function HistoryPage(): JSX.Element {
      <span className="cell-dim">
       {/* The encoding is named unless the server's reason already names it ("no decoder for
           Content-Encoding \"br\""), so the sentence does not say it twice. */}
-      {label} body{reading.encoding && !reading.decodeError.includes(reading.encoding) ? ` (Content-Encoding: ${reading.encoding})` : ""}{" "}
-      could not be decoded: {reading.decodeError}. Showing the bytes as captured.
+      {label} body{reading.encoding && !reading.decodeError.includes(reading.encoding) ? ` (Content-Encoding: ${reading.encoding})` : ""} could not be
+      decoded: {reading.decodeError}. Showing the bytes as captured.
      </span>
     </div>
    );
@@ -1193,10 +1091,7 @@ export function HistoryPage(): JSX.Element {
   return (
    <div className="decode-strip" role="status">
     {reading.decoded ? (
-     <Badge
-      tone="info"
-      title="The body is shown decompressed; the headers are as captured. Sends and resends always use the captured bytes."
-     >
+     <Badge tone="info" title="The body is shown decompressed; the headers are as captured. Sends and resends always use the captured bytes.">
       {decodedMarker(reading.encoding)}
      </Badge>
     ) : (
@@ -1211,68 +1106,68 @@ export function HistoryPage(): JSX.Element {
 
  // Gated on a selection because the panes are built on every render while the detail block renders
  // only when something is selected, and actions.menu wants a row.
- const requestPane = selected
-  ? renderPane(
-     "Request",
-     requestVariants,
-     requestVariant,
-     setRequestVariant,
-     <HttpEditor
-      label="Request"
-      readOnly
-      // A row with NO request says so, with the reason, the way the response pane already does. A
-      // blind CONNECT tunnel is the one case: the proxy relayed it without looking inside, and there
-      // are no request bytes to show. Before the wire made the absence a null this pane read message 0
-      // and displayed the project's first request under the label Request for this row — another
-      // exchange's bytes, with nothing marking it (burpsy-react-ui-wtov).
-      value={
-       selected.request === null
-        ? "No request was captured for this exchange — it is a blind tunnel, relayed without being read."
-        : (requestReading?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
-      }
-      filename={`exchange-${selected.id}-request-${requestVariant}${requestReading?.decoded ? "-decoded" : ""}.txt`}
-      // The body's real bytes, so a binary request (a gRPC/protobuf call) decodes in the Protobuf view
-      // rather than from `text`, which replaces non-UTF-8 bytes (burpsy-react-ui-3x2g).
-      bodyBase64={request.data?.body_base64}
-      menuGroups={actions.menu(selected)}
-      // Actively audit a selected byte range (burpsy-react-ui-c6oq): only on a request that
-      // exists (not a blind tunnel's null) — auditing a response is not a thing the
-      // scanner's insertion-point model can even express. Withheld while the pane shows the decoded
-      // body (qpfy): the span would be an offset into the decompressed bytes, and the scanner would
-      // inject at that offset into the compressed request that is actually sent.
-      auditSelection={request.data && !requestReading?.decoded ? (span) => void actions.auditSelection(selected, [span]) : undefined}
-      // The stored-message id behind this reading, so a loaded plugin's editor tab can render
-      // from the bytes the operator is looking at (burpsy-react-ui-ww5).
-      messageId={requestId ?? undefined}
-     />,
-     decodeStrip("Request", requestReading, requestRaw, setRequestRaw),
-    )
-  : null;
- const responsePane = selected
-  ? renderPane(
-     "Response",
-     responseVariants,
-     responseVariant,
-     setResponseVariant,
-     <HttpEditor
-      label="Response"
-      readOnly
-      value={
-       selected.response === null
-        ? "No response was captured for this exchange."
-        : (responseReading?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
-      }
-      bodyBase64={response.data?.body_base64}
-      requestPath={selected.path}
-      filename={`exchange-${selected.id}-response-${responseVariant}${responseReading?.decoded ? "-decoded" : ""}.txt`}
-      menuGroups={actions.menu(selected)}
-      // Same rule as the request pane: the response message id, undefined when this exchange
-      // has no response to derive from.
-      messageId={selected.response === null ? undefined : (responseId ?? undefined)}
-     />,
-     decodeStrip("Response", responseReading, responseRaw, setResponseRaw),
-    )
-  : null;
+ const requestPane = selected ? (
+  renderPane(
+   "Request",
+   requestVariants,
+   requestVariant,
+   setRequestVariant,
+   <HttpEditor
+    label="Request"
+    readOnly
+    // A row with NO request says so, with the reason, the way the response pane already does. A
+    // blind CONNECT tunnel is the one case: the proxy relayed it without looking inside, and there
+    // are no request bytes to show. Before the wire made the absence a null this pane read message 0
+    // and displayed the project's first request under the label Request for this row — another
+    // exchange's bytes, with nothing marking it (burpsy-react-ui-wtov).
+    value={
+     selected.request === null
+      ? "No request was captured for this exchange — it is a blind tunnel, relayed without being read."
+      : (requestReading?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
+    }
+    filename={`exchange-${selected.id}-request-${requestVariant}${requestReading?.decoded ? "-decoded" : ""}.txt`}
+    // The body's real bytes, so a binary request (a gRPC/protobuf call) decodes in the Protobuf view
+    // rather than from `text`, which replaces non-UTF-8 bytes (burpsy-react-ui-3x2g).
+    bodyBase64={request.data?.body_base64}
+    menuGroups={actions.menu(selected)}
+    // Actively audit a selected byte range (burpsy-react-ui-c6oq): only on a request that
+    // exists (not a blind tunnel's null) — auditing a response is not a thing the
+    // scanner's insertion-point model can even express. Withheld while the pane shows the decoded
+    // body (qpfy): the span would be an offset into the decompressed bytes, and the scanner would
+    // inject at that offset into the compressed request that is actually sent.
+    auditSelection={request.data && !requestReading?.decoded ? (span) => void actions.auditSelection(selected, [span]) : undefined}
+    // The stored-message id behind this reading, so a loaded plugin's editor tab can render
+    // from the bytes the operator is looking at (burpsy-react-ui-ww5).
+    messageId={requestId ?? undefined}
+   />,
+   decodeStrip("Request", requestReading, requestRaw, setRequestRaw),
+  )
+ ) : null;
+ const responsePane = selected ? (
+  renderPane(
+   "Response",
+   responseVariants,
+   responseVariant,
+   setResponseVariant,
+   <HttpEditor
+    label="Response"
+    readOnly
+    value={
+     selected.response === null
+      ? "No response was captured for this exchange."
+      : (responseReading?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+    }
+    bodyBase64={response.data?.body_base64}
+    requestPath={selected.path}
+    filename={`exchange-${selected.id}-response-${responseVariant}${responseReading?.decoded ? "-decoded" : ""}.txt`}
+    menuGroups={actions.menu(selected)}
+    // Same rule as the request pane: the response message id, undefined when this exchange
+    // has no response to derive from.
+    messageId={selected.response === null ? undefined : (responseId ?? undefined)}
+   />,
+   decodeStrip("Response", responseReading, responseRaw, setResponseRaw),
+  )
+ ) : null;
 
  // The note field mirrors the selected row's own copy — see organizer.tsx's identical comment on
  // its own draft state — but reset only on a selection change, not on every background refetch, so
@@ -1345,16 +1240,16 @@ export function HistoryPage(): JSX.Element {
      // stopped here so the row's own click handler does not then collapse the selection to it.
      return (
       <span className="tick-cell" onClick={(event) => event.stopPropagation()}>
-       <Checkbox
-        label={<span className="sr-only">{`Select row ${id}`}</span>}
-        checked={checkedRows.has(id)}
-        onCheckedChange={(on) => {
-         const next = new Set(checkedRows);
-         if (on) next.add(id);
-         else next.delete(id);
-         setCheckedExchanges([...next]);
-        }}
-       />
+      <Checkbox
+       label={<span className="sr-only">{`Select row ${id}`}</span>}
+       checked={checkedRows.has(id)}
+       onCheckedChange={(on) => {
+        const next = new Set(checkedRows);
+        if (on) next.add(id);
+        else next.delete(id);
+        setCheckedExchanges([...next]);
+       }}
+      />
       </span>
      );
     },
@@ -1417,10 +1312,7 @@ export function HistoryPage(): JSX.Element {
     cell: (info) => {
      const row = info.row.original;
      return (
-      <span
-       className="cell-dim"
-       title={row.mime || (row.response === null ? "No response was captured" : "The response declared no Content-Type")}
-      >
+      <span className="cell-dim" title={row.mime || (row.response === null ? "No response was captured" : "The response declared no Content-Type")}>
        {mimeLabel(row)}
       </span>
      );
@@ -1547,7 +1439,8 @@ export function HistoryPage(): JSX.Element {
     header: "Edited",
     size: 76,
     accessorFn: (row: Exchange) => row.variants?.edited ?? false,
-    cell: (info) => (info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>),
+    cell: (info) =>
+     info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>,
    },
    {
     accessorKey: "response_len",
@@ -1565,7 +1458,11 @@ export function HistoryPage(): JSX.Element {
     size: 78,
     cell: (info) => {
      const ms = info.getValue<number | null>();
-     return ms === null || ms === undefined ? <span className="cell-dim">—</span> : <span className="cell-num">{formatDuration(ms)}</span>;
+     return ms === null || ms === undefined ? (
+      <span className="cell-dim">—</span>
+     ) : (
+      <span className="cell-num">{formatDuration(ms)}</span>
+     );
     },
    },
    {
@@ -1669,7 +1566,10 @@ export function HistoryPage(): JSX.Element {
           this is what lets an operator mark a row up in place instead of filing it in a different
           tool just to comment on it. */}
    <div className="annotate-bar">
-    <HighlightPicker value={highlightName(selected.highlight)} onChange={(next) => annotate.mutate({ id: selected.id, highlight: next })} />
+    <HighlightPicker
+     value={highlightName(selected.highlight)}
+     onChange={(next) => annotate.mutate({ id: selected.id, highlight: next })}
+    />
     <Input
      aria-label="Row note"
      title="Row note"
@@ -1754,7 +1654,12 @@ export function HistoryPage(): JSX.Element {
        </Button>
        {/* Burp's File > Import (HAR). Not disabled on an empty capture — importing into one is the
            main use. The input is visually hidden but reachable; the button is its label and opens it. */}
-       <Button variant="outline" size="small" onClick={() => harInputRef.current?.click()} disabled={importHar.isPending}>
+       <Button
+        variant="outline"
+        size="small"
+        onClick={() => harInputRef.current?.click()}
+        disabled={importHar.isPending}
+       >
         <Upload size={14} />
         {importHar.isPending ? "Importing…" : "Import HAR"}
        </Button>
@@ -1808,6 +1713,7 @@ export function HistoryPage(): JSX.Element {
      }
     />
     <Toolbar style={{ marginTop: 10 }}>
+
      <FilterToggle pressed={filterOn} onPressedChange={setFilterOn} title="Suspend every filter below without clearing it">
       Filter
      </FilterToggle>
@@ -1817,7 +1723,11 @@ export function HistoryPage(): JSX.Element {
      <FilterToggle pressed={hideNoResponse} onPressedChange={setHideNoResponse}>
       Hide items without responses
      </FilterToggle>
-     <FilterToggle pressed={followNew} onPressedChange={setFollowNew} title="Keep the bottom of the table in view as new rows arrive">
+     <FilterToggle
+      pressed={followNew}
+      onPressedChange={setFollowNew}
+      title="Keep the bottom of the table in view as new rows arrive"
+     >
       Auto-scroll
      </FilterToggle>
      {/* FilterToggle takes a single string child, so the count is composed rather than
@@ -1825,7 +1735,12 @@ export function HistoryPage(): JSX.Element {
      <FilterToggle pressed={columnFiltersOpen} onPressedChange={setColumnFiltersOpen}>
       {totalColumnFiltersActive > 0 ? `Column filters (${totalColumnFiltersActive})` : "Column filters"}
      </FilterToggle>
-     <Button variant={filtersActive > 0 ? "outline" : "quiet"} size="small" aria-expanded={filterOpen} onClick={() => setFilterOpen(true)}>
+     <Button
+      variant={filtersActive > 0 ? "outline" : "quiet"}
+      size="small"
+      aria-expanded={filterOpen}
+      onClick={() => setFilterOpen(true)}
+     >
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
      </Button>
      <FilterPresetsMenu
@@ -1849,13 +1764,7 @@ export function HistoryPage(): JSX.Element {
       // would PUT an empty replacement over the project's real columns. A failed load says so in the
       // error strip below rather than silently offering an empty editor.
       disabled={!extractorsReady}
-      title={
-       extractorsReady
-        ? "Add columns that extract a field from every response"
-        : extractorsQuery.isError
-          ? "Could not load the saved extractors"
-          : "Loading the saved extractors…"
-      }
+      title={extractorsReady ? "Add columns that extract a field from every response" : extractorsQuery.isError ? "Could not load the saved extractors" : "Loading the saved extractors…"}
      >
       <ScanText size={14} />
       Extractors{savedExtractors.length > 0 ? ` (${savedExtractors.length})` : ""}
@@ -1864,23 +1773,21 @@ export function HistoryPage(): JSX.Element {
       label="Status"
       buckets={STATUS_BUCKETS.filter((bucket) => bucket.value !== "all")}
       selected={statusSet}
-      onToggle={(value) => setStatusSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))}
+      onToggle={(value) =>
+       setStatusSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))
+      }
       onReset={() => setStatusSet([])}
      />
      <BucketMenu
       label="Type"
       buckets={MIME_TYPES.filter((mt) => mt.value !== "all")}
       selected={mimeSet}
-      onToggle={(value) => setMimeSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))}
+      onToggle={(value) =>
+       setMimeSet((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))
+      }
       onReset={() => setMimeSet([])}
      />
-     <Select
-      aria-label="Method filter"
-      title="Method filter"
-      value={method}
-      onChange={(event) => setMethod(event.target.value)}
-      style={{ maxWidth: "var(--w-xs)" }}
-     >
+     <Select aria-label="Method filter" title="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
       <option value="all">All methods</option>
       {METHODS.map((name) => (
        <option key={name} value={name}>
@@ -1969,9 +1876,9 @@ export function HistoryPage(): JSX.Element {
                 into the filter box above, and the columns the query grammar cannot express get no DSL
                 input. Extractor boxes are the exception and say so. */}
       <span className="cell-dim">
-       Host, path and response-body boxes append clauses to the filter box, so it always shows what is filtered. Status, type and method
-       have their own controls above; extension, params, length, time and comment cannot be expressed in the query grammar and so have no
-       filter here.
+       Host, path and response-body boxes append clauses to the filter box, so it always shows what
+       is filtered. Status, type and method have their own controls above; extension, params,
+       length, time and comment cannot be expressed in the query grammar and so have no filter here.
        {savedExtractors.length > 0 ? " Extractor-column boxes filter client-side over the captured values." : ""}
       </span>
      </Toolbar>
@@ -1990,7 +1897,11 @@ export function HistoryPage(): JSX.Element {
         leaving every derived cell as a bare dash) is what tells the operator the columns are empty
         because the run failed, not because nothing matched. */}
     {extractFailed ? (
-     <ErrorNotice title="Could not run the extractor columns" error={extractValues.error} onRetry={() => void extractValues.refetch()} />
+     <ErrorNotice
+      title="Could not run the extractor columns"
+      error={extractValues.error}
+      onRetry={() => void extractValues.refetch()}
+     />
     ) : null}
    </div>
 
@@ -2128,7 +2039,10 @@ export function HistoryPage(): JSX.Element {
               a filter narrowed the view, the row limit truncated the fetch, or neither - and
               collapsing them hides which. The captured figure is omitted rather than guessed when
               /api/stats has not answered. */}
-     {stats.data && data && stats.data.exchanges > data.length ? `, ${formatCount(stats.data.exchanges)} captured` : ""}{" "}
+     {stats.data && data && stats.data.exchanges > data.length
+      ? `, ${formatCount(stats.data.exchanges)} captured`
+      : ""}
+     {" "}
      {rows.length === 1 ? "row" : "rows"}
     </div>
     {/* The fourth clause, and the same reasoning as the three numbers above: zero is the count
@@ -2147,12 +2061,11 @@ export function HistoryPage(): JSX.Element {
     <div title="Sum of response bytes for the visible rows">
      {formatBytes(rows.reduce((sum, row) => sum + (row.response_len ?? 0), 0))} in responses
     </div>
-    <div title="Exchanges with no response yet">{rows.filter((row) => row.status === null).length} pending</div>
+    <div title="Exchanges with no response yet">
+     {rows.filter((row) => row.status === null).length} pending
+    </div>
     {selected ? (
-     <div
-      style={{ color: "var(--fg)", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-      title={exchangeUrl(selected)}
-     >
+     <div style={{ color: "var(--fg)", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={exchangeUrl(selected)}>
       <strong>#{selected.id}</strong> {selected.method} {selected.path}
      </div>
     ) : null}
@@ -2179,16 +2092,17 @@ export function HistoryPage(): JSX.Element {
       <Checkbox checked={onlyCommented} onCheckedChange={setOnlyCommented} label="Commented items" />
       <Checkbox checked={onlyHighlighted} onCheckedChange={setOnlyHighlighted} label="Highlighted items" />
       <p className="field-hint">
-       A request is parameterized when its URL or its body carries a parameter, so a form post, a JSON API call or a multipart upload is
-       kept — counted on the server at capture, because a history row carries no request body to read.
+       A request is parameterized when its URL or its body carries a parameter, so a form post, a
+       JSON API call or a multipart upload is kept — counted on the server at capture, because a
+       history row carries no request body to read.
        {onlyParameterized && neverCounted > 0 ? (
         <>
          {" "}
          <strong>
           {neverCounted} row{neverCounted === 1 ? " predates" : "s predate"} this count
          </strong>{" "}
-         and {neverCounted === 1 ? "was" : "were"} never examined, so {neverCounted === 1 ? "it is" : "they are"} kept rather than reported
-         as having no parameters.
+         and {neverCounted === 1 ? "was" : "were"} never examined, so {neverCounted === 1 ? "it is" : "they are"} kept
+         rather than reported as having no parameters.
         </>
        ) : null}
       </p>
@@ -2199,7 +2113,14 @@ export function HistoryPage(): JSX.Element {
        label="Filter by listener"
        hint="Comma-separated listener ports, e.g. 8080,8443. Empty shows every row. Burp's &quot;This can be useful when testing access controls&quot; — several listeners receiving the same host is the case a column alone cannot answer. Non-numeric entries are ignored, and 0 is not a port: it is what a Repeater, Intruder or crawl row carries because no listener received it."
       >
-       {(id) => <Input id={id} value={listenerPorts} onChange={(event) => setListenerPorts(event.target.value)} placeholder="8080,8443" />}
+       {(id) => (
+        <Input
+         id={id}
+         value={listenerPorts}
+         onChange={(event) => setListenerPorts(event.target.value)}
+         placeholder="8080,8443"
+        />
+       )}
       </Field>
       <Field label="Show only extensions" hint="Comma-separated, e.g. php,asp. Empty shows every extension.">
        {(id) => (
@@ -2219,20 +2140,29 @@ export function HistoryPage(): JSX.Element {
                 own input, not the top-bar box: that box is a DSL statement the server evaluates,
                 and a regex tick over it turned `host ~ "api" AND status = 200` into a pattern that
                 matches nothing — the defect this field exists to remove (burpsy-react-ui-vlf). */}
-      <Field
-       label="Search for"
-       hint="Text or pattern over the whole capture — every row column and both messages' bytes. Separate from the filter box above — the modifiers apply only here."
-      >
-       {(id) => <Input id={id} value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="text or pattern" />}
+      <Field label="Search for" hint="Text or pattern over the whole capture — every row column and both messages' bytes. Separate from the filter box above — the modifiers apply only here.">
+       {(id) => (
+        <Input
+         id={id}
+         value={searchText}
+         onChange={(event) => setSearchText(event.target.value)}
+         placeholder="text or pattern"
+        />
+       )}
       </Field>
       <Checkbox checked={searchCase} onCheckedChange={setSearchCase} label="Case sensitive" />
       <Checkbox checked={searchRegex} onCheckedChange={setSearchRegex} label="Regular expression" />
-      <Checkbox checked={searchNegate} onCheckedChange={setSearchNegate} label="Negative match — show rows that do NOT match" />
+      <Checkbox
+       checked={searchNegate}
+       onCheckedChange={setSearchNegate}
+       label="Negative match — show rows that do NOT match"
+      />
       <p className="field-hint">
-       Searches the underlying data, not just this page: every column of a row (including the page title and your comment) and BOTH
-       messages' bytes, headers and body, across the whole capture — so a term in a response body is findable even though no column shows
-       it, and so is a row older than the row limit. A rejected regular expression is reported by the server and shows in the page's error
-       strip rather than emptying the table.
+       Searches the underlying data, not just this page: every column of a row (including the page
+       title and your comment) and BOTH messages' bytes, headers and body, across the whole capture —
+       so a term in a response body is findable even though no column shows it, and so is a row
+       older than the row limit. A rejected regular expression is reported by the server and shows
+       in the page's error strip rather than emptying the table.
       </p>
      </div>
 
@@ -2274,8 +2204,8 @@ export function HistoryPage(): JSX.Element {
       {removeRows.isPending
        ? "Deleting…"
        : confirmDelete?.scope === "selected"
-         ? `Delete ${checkedRows.size.toLocaleString()} ${checkedRows.size === 1 ? "row" : "rows"}`
-         : `Clear ${formatCount(data?.length ?? 0)} rows`}
+        ? `Delete ${checkedRows.size.toLocaleString()} ${checkedRows.size === 1 ? "row" : "rows"}`
+        : `Clear ${formatCount(data?.length ?? 0)} rows`}
      </Button>
      <Button variant="outline" onClick={() => setConfirmDelete(undefined)}>
       Keep them
@@ -2284,5 +2214,5 @@ export function HistoryPage(): JSX.Element {
    </Modal>
   </div>
  );
-}
-import { openDetailWindow } from "./detailwindow";
+} import { openDetailWindow } from "./detailwindow";
+

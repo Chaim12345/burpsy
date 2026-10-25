@@ -12,14 +12,18 @@ import { extractLinks } from "./actions";
 
 describe("extractLinks harvests what is there and nothing else", () => {
  test("quoted attributes come first, in order, without repeats", () => {
-  expect(extractLinks('<a href="/login">in</a><img src="https://cdn.x/y.png"><a href="/login">again</a>')).toEqual([
-   "/login",
-   "https://cdn.x/y.png",
-  ]);
+  expect(
+   extractLinks(
+    '<a href="/login">in</a><img src="https://cdn.x/y.png"><a href="/login">again</a>',
+   ),
+  ).toEqual(["/login", "https://cdn.x/y.png"]);
  });
 
  test("bare absolute URLs in JS and CSS are harvested", () => {
-  expect(extractLinks('fetch("https://api.x/v1?q=1"), url(/static/a.css)')).toEqual(["https://api.x/v1?q=1", "/static/a.css"]);
+  expect(extractLinks('fetch("https://api.x/v1?q=1"), url(/static/a.css)')).toEqual([
+   "https://api.x/v1?q=1",
+   "/static/a.css",
+  ]);
  });
 
  test("fragments, javascript:, mailto: and data: never reach the clipboard", () => {
@@ -29,7 +33,10 @@ describe("extractLinks harvests what is there and nothing else", () => {
  });
 
  test("trailing sentence punctuation is stripped, not seeded", () => {
-  expect(extractLinks("see https://x.example/y, and https://x.example/z.")).toEqual(["https://x.example/y", "https://x.example/z"]);
+  expect(extractLinks("see https://x.example/y, and https://x.example/z.")).toEqual([
+   "https://x.example/y",
+   "https://x.example/z",
+  ]);
  });
 
  test("an unlinking response harvests nothing", () => {

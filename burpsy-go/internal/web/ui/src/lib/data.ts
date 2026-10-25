@@ -49,12 +49,7 @@ export const keys = {
  projects: ["projects"] as const,
  dashboard: ["dashboard"] as const,
  history: (q: string, limit: number, search?: HistorySearch) =>
-  [
-   "history",
-   q,
-   limit,
-   ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : []),
-  ] as const,
+  ["history", q, limit, ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : [])] as const,
  message: (id: number) => ["message", id] as const,
  exchange: (id: number) => ["exchange", id] as const,
  issues: ["issues"] as const,
@@ -519,7 +514,9 @@ export function useOrganizerMutations() {
   moveItems: useMutation({
    mutationFn: ({ collection, itemIds, copy }: { collection: number | "inbox"; itemIds: number[]; copy?: boolean }) =>
     api<{ moved: number }>(
-     collection === "inbox" ? "/api/tools/organizer/collections/inbox" : `/api/tools/organizer/collections/${collection}/items`,
+     collection === "inbox"
+      ? "/api/tools/organizer/collections/inbox"
+      : `/api/tools/organizer/collections/${collection}/items`,
      json("PUT", { item_ids: itemIds, copy: copy === true }),
     ),
    onSuccess: done,
@@ -598,7 +595,10 @@ export function useInterceptControls() {
    * would make a caller setting one have to restate the other. */
   setInScopeOnly: useMutation({
    mutationFn: (inScopeOnly: boolean) =>
-    api<{ in_scope_only: boolean; scope_attached: boolean }>("/api/intercept/in-scope-only", json("POST", { in_scope_only: inScopeOnly })),
+    api<{ in_scope_only: boolean; scope_attached: boolean }>(
+     "/api/intercept/in-scope-only",
+     json("POST", { in_scope_only: inScopeOnly }),
+    ),
    onSuccess: done,
   }),
   forward: useMutation({
@@ -607,7 +607,8 @@ export function useInterceptControls() {
    onSuccess: done,
   }),
   drop: useMutation({
-   mutationFn: (id: number) => api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
+   mutationFn: (id: number) =>
+    api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
    onSuccess: done,
   }),
   /**
@@ -632,7 +633,8 @@ export function useInterceptControls() {
    onSuccess: done,
   }),
   dropAll: useMutation({
-   mutationFn: () => api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
+   mutationFn: () =>
+    api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
    onSuccess: done,
   }),
  };

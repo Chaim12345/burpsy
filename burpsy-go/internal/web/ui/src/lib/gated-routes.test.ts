@@ -8,14 +8,7 @@ import { join } from "node:path";
 import { api, CONFIRM_HEADER, confirmUrlFor, gatedPatternFor, manifestPatternFor } from "./api";
 import { ROUTE_GATED } from "./gated-routes";
 import { ROUTE_RISK } from "./route-risk";
-import {
- gatedTable,
- parseGatedRiskClasses,
- parseManifestRisks,
- renderGatedRoutesModule,
- renderRouteRiskModule,
- riskTable,
-} from "./route-manifest";
+import { gatedTable, parseGatedRiskClasses, parseManifestRisks, renderGatedRoutesModule, renderRouteRiskModule, riskTable } from "./route-manifest";
 
 const web = join(import.meta.dir, "..", "..", "..");
 const manifestGo = readFileSync(join(web, "route_manifest.go"), "utf8");
@@ -81,11 +74,7 @@ describe("api() mints for gated mutations only", () => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
    const url = String(input);
    log.calls.push({ url, method: init?.method ?? "GET", token: new Headers(init?.headers).get(CONFIRM_HEADER) });
-   if (url.endsWith("/confirm"))
-    return new Response(
-     JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
-     { status: 200 },
-    );
+   if (url.endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
    return new Response("{}", { status: 200 });
   }) as typeof fetch;
   return log;

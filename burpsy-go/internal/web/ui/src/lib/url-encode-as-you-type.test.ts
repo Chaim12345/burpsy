@@ -15,47 +15,45 @@ const editor = readFileSync(join(import.meta.dir, "..", "ui", "editor.tsx"), "ut
 const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
 
 describe("the URL-encode-as-you-type editor wire", () => {
- // The mode lives in lib/url-encode-as-you-type.ts (factored so its whole logic is
- // testable against a real EditorState); the editor installs it while the toggle is on.
- const module_ = readFileSync(join(import.meta.dir, "url-encode-as-you-type.ts"), "utf8");
+  // The mode lives in lib/url-encode-as-you-type.ts (factored so its whole logic is
+  // testable against a real EditorState); the editor installs it while the toggle is on.
+  const module_ = readFileSync(join(import.meta.dir, "url-encode-as-you-type.ts"), "utf8");
 
- test("a transaction filter rewrites the typed insert before the document changes", () => {
-  expect(module_, "the mode must be a filter, not an onChange rewrite — onChange would fight the cursor after every keystroke").toMatch(
-   /transactionFilter\.of/,
-  );
- });
+  test("a transaction filter rewrites the typed insert before the document changes", () => {
+    expect(module_, "the mode must be a filter, not an onChange rewrite — onChange would fight the cursor after every keystroke").toMatch(/transactionFilter\.of/);
+  });
 
- test("only keystrokes are encoded: input.type, never paste or programmatic changes", () => {
-  expect(module_).toMatch(/Transaction\.userEvent\) !== "input\.type"/);
- });
+  test("only keystrokes are encoded: input.type, never paste or programmatic changes", () => {
+    expect(module_).toMatch(/Transaction\.userEvent\) !== "input\.type"/);
+  });
 
- test("the encoding goes through urlEncodeKeyChars — Burp's key-character set, not a second one", () => {
-  expect(module_).toMatch(/urlEncodeKeyChars\(inserted\.toString\(\)\)/);
- });
+  test("the encoding goes through urlEncodeKeyChars — Burp's key-character set, not a second one", () => {
+    expect(module_).toMatch(/urlEncodeKeyChars\(inserted\.toString\(\)\)/);
+  });
 
- test("the editor installs the filter only while the toggle is on", () => {
-  expect(editor).toMatch(/if \(urlEncodeAsYouType\)/);
-  expect(editor).toMatch(/urlEncodeAsYouTypeExtension\(\)/);
- });
+  test("the editor installs the filter only while the toggle is on", () => {
+    expect(editor).toMatch(/if \(urlEncodeAsYouType\)/);
+    expect(editor).toMatch(/urlEncodeAsYouTypeExtension\(\)/);
+  });
 
- test("the preference is persisted — a typing preference survives a reload like the font does", () => {
-  expect(store).toMatch(/urlEncodeAsYouType: state\.urlEncodeAsYouType/);
- });
+  test("the preference is persisted — a typing preference survives a reload like the font does", () => {
+    expect(store).toMatch(/urlEncodeAsYouType: state\.urlEncodeAsYouType/);
+  });
 
- test("the toggle is a pressed-state control on the text views", () => {
-  expect(editor).toMatch(/aria-pressed=\{urlEncodeAsYouType\}/);
-  expect(editor).toMatch(/"URL-encode as you type"/);
- });
+  test("the toggle is a pressed-state control on the text views", () => {
+    expect(editor).toMatch(/aria-pressed=\{urlEncodeAsYouType\}/);
+    expect(editor).toMatch(/"URL-encode as you type"/);
+  });
 });
 
 describe("the key-character set the mode reuses", () => {
- test("encodes the characters that change a request's structure, and leaves prose readable", () => {
-  expect(urlEncodeKeyChars("a=b&c")).toBe("a%3Db%26c");
-  expect(urlEncodeKeyChars("hello world")).toBe("hello%20world");
-  expect(urlEncodeKeyChars("/api/v2/users")).toBe("%2Fapi%2Fv2%2Fusers");
- });
+  test("encodes the characters that change a request's structure, and leaves prose readable", () => {
+    expect(urlEncodeKeyChars("a=b&c")).toBe("a%3Db%26c");
+    expect(urlEncodeKeyChars("hello world")).toBe("hello%20world");
+    expect(urlEncodeKeyChars("/api/v2/users")).toBe("%2Fapi%2Fv2%2Fusers");
+  });
 
- test("the percent itself is a key character — typing %41 encodes the % so the literal survives", () => {
-  expect(urlEncodeKeyChars("%41")).toBe("%2541");
- });
+  test("the percent itself is a key character — typing %41 encodes the % so the literal survives", () => {
+    expect(urlEncodeKeyChars("%41")).toBe("%2541");
+  });
 });

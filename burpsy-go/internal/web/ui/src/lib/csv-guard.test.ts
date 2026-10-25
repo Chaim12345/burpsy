@@ -34,41 +34,19 @@ describe("historyToCSV guards formula-leading cells", () => {
   const csv = historyToCSV([
    { id: 2, started_ms: 0, method: "GET", host: "@evil.test", port: 80, path: "/", status: 200, response_len: 0, duration_ms: 1 },
   ]);
-  expect(csv).toContain('"\'@evil.test"');
+  expect(csv).toContain("\"'@evil.test\"");
  });
 
  test("a note beginning with - is guarded retroactively (656's History clause)", () => {
   const csv = historyToCSV([
-   {
-    id: 3,
-    started_ms: 0,
-    method: "GET",
-    host: "a.test",
-    port: 80,
-    path: "/",
-    status: 200,
-    response_len: 0,
-    duration_ms: 1,
-    notes: "-1+1",
-   },
+   { id: 3, started_ms: 0, method: "GET", host: "a.test", port: 80, path: "/", status: 200, response_len: 0, duration_ms: 1, notes: "-1+1" },
   ]);
-  expect(csv).toContain('"\'-1+1"');
+  expect(csv).toContain("\"'-1+1\"");
  });
 
  test("ordinary values are still plain quoted text", () => {
   const csv = historyToCSV([
-   {
-    id: 4,
-    started_ms: 0,
-    method: "GET",
-    host: "a.test",
-    port: 80,
-    path: "/x",
-    status: 200,
-    response_len: 3,
-    duration_ms: 9,
-    notes: "plain note",
-   },
+   { id: 4, started_ms: 0, method: "GET", host: "a.test", port: 80, path: "/x", status: 200, response_len: 3, duration_ms: 9, notes: "plain note" },
   ]);
   expect(csv).toContain('"plain note"');
  });
@@ -77,24 +55,12 @@ describe("historyToCSV guards formula-leading cells", () => {
 describe("toolLogToCSV", () => {
  test("covers the logger columns and guards the comment", () => {
   const csv = toolLogToCSV([
-   {
-    id: 7,
-    started_ms: 0,
-    tool: "repeater",
-    host: "h.test",
-    port: 8080,
-    method: "GET",
-    path: "/=x",
-    status: 200,
-    response_len: null,
-    duration_ms: 3,
-    comment: "=boom",
-   },
+   { id: 7, started_ms: 0, tool: "repeater", host: "h.test", port: 8080, method: "GET", path: "/=x", status: 200, response_len: null, duration_ms: 3, comment: "=boom" },
   ]);
   const lines = csv.split("\n");
   expect(lines[0]).toBe('"ID","Timestamp","Tool","Host","Port","Method","Path","Status","Length","Duration","Comment"');
   expect(lines[1]).toContain('"repeater"');
-  expect(lines[1]).toContain('"\'=boom"');
+  expect(lines[1]).toContain("\"'=boom\"");
   // no response is an empty cell, not a zero
   expect(lines[1]).toContain(',"",');
  });
@@ -108,7 +74,7 @@ describe("organizerToCSV", () => {
   const lines = csv.split("\n");
   expect(lines[0]).toBe('"ID","Title","Note","Highlight","Status","Exchange"');
   expect(lines[1]).toContain('"Token endpoint"');
-  expect(lines[1]).toContain('"\'+retry"');
+  expect(lines[1]).toContain("\"'+retry\"");
   expect(lines[1]).toContain('"42"');
  });
 });
@@ -142,20 +108,10 @@ describe("intruderReportToCSV", () => {
  };
  const attempts: Attempt[] = [
   {
-   ordinal: 0,
-   status: 200,
-   response_len: 5,
-   duration_ms: 1,
-   reflected: false,
-   request_id: null,
-   response_id: null,
-   error: null,
-   grep_matched: null,
-   grep_extract: null,
+   ordinal: 0, status: 200, response_len: 5, duration_ms: 1, reflected: false, request_id: null,
+   response_id: null, error: null, grep_matched: null, grep_extract: null,
    grep_match_counts: [],
-   time_of_day: "2026-01-01T00:00:00.000Z",
-   cookies: [],
-   timeout: false,
+   time_of_day: "2026-01-01T00:00:00.000Z", cookies: [], timeout: false,
   },
  ];
 
@@ -166,6 +122,6 @@ describe("intruderReportToCSV", () => {
 
  test("a payload beginning with @ is guarded the same way", () => {
   const csv = intruderReportToCSV(report, attempts, () => [{ set: 0, index: 0, text: "@sum(1,1)" }]);
-  expect(csv).toContain('"\'@sum(1,1)"');
+  expect(csv).toContain("\"'@sum(1,1)\"");
  });
 });

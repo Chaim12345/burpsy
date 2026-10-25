@@ -9,7 +9,9 @@ const fakeStorage = {
  removeItem: (key: string) => void store.delete(key),
  clear: () => store.clear(),
 };
-const existingWindow = (globalThis as Record<string, unknown>).window as (Record<string, unknown> & { localStorage?: Storage }) | undefined;
+const existingWindow = (globalThis as Record<string, unknown>).window as
+ | (Record<string, unknown> & { localStorage?: Storage })
+ | undefined;
 if (existingWindow) {
  existingWindow.localStorage = fakeStorage as unknown as Storage;
 } else {

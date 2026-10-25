@@ -15,30 +15,27 @@ import { HIGHLIGHTS } from "../lib/types";
 const stylesheet = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
 
 function definesCustomProperty(token: string): boolean {
- return new RegExp(`--${token}\\s*:`).test(stylesheet);
+  return new RegExp(`--${token}\\s*:`).test(stylesheet);
 }
 
 describe("highlightBorderStyle", () => {
- test("no highlight, or the 'none' sentinel, renders no border", () => {
-  expect(highlightBorderStyle(undefined)).toBeUndefined();
-  expect(highlightBorderStyle("none")).toBeUndefined();
- });
+  test("no highlight, or the 'none' sentinel, renders no border", () => {
+    expect(highlightBorderStyle(undefined)).toBeUndefined();
+    expect(highlightBorderStyle("none")).toBeUndefined();
+  });
 
- test("every named highlight resolves to a --highlight-<name> custom property styles.css actually defines", () => {
-  for (const name of HIGHLIGHTS.filter((candidate) => candidate !== "none")) {
-   const style = highlightBorderStyle(name);
-   const match = style?.borderLeft?.toString().match(/var\((--[\w-]+),/);
-   expect(match, `${name}: no var() with a fallback in "${style?.borderLeft}"`).toBeTruthy();
-   const token = match![1]!.replace(/^--/, "");
-   expect(
-    definesCustomProperty(token),
-    `${name} resolved to --${token}, which styles.css never defines — it would fall back to the same --accent for every colour`,
-   ).toBe(true);
-  }
- });
+  test("every named highlight resolves to a --highlight-<name> custom property styles.css actually defines", () => {
+    for (const name of HIGHLIGHTS.filter((candidate) => candidate !== "none")) {
+      const style = highlightBorderStyle(name);
+      const match = style?.borderLeft?.toString().match(/var\((--[\w-]+),/);
+      expect(match, `${name}: no var() with a fallback in "${style?.borderLeft}"`).toBeTruthy();
+      const token = match![1]!.replace(/^--/, "");
+      expect(definesCustomProperty(token), `${name} resolved to --${token}, which styles.css never defines — it would fall back to the same --accent for every colour`).toBe(true);
+    }
+  });
 
- test("two different colours resolve to two different custom properties, so they can render differently", () => {
-  expect(highlightBorderStyle("red")).not.toEqual(highlightBorderStyle("green"));
-  expect(highlightBorderStyle("red")).toEqual({ borderLeft: "3px solid var(--highlight-red, var(--accent))" });
- });
+  test("two different colours resolve to two different custom properties, so they can render differently", () => {
+    expect(highlightBorderStyle("red")).not.toEqual(highlightBorderStyle("green"));
+    expect(highlightBorderStyle("red")).toEqual({ borderLeft: "3px solid var(--highlight-red, var(--accent))" });
+  });
 });

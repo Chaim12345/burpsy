@@ -8,28 +8,28 @@
 import type { RepeaterHistoryEntry, RepeaterWsHistoryEntry } from "./types";
 
 export interface HistoryExportEntryBody {
- kind: "http" | "ws";
- request_msg_id?: number;
- response_msg_id?: number;
- exchange_id?: number;
+  kind: "http" | "ws";
+  request_msg_id?: number;
+  response_msg_id?: number;
+  exchange_id?: number;
 }
 
 export function historyExportBody(
- tab: { name: string; target: string; note?: string },
- entries: (RepeaterHistoryEntry | RepeaterWsHistoryEntry)[],
+  tab: { name: string; target: string; note?: string },
+  entries: (RepeaterHistoryEntry | RepeaterWsHistoryEntry)[],
 ): { tab: string; target: string; note?: string; entries: HistoryExportEntryBody[] } {
- return {
-  tab: tab.name,
-  target: tab.target,
-  ...(tab.note && tab.note.trim() !== "" ? { note: tab.note } : {}),
-  entries: entries.map((entry): HistoryExportEntryBody => {
-   if ("ws" in entry) return { kind: "ws" };
-   return {
-    kind: "http",
-    ...(entry.request_msg_id != null ? { request_msg_id: entry.request_msg_id } : {}),
-    ...(entry.response_msg_id != null ? { response_msg_id: entry.response_msg_id } : {}),
-    ...(entry.exchange_id != null ? { exchange_id: entry.exchange_id } : {}),
-   };
-  }),
- };
+  return {
+    tab: tab.name,
+    target: tab.target,
+    ...(tab.note && tab.note.trim() !== "" ? { note: tab.note } : {}),
+    entries: entries.map((entry): HistoryExportEntryBody => {
+      if ("ws" in entry) return { kind: "ws" };
+      return {
+        kind: "http",
+        ...(entry.request_msg_id != null ? { request_msg_id: entry.request_msg_id } : {}),
+        ...(entry.response_msg_id != null ? { response_msg_id: entry.response_msg_id } : {}),
+        ...(entry.exchange_id != null ? { exchange_id: entry.exchange_id } : {}),
+      };
+    }),
+  };
 }

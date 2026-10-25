@@ -110,7 +110,13 @@ export function EngagementView({ seed }: { seed?: EngagementSeedRequest } = {}) 
    <Toolbar className="pane-toolbar">
     <div role="group" aria-label="Engagement search kind" className="chip-row">
      {KINDS.map((k) => (
-      <Button key={k.id} variant={kind === k.id ? "outline" : "quiet"} size="small" aria-pressed={kind === k.id} onClick={() => run(k.id)}>
+      <Button
+       key={k.id}
+       variant={kind === k.id ? "outline" : "quiet"}
+       size="small"
+       aria-pressed={kind === k.id}
+       onClick={() => run(k.id)}
+      >
        {k.label}
       </Button>
      ))}
@@ -148,7 +154,10 @@ export function EngagementView({ seed }: { seed?: EngagementSeedRequest } = {}) 
    {search.isFetching ? (
     <Empty title="Searching…" detail="Reading the responses the site map holds." />
    ) : search.isError ? (
-    <Empty title="The search failed" detail={search.error instanceof Error ? search.error.message : "The store could not be read."} />
+    <Empty
+     title="The search failed"
+     detail={search.error instanceof Error ? search.error.message : "The store could not be read."}
+    />
    ) : rows.length === 0 ? (
     <Empty
      title="No matches in the captured responses"

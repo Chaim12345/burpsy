@@ -65,15 +65,17 @@ export function APIScanReview({
  const excluded = new Set(state.excluded);
  const rows = parameterRows(operations, state, format);
  const needle = filter.trim().toLowerCase();
- const shown = needle ? rows.filter((r) => `${r.endpoint} ${r.in} ${r.name} ${r.value}`.toLowerCase().includes(needle)) : rows;
+ const shown = needle
+  ? rows.filter((r) => `${r.endpoint} ${r.in} ${r.name} ${r.value}`.toLowerCase().includes(needle))
+  : rows;
  const kept = operations.length - operations.filter((op) => excluded.has(op.key)).length;
 
  return (
   <div className="stack apiscan-review">
    <h3 className="subheading">Endpoints</h3>
    <p className="cell-dim" style={{ margin: 0 }}>
-    {kept} of {operations.length} endpoint{operations.length === 1 ? "" : "s"} will be scanned. A removed endpoint is not sent and not
-    audited; it stays listed here so it can be restored.
+    {kept} of {operations.length} endpoint{operations.length === 1 ? "" : "s"} will be scanned. A removed endpoint is not sent
+    and not audited; it stays listed here so it can be restored.
    </p>
    <div className="apiscan-review-scroll">
     <SimpleTable headers={["Method", "Document path", "Request", "Parameters", ""]}>
@@ -123,9 +125,9 @@ export function APIScanReview({
    ) : (
     <>
      <p className="cell-dim" style={{ margin: 0 }}>
-      Dynamic values are sent and audited like any other. Fixed values are sent as set and kept out of the audit's insertion points — the
-      audit matches a Fixed parameter by name, so fixing one on a single endpoint exempts that name on every endpoint. A request body
-      synthesised from a schema is not listed. * marks a parameter the document requires.
+      Dynamic values are sent and audited like any other. Fixed values are sent as set and kept out of the audit's insertion
+      points — the audit matches a Fixed parameter by name, so fixing one on a single endpoint exempts that name on every
+      endpoint. A request body synthesised from a schema is not listed. * marks a parameter the document requires.
      </p>
      {rows.length > 8 ? (
       <Input
@@ -149,22 +151,10 @@ export function APIScanReview({
           <td>
            <span className="cell-dim">{row.in} </span>
            <code>{row.name}</code>
-           {row.required ? (
-            <span className="cell-dim" title="Required by the document">
-             {" "}
-             *<span className="sr-only"> required</span>
-            </span>
-           ) : null}
+           {row.required ? <span className="cell-dim" title="Required by the document"> *<span className="sr-only"> required</span></span> : null}
           </td>
           <td>
-           <Badge
-            tone={SOURCE_TONE[source]}
-            title={
-             row.scope === "document"
-              ? SOURCE_TITLE[source]
-              : `${SOURCE_TITLE.operator}; the document gives “${row.documentValue}” (${row.source})`
-            }
-           >
+           <Badge tone={SOURCE_TONE[source]} title={row.scope === "document" ? SOURCE_TITLE[source] : `${SOURCE_TITLE.operator}; the document gives “${row.documentValue}” (${row.source})`}>
             {source}
            </Badge>
           </td>
@@ -174,11 +164,7 @@ export function APIScanReview({
              <code>{row.value}</code> <small className="field-hint">{row.locked}</small>
             </span>
            ) : (
-            <Input
-             aria-label={`Value of ${label}`}
-             value={row.value}
-             onChange={(event) => onChange(editRow(state, row, { value: event.target.value }))}
-            />
+            <Input aria-label={`Value of ${label}`} value={row.value} onChange={(event) => onChange(editRow(state, row, { value: event.target.value }))} />
            )}
           </td>
           <td>
@@ -205,12 +191,7 @@ export function APIScanReview({
           </td>
           <td>
            {row.scope !== "document" ? (
-            <Button
-             variant="quiet"
-             size="small"
-             aria-label={`Reset ${label}${row.scope === "all" ? " on every endpoint" : ""}`}
-             onClick={() => onChange(resetRow(state, row))}
-            >
+            <Button variant="quiet" size="small" aria-label={`Reset ${label}${row.scope === "all" ? " on every endpoint" : ""}`} onClick={() => onChange(resetRow(state, row))}>
              {row.scope === "all" ? "Reset all" : "Reset"}
             </Button>
            ) : null}
@@ -273,57 +254,27 @@ function AuthSection({
    </div>
    {auth.type === "basic" ? (
     <div className="metric-grid wide">
-     <Field label="Username">
-      {(id) => (
-       <Input id={id} autoComplete="off" value={auth.username} onChange={(event) => set({ ...auth, username: event.target.value })} />
-      )}
-     </Field>
+     <Field label="Username">{(id) => <Input id={id} autoComplete="off" value={auth.username} onChange={(event) => set({ ...auth, username: event.target.value })} />}</Field>
      <Field label="Password">
-      {(id) => (
-       <Input
-        id={id}
-        type="password"
-        autoComplete="new-password"
-        value={auth.password}
-        onChange={(event) => set({ ...auth, password: event.target.value })}
-       />
-      )}
+      {(id) => <Input id={id} type="password" autoComplete="new-password" value={auth.password} onChange={(event) => set({ ...auth, password: event.target.value })} />}
      </Field>
     </div>
    ) : auth.type === "bearer" ? (
     <Field label="Token" hint="Sent as Authorization: Bearer <token> on every request.">
-     {(id) => (
-      <Input
-       id={id}
-       type="password"
-       autoComplete="new-password"
-       value={auth.token}
-       onChange={(event) => set({ ...auth, token: event.target.value })}
-      />
-     )}
+     {(id) => <Input id={id} type="password" autoComplete="new-password" value={auth.token} onChange={(event) => set({ ...auth, token: event.target.value })} />}
     </Field>
    ) : auth.type === "header" ? (
     <div className="metric-grid wide">
-     <Field label="Header name">
-      {(id) => <Input id={id} autoComplete="off" value={auth.name} onChange={(event) => set({ ...auth, name: event.target.value })} />}
-     </Field>
+     <Field label="Header name">{(id) => <Input id={id} autoComplete="off" value={auth.name} onChange={(event) => set({ ...auth, name: event.target.value })} />}</Field>
      <Field label="Header value">
-      {(id) => (
-       <Input
-        id={id}
-        type="password"
-        autoComplete="new-password"
-        value={auth.value}
-        onChange={(event) => set({ ...auth, value: event.target.value })}
-       />
-      )}
+      {(id) => <Input id={id} type="password" autoComplete="new-password" value={auth.value} onChange={(event) => set({ ...auth, value: event.target.value })} />}
      </Field>
     </div>
    ) : null}
    {auth.type !== "none" ? (
     <p className="cell-dim" style={{ margin: 0 }}>
-     Added to every request this scan sends to the definition's host, and carried into its audit. It is not stored with the scan's settings;
-     the requests themselves are captured in HTTP history like any other traffic.
+     Added to every request this scan sends to the definition's host, and carried into its audit. It is not stored with the
+     scan's settings; the requests themselves are captured in HTTP history like any other traffic.
     </p>
    ) : null}
    {replaces.length > 0 ? (
@@ -356,11 +307,7 @@ export function APIScanFetchFromURL({ onLoaded }: { onLoaded: (fetched: FetchedD
  return (
   <div className="stack" style={{ gap: 8 }}>
    <div className="toolbar" style={{ alignItems: "flex-end" }}>
-    <Field
-     label="Definition URL"
-     style={{ flex: 1 }}
-     hint="Fetched once through the scope check — an out-of-scope URL is refused, not contacted. Redirects are not followed."
-    >
+    <Field label="Definition URL" style={{ flex: 1 }} hint="Fetched once through the scope check — an out-of-scope URL is refused, not contacted. Redirects are not followed.">
      {(id) => (
       <Input
        id={id}
@@ -387,57 +334,20 @@ export function APIScanFetchFromURL({ onLoaded }: { onLoaded: (fetched: FetchedD
    </div>
    {auth.type === "basic" ? (
     <div className="toolbar">
-     <Field label="Username">
-      {(id) => <Input id={id} autoComplete="off" value={auth.username} onChange={(e) => setAuth({ ...auth, username: e.target.value })} />}
-     </Field>
-     <Field label="Password">
-      {(id) => (
-       <Input
-        id={id}
-        type="password"
-        autoComplete="off"
-        value={auth.password}
-        onChange={(e) => setAuth({ ...auth, password: e.target.value })}
-       />
-      )}
-     </Field>
+     <Field label="Username">{(id) => <Input id={id} autoComplete="off" value={auth.username} onChange={(e) => setAuth({ ...auth, username: e.target.value })} />}</Field>
+     <Field label="Password">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.password} onChange={(e) => setAuth({ ...auth, password: e.target.value })} />}</Field>
     </div>
    ) : auth.type === "bearer" ? (
-    <Field label="Token">
-     {(id) => (
-      <Input id={id} type="password" autoComplete="off" value={auth.token} onChange={(e) => setAuth({ ...auth, token: e.target.value })} />
-     )}
-    </Field>
+    <Field label="Token">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.token} onChange={(e) => setAuth({ ...auth, token: e.target.value })} />}</Field>
    ) : auth.type === "oauth2_client_credentials" ? (
     <div className="stack" style={{ gap: 8 }}>
      <Field label="Token URL" hint="Must be in scope too: the token request is a send like any other.">
-      {(id) => (
-       <Input
-        id={id}
-        value={auth.tokenUrl}
-        placeholder="https://auth.example.com/oauth/token"
-        onChange={(e) => setAuth({ ...auth, tokenUrl: e.target.value })}
-       />
-      )}
+      {(id) => <Input id={id} value={auth.tokenUrl} placeholder="https://auth.example.com/oauth/token" onChange={(e) => setAuth({ ...auth, tokenUrl: e.target.value })} />}
      </Field>
      <div className="toolbar">
-      <Field label="Client ID">
-       {(id) => <Input id={id} autoComplete="off" value={auth.clientId} onChange={(e) => setAuth({ ...auth, clientId: e.target.value })} />}
-      </Field>
-      <Field label="Client secret">
-       {(id) => (
-        <Input
-         id={id}
-         type="password"
-         autoComplete="off"
-         value={auth.clientSecret}
-         onChange={(e) => setAuth({ ...auth, clientSecret: e.target.value })}
-        />
-       )}
-      </Field>
-      <Field label="Scope (optional)">
-       {(id) => <Input id={id} value={auth.scope} onChange={(e) => setAuth({ ...auth, scope: e.target.value })} />}
-      </Field>
+      <Field label="Client ID">{(id) => <Input id={id} autoComplete="off" value={auth.clientId} onChange={(e) => setAuth({ ...auth, clientId: e.target.value })} />}</Field>
+      <Field label="Client secret">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.clientSecret} onChange={(e) => setAuth({ ...auth, clientSecret: e.target.value })} />}</Field>
+      <Field label="Scope (optional)">{(id) => <Input id={id} value={auth.scope} onChange={(e) => setAuth({ ...auth, scope: e.target.value })} />}</Field>
      </div>
     </div>
    ) : null}

@@ -11,11 +11,11 @@ import { unifiedMergeView } from "@codemirror/merge";
 import { Text, type Extension } from "@codemirror/state";
 
 export function inlineDiffExtension(previous: string, separator: "\r\n" | "\r" | "\n"): Extension {
- return unifiedMergeView({
-  original: Text.of(previous.split(separator)),
-  mergeControls: false,
-  gutter: true,
-  highlightChanges: true,
-  syntaxHighlightDeletions: false,
- });
+  return unifiedMergeView({
+    original: Text.of(previous.split(separator)),
+    mergeControls: false,
+    gutter: true,
+    highlightChanges: true,
+    syntaxHighlightDeletions: false,
+  });
 }

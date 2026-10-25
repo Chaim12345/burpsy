@@ -14,10 +14,10 @@ import type { ExtensionList } from "./types.extensions";
 
 /** One installed binding: the chord in this console's vocabulary, and what it runs. */
 export interface InstalledPluginHotkey {
- chord: string;
- plugin: string;
- registration: string;
- label: string;
+  chord: string;
+  plugin: string;
+  registration: string;
+  label: string;
 }
 
 /**
@@ -28,15 +28,15 @@ export interface InstalledPluginHotkey {
  * The UI installs that field verbatim — no second normaliser, no disagreement possible.
  */
 export function installedPluginHotkeys(list: ExtensionList | undefined): InstalledPluginHotkey[] {
- const out: InstalledPluginHotkey[] = [];
- for (const invocation of pluginInvocations(list, "hotkey")) {
-  // Optional on the wire: absent is how a non-hotkey registration, and a hotkey the host
-  // refused, both arrive. Absent means "do not bind it", which is the honest reading either way.
-  const chord = invocation.registration.binding;
-  if (!chord) continue;
-  out.push({ chord, plugin: invocation.plugin, registration: invocation.registration.id, label: invocation.registration.label });
- }
- return out;
+  const out: InstalledPluginHotkey[] = [];
+  for (const invocation of pluginInvocations(list, "hotkey")) {
+    // Optional on the wire: absent is how a non-hotkey registration, and a hotkey the host
+    // refused, both arrive. Absent means "do not bind it", which is the honest reading either way.
+    const chord = invocation.registration.binding;
+    if (!chord) continue;
+    out.push({ chord, plugin: invocation.plugin, registration: invocation.registration.id, label: invocation.registration.label });
+  }
+  return out;
 }
 
 /**
@@ -60,31 +60,31 @@ export function installedPluginHotkeys(list: ExtensionList | undefined): Install
  * fire for any supported context."
  */
 export function usePluginHotkeys(): void {
- const extensions = useExtensions();
- const invoke = useInvokeExtension();
- const bindings = installedPluginHotkeys(extensions.data);
- const chord = bindings.map((b) => b.chord).join(",");
- useHotkeys(
-  chord,
-  (event, handler) => {
-   if (event.repeat) return;
-   const pressed = handler.keys?.join("+");
-   const binding = bindings.find((b) => b.chord === pressed);
-   if (!binding) return;
-   event.preventDefault();
-   invoke.mutate(
-    { name: binding.plugin, registration: binding.registration },
-    {
-     onSuccess: (answer) => {
-      const said = answer.result.text ?? answer.result.output;
-      toast.success(said ? `${binding.label}: ${said}` : `${binding.label} ran`);
-     },
-     onError: (failure: unknown) =>
-      toast.error(failure instanceof Error ? `${binding.label}: ${failure.message}` : `${binding.label} failed`),
+  const extensions = useExtensions();
+  const invoke = useInvokeExtension();
+  const bindings = installedPluginHotkeys(extensions.data);
+  const chord = bindings.map((b) => b.chord).join(",");
+  useHotkeys(
+    chord,
+    (event, handler) => {
+      if (event.repeat) return;
+      const pressed = handler.keys?.join("+");
+      const binding = bindings.find((b) => b.chord === pressed);
+      if (!binding) return;
+      event.preventDefault();
+      invoke.mutate(
+        { name: binding.plugin, registration: binding.registration },
+        {
+          onSuccess: (answer) => {
+            const said = answer.result.text ?? answer.result.output;
+            toast.success(said ? `${binding.label}: ${said}` : `${binding.label} ran`);
+          },
+          onError: (failure: unknown) =>
+            toast.error(failure instanceof Error ? `${binding.label}: ${failure.message}` : `${binding.label} failed`),
+        },
+      );
     },
-   );
-  },
-  { enableOnFormTags: true, enableOnContentEditable: true },
-  [chord, bindings, invoke],
- );
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [chord, bindings, invoke],
+  );
 }

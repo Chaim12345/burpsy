@@ -26,32 +26,32 @@ import type { EditorState } from "@codemirror/state";
  * Breaks of any other kind in a mixed message stay characters in their line.
  */
 export function lineSeparatorFor(text: string): "\r\n" | "\r" | "\n" {
- if (text.includes("\r\n")) return "\r\n";
- const first = text.search(/[\r\n]/);
- return first >= 0 && text.charCodeAt(first) === 13 ? "\r" : "\n";
+  if (text.includes("\r\n")) return "\r\n";
+  const first = text.search(/[\r\n]/);
+  return first >= 0 && text.charCodeAt(first) === 13 ? "\r" : "\n";
 }
 
 /** The whole document as the message's own text, line endings included. */
 export function documentText(state: EditorState): string {
- return state.sliceDoc(0);
+  return state.sliceDoc(0);
 }
 
 /** The document range [from, to) as the message's own text. */
 export function sliceReal(state: EditorState, from: number, to: number): string {
- return state.sliceDoc(from, to);
+  return state.sliceDoc(from, to);
 }
 
 /** The main selection as the message's own text: what a copy or a read-only conversion should see. */
 export function selectionText(state: EditorState): string {
- const range = state.selection.main;
- return state.sliceDoc(range.from, range.to);
+  const range = state.selection.main;
+  return state.sliceDoc(range.from, range.to);
 }
 
 /** One change in the transaction's start-document coordinates, with the exact text to write. */
 export interface ExactChange {
- from: number;
- to: number;
- insert: string;
+  from: number;
+  to: number;
+  insert: string;
 }
 
 /**
@@ -59,9 +59,13 @@ export interface ExactChange {
  * when nothing is selected. Shared by the editor's Convert selection / codec hotkeys and the
  * palette's codecs, so they cannot disagree about what a conversion reads or writes.
  */
-export function selectionTransformSpec(state: EditorState, transform: (input: string) => string): { changes: ExactChange[] } | null {
- const changes = state.selection.ranges
-  .filter((range) => !range.empty)
-  .map((range) => ({ from: range.from, to: range.to, insert: transform(state.sliceDoc(range.from, range.to)) }));
- return changes.length === 0 ? null : { changes };
+export function selectionTransformSpec(
+  state: EditorState,
+  transform: (input: string) => string,
+): { changes: ExactChange[] } | null {
+  const changes = state.selection.ranges
+    .filter((range) => !range.empty)
+    .map((range) => ({ from: range.from, to: range.to, insert: transform(state.sliceDoc(range.from, range.to)) }));
+  return changes.length === 0 ? null : { changes };
 }
+

@@ -68,9 +68,14 @@ const FORM = [
 
 const GET = ["GET /a HTTP/1.1", "Host: shop.example", "Accept: */*", "", ""].join("\r\n");
 
-const RESPONSE = ["HTTP/1.1 404 Not Found", "Content-Type: text/html", "Set-Cookie: a=1; Path=/", "Content-Length: 4", "", "gone"].join(
- "\r\n",
-);
+const RESPONSE = [
+ "HTTP/1.1 404 Not Found",
+ "Content-Type: text/html",
+ "Set-Cookie: a=1; Path=/",
+ "Content-Length: 4",
+ "",
+ "gone",
+].join("\r\n");
 
 describe("reading is unchanged by the span rewrite", () => {
  test("CRLF, LF and separator-less messages parse the same as before", () => {
@@ -147,7 +152,9 @@ describe("headers", () => {
  });
 
  test("an added header lands at the end of the head with the message's own line ending", () => {
-  expect(addHeader(FORM, "X-Trace", "1")).toBe(FORM.replace("Content-Length: 26\r\n\r\n", "Content-Length: 26\r\nX-Trace: 1\r\n\r\n"));
+  expect(addHeader(FORM, "X-Trace", "1")).toBe(
+   FORM.replace("Content-Length: 26\r\n\r\n", "Content-Length: 26\r\nX-Trace: 1\r\n\r\n"),
+  );
   const lf = "GET / HTTP/1.1\nHost: h\n\nbody";
   expect(addHeader(lf, "X", "1")).toBe("GET / HTTP/1.1\nHost: h\nX: 1\n\nbody");
  });
@@ -370,7 +377,10 @@ describe("body parameters — JSON", () => {
  test("adding a member appends, and Content-Length follows", () => {
   const next = addBodyParam(json, "role", "admin");
   expect(parseMessage(next).body).toContain('"tags": ["a"], "role": "admin"');
-  expect(parseMessage(next).headers).toContainEqual(["Content-Length", String(new TextEncoder().encode(parseMessage(next).body).length)]);
+  expect(parseMessage(next).headers).toContainEqual([
+   "Content-Length",
+   String(new TextEncoder().encode(parseMessage(next).body).length),
+  ]);
  });
 
  test("an empty object gets its first member", () => {
@@ -515,7 +525,12 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   // Minified HTML — the common shape an operator meets on the wire. Every
   // newline in the Pretty view is one prettyMarkup inserted, so the write-back
   // can restore the exact original body.
-  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", '<html><body><p>hi</p><br><a href="/x">y</a></body></html>'].join("\r\n");
+  const HTML = [
+   "HTTP/1.1 200 OK",
+   "Content-Type: text/html",
+   "",
+   "<html><body><p>hi</p><br><a href=\"/x\">y</a></body></html>",
+  ].join("\r\n");
   const pretty = prettyMessage(HTML);
   expect(pretty).not.toBe(HTML);
   expect(compactMessage(pretty)).toBe(HTML);
@@ -526,7 +541,12 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   // lines, and that indentation is unrecoverable — the write-back leaves the
   // node's own newlines and words exactly as the Pretty view showed rather than
   // eating them with the tag breaks.
-  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html><body>hello\nworld</body></html>"].join("\r\n");
+  const HTML = [
+   "HTTP/1.1 200 OK",
+   "Content-Type: text/html",
+   "",
+   "<html><body>hello\nworld</body></html>",
+  ].join("\r\n");
   const pretty = prettyMessage(HTML);
   const compacted = compactMessage(pretty);
   // Tag breaks collapsed back to the minified framing…
@@ -558,6 +578,7 @@ describe("hexDumpBytes", () => {
   expect(lines[0]).toBe("00000000  c9 e8 e8 20 63 61 66 65  20 92 93                 |... cafe ..|");
  });
 });
+
 
 describe("moveItem — Inspector reorder (burpsy-react-ui-ybmd)", () => {
  test("a header moves one place and every other byte stays put, mixed line endings included", () => {

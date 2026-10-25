@@ -23,60 +23,56 @@ const actions = readFileSync(join(import.meta.dir, "actions.ts"), "utf8");
 const repeater = readFileSync(join(import.meta.dir, "..", "pages", "repeater.tsx"), "utf8");
 
 describe("the two operations are separate rows with separate names", () => {
- test("the chunked toggle no longer carries Burp's name for the conversion", () => {
-  // The exact string this project shipped. It must not come back under any row.
-  expect(actions).not.toContain("Change body encoding (chunked)");
-  expect(actions).toContain('label: "Toggle chunked transfer framing"');
- });
+  test("the chunked toggle no longer carries Burp's name for the conversion", () => {
+    // The exact string this project shipped. It must not come back under any row.
+    expect(actions).not.toContain("Change body encoding (chunked)");
+    expect(actions).toContain('label: "Toggle chunked transfer framing"');
+  });
 
- test("the chunked toggle and the conversion are distinct menu entries with distinct ids", () => {
-  expect(actions).toContain('id: "chunked-framing"');
-  expect(actions).toContain('id: "body-encoding"');
-  expect(actions).toContain("void toggleChunkedFraming(exchange)");
- });
+  test("the chunked toggle and the conversion are distinct menu entries with distinct ids", () => {
+    expect(actions).toContain('id: "chunked-framing"');
+    expect(actions).toContain('id: "body-encoding"');
+    expect(actions).toContain("void toggleChunkedFraming(exchange)");
+  });
 
- test("the row menu's conversion rows come from BODY_ENCODINGS, so no encoding can be listed and left unwired", () => {
-  // A hardcoded list of three rows is how a fourth label appears with no transform behind it.
-  expect(actions).toMatch(
-   /submenu:[\s\S]{0,400}BODY_ENCODINGS\.map\(\(encoding\) => \(\{[\s\S]{0,400}convertBodyEncoding\(exchange, encoding\)/,
-  );
- });
+  test("the row menu's conversion rows come from BODY_ENCODINGS, so no encoding can be listed and left unwired", () => {
+    // A hardcoded list of three rows is how a fourth label appears with no transform behind it.
+    expect(actions).toMatch(/submenu:[\s\S]{0,400}BODY_ENCODINGS\.map\(\(encoding\) => \(\{[\s\S]{0,400}convertBodyEncoding\(exchange, encoding\)/);
+  });
 
- test("every encoding the menu can name has a label, so no row can render as an identifier", () => {
-  for (const encoding of BODY_ENCODINGS) {
-   expect(BODY_ENCODING_LABELS[encoding]).toBeTruthy();
-  }
-  expect(Object.keys(BODY_ENCODING_LABELS).sort()).toEqual([...BODY_ENCODINGS].sort());
- });
+  test("every encoding the menu can name has a label, so no row can render as an identifier", () => {
+    for (const encoding of BODY_ENCODINGS) {
+      expect(BODY_ENCODING_LABELS[encoding]).toBeTruthy();
+    }
+    expect(Object.keys(BODY_ENCODING_LABELS).sort()).toEqual([...BODY_ENCODINGS].sort());
+  });
 });
 
 describe("the Repeater draft offers the conversion and the toggle on its own bytes", () => {
- test("the request editor is handed the body-encoding group, which is what makes the rows reachable", () => {
-  // The subject is that the group reaches a menuGroups, not the exact expression it is spread
-  // alongside. This assertion used to pin the whole expression; the draft-send row then landed
-  // between the two groups (bg7j) and failed a test whose subject had not changed at all. What
-  // must hold is that the group is spread into a menuGroups, and the count says it is not also
-  // built and handed to a second one, which is how the same rows come to be listed twice.
-  expect(repeater).toContain("...bodyEncodingMenu");
-  const mentions = repeater.match(/bodyEncodingMenu/g) ?? [];
-  expect(mentions).toHaveLength(2); // the declaration, and the one spread
- });
+  test("the request editor is handed the body-encoding group, which is what makes the rows reachable", () => {
+    // The subject is that the group reaches a menuGroups, not the exact expression it is spread
+    // alongside. This assertion used to pin the whole expression; the draft-send row then landed
+    // between the two groups (bg7j) and failed a test whose subject had not changed at all. What
+    // must hold is that the group is spread into a menuGroups, and the count says it is not also
+    // built and handed to a second one, which is how the same rows come to be listed twice.
+    expect(repeater).toContain("...bodyEncodingMenu");
+    const mentions = repeater.match(/bodyEncodingMenu/g) ?? [];
+    expect(mentions).toHaveLength(2); // the declaration, and the one spread
+  });
 
- test("the toggle's target is remembered per tab id, not in one global slot", () => {
-  // Two tabs converted in different directions must toggle in different directions. A bare
-  // `useState<BodyEncoding>` would make the second tab's toggle follow the first tab's move.
-  expect(repeater).toContain("useState<Record<string, BodyEncoding>>({})");
-  expect(repeater).toContain("[active.id]: from");
- });
+  test("the toggle's target is remembered per tab id, not in one global slot", () => {
+    // Two tabs converted in different directions must toggle in different directions. A bare
+    // `useState<BodyEncoding>` would make the second tab's toggle follow the first tab's move.
+    expect(repeater).toContain("useState<Record<string, BodyEncoding>>({})");
+    expect(repeater).toContain("[active.id]: from");
+  });
 
- test("the toggle is disabled until the tab has actually been converted, so it cannot invent a third state", () => {
-  expect(repeater).toContain("const canToggle = previous !== undefined && previous !== draftEncoding;");
-  expect(repeater).toContain("disabled: !canToggle,");
- });
+  test("the toggle is disabled until the tab has actually been converted, so it cannot invent a third state", () => {
+    expect(repeater).toContain("const canToggle = previous !== undefined && previous !== draftEncoding;");
+    expect(repeater).toContain("disabled: !canToggle,");
+  });
 
- test("the per-tab memory is pruned with the tabs, so a closed tab leaves no direction behind", () => {
-  expect(repeater).toMatch(
-   /setPreviousEncoding\(\(current\) => Object\.fromEntries\(Object\.entries\(current\)\.filter\(\(\[id\]\) => alive\.has\(id\)\)\)\);/,
-  );
- });
+  test("the per-tab memory is pruned with the tabs, so a closed tab leaves no direction behind", () => {
+    expect(repeater).toMatch(/setPreviousEncoding\(\(current\) => Object\.fromEntries\(Object\.entries\(current\)\.filter\(\(\[id\]\) => alive\.has\(id\)\)\)\);/);
+  });
 });

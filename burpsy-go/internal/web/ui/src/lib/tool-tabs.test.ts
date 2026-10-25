@@ -8,7 +8,12 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { TOOL_TABS_STORAGE_KEY, clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./tool-tabs";
+import {
+ TOOL_TABS_STORAGE_KEY,
+ clearHiddenToolTabs,
+ readHiddenToolTabs,
+ writeHiddenToolTabs,
+} from "./tool-tabs";
 
 const store = new Map<string, string>();
 
@@ -22,14 +27,16 @@ const fakeStorage = {
  removeItem: (key: string) => void store.delete(key),
  clear: () => store.clear(),
 };
-const existingWindow = (globalThis as Record<string, unknown>).window as (Record<string, unknown> & { localStorage?: Storage }) | undefined;
+const existingWindow = (globalThis as Record<string, unknown>).window as
+ | (Record<string, unknown> & { localStorage?: Storage })
+ | undefined;
 if (existingWindow) {
  existingWindow.localStorage = fakeStorage as unknown as Storage;
 } else {
  (globalThis as Record<string, unknown>).window = {
   localStorage: fakeStorage,
-  addEventListener: () => {},
-  removeEventListener: () => {},
+  addEventListener: () => { },
+  removeEventListener: () => { },
  };
 }
 
@@ -91,7 +98,7 @@ describe("hidden tool tabs", () => {
    removeItem: () => {
     throw new Error("denied");
    },
-   clear: () => {},
+   clear: () => { },
   } as unknown as Storage;
   const target = (globalThis as Record<string, unknown>).window as { localStorage: Storage };
   const previous = target.localStorage;

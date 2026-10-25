@@ -1,123 +1,124 @@
 import { describe, expect, test } from "bun:test";
-import {
- connectionReuseSummary,
- hostHeaderCaveats,
- intruderSendSettingsFields,
- mergeRepeaterOptions,
- parseResponseTimeoutMS,
- parseStreamingTimeoutMS,
-} from "./send-settings";
+import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "./send-settings";
 import { emptyIntruderConfig, mergePersistedWorkspace } from "./store";
 
 // ---- what the send-settings controls put on the wire (burpsy-react-ui-xixe.1, Phase 1) ------------
 
 describe("response timeout (mmca)", () => {
- test("a positive number is sent, as whole milliseconds", () => {
-  expect(parseResponseTimeoutMS("2500")).toBe(2500);
-  expect(parseResponseTimeoutMS(" 20000 ")).toBe(20000);
-  expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), responseTimeoutMS: "20000" })).toMatchObject({
-   response_timeout_ms: 20000,
+  test("a positive number is sent, as whole milliseconds", () => {
+    expect(parseResponseTimeoutMS("2500")).toBe(2500);
+    expect(parseResponseTimeoutMS(" 20000 ")).toBe(20000);
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), responseTimeoutMS: "20000" })).toMatchObject({
+      response_timeout_ms: 20000,
+    });
   });
- });
 
- test("blank, zero and nonsense mean the standing read timeout, and send nothing", () => {
-  for (const text of ["", "  ", "0", "-5", "abc"]) {
-   expect(parseResponseTimeoutMS(text)).toBeUndefined();
-   expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), responseTimeoutMS: text })).not.toHaveProperty("response_timeout_ms");
-  }
- });
+  test("blank, zero and nonsense mean the standing read timeout, and send nothing", () => {
+    for (const text of ["", "  ", "0", "-5", "abc"]) {
+      expect(parseResponseTimeoutMS(text)).toBeUndefined();
+      expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), responseTimeoutMS: text })).not.toHaveProperty(
+        "response_timeout_ms",
+      );
+    }
+  });
 });
 
 describe("HTTP/1 connection reuse and the HTTP version (xhqr)", () => {
- test("a fresh attack asks for reuse — Burp's default — and pins no version", () => {
-  const fields = intruderSendSettingsFields(emptyIntruderConfig());
-  expect(fields.http1_connection_reuse).toBe(true);
-  expect(fields).not.toHaveProperty("http_version");
- });
+  test("a fresh attack asks for reuse — Burp's default — and pins no version", () => {
+    const fields = intruderSendSettingsFields(emptyIntruderConfig());
+    expect(fields.http1_connection_reuse).toBe(true);
+    expect(fields).not.toHaveProperty("http_version");
+  });
 
- test("reuse off sends nothing, so the server keeps one connection per request", () => {
-  expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), http1ConnectionReuse: false })).not.toHaveProperty(
-   "http1_connection_reuse",
-  );
- });
+  test("reuse off sends nothing, so the server keeps one connection per request", () => {
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), http1ConnectionReuse: false })).not.toHaveProperty(
+      "http1_connection_reuse",
+    );
+  });
 
- test("Set Connection header switches reuse off rather than sending the pair the server refuses", () => {
-  const fields = intruderSendSettingsFields({ ...emptyIntruderConfig(), setConnectionClose: true });
-  expect(fields).not.toHaveProperty("http1_connection_reuse");
- });
+  test("Set Connection header switches reuse off rather than sending the pair the server refuses", () => {
+    const fields = intruderSendSettingsFields({ ...emptyIntruderConfig(), setConnectionClose: true });
+    expect(fields).not.toHaveProperty("http1_connection_reuse");
+  });
 
- test("a version pin is sent as written", () => {
-  expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), httpVersion: "http1" }).http_version).toBe("http1");
-  expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), httpVersion: "http2" }).http_version).toBe("http2");
- });
+  test("a version pin is sent as written", () => {
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), httpVersion: "http1" }).http_version).toBe("http1");
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), httpVersion: "http2" }).http_version).toBe("http2");
+  });
 
- test("the report's counts read as a line, and null is not zero", () => {
-  expect(connectionReuseSummary({ connections_opened: 3, connections_reused: 9 })).toBe("3 opened, 9 requests on a reused connection");
-  expect(connectionReuseSummary({ connections_opened: 4, connections_reused: 0 })).toBe("4 opened, 0 requests on a reused connection");
-  expect(connectionReuseSummary({ connections_opened: null, connections_reused: null })).toBeNull();
-  expect(connectionReuseSummary({})).toBeNull();
- });
+  test("the report's counts read as a line, and null is not zero", () => {
+    expect(connectionReuseSummary({ connections_opened: 3, connections_reused: 9 })).toBe(
+      "3 opened, 9 requests on a reused connection",
+    );
+    expect(connectionReuseSummary({ connections_opened: 4, connections_reused: 0 })).toBe(
+      "4 opened, 0 requests on a reused connection",
+    );
+    expect(connectionReuseSummary({ connections_opened: null, connections_reused: null })).toBeNull();
+    expect(connectionReuseSummary({})).toBeNull();
+  });
 });
 
 describe("Update Host header to match target (ety8)", () => {
- test("on by default, as in Burp, and sent", () => {
-  expect(intruderSendSettingsFields(emptyIntruderConfig()).update_host_header).toBe(true);
- });
+  test("on by default, as in Burp, and sent", () => {
+    expect(intruderSendSettingsFields(emptyIntruderConfig()).update_host_header).toBe(true);
+  });
 
- test("off sends nothing, which the server reads as leave the Host header as captured", () => {
-  expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), updateHostHeader: false })).not.toHaveProperty("update_host_header");
- });
+  test("off sends nothing, which the server reads as leave the Host header as captured", () => {
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), updateHostHeader: false })).not.toHaveProperty(
+      "update_host_header",
+    );
+  });
 
- test("a skipped setting and untouched requests become result caveats, and silence means applied", () => {
-  expect(hostHeaderCaveats({ host_header_skipped: "", host_header_untouched: 0 })).toEqual([]);
-  expect(hostHeaderCaveats({})).toEqual([]);
-  const caveats = hostHeaderCaveats({ host_header_skipped: 'position "Host" covers the Host header', host_header_untouched: 2 });
-  expect(caveats).toHaveLength(2);
-  expect(caveats[0]).toContain("covers the Host header");
-  expect(caveats[1]).toContain("2 requests");
- });
+  test("a skipped setting and untouched requests become result caveats, and silence means applied", () => {
+    expect(hostHeaderCaveats({ host_header_skipped: "", host_header_untouched: 0 })).toEqual([]);
+    expect(hostHeaderCaveats({})).toEqual([]);
+    const caveats = hostHeaderCaveats({ host_header_skipped: 'position "Host" covers the Host header', host_header_untouched: 2 });
+    expect(caveats).toHaveLength(2);
+    expect(caveats[0]).toContain("covers the Host header");
+    expect(caveats[1]).toContain("2 requests");
+  });
 });
 
 describe("a persisted attack from before a setting existed", () => {
- test("hydrates the missing setting with its default rather than with undefined", () => {
-  const current = { intruder: emptyIntruderConfig(), other: 1 };
-  const old = { ...emptyIntruderConfig(), msgId: "9" } as Record<string, unknown>;
-  delete old.responseTimeoutMS;
-  delete old.http1ConnectionReuse;
-  delete old.httpVersion;
-  delete old.updateHostHeader;
-  const merged = mergePersistedWorkspace({ intruder: old }, current);
-  expect(merged.intruder.msgId).toBe("9");
-  expect(merged.intruder.responseTimeoutMS).toBe("");
-  // A true default must come back true, not undefined-and-therefore-off.
-  expect(merged.intruder.http1ConnectionReuse).toBe(true);
-  expect(merged.intruder.httpVersion).toBe("");
-  expect(merged.intruder.updateHostHeader).toBe(true);
-  expect(merged.other).toBe(1);
- });
+  test("hydrates the missing setting with its default rather than with undefined", () => {
+    const current = { intruder: emptyIntruderConfig(), other: 1 };
+    const old = { ...emptyIntruderConfig(), msgId: "9" } as Record<string, unknown>;
+    delete old.responseTimeoutMS;
+    delete old.http1ConnectionReuse;
+    delete old.httpVersion;
+    delete old.updateHostHeader;
+    const merged = mergePersistedWorkspace({ intruder: old }, current);
+    expect(merged.intruder.msgId).toBe("9");
+    expect(merged.intruder.responseTimeoutMS).toBe("");
+    // A true default must come back true, not undefined-and-therefore-off.
+    expect(merged.intruder.http1ConnectionReuse).toBe(true);
+    expect(merged.intruder.httpVersion).toBe("");
+    expect(merged.intruder.updateHostHeader).toBe(true);
+    expect(merged.other).toBe(1);
+  });
 });
 
 describe("Repeater tab overrides (burpsy-react-ui-of0z)", () => {
- test("unpack_responses defaults ON: true is dropped from the wire, an explicit false is kept", () => {
-  expect(mergeRepeaterOptions({}, { unpack_responses: true })).toEqual({});
-  expect(mergeRepeaterOptions({}, { unpack_responses: false })).toEqual({ unpack_responses: false });
-  expect(mergeRepeaterOptions({ unpack_responses: false }, { unpack_responses: true })).toEqual({});
- });
+  test("unpack_responses defaults ON: true is dropped from the wire, an explicit false is kept", () => {
+    expect(mergeRepeaterOptions({}, { unpack_responses: true })).toEqual({});
+    expect(mergeRepeaterOptions({}, { unpack_responses: false })).toEqual({ unpack_responses: false });
+    expect(mergeRepeaterOptions({ unpack_responses: false }, { unpack_responses: true })).toEqual({});
+  });
 
- test("the other switches keep their false-is-default rule", () => {
-  expect(mergeRepeaterOptions({ strip_connection: true }, { strip_connection: false })).toEqual({});
- });
+  test("the other switches keep their false-is-default rule", () => {
+    expect(mergeRepeaterOptions({ strip_connection: true }, { strip_connection: false })).toEqual({});
+  });
 
- test("a streaming window of 0 is kept (no cutoff), blank is dropped", () => {
-  expect(mergeRepeaterOptions({}, { streaming_timeout_ms: 0 })).toEqual({ streaming_timeout_ms: 0 });
-  expect(mergeRepeaterOptions({ streaming_timeout_ms: 500 }, { streaming_timeout_ms: undefined })).toEqual({});
- });
+  test("a streaming window of 0 is kept (no cutoff), blank is dropped", () => {
+    expect(mergeRepeaterOptions({}, { streaming_timeout_ms: 0 })).toEqual({ streaming_timeout_ms: 0 });
+    expect(mergeRepeaterOptions({ streaming_timeout_ms: 500 }, { streaming_timeout_ms: undefined })).toEqual({});
+  });
 
- test("parseStreamingTimeoutMS: blank unset, 0 allowed, negative and junk unset", () => {
-  expect(parseStreamingTimeoutMS("")).toBeUndefined();
-  expect(parseStreamingTimeoutMS("0")).toBe(0);
-  expect(parseStreamingTimeoutMS("1500.7")).toBe(1500);
-  expect(parseStreamingTimeoutMS("-1")).toBeUndefined();
-  expect(parseStreamingTimeoutMS("abc")).toBeUndefined();
- });
+  test("parseStreamingTimeoutMS: blank unset, 0 allowed, negative and junk unset", () => {
+    expect(parseStreamingTimeoutMS("")).toBeUndefined();
+    expect(parseStreamingTimeoutMS("0")).toBe(0);
+    expect(parseStreamingTimeoutMS("1500.7")).toBe(1500);
+    expect(parseStreamingTimeoutMS("-1")).toBeUndefined();
+    expect(parseStreamingTimeoutMS("abc")).toBeUndefined();
+  });
 });

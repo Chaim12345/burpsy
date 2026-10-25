@@ -74,7 +74,9 @@ const POSITIONS_SHOWN = 24;
 const COUNTS_SHOWN = 6;
 
 function lengthLabel(characters: CharacterAnalysis): string {
- return characters.min_len === characters.max_len ? String(characters.max_len) : `${characters.min_len}–${characters.max_len}`;
+ return characters.min_len === characters.max_len
+  ? String(characters.max_len)
+  : `${characters.min_len}–${characters.max_len}`;
 }
 
 function Warnings({ warnings, grade }: { warnings: string[]; grade: string }): JSX.Element | null {
@@ -108,15 +110,15 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
        Say which one this is, so an operator who knows Burp does not read a block verdict as a
        per-position one. */}
    <div className="notice">
-    These verdicts describe the <strong>whole bit stream</strong>, cut into {fips.block_bits}-bit blocks. Every FIPS 140-2 interval is
-    defined on a {fips.block_bits}-bit sample, so each row reports over those blocks. The same four tests at{" "}
-    <strong>each bit position</strong>, which name the weak bits of the token, are in the &ldquo;FIPS tests at each bit position&rdquo;
-    section below.
+    These verdicts describe the <strong>whole bit stream</strong>, cut into {fips.block_bits}-bit blocks. Every
+    FIPS 140-2 interval is defined on a {fips.block_bits}-bit sample, so each row reports over those blocks. The
+    same four tests at <strong>each bit position</strong>, which name the weak bits of the token, are in the
+    &ldquo;FIPS tests at each bit position&rdquo; section below.
    </div>
    {fips.tests === null ? (
     <div className="notice notice-warn">
-     Not run. Every FIPS 140-2 threshold is defined on a {fips.block_bits}-bit sample, so running them against a shorter one would produce a
-     confident answer that means nothing. Capture more tokens.
+     Not run. Every FIPS 140-2 threshold is defined on a {fips.block_bits}-bit sample, so running them against a
+     shorter one would produce a confident answer that means nothing. Capture more tokens.
     </div>
    ) : (
     <SimpleTable headers={["Test", "Result", "Observed", "Requirement", "Blocks"]}>
@@ -133,17 +135,17 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
         </td>
        </tr>
       ) : (
-       <tr key={test.id}>
-        <td title={test.spec}>{test.name}</td>
-        <td>
-         <Badge tone={test.passed ? "good" : "bad"}>{test.passed ? "pass" : "fail"}</Badge>
-        </td>
-        <td className="cell-num">{test.observed}</td>
-        <td className="cell-dim">{test.requirement}</td>
-        <td className="cell-num">
-         {test.blocks_passed} / {test.blocks_passed + test.blocks_failed}
-        </td>
-       </tr>
+      <tr key={test.id}>
+       <td title={test.spec}>{test.name}</td>
+       <td>
+        <Badge tone={test.passed ? "good" : "bad"}>{test.passed ? "pass" : "fail"}</Badge>
+       </td>
+       <td className="cell-num">{test.observed}</td>
+       <td className="cell-dim">{test.requirement}</td>
+       <td className="cell-num">
+        {test.blocks_passed} / {test.blocks_passed + test.blocks_failed}
+       </td>
+      </tr>
       ),
      )}
     </SimpleTable>
@@ -223,7 +225,11 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
       <figure style={{ margin: 0 }}>
        <Toolbar>
         <Field label="Chart">
-         <Select aria-label="Test to chart" value={test.id} onChange={(event) => setSelected(event.target.value)}>
+         <Select
+          aria-label="Test to chart"
+          value={test.id}
+          onChange={(event) => setSelected(event.target.value)}
+         >
           {tests
            .filter((t) => !t.disabled)
            .map((t) => (
@@ -293,7 +299,12 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
           stroke="var(--ink)"
           strokeDasharray="4 3"
          />
-         <text x={POSITION_CHART_W + 6} y={(1 - chart.passLine) * POSITION_CHART_H + 3} fontSize="10" fill="var(--muted)">
+         <text
+          x={POSITION_CHART_W + 6}
+          y={(1 - chart.passLine) * POSITION_CHART_H + 3}
+          fontSize="10"
+          fill="var(--muted)"
+         >
           FIPS pass level
          </text>
          <text x={0} y={POSITION_CHART_H + 20} fontSize="10" fill="var(--muted)">
@@ -305,9 +316,9 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
         </g>
        </svg>
        <figcaption className="field-hint">
-        Each bar is one bit position&apos;s significance as 6 + log10(p): 6 is a perfectly ordinary position and 0 is the 10⁻⁶ floor. The
-        dashed line is the pass level, 6 + log10({test.threshold}). Green passed and red failed, and a red mark under the axis flags every
-        failing position, including those whose bar sits at the floor.
+        Each bar is one bit position&apos;s significance as 6 + log10(p): 6 is a perfectly ordinary position and 0 is
+        the 10⁻⁶ floor. The dashed line is the pass level, 6 + log10({test.threshold}). Green passed and red failed, and a
+        red mark under the axis flags every failing position, including those whose bar sits at the floor.
         {positions.exact_intervals
          ? " At N = 20,000 the FIPS intervals decide each verdict, so a bar's colour, not its height against the line, is the verdict."
          : ""}
@@ -389,8 +400,8 @@ function Advanced({ report }: { report: SequencerAnalysis }): JSX.Element | null
     ) : null,
    )}
    <div className="field-hint">
-    These four do not change the grade above, which is the FIPS 140-2 battery's. A flagged row here is a finding about the sample; how far
-    it moves the verdict is a judgement the operator makes.
+    These four do not change the grade above, which is the FIPS 140-2 battery's. A flagged row here is a
+    finding about the sample; how far it moves the verdict is a judgement the operator makes.
    </div>
   </Card>
  );
@@ -485,7 +496,13 @@ function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }):
         />
        ))}
        {chart.runs.map((run, index) => (
-        <polyline key={`run-${index}`} points={runPolyline(run, CHART_W, CHART_H)} fill="none" stroke="var(--accent)" strokeWidth={2} />
+        <polyline
+         key={`run-${index}`}
+         points={runPolyline(run, CHART_W, CHART_H)}
+         fill="none"
+         stroke="var(--accent)"
+         strokeWidth={2}
+        />
        ))}
        {chart.marks.map((mark) => (
         <circle
@@ -499,7 +516,14 @@ function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }):
        ))}
        {[...chart.marks, ...chart.gaps].map((point) =>
         isLadderHighlight(point.percent) || point.chosen ? (
-         <text key={`tick-${point.percent}`} x={point.x * CHART_W} y={CHART_H + 16} textAnchor="middle" fontSize="10" fill="var(--muted)">
+         <text
+          key={`tick-${point.percent}`}
+          x={point.x * CHART_W}
+          y={CHART_H + 16}
+          textAnchor="middle"
+          fontSize="10"
+          fill="var(--muted)"
+         >
           {significanceLabel(point.percent)}
          </text>
         ) : null,
@@ -507,16 +531,16 @@ function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }):
       </g>
      </svg>
      <figcaption className="field-hint">
-      Significance level, logarithmic, from {significanceLabel(effective.curve[0]?.significance_percent ?? 0.001)} on the left to{" "}
-      {significanceLabel(effective.curve[effective.curve.length - 1]?.significance_percent ?? 10)} on the right. A dashed column is a level
-      this sample cannot answer — the line breaks there rather than being drawn through a value that does not exist. The table below carries
-      every number in the picture.
+      Significance level, logarithmic, from {significanceLabel(effective.curve[0]?.significance_percent ?? 0.001)} on the
+      left to {significanceLabel(effective.curve[effective.curve.length - 1]?.significance_percent ?? 10)} on the right.
+      A dashed column is a level this sample cannot answer — the line breaks there rather than being drawn through a
+      value that does not exist. The table below carries every number in the picture.
      </figcaption>
     </figure>
    ) : (
     <div className="notice notice-warn">
-     No level in the chart&apos;s range could be answered by this sample, so there is nothing to draw. That is an absence, not a curve at
-     zero — the table below says why for each level.
+     No level in the chart&apos;s range could be answered by this sample, so there is nothing to draw. That is an absence,
+     not a curve at zero — the table below says why for each level.
     </div>
    )}
 
@@ -538,14 +562,18 @@ function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }):
       </td>
       <td className="cell-num">{point.computed && point.bits_rejected !== null ? point.bits_rejected : "—"}</td>
       <td className="cell-num">
-       {point.computed && point.expected_chance_rejections !== null ? point.expected_chance_rejections.toFixed(2) : "—"}
+       {point.computed && point.expected_chance_rejections !== null
+        ? point.expected_chance_rejections.toFixed(2)
+        : "—"}
       </td>
       <td className="cell-dim">{point.computed ? "" : point.reason}</td>
      </tr>
     ))}
    </SimpleTable>
    {!showAll && rows.length < effective.curve.length ? (
-    <p className="field-hint">{effective.curve.length - rows.length} more level(s) not shown. The chart above draws all of them.</p>
+    <p className="field-hint">
+     {effective.curve.length - rows.length} more level(s) not shown. The chart above draws all of them.
+    </p>
    ) : null}
 
    {/* `robust` on the server is strict equality, which is the honest reading of "the
@@ -553,23 +581,26 @@ function EffectiveEntropy({ effective }: { effective: EffectiveEntropyReport }):
        as a warning: a healthy sample loses a position or two at 5% and 10% to the
        level's own false-positive rate, and colouring that red would call an artefact a
        defect. The warn styling is reserved for movement larger than chance explains. */}
-   <div className={spreadExceedsChance(effective.curve) ? "notice notice-warn" : "notice"}>{effective.robustness_note}</div>
+   <div className={spreadExceedsChance(effective.curve) ? "notice notice-warn" : "notice"}>
+    {effective.robustness_note}
+   </div>
 
    <div className="field-hint">
-    <strong>What this number is.</strong> {effective.definition} Tests run at each bit position: {effective.tests.join("; ")}. No
-    multiple-comparison correction is applied — correcting would flatten the slope this chart exists to show — so read every loss against
-    the &quot;expected by chance&quot; column beside it.
+    <strong>What this number is.</strong> {effective.definition} Tests run at each bit position:{" "}
+    {effective.tests.join("; ")}. No multiple-comparison correction is applied — correcting would flatten the slope this
+    chart exists to show — so read every loss against the &quot;expected by chance&quot; column beside it.
    </div>
    {effective.bit_positions_skipped_variable_length > 0 ? (
     <div className="field-hint">
-     {effective.bit_positions_skipped_variable_length} bit position(s) present in the longest token but not the shortest were excluded: they
-     have a smaller sample than the rest, and testing them against this sample size would manufacture a rejection.
+     {effective.bit_positions_skipped_variable_length} bit position(s) present in the longest token but not the shortest
+     were excluded: they have a smaller sample than the rest, and testing them against this sample size would
+     manufacture a rejection.
     </div>
    ) : null}
    {effective.positions_truncated ? (
     <div className="notice notice-warn">
-     Only the first {effective.bit_positions_examined} bit positions were examined. The counts above are out of that number, not out of the
-     whole token.
+     Only the first {effective.bit_positions_examined} bit positions were examined. The counts above are out of that
+     number, not out of the whole token.
     </div>
    ) : null}
    <div className="field-hint">
@@ -636,7 +667,9 @@ function Positions({ characters }: { characters: CharacterAnalysis }): JSX.Eleme
            {count.label} {(count.fraction * 100).toFixed(0)}%
           </Badge>
          ))}
-         {position.counts.length > top.length ? <span className="cell-dim">+{position.counts.length - top.length} more</span> : null}
+         {position.counts.length > top.length ? (
+          <span className="cell-dim">+{position.counts.length - top.length} more</span>
+         ) : null}
         </div>
        </td>
        <td>{dead ? <Badge tone="bad">never varies</Badge> : <span className="cell-dim">—</span>}</td>
@@ -673,14 +706,18 @@ function Report({ report }: { report: SequencerAnalysis }): JSX.Element {
      value={`${characters.entropy_bits_per_char.toFixed(2)} b`}
      detail={`per-position cap ${characters.entropy_ceiling_bits.toFixed(1)} b`}
     />
-    <Metric label="Bits read as" value={report.encoding} detail={report.encoding_detected ? "detected" : "your choice"} />
+    <Metric
+     label="Bits read as"
+     value={report.encoding}
+     detail={report.encoding_detected ? "detected" : "your choice"}
+    />
    </div>
    <p className="field-hint">
     Entropy per token is the sum of the per-position figures, which assumes the positions are independent
-    {characters.assumes_positional_independence ? "" : " (the server reports otherwise for this sample)"} — an upper estimate, not a
-    measurement. This alphabet and length could carry at most {characters.max_possible_bits.toFixed(1)} bits, and{" "}
-    {report.tokens.toLocaleString()} sample(s) cap any single position at {characters.entropy_ceiling_bits.toFixed(1)} bits however good the
-    generator is.
+    {characters.assumes_positional_independence ? "" : " (the server reports otherwise for this sample)"} — an upper
+    estimate, not a measurement. This alphabet and length could carry at most{" "}
+    {characters.max_possible_bits.toFixed(1)} bits, and {report.tokens.toLocaleString()} sample(s) cap any single
+    position at {characters.entropy_ceiling_bits.toFixed(1)} bits however good the generator is.
    </p>
    <EffectiveEntropy effective={report.effective_entropy} />
    <ExtraStats report={report} />
@@ -718,16 +755,21 @@ function ExtraStats({ report }: { report: SequencerAnalysis }): JSX.Element {
      {...(extra.repeated_tokens > 0 ? { tone: "warn" as const, accent: true } : {})}
     />
     <Metric label="Chi-square (chars)" value={extra.chi_square.toFixed(1)} detail="larger = less uniform" />
-    <Metric label="Serial correlation" value={extra.serial_correlation.toFixed(3)} detail={extra.serial_correlation_label} />
-    <Metric label="Monte-Carlo π" value={extra.monte_carlo_pi.toFixed(2)} detail={`deviation ${extra.monte_carlo_deviation.toFixed(2)}`} />
+    <Metric
+     label="Serial correlation"
+     value={extra.serial_correlation.toFixed(3)}
+     detail={extra.serial_correlation_label}
+    />
+    <Metric
+     label="Monte-Carlo π"
+     value={extra.monte_carlo_pi.toFixed(2)}
+     detail={`deviation ${extra.monte_carlo_deviation.toFixed(2)}`}
+    />
    </div>
    {extra.repeated_list?.length ? (
     <div className="notice notice-warn">
      {extra.repeated_tokens.toLocaleString()} token(s) appear more than once:{" "}
-     {extra.repeated_list
-      .slice(0, 5)
-      .map((t) => t.slice(0, 32))
-      .join(", ")}
+     {extra.repeated_list.slice(0, 5).map((t) => t.slice(0, 32)).join(", ")}
      {extra.repeated_list.length > 5 ? ` …and ${(extra.repeated_list.length - 5).toLocaleString()} more` : ""}
     </div>
    ) : null}
@@ -779,7 +821,8 @@ function CaptureProgress({ capture }: { capture: SequencerCapture }): JSX.Elemen
      {capture.misses_truncated ? (
       <tr>
        <td className="cell-dim" colSpan={2}>
-        …and {(capture.misses - capture.miss_examples.length).toLocaleString()} more. The count is exact; the examples are a sample.
+        …and {(capture.misses - capture.miss_examples.length).toLocaleString()} more. The count is exact; the
+        examples are a sample.
        </td>
       </tr>
      ) : null}
@@ -819,7 +862,11 @@ function AnalysisSettings({
    {settings.isPending ? (
     <Spinner label="Reading the analysis settings" />
    ) : settings.isError ? (
-    <ErrorNotice title="Could not read the analysis settings" error={settings.error} onRetry={() => void settings.refetch()} />
+    <ErrorNotice
+     title="Could not read the analysis settings"
+     error={settings.error}
+     onRetry={() => void settings.refetch()}
+    />
    ) : (
     <div className="analysis-settings" role="group" aria-label="Tests an analysis runs">
      {rows.map((row) => (
@@ -949,12 +996,12 @@ export function SequencerPage(): JSX.Element {
  const captureMissing = !captureTarget.trim()
   ? "needs a target"
   : !captureRequest.trim()
-    ? "needs a request"
-    : (locationKind === "body_regex" ? !locationPattern.trim() : !locationName.trim())
-      ? locationKind === "body_regex"
-       ? "needs a token pattern"
-       : "needs the name to read the token from"
-      : null;
+   ? "needs a request"
+   : (locationKind === "body_regex" ? !locationPattern.trim() : !locationName.trim())
+    ? locationKind === "body_regex"
+     ? "needs a token pattern"
+     : "needs the name to read the token from"
+    : null;
 
  const startCaptureRun = () => {
   const target = captureTarget.trim();
@@ -986,7 +1033,9 @@ export function SequencerPage(): JSX.Element {
     ...(Number.isFinite(count) && count > 0 ? { count } : {}),
     ...(Number.isFinite(delay) && delay > 0 ? { delay_ms: delay } : {}),
     ...(Number.isFinite(threads) && threads > 1 ? { threads } : {}),
-    ...(Number.isFinite(Number(deviates)) && Number(deviates) > 0 ? { length_deviates: { enable: true, chars: Number(deviates) } } : {}),
+    ...(Number.isFinite(Number(deviates)) && Number(deviates) > 0
+     ? { length_deviates: { enable: true, chars: Number(deviates) } }
+     : {}),
    },
    {
     onSuccess: (started) => {
@@ -1016,12 +1065,8 @@ export function SequencerPage(): JSX.Element {
  // and disabled_tests is never sent, so the saved analysis settings decide which tests run.
  const lastSample =
   source === "paste"
-   ? analysePaste.variables
-    ? { kind: "paste" as const, text: analysePaste.variables.text }
-    : null
-   : analyseTokens.variables
-     ? { kind: "tokens" as const, tokens: analyseTokens.variables.tokens }
-     : null;
+   ? (analysePaste.variables ? { kind: "paste" as const, text: analysePaste.variables.text } : null)
+   : (analyseTokens.variables ? { kind: "tokens" as const, tokens: analyseTokens.variables.tokens } : null);
  const redoAnalysis = () => {
   if (!lastSample) return;
   const done = {
@@ -1184,7 +1229,11 @@ export function SequencerPage(): JSX.Element {
     </TabsList>
     <TabsContent value="paste">
      <div className="toolbar" style={{ marginBottom: 8 }}>
-      <Button variant="outline" size="small" onClick={() => loadInputRef.current?.click()}>
+      <Button
+       variant="outline"
+       size="small"
+       onClick={() => loadInputRef.current?.click()}
+      >
        Load from file…
       </Button>
       <input
@@ -1199,12 +1248,7 @@ export function SequencerPage(): JSX.Element {
         const reader = new FileReader();
         reader.onload = () => {
          setTokens(String(reader.result ?? ""));
-         toast.success(
-          `Loaded ${file.name} — ${String(reader.result ?? "")
-           .split(/\r?\n/)
-           .filter(Boolean)
-           .length.toLocaleString()} line(s)`,
-         );
+         toast.success(`Loaded ${file.name} — ${String(reader.result ?? "").split(/\r?\n/).filter(Boolean).length.toLocaleString()} line(s)`);
         };
         reader.readAsText(file);
         event.target.value = "";
@@ -1223,8 +1267,8 @@ export function SequencerPage(): JSX.Element {
     </TabsContent>
     <TabsContent value="live">
      <div className="field-hint" style={{ marginBottom: 8 }}>
-      Send one request repeatedly and pull a token out of every response. The token location is declared, not guessed: a heuristic that
-      picked the wrong cookie would produce a confident verdict about the wrong string.
+      Send one request repeatedly and pull a token out of every response. The token location is declared, not
+      guessed: a heuristic that picked the wrong cookie would produce a confident verdict about the wrong string.
      </div>
 
      <div className="two-col">
@@ -1378,7 +1422,10 @@ export function SequencerPage(): JSX.Element {
           stopCapture.mutate(undefined, {
            // The reply says whether anything was actually stopped, so the toast says so
            // too. It used to report success unconditionally, for a loop that did not exist.
-           onSuccess: (result) => (result.stopped ? toast.success(`Stopped ${result.signalled} capture(s)`) : toast.message(result.note)),
+           onSuccess: (result) =>
+            result.stopped
+             ? toast.success(`Stopped ${result.signalled} capture(s)`)
+             : toast.message(result.note),
            onError: (cause) => toast.error(`Could not stop the capture: ${cause.message}`),
           })
          }
@@ -1466,14 +1513,16 @@ export function SequencerPage(): JSX.Element {
 
    {error ? <ErrorNotice error={error} onRetry={source === "paste" ? runPaste : runCaptured} /> : null}
 
-   {report ? (
-    <Report report={report} />
-   ) : (
-    <Empty
-     title="No analysis yet"
-     detail="Paste a representative sample of session ids or CSRF tokens — a hundred is the conventional floor — then analyse it."
-    />
-   )}
-  </div>
+   {
+    report ? (
+     <Report report={report} />
+    ) : (
+     <Empty
+      title="No analysis yet"
+      detail="Paste a representative sample of session ids or CSRF tokens — a hundred is the conventional floor — then analyse it."
+     />
+    )
+   }
+  </div >
  );
 }

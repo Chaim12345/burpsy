@@ -23,11 +23,11 @@ import type { RepeaterSendOptions } from "./types";
  * else is "not set" rather than a value the server would refuse.
  */
 export function parseStreamingTimeoutMS(text: string): number | undefined {
- const trimmed = text.trim();
- if (trimmed === "") return undefined;
- const value = Number(trimmed);
- if (!Number.isFinite(value) || value < 0) return undefined;
- return Math.floor(value);
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  return Math.floor(value);
 }
 
 /**
@@ -37,27 +37,27 @@ export function parseStreamingTimeoutMS(text: string): number | undefined {
  * and an explicit `false` that is kept. 0 is kept — for streaming_timeout_ms it means "no cutoff".
  */
 export function mergeRepeaterOptions(current: RepeaterSendOptions | undefined, patch: Partial<RepeaterSendOptions>): RepeaterSendOptions {
- const merged: RepeaterSendOptions = { ...(current ?? {}), ...patch };
- for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
-  const value = merged[key];
-  const standing = key === "unpack_responses" ? value === true : value === false;
-  if (value === undefined || value === "" || standing) delete merged[key];
- }
- return merged;
+  const merged: RepeaterSendOptions = { ...(current ?? {}), ...patch };
+  for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
+    const value = merged[key];
+    const standing = key === "unpack_responses" ? value === true : value === false;
+    if (value === undefined || value === "" || standing) delete merged[key];
+  }
+  return merged;
 }
 
 export function parseResponseTimeoutMS(text: string): number | undefined {
- const trimmed = text.trim();
- if (trimmed === "") return undefined;
- const value = Number(trimmed);
- if (!Number.isFinite(value) || value <= 0) return undefined;
- return Math.floor(value);
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
 }
 
 /** The Intruder settings this module owns, as the run request's fields. */
 export type IntruderSendSettings = Pick<
- IntruderConfig,
- "responseTimeoutMS" | "http1ConnectionReuse" | "httpVersion" | "setConnectionClose" | "updateHostHeader"
+  IntruderConfig,
+  "responseTimeoutMS" | "http1ConnectionReuse" | "httpVersion" | "setConnectionClose" | "updateHostHeader"
 >;
 
 /**
@@ -66,20 +66,20 @@ export type IntruderSendSettings = Pick<
  * so the control is shown off and nothing is sent, rather than a launch that fails.
  */
 export function reuseRequested(config: Pick<IntruderSendSettings, "http1ConnectionReuse" | "setConnectionClose">): boolean {
- return config.http1ConnectionReuse !== false && !config.setConnectionClose;
+  return config.http1ConnectionReuse !== false && !config.setConnectionClose;
 }
 
 export function intruderSendSettingsFields(config: IntruderSendSettings): Record<string, unknown> {
- const fields: Record<string, unknown> = {};
- const responseTimeout = parseResponseTimeoutMS(config.responseTimeoutMS ?? "");
- if (responseTimeout !== undefined) fields.response_timeout_ms = responseTimeout;
- // Sent only when on: an absent field is the server's "one connection per request".
- if (reuseRequested(config)) fields.http1_connection_reuse = true;
- if (config.httpVersion === "http1" || config.httpVersion === "http2") fields.http_version = config.httpVersion;
- // Sent only when on: an absent field is the server's "leave the Host header as captured". `!== false`
- // so an attack persisted before the setting existed gets Burp's default rather than nothing.
- if (config.updateHostHeader !== false) fields.update_host_header = true;
- return fields;
+  const fields: Record<string, unknown> = {};
+  const responseTimeout = parseResponseTimeoutMS(config.responseTimeoutMS ?? "");
+  if (responseTimeout !== undefined) fields.response_timeout_ms = responseTimeout;
+  // Sent only when on: an absent field is the server's "one connection per request".
+  if (reuseRequested(config)) fields.http1_connection_reuse = true;
+  if (config.httpVersion === "http1" || config.httpVersion === "http2") fields.http_version = config.httpVersion;
+  // Sent only when on: an absent field is the server's "leave the Host header as captured". `!== false`
+  // so an attack persisted before the setting existed gets Burp's default rather than nothing.
+  if (config.updateHostHeader !== false) fields.update_host_header = true;
+  return fields;
 }
 
 /**
@@ -88,15 +88,15 @@ export function intruderSendSettingsFields(config: IntruderSendSettings): Record
  * some requests kept the Host header a payload gave them. Empty when there is nothing to say.
  */
 export function hostHeaderCaveats(view: { host_header_skipped?: string; host_header_untouched?: number }): string[] {
- const out: string[] = [];
- if (view.host_header_skipped) out.push(`Host header not updated to match the target: ${view.host_header_skipped}.`);
- const untouched = view.host_header_untouched ?? 0;
- if (untouched > 0) {
-  out.push(
-   `${untouched} request${untouched === 1 ? "" : "s"} kept the Host header the payload produced (not exactly one Host header, so none was rewritten).`,
-  );
- }
- return out;
+  const out: string[] = [];
+  if (view.host_header_skipped) out.push(`Host header not updated to match the target: ${view.host_header_skipped}.`);
+  const untouched = view.host_header_untouched ?? 0;
+  if (untouched > 0) {
+    out.push(
+      `${untouched} request${untouched === 1 ? "" : "s"} kept the Host header the payload produced (not exactly one Host header, so none was rewritten).`,
+    );
+  }
+  return out;
 }
 
 /**
@@ -105,8 +105,8 @@ export function hostHeaderCaveats(view: { host_header_skipped?: string; host_hea
  * on and never happened" are different findings about the target.
  */
 export function connectionReuseSummary(view: { connections_opened?: number | null; connections_reused?: number | null }): string | null {
- const opened = view.connections_opened;
- const reused = view.connections_reused;
- if (typeof opened !== "number" || typeof reused !== "number") return null;
- return `${opened} opened, ${reused} ${reused === 1 ? "request" : "requests"} on a reused connection`;
+  const opened = view.connections_opened;
+  const reused = view.connections_reused;
+  if (typeof opened !== "number" || typeof reused !== "number") return null;
+  return `${opened} opened, ${reused} ${reused === 1 ? "request" : "requests"} on a reused connection`;
 }

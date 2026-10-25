@@ -37,7 +37,11 @@ import type {
  * these two as UI would have produced controls that render, accept input, return 200 and change
  * nothing — the single decorative control the parity audit went looking for.
  */
-export type InterceptDirection = "requests" | "responses" | "websocket_to_server" | "websocket_to_client";
+export type InterceptDirection =
+ | "requests"
+ | "responses"
+ | "websocket_to_server"
+ | "websocket_to_client";
 
 /**
  * Keys for the attack-area resources. The intercept-rules key keeps the "intercept" prefix the event
@@ -73,7 +77,8 @@ export function useInterceptDetailed(pollMs = 1_500): UseQueryResult<InterceptSt
 export function useAnnotateHeld() {
  const client = useQueryClient();
  return useMutation<unknown, Error, { id: number; comment: string; highlight: string }>({
-  mutationFn: ({ id, comment, highlight }) => api(`/api/intercept/annotate/${id}`, json("POST", { comment, highlight })),
+  mutationFn: ({ id, comment, highlight }) =>
+   api(`/api/intercept/annotate/${id}`, json("POST", { comment, highlight })),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.intercept }),
  });
 }
@@ -245,7 +250,12 @@ export function useScanConfigLibrary() {
  return useMutation({
   // `settings` overlays the operator's own values on what the save starts from (saq3.3.1). Only the
   // keys it carries are written; an absent key leaves the saved value alone.
-  mutationFn: (body: { action: "save" | "clone" | "rename" | "delete"; name: string; from?: string; settings?: AuditConfigSettings }) =>
+  mutationFn: (body: {
+   action: "save" | "clone" | "rename" | "delete";
+   name: string;
+   from?: string;
+   settings?: AuditConfigSettings;
+  }) =>
    api<Record<string, unknown>>("/api/scanner/configs", json(body.action === "delete" ? "DELETE" : "POST", body)),
   onSuccess: () => invalidate([keys.scannerConfigs]),
  });
@@ -272,12 +282,12 @@ export const useCorpusChecks = () => useResource<CorpusChecks>(keys.scannerCheck
  * response that echoed the request would make a refused write look applied.
  */
 export function useSetCorpusCheckEnabled() {
- const invalidate = useInvalidate();
- return useMutation({
-  mutationFn: (body: { name: string; enabled: boolean }) =>
-   api<{ name: string; enabled: boolean; disabled: boolean }>("/api/scanner/checks/enable", json("PUT", body)),
-  onSuccess: () => invalidate([keys.scannerChecks, keys.scannerCoverage]),
- });
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: { name: string; enabled: boolean }) =>
+      api<{ name: string; enabled: boolean; disabled: boolean }>("/api/scanner/checks/enable", json("PUT", body)),
+    onSuccess: () => invalidate([keys.scannerChecks, keys.scannerCoverage]),
+  });
 }
 
 /** Polls like Intercept: the sweep's swept/behind counters move as traffic is captured, and an
@@ -299,11 +309,7 @@ export function useScannerLive(pollMs = 2_000): UseQueryResult<LiveAuditState> {
  */
 export function useSetScannerLive() {
  const client = useQueryClient();
- return useMutation<
-  LiveAuditState,
-  Error,
-  { enabled: boolean; query?: string; retry_stalled?: boolean; traffic_source?: string; config?: string; pool?: string }
- >({
+ return useMutation<LiveAuditState, Error, { enabled: boolean; query?: string; retry_stalled?: boolean; traffic_source?: string; config?: string; pool?: string }>({
   mutationFn: (body) => api<LiveAuditState>("/api/scanner/live", json("POST", body)),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.scannerLive }),
  });
@@ -319,7 +325,8 @@ export function useSetScannerLive() {
 export function useRunAudit() {
  const client = useQueryClient();
  return useMutation<AuditResult, Error, { exchangeId: number; config?: string }>({
-  mutationFn: ({ exchangeId, config }) => api<AuditResult>(`/api/audit/${exchangeId}`, json("POST", config ? { config } : {})),
+  mutationFn: ({ exchangeId, config }) =>
+   api<AuditResult>(`/api/audit/${exchangeId}`, json("POST", config ? { config } : {})),
   onSuccess: () => {
    void client.invalidateQueries({ queryKey: keys.issues });
    void client.invalidateQueries({ queryKey: keys.dashboard });

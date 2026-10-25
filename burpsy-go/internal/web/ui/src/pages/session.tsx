@@ -1,35 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
- ArrowDown,
- ArrowUp,
- History,
- KeyRound,
- Pencil,
- Play,
- Plus,
- RotateCcw,
- Save,
- Trash2,
- Upload,
- X,
- SearchCheck,
- Wand2,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, History, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X , SearchCheck , Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
-import {
- useMoveSessionRule,
- useSessionCookies,
- useSessionLogin,
- useSessionRulesFull,
- useTestSessionRule,
- useAnalyzeSessionRule,
- useApplySessionExtractions,
- useUpdateSessionMacro,
- useCookieJarWrite,
- useSessionTrace,
- useSessionTraceEnable,
-} from "../lib/data.policy";
+import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useAnalyzeSessionRule, useApplySessionExtractions, useUpdateSessionMacro, useCookieJarWrite, useSessionTrace, useSessionTraceEnable } from "../lib/data.policy";
 import { MacroRecorder } from "../ui/macro-recorder";
 import type {
  SessionAction,
@@ -46,23 +19,7 @@ import type {
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import {
- Badge,
- Button,
- Card,
- Checkbox,
- Empty,
- ErrorNotice,
- Field,
- IconButton,
- Input,
- Modal,
- NeedsValueButton,
- Select,
- Switch,
- Textarea,
- Toolbar,
-} from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, NeedsValueButton, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { actionPath, refusedActionPath, SCRIPT_LIMITS, SCRIPT_REFERENCE } from "../lib/session-script";
 
@@ -108,13 +65,13 @@ interface RuleDraft {
  /** Custom-scope arms: path prefix, port, protocol. Empty/undefined = the arm does not apply. */
  scopePath: string;
  scopePort: string;
- scopeProtocol: "" | "http" | "https" /** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
-  * parameter exists. Empty = everywhere. */;
- params: string[];
- /** Burp's tools scope (so3): the tools the rule applies to, from the server's own list.
-  * Empty = everywhere, which the section says out loud — the server refuses the wire form of
-  * "checked nothing" precisely so this reading is never what an operator gets by accident. */
- tools: string[];
+ scopeProtocol: "" | "http" | "https";	/** Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
+	 * parameter exists. Empty = everywhere. */
+	params: string[];
+	/** Burp's tools scope (so3): the tools the rule applies to, from the server's own list.
+	 * Empty = everywhere, which the section says out loud — the server refuses the wire form of
+	 * "checked nothing" precisely so this reading is never what an operator gets by accident. */
+	tools: string[];
  validity: SessionValidity;
  /** Kept as text so "" can mean "the server's default" rather than one attempt. */
  maxAttempts: string;
@@ -171,13 +128,12 @@ interface ActionDraft {
  cookies: string;
 }
 
-const VALIDITY_FIELDS: { key: "body_contains" | "body_not_contains" | "header_present" | "header_absent"; label: string; hint: string }[] =
- [
-  { key: "body_contains", label: "Body contains", hint: "Session is valid when the probe body contains this." },
-  { key: "body_not_contains", label: "Body does not contain", hint: "For example a login form marker." },
-  { key: "header_present", label: "Header present", hint: "Name only." },
-  { key: "header_absent", label: "Header absent", hint: "Name only." },
- ];
+const VALIDITY_FIELDS: { key: "body_contains" | "body_not_contains" | "header_present" | "header_absent"; label: string; hint: string }[] = [
+ { key: "body_contains", label: "Body contains", hint: "Session is valid when the probe body contains this." },
+ { key: "body_not_contains", label: "Body does not contain", hint: "For example a login form marker." },
+ { key: "header_present", label: "Header present", hint: "Name only." },
+ { key: "header_absent", label: "Header absent", hint: "Name only." },
+];
 
 const OUTCOME_TONE: Record<string, "good" | "warn" | "bad"> = {
  already_valid: "good",
@@ -400,9 +356,8 @@ function ruleIn(rule: SessionRuleFull): RuleDraft {
   scopeMode: (rule.scope?.mode as RuleDraft["scopeMode"]) ?? "all",
   scopePath: rule.scope?.path ?? "",
   scopePort: rule.scope?.port !== undefined && rule.scope?.port !== null ? String(rule.scope.port) : "",
-  scopeProtocol: (rule.scope?.protocol as RuleDraft["scopeProtocol"]) ?? "",
-  params: rule.scope_params ?? [],
-  tools: rule.scope_tools ?? [],
+  scopeProtocol: (rule.scope?.protocol as RuleDraft["scopeProtocol"]) ?? "",	params: rule.scope_params ?? [],
+	tools: rule.scope_tools ?? [],
   validity: rule.validity ?? {},
   maxAttempts: rule.max_attempts === undefined ? "" : String(rule.max_attempts),
   steps: (rule.steps ?? []).map(stepIn),
@@ -453,16 +408,16 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
   };
  } else if (draft.hosts.length) {
   out.scope = { allow_all: false, rules: draft.hosts.map((host) => ({ kind: "Include" as const, host })) };
- } // Parameter scope is omitted when empty, like the host scope: absent means "applies
- // everywhere", so an operator who never opened the field never changes a rule's meaning.
- if (draft.params.length) {
-  const names = draft.params.map((name) => name.trim()).filter(Boolean);
-  if (names.length) out.scope_params = names;
- }
- // Same again for the tools scope. Omitted rather than sent empty: an empty array is the
- // server's refused "names no tools at all", which is a different statement from "every tool"
- // and must not be what the form says when the operator has restricted nothing.
- if (draft.tools.length) out.scope_tools = [...draft.tools];
+ }	// Parameter scope is omitted when empty, like the host scope: absent means "applies
+	// everywhere", so an operator who never opened the field never changes a rule's meaning.
+	if (draft.params.length) {
+		const names = draft.params.map((name) => name.trim()).filter(Boolean);
+		if (names.length) out.scope_params = names;
+	}
+	// Same again for the tools scope. Omitted rather than sent empty: an empty array is the
+	// server's refused "names no tools at all", which is a different statement from "every tool"
+	// and must not be what the form says when the operator has restricted nothing.
+	if (draft.tools.length) out.scope_tools = [...draft.tools];
  const attempts = Number(draft.maxAttempts.trim());
  if (draft.maxAttempts.trim() !== "" && Number.isInteger(attempts) && attempts > 0) out.max_attempts = attempts;
  return out;
@@ -483,9 +438,13 @@ function ruleOut(draft: RuleDraft): SessionRuleFull {
  * them to fill in.
  */
 function isBlankStep(step: StepDraft): boolean {
- return (
-  step.url === "" && step.body === "" && step.headers.length === 0 && step.extract.length === 0 && step.method.toUpperCase() === "POST"
- );
+  return (
+    step.url === "" &&
+    step.body === "" &&
+    step.headers.length === 0 &&
+    step.extract.length === 0 &&
+    step.method.toUpperCase() === "POST"
+  );
 }
 
 /**
@@ -498,13 +457,13 @@ function isBlankStep(step: StepDraft): boolean {
  * to occupy exactly that place.
  */
 function withRecordedSteps(current: StepDraft[], recorded: StepDraft[]): StepDraft[] {
- let keep = current.length;
- while (keep > 0) {
-  const step = current[keep - 1];
-  if (step === undefined || !isBlankStep(step)) break;
-  keep -= 1;
- }
- return [...current.slice(0, keep), ...recorded];
+  let keep = current.length;
+  while (keep > 0) {
+    const step = current[keep - 1];
+    if (step === undefined || !isBlankStep(step)) break;
+    keep -= 1;
+  }
+  return [...current.slice(0, keep), ...recorded];
 }
 
 function emptyRule(): RuleDraft {
@@ -515,33 +474,34 @@ function emptyRule(): RuleDraft {
   scopeMode: "all",
   scopePath: "",
   scopePort: "",
-  scopeProtocol: "",
-  params: [],
-  tools: [],
+  scopeProtocol: "",	params: [],
+	tools: [],
   validity: { status_is: 200 },
   maxAttempts: "",
   steps: [{ method: "POST", url: "", headers: [], body: "", extract: [] }],
   // A new rule starts as the flow burpsy already had — check, then log in — rather than as an empty
   // list, for the reason the server refuses an empty one: a rule with no actions does nothing, and
   // the operator's next step is to add to this list, not to discover it is inert.
-  actions: [{ ...emptyAction("check_validity"), else: [emptyAction("run_macro")] }],
+  actions: [
+   { ...emptyAction("check_validity"), else: [emptyAction("run_macro")] },
+  ],
  };
 }
 
 function scopeSummary(rule: SessionRuleFull): string {
  const hosts = (rule.scope?.rules ?? []).map((entry) => entry.host ?? "").filter(Boolean);
  let hostPart = "every host";
- if (rule.scope && !rule.scope.allow_all && hosts.length > 0) hostPart = hosts.join(", "); // The tools scope is a restriction on a different axis, and it is the one an operator is most
- // likely to have forgotten, so it is named first — "every host" alone reads as "fires for
- // everything" when a tools restriction may be quietly holding it back.
- const toolsPart = rule.scope_tools?.length ? `from ${rule.scope_tools.join(", ")}` : "";
- // A parameter scope is a further restriction; say what it needs so the row reads whole.
- if (rule.scope_params?.length) {
-  return toolsPart
-   ? `${hostPart} ${toolsPart} carrying ${rule.scope_params.join(" + ")}`
-   : `${hostPart} carrying ${rule.scope_params.join(" + ")}`;
- }
- return toolsPart ? `${hostPart} ${toolsPart}` : hostPart;
+ if (rule.scope && !rule.scope.allow_all && hosts.length > 0) hostPart = hosts.join(", ");	// The tools scope is a restriction on a different axis, and it is the one an operator is most
+	// likely to have forgotten, so it is named first — "every host" alone reads as "fires for
+	// everything" when a tools restriction may be quietly holding it back.
+	const toolsPart = rule.scope_tools?.length ? `from ${rule.scope_tools.join(", ")}` : "";
+	// A parameter scope is a further restriction; say what it needs so the row reads whole.
+	if (rule.scope_params?.length) {
+		return toolsPart
+			? `${hostPart} ${toolsPart} carrying ${rule.scope_params.join(" + ")}`
+			: `${hostPart} carrying ${rule.scope_params.join(" + ")}`;
+	}
+	return toolsPart ? `${hostPart} ${toolsPart}` : hostPart;
 }
 
 function hasNestedValidity(validity: SessionValidity): boolean {
@@ -720,12 +680,7 @@ function ExtractionRows({
      variant="outline"
      size="small"
      disabled={disabled}
-     onClick={() =>
-      onChange([
-       ...step.extract,
-       { name: "", fromKind: "body", header: "", how: "regex", pattern: "", group: "1", prefix: "", suffix: "", urlEncoded: true },
-      ])
-     }
+     onClick={() => onChange([...step.extract, { name: "", fromKind: "body", header: "", how: "regex", pattern: "", group: "1", prefix: "", suffix: "", urlEncoded: true }])}
     >
      <Plus size={13} />
      Add extraction
@@ -777,7 +732,12 @@ function StepCard({
     <IconButton label={`Move step ${index + 1} up`} size="small" disabled={disabled || index === 0} onClick={() => onMove(-1)}>
      <ArrowUp size={13} />
     </IconButton>
-    <IconButton label={`Move step ${index + 1} down`} size="small" disabled={disabled || index === total - 1} onClick={() => onMove(1)}>
+    <IconButton
+     label={`Move step ${index + 1} down`}
+     size="small"
+     disabled={disabled || index === total - 1}
+     onClick={() => onMove(1)}
+    >
      <ArrowDown size={13} />
     </IconButton>
     <IconButton label={`Remove step ${index + 1}`} size="small" disabled={disabled} onClick={onRemove}>
@@ -936,7 +896,12 @@ function ActionCard({
     <IconButton label={`Move action ${index + 1} up`} size="small" disabled={disabled || index === 0} onClick={() => onMove(-1)}>
      <ArrowUp size={13} />
     </IconButton>
-    <IconButton label={`Move action ${index + 1} down`} size="small" disabled={disabled || index === total - 1} onClick={() => onMove(1)}>
+    <IconButton
+     label={`Move action ${index + 1} down`}
+     size="small"
+     disabled={disabled || index === total - 1}
+     onClick={() => onMove(1)}
+    >
      <ArrowDown size={13} />
     </IconButton>
     <IconButton label={`Remove action ${index + 1}`} size="small" disabled={disabled} onClick={onRemove}>
@@ -944,7 +909,12 @@ function ActionCard({
     </IconButton>
    </div>
    <div className="inline-add">
-    <Checkbox label="Enabled" checked={action.enabled} disabled={disabled} onCheckedChange={(on) => patch({ enabled: on })} />
+    <Checkbox
+     label="Enabled"
+     checked={action.enabled}
+     disabled={disabled}
+     onCheckedChange={(on) => patch({ enabled: on })}
+    />
     {/* Burp's "unless one of the actions specifies that no further actions should be applied to
         the request". Offered on every kind, because that is what Burp does — the switch is about
         the request, not about the action that happens to carry it. */}
@@ -960,9 +930,10 @@ function ActionCard({
     action.macro.length > 0 ? (
      <div className="notice notice-warn">
       <span>
-       This action carries its own {action.macro.length} step(s), so it replays those and not the rule&apos;s macro below. That is what the
-       rule already states — it is shown rather than folded into the macro section, because editing that section would otherwise appear to
-       change this action and would not.
+       This action carries its own {action.macro.length} step(s), so it replays those and not the
+       rule&apos;s macro below. That is what the rule already states — it is shown rather than folded
+       into the macro section, because editing that section would otherwise appear to change this
+       action and would not.
       </span>
       <Button variant="outline" size="small" disabled={disabled} onClick={() => patch({ macro: [] })}>
        Use the rule&apos;s macro instead
@@ -970,8 +941,8 @@ function ActionCard({
      </div>
     ) : (
      <small className="field-hint">
-      Runs the rule&apos;s {ruleStepCount} macro step(s) below. A macro action never sends the request being processed — for that, use "Run
-      a post-request macro".
+      Runs the rule&apos;s {ruleStepCount} macro step(s) below. A macro action never sends the request
+      being processed — for that, use "Run a post-request macro".
      </small>
     )
    ) : null}
@@ -1037,31 +1008,42 @@ function ActionCard({
       </Toolbar>
      ) : null}
      <small className="field-hint">
-      Parameters come from the final macro response&apos;s forms and links, and only ones this request already carries (query or urlencoded
-      body) are updated. Matched by name and the URL the response points them at, unless the mismatch is tolerated.
+      Parameters come from the final macro response&apos;s forms and links, and only ones this request
+      already carries (query or urlencoded body) are updated. Matched by name and the URL the response
+      points them at, unless the mismatch is tolerated.
      </small>
     </div>
    ) : null}
 
    {action.kind === "add_cookies_from_jar" ? (
     <small className="field-hint">
-     Attaches the session-handling jar&apos;s cookies for this request&apos;s own host, port and scheme. That used to happen implicitly on
-     every send; as an action it can be ordered against a macro that rewrites the cookie the request should carry.
+     Attaches the session-handling jar&apos;s cookies for this request&apos;s own host, port and
+     scheme. That used to happen implicitly on every send; as an action it can be ordered against a
+     macro that rewrites the cookie the request should carry.
     </small>
    ) : null}
 
    {action.kind === "set_cookie" || action.kind === "set_header" || action.kind === "set_param" ? (
     <div className="form-grid">
      <Field label={action.kind === "set_cookie" ? "Cookie name" : action.kind === "set_header" ? "Header name" : "Parameter name"}>
-      {(id) => <Input id={id} value={action.name} disabled={disabled} onChange={(event) => patch({ name: event.target.value })} />}
+      {(id) => (
+       <Input id={id} value={action.name} disabled={disabled} onChange={(event) => patch({ name: event.target.value })} />
+      )}
      </Field>
      <Field label="Value" hint="{{name}} is replaced by a value a macro action extracted earlier in this list.">
-      {(id) => <Input id={id} value={action.value} disabled={disabled} onChange={(event) => patch({ value: event.target.value })} />}
+      {(id) => (
+       <Input id={id} value={action.value} disabled={disabled} onChange={(event) => patch({ value: event.target.value })} />
+      )}
      </Field>
      {action.kind === "set_param" ? (
       <Field label="Where" hint="Blank means wherever the parameter already is, and the query string when it is nowhere.">
        {(id) => (
-        <Select id={id} value={action.in} disabled={disabled} onChange={(event) => patch({ in: event.target.value as ActionDraft["in"] })}>
+        <Select
+         id={id}
+         value={action.in}
+         disabled={disabled}
+         onChange={(event) => patch({ in: event.target.value as ActionDraft["in"] })}
+        >
          <option value="">Wherever it is</option>
          <option value="query">Query string</option>
          <option value="body">Form body</option>
@@ -1085,10 +1067,16 @@ function ActionCard({
       </Field>
      </div>
      <div className="inline-add">
-      <Checkbox label="Regular expression" checked={action.regex} disabled={disabled} onCheckedChange={(on) => patch({ regex: on })} />
+      <Checkbox
+       label="Regular expression"
+       checked={action.regex}
+       disabled={disabled}
+       onCheckedChange={(on) => patch({ regex: on })}
+      />
      </div>
      <small className="field-hint">
-      Applied to the URL, every header name and value, and the body — over the request as the actions before it left it.
+      Applied to the URL, every header name and value, and the body — over the request as the actions
+      before it left it.
      </small>
     </>
    ) : null}
@@ -1137,8 +1125,9 @@ function ActionCard({
       )}
      </Field>
      <small className="field-hint">
-      The plugin is handed the request as the actions before this one left it, and answers with the request to send. With no plugin loaded
-      the action is refused and says so — nothing is sent silently unchanged.
+      The plugin is handed the request as the actions before this one left it, and answers with the
+      request to send. With no plugin loaded the action is refused and says so — nothing is sent
+      silently unchanged.
      </small>
     </>
    ) : null}
@@ -1146,8 +1135,8 @@ function ActionCard({
    {isCheck ? (
     <>
      <small className="field-hint">
-      Evaluated against the rule&apos;s validity check below, unless this action states one of its own (in which case that one is used, and
-      the section below is not consulted by this action).
+      Evaluated against the rule&apos;s validity check below, unless this action states one of its
+      own (in which case that one is used, and the section below is not consulted by this action).
      </small>
      {/* Burp's "validate the session after a set number of requests" (us12,
          validate_every_num_requests): a cost dial, not a correctness one, so it is stated as the
@@ -1191,12 +1180,7 @@ export function SessionPage(): JSX.Element {
  const traceEnabled = traceQuery.data?.enabled ?? false;
  const toggleTracer = (on: boolean) => {
   traceEnable.mutate(on, {
-   onSuccess: () =>
-    toast.success(
-     on
-      ? "Tracer on — it adds work to every request a rule handles, so turn it off when you are done"
-      : "Tracer off. What it recorded is kept below.",
-    ),
+   onSuccess: () => toast.success(on ? "Tracer on — it adds work to every request a rule handles, so turn it off when you are done" : "Tracer off. What it recorded is kept below."),
    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Toggling the tracer failed"),
   });
  };
@@ -1206,17 +1190,9 @@ export function SessionPage(): JSX.Element {
  const [editingCookie, setEditingCookie] = useState<{ host: string; port: number; tls: boolean; name: string; value: string } | null>(null);
 
  const applyCookieWrite = (
-  vars: {
-   action: "set" | "remove" | "clear" | "monitor";
-   host?: string;
-   port?: number;
-   tls?: boolean;
-   name?: string;
-   value?: string;
-   tools?: string[];
-  },
+  vars: { action: "set" | "remove" | "clear" | "monitor"; host?: string; port?: number; tls?: boolean; name?: string; value?: string; tools?: string[] },
   label: string,
- ) =>
+) =>
   jarWrite.mutate(vars, {
    onSuccess: (out) => {
     if (out.action === "remove" && out.removed === false) {
@@ -1682,11 +1658,7 @@ export function SessionPage(): JSX.Element {
          variant="outline"
          size="small"
          disabled={!wired || editing.id === undefined || analyzeMacro.isPending}
-         title={
-          editing.id === undefined
-           ? "Save the rule before analyzing it"
-           : "Find the parameter relationships this rule's responses determine"
-         }
+         title={editing.id === undefined ? "Save the rule before analyzing it" : "Find the parameter relationships this rule's responses determine"}
          onClick={runAnalyze}
         >
          <SearchCheck size={13} />
@@ -1767,7 +1739,9 @@ export function SessionPage(): JSX.Element {
            onChange={() =>
             setEditing({
              ...editing,
-             tools: editing.tools.includes(tool) ? editing.tools.filter((name) => name !== tool) : [...editing.tools, tool],
+             tools: editing.tools.includes(tool)
+              ? editing.tools.filter((name) => name !== tool)
+              : [...editing.tools, tool],
             })
            }
           />
@@ -1783,64 +1757,41 @@ export function SessionPage(): JSX.Element {
       <div className="stack-tight">
        <span className="eyebrow">URL scope</span>
        <div className="row-list">
-        {(
-         [
-          ["all", "Include all URLs"],
-          ["suite", "Use suite scope [defined in Target tab]"],
-          ["custom", "Use custom scope"],
-         ] as const
-        ).map(([mode, label]) => (
-         <label
-          key={mode}
-          className="field-label"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)" }}
-         >
-          <input
-           type="radio"
-           name="url-scope-mode"
-           value={mode}
-           checked={editing.scopeMode === mode}
-           disabled={!wired}
-           onChange={() => setEditing({ ...editing, scopeMode: mode })}
-          />
-          {label}
-         </label>
-        ))}
+        {([["all", "Include all URLs"], ["suite", "Use suite scope [defined in Target tab]"], ["custom", "Use custom scope"]] as const).map(
+          ([mode, label]) => (
+            <label key={mode} className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)" }}>
+              <input
+                type="radio"
+                name="url-scope-mode"
+                value={mode}
+                checked={editing.scopeMode === mode}
+                disabled={!wired}
+                onChange={() => setEditing({ ...editing, scopeMode: mode })}
+              />
+              {label}
+            </label>
+          ),
+        )}
        </div>
        {editing.scopeMode === "custom" ? (
         <>
          <div className="form-grid">
           <Field label="Path prefix" hint="Blank covers the whole host.">
            {(id) => (
-            <Input
-             id={id}
-             value={editing.scopePath}
-             disabled={!wired}
-             placeholder="/api"
-             onChange={(event) => setEditing({ ...editing, scopePath: event.target.value })}
-            />
+            <Input id={id} value={editing.scopePath} disabled={!wired} placeholder="/api"
+             onChange={(event) => setEditing({ ...editing, scopePath: event.target.value })} />
            )}
           </Field>
           <Field label="Port" hint="Blank matches any port.">
            {(id) => (
-            <Input
-             id={id}
-             value={editing.scopePort}
-             disabled={!wired}
-             placeholder="443"
-             inputMode="numeric"
-             onChange={(event) => setEditing({ ...editing, scopePort: event.target.value })}
-            />
+            <Input id={id} value={editing.scopePort} disabled={!wired} placeholder="443" inputMode="numeric"
+             onChange={(event) => setEditing({ ...editing, scopePort: event.target.value })} />
            )}
           </Field>
           <Field label="Protocol" hint="Blank matches either scheme.">
            {(id) => (
-            <select
-             id={id}
-             value={editing.scopeProtocol}
-             disabled={!wired}
-             onChange={(event) => setEditing({ ...editing, scopeProtocol: event.target.value as "" | "http" | "https" })}
-            >
+            <select id={id} value={editing.scopeProtocol} disabled={!wired}
+             onChange={(event) => setEditing({ ...editing, scopeProtocol: event.target.value as "" | "http" | "https" })}>
              <option value="">Any</option>
              <option value="http">http</option>
              <option value="https">https</option>
@@ -1853,61 +1804,64 @@ export function SessionPage(): JSX.Element {
       </div>
 
       {editing.scopeMode === "custom" ? (
-       <div className="stack-tight">
-        <span className="eyebrow">Hosts this rule covers</span>
-        {editing.hosts.length === 0 ? <small className="field-hint">No hosts listed, so the rule applies everywhere.</small> : null}
-        {editing.hosts.map((host, index) => (
-         <div className="kv-row" key={index}>
-          <Input
-           aria-label={`Scope host ${index + 1}`}
-           title={`Scope host ${index + 1}`}
-           value={host}
-           disabled={!wired}
-           onChange={(event) =>
-            setEditing({ ...editing, hosts: editing.hosts.map((value, i) => (i === index ? event.target.value : value)) })
-           }
-          />
-          <span className="cell-dim">host pattern</span>
-          <IconButton
-           label={`Remove scope host ${index + 1}`}
-           size="small"
-           disabled={!wired}
-           onClick={() => setEditing({ ...editing, hosts: editing.hosts.filter((_, i) => i !== index) })}
-          >
-           <X size={13} />
-          </IconButton>
-         </div>
-        ))}
-        <div className="inline-add">
+      <div className="stack-tight">
+       <span className="eyebrow">Hosts this rule covers</span>
+       {editing.hosts.length === 0 ? (
+        <small className="field-hint">No hosts listed, so the rule applies everywhere.</small>
+       ) : null}
+       {editing.hosts.map((host, index) => (
+        <div className="kv-row" key={index}>
          <Input
-          aria-label="New scope host"
-          title="New scope host"
-          value={newHost}
-          placeholder="target.test"
+          aria-label={`Scope host ${index + 1}`}
+          title={`Scope host ${index + 1}`}
+          value={host}
           disabled={!wired}
-          onChange={(event) => setNewHost(event.target.value)}
+          onChange={(event) =>
+           setEditing({ ...editing, hosts: editing.hosts.map((value, i) => (i === index ? event.target.value : value)) })
+          }
          />
-         <Button
-          variant="outline"
+         <span className="cell-dim">host pattern</span>
+         <IconButton
+          label={`Remove scope host ${index + 1}`}
           size="small"
-          disabled={!wired || !newHost.trim()}
-          onClick={() => {
-           setEditing({ ...editing, hosts: [...editing.hosts, newHost.trim()] });
-           setNewHost("");
-          }}
+          disabled={!wired}
+          onClick={() => setEditing({ ...editing, hosts: editing.hosts.filter((_, i) => i !== index) })}
          >
-          <Plus size={13} />
-          Add host
-         </Button>
+          <X size={13} />
+         </IconButton>
         </div>
+       ))}
+       <div className="inline-add">
+        <Input
+         aria-label="New scope host"
+         title="New scope host"
+         value={newHost}
+         placeholder="target.test"
+         disabled={!wired}
+         onChange={(event) => setNewHost(event.target.value)}
+        />
+        <Button
+         variant="outline"
+         size="small"
+         disabled={!wired || !newHost.trim()}
+         onClick={() => {
+          setEditing({ ...editing, hosts: [...editing.hosts, newHost.trim()] });
+          setNewHost("");
+         }}
+        >
+         <Plus size={13} />
+         Add host
+        </Button>
+       </div>
        </div>
       ) : null}
 
       <div className="stack-tight">
        <span className="eyebrow">Only requests carrying these parameters</span>
        <small className="field-hint">
-        Optional. The rule applies only where every named parameter exists — Burp's parameter scope, for the canonical "update the CSRF
-        token wherever it appears" rule. No names, no restriction: the rule follows its hosts alone.
+        Optional. The rule applies only where every named parameter exists — Burp's parameter
+        scope, for the canonical "update the CSRF token wherever it appears" rule. No names, no
+        restriction: the rule follows its hosts alone.
        </small>
        {editing.params.map((param, index) => (
         <div className="kv-row" key={index}>
@@ -1964,14 +1918,15 @@ export function SessionPage(): JSX.Element {
        <Card>
         <SectionHeading
          title="Parameter relationships"
-         detail={
-          suggestions.length === 0
-           ? "No new values the responses determine — everything found is already wired."
-           : "Values the dry-run's responses determined. Picked rows will be added to the rule as extractions."
-         }
+         detail={suggestions.length === 0 ? "No new values the responses determine — everything found is already wired." : "Values the dry-run's responses determined. Picked rows will be added to the rule as extractions."}
          actions={
           <>
-           <Button variant="outline" size="small" disabled={suggestions.length === 0 || applyExtractions.isPending} onClick={runApply}>
+           <Button
+            variant="outline"
+            size="small"
+            disabled={suggestions.length === 0 || applyExtractions.isPending}
+            onClick={runApply}
+           >
             <Wand2 size={13} />
             {applyExtractions.isPending ? "Wiring…" : `Wire ${pickedSuggestions.length}`}
            </Button>
@@ -1996,14 +1951,14 @@ export function SessionPage(): JSX.Element {
              type="checkbox"
              checked={pickedSuggestions.includes(sug.name)}
              onChange={(event) => {
-              const next = event.target.checked ? [...pickedSuggestions, sug.name] : pickedSuggestions.filter((n) => n !== sug.name);
+              const next = event.target.checked
+               ? [...pickedSuggestions, sug.name]
+               : pickedSuggestions.filter((n) => n !== sug.name);
               setPickedSuggestions(next);
              }}
             />
             <code>{`{{${sug.name}}}`}</code>
-            <span className="cell-dim">
-             from step {sug.step + 1}'s {sug.source}
-            </span>
+            <span className="cell-dim">from step {sug.step + 1}'s {sug.source}</span>
             <span className="cell-dim">·</span>
             <code className="cell-dim">{sug.value}</code>
            </label>
@@ -2016,23 +1971,27 @@ export function SessionPage(): JSX.Element {
        <div className="stack-tight">
         <span className="eyebrow">Test macro report</span>
         <small className="field-hint">
-         The dry-run as it just ran: each step's request, the response, cookies the response set, and every extraction's outcome. Nothing
-         was promoted — run the login to do that.
+         The dry-run as it just ran: each step's request, the response, cookies the response set,
+         and every extraction's outcome. Nothing was promoted — run the login to do that.
         </small>
         <div className="stack-tight">
          {testReport.steps.map((step) => (
           <Card key={step.index}>
            <SectionHeading
             title={`Step ${step.index + 1} — ${step.sent.method} ${step.sent.url}`}
-            detail={step.response ? `answered ${step.response.status}` : (step.skipped ?? "no response")}
+            detail={
+             step.response
+              ? `answered ${step.response.status}`
+              : (step.skipped ?? "no response")
+            }
            />
-           {step.sent_cookie ? <p className="field-hint">Sent with Cookie: {step.sent_cookie}</p> : null}
+           {step.sent_cookie ? (
+            <p className="field-hint">Sent with Cookie: {step.sent_cookie}</p>
+           ) : null}
            {step.set_cookies && step.set_cookies.length > 0 ? (
             <div className="stack-tight">
              {step.set_cookies.map((cookie, i) => (
-              <p key={i} className="field-hint">
-               Set-Cookie: {cookie}
-              </p>
+              <p key={i} className="field-hint">Set-Cookie: {cookie}</p>
              ))}
             </div>
            ) : null}
@@ -2066,7 +2025,9 @@ export function SessionPage(): JSX.Element {
 
       <div className="stack-tight">
        <span className="eyebrow">Validity check</span>
-       <small className="field-hint">Every stated field has to hold for the probe response to count as a valid session.</small>
+       <small className="field-hint">
+        Every stated field has to hold for the probe response to count as a valid session.
+       </small>
        <div className="form-grid">
         <Field label="Status is" hint="Blank means status is not checked.">
          {(id) => (
@@ -2111,8 +2072,8 @@ export function SessionPage(): JSX.Element {
        {nested ? (
         <div className="notice notice-warn">
          <span>
-          This rule combines conditions with all / any / not. Those nested branches are kept exactly as saved — the fields above edit the
-          flat conditions only.
+          This rule combines conditions with all / any / not. Those nested branches are kept exactly as
+          saved — the fields above edit the flat conditions only.
          </span>
         </div>
        ) : null}
@@ -2270,7 +2231,11 @@ export function SessionPage(): JSX.Element {
        open={recorderOpen}
        onOpenChange={setRecorderOpen}
        onRecord={(steps) =>
-        setEditing((current) => (current === null ? current : { ...current, steps: withRecordedSteps(current.steps, steps.map(stepIn)) }))
+        setEditing((current) =>
+         current === null
+          ? current
+          : { ...current, steps: withRecordedSteps(current.steps, steps.map(stepIn)) },
+        )
        }
       />
      </div>
@@ -2293,7 +2258,8 @@ export function SessionPage(): JSX.Element {
            toast.success(`Macro of “${promotable.name}” replaced with ${result.steps.length} observed step(s)`);
            setPromotable(null);
           },
-          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not promote the macro"),
+          onError: (failure: unknown) =>
+           toast.error(failure instanceof Error ? failure.message : "Could not promote the macro"),
          })
         }
        >
@@ -2371,41 +2337,41 @@ export function SessionPage(): JSX.Element {
           following tools". Rendered from the server's own monitored/absorbing_from pair, so
           "attached" and "absorbing" stay the two facts they are — a source switched off shows
           unticked, not vanished. */}
-       <div className="stack-tight">
-        <span className="field-hint">Monitor for cookies:</span>
-        <div className="chip-row">
-         {(cookiesQuery.data?.absorbing_from ?? []).map((src) => {
-          const on = (cookiesQuery.data?.monitored ?? []).includes(src);
-          return (
-           <label key={src} className="check-row">
-            <input
-             type="checkbox"
-             checked={on}
-             aria-label={`Monitor ${src} for cookies`}
-             onChange={(event) => {
-              const set = new Set(cookiesQuery.data?.monitored ?? []);
-              if (event.target.checked) set.add(src);
-              else set.delete(src);
-              // Never fewer than one: un-monitoring every surface is a jar that can only stay
-              // empty, and the server refuses it — reflect that here rather than letting the
-              // click appear to work.
-              if (set.size === 0) {
-               toast.error("At least one tool must be monitored — the jar would never fill");
-               return;
-              }
-              applyCookieWrite(
-               { action: "monitor", tools: [...set] },
-               `Now monitoring ${set.size} tool${set.size === 1 ? "" : "s"} for cookies`,
-              );
-             }}
-            />{" "}
-            {src}
-           </label>
-          );
-         })}
-        </div>
+      <div className="stack-tight">
+       <span className="field-hint">Monitor for cookies:</span>
+       <div className="chip-row">
+        {(cookiesQuery.data?.absorbing_from ?? []).map((src) => {
+         const on = (cookiesQuery.data?.monitored ?? []).includes(src);
+         return (
+          <label key={src} className="check-row">
+           <input
+            type="checkbox"
+            checked={on}
+            aria-label={`Monitor ${src} for cookies`}
+            onChange={(event) => {
+             const set = new Set(cookiesQuery.data?.monitored ?? []);
+             if (event.target.checked) set.add(src);
+             else set.delete(src);
+             // Never fewer than one: un-monitoring every surface is a jar that can only stay
+             // empty, and the server refuses it — reflect that here rather than letting the
+             // click appear to work.
+             if (set.size === 0) {
+              toast.error("At least one tool must be monitored — the jar would never fill");
+              return;
+             }
+             applyCookieWrite(
+              { action: "monitor", tools: [...set] },
+              `Now monitoring ${set.size} tool${set.size === 1 ? "" : "s"} for cookies`,
+             );
+            }}
+           />
+           {" "}{src}
+          </label>
+         );
+        })}
        </div>
-       {cookieRows.length > 0 ? (
+      </div>
+      {cookieRows.length > 0 ? (
         <Button
          variant="outline"
          size="small"
@@ -2530,15 +2496,16 @@ export function SessionPage(): JSX.Element {
    <Card>
     <SectionHeading
      title="Session handling tracer"
-     detail={
-      traceEnabled
-       ? "Recording. Every request a rule handles is traced — the overhead is real; turn this off when you are done."
-       : "Off. Turn it on to record, per request a rule handles, which rule matched and what each action changed. What a run recorded is kept after you switch it off."
-     }
+     detail={traceEnabled ? "Recording. Every request a rule handles is traced — the overhead is real; turn this off when you are done." : "Off. Turn it on to record, per request a rule handles, which rule matched and what each action changed. What a run recorded is kept after you switch it off."}
      actions={
       <>
        <Badge tone={traceEnabled ? "good" : "neutral"}>{traceEnabled ? "recording" : "off"}</Badge>
-       <Button variant="outline" size="small" disabled={traceEnable.isPending} onClick={() => toggleTracer(!traceEnabled)}>
+       <Button
+        variant="outline"
+        size="small"
+        disabled={traceEnable.isPending}
+        onClick={() => toggleTracer(!traceEnabled)}
+       >
         {traceEnabled ? "Stop tracing" : "Start tracing"}
        </Button>
        <RefreshButton onClick={() => void traceQuery.refetch()} loading={traceQuery.isFetching} label="Refresh tracer" />
@@ -2548,31 +2515,17 @@ export function SessionPage(): JSX.Element {
     {(traceQuery.data?.entries ?? []).length === 0 ? (
      <Empty
       title={traceEnabled ? "No request handled yet" : "Nothing recorded"}
-      detail={
-       traceEnabled
-        ? "Nothing a session rule has applied to yet. The tracer lists handled requests only — traffic no rule matches is not traced."
-        : "Enable the tracer, drive some traffic a rule handles, and the sequence of rules and actions — with each step's change — is listed here."
-      }
+      detail={traceEnabled ? "Nothing a session rule has applied to yet. The tracer lists handled requests only — traffic no rule matches is not traced." : "Enable the tracer, drive some traffic a rule handles, and the sequence of rules and actions — with each step's change — is listed here."}
      />
     ) : (
      <div className="stack-tight">
       {(traceQuery.data?.entries ?? []).map((entry, index) => (
        <div key={index} className="trace-entry">
         <div className="trace-entry-head">
-         <code>
-          {entry.host}
-          {entry.path}
-         </code>
-         <span className="cell-dim">
-          {entry.tool ? `via ${entry.tool} · ` : ""}
-          {new Date(entry.at).toLocaleTimeString()} ·{" "}
-         </span>
+         <code>{entry.host}{entry.path}</code>
+         <span className="cell-dim">{entry.tool ? `via ${entry.tool} · ` : ""}{new Date(entry.at).toLocaleTimeString()} · </span>
          <Badge>{entry.rule}</Badge>
-         <Badge
-          tone={entry.kind === "recovered" || entry.kind === "rule applied" ? "good" : entry.kind === "already valid" ? "neutral" : "warn"}
-         >
-          {entry.kind}
-         </Badge>
+         <Badge tone={entry.kind === "recovered" || entry.kind === "rule applied" ? "good" : entry.kind === "already valid" ? "neutral" : "warn"}>{entry.kind}</Badge>
         </div>
         {(entry.actions ?? []).length > 0 ? (
          <ol className="trace-actions">
@@ -2591,8 +2544,8 @@ export function SessionPage(): JSX.Element {
        </div>
       ))}
       <p className="field-hint">
-       The tracer keeps the last {traceQuery.data?.capacity ?? 200} handled requests — older entries are dropped, so leave it off when you
-       are not troubleshooting.
+       The tracer keeps the last {traceQuery.data?.capacity ?? 200} handled requests — older
+       entries are dropped, so leave it off when you are not troubleshooting.
       </p>
      </div>
     )}
@@ -2612,7 +2565,11 @@ export function SessionPage(): JSX.Element {
      <div className="stack">
       <Field label="Value">
        {(id) => (
-        <Input id={id} value={editingCookie.value} onChange={(e) => setEditingCookie({ ...editingCookie, value: e.target.value })} />
+        <Input
+         id={id}
+         value={editingCookie.value}
+         onChange={(e) => setEditingCookie({ ...editingCookie, value: e.target.value })}
+        />
        )}
       </Field>
       <div className="page-actions">
@@ -2623,14 +2580,7 @@ export function SessionPage(): JSX.Element {
         disabled={jarWrite.isPending}
         onClick={() => {
          applyCookieWrite(
-          {
-           action: "set",
-           host: editingCookie.host.split(":").slice(0, -1).join(":") || editingCookie.host,
-           port: editingCookie.port,
-           tls: editingCookie.tls,
-           name: editingCookie.name,
-           value: editingCookie.value,
-          },
+          { action: "set", host: editingCookie.host.split(":").slice(0, -1).join(":") || editingCookie.host, port: editingCookie.port, tls: editingCookie.tls, name: editingCookie.name, value: editingCookie.value },
           `Updated ${editingCookie.name}`,
          );
          setEditingCookie(null);
@@ -2655,11 +2605,7 @@ export function SessionPage(): JSX.Element {
      <Button variant="outline" onClick={() => setConfirmDelete(null)}>
       Keep it
      </Button>
-     <Button
-      variant="danger"
-      disabled={deleteRule.isPending}
-      onClick={() => (confirmDelete === null ? undefined : onDelete(confirmDelete))}
-     >
+     <Button variant="danger" disabled={deleteRule.isPending} onClick={() => (confirmDelete === null ? undefined : onDelete(confirmDelete))}>
       <Trash2 size={13} />
       Delete rule
      </Button>

@@ -22,9 +22,9 @@ import type { Advisory } from "./types";
  * severity: nothing on this screen has been found, so there is no occurrence to rate.
  */
 export interface AdvisoryIndexRow {
- type_index: string;
- name: string;
- typical_severity: string;
+  type_index: string;
+  name: string;
+  typical_severity: string;
 }
 
 /**
@@ -38,21 +38,21 @@ export interface AdvisoryIndexRow {
  * state for both.
  */
 export interface AdvisoryCatalogue {
- loaded: boolean;
- /** The whole catalogue, before any filter — the denominator in "N of M". */
- count: number;
- /** How many definitions survived the filter. Equal to `count` when nothing is filtered. */
- matched: number;
- /**
-  * The whole catalogue partitioned by typical severity, keyed by the uppercase severity name. It
-  * labels the severity filter's options, so it describes what selecting one *would* find rather
-  * than what the current filter did find — and it sums to `count`, which the Go handler test
-  * asserts.
-  */
- severity_counts?: Record<string, number>;
- /** Why the catalogue is absent or empty. Absent when there is nothing to explain. */
- hint?: string;
- advisories: AdvisoryIndexRow[];
+  loaded: boolean;
+  /** The whole catalogue, before any filter — the denominator in "N of M". */
+  count: number;
+  /** How many definitions survived the filter. Equal to `count` when nothing is filtered. */
+  matched: number;
+  /**
+   * The whole catalogue partitioned by typical severity, keyed by the uppercase severity name. It
+   * labels the severity filter's options, so it describes what selecting one *would* find rather
+   * than what the current filter did find — and it sums to `count`, which the Go handler test
+   * asserts.
+   */
+  severity_counts?: Record<string, number>;
+  /** Why the catalogue is absent or empty. Absent when there is nothing to explain. */
+  hint?: string;
+  advisories: AdvisoryIndexRow[];
 }
 
 export type { Advisory };

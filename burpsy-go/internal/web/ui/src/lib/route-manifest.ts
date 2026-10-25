@@ -38,11 +38,7 @@ export function parseGatedRiskClasses(agentToolsGo: string): string[] {
  if (!fn?.[1]) throw new Error("needsConfirmation not found in agent_tools.go");
  const trueCase = /case ([^:]+):\s*return true/.exec(fn[1]);
  if (!trueCase?.[1]) throw new Error("needsConfirmation has no `case …: return true`");
- return trueCase[1]
-  .split(",")
-  .map((name) => name.trim())
-  .filter(Boolean)
-  .sort();
+ return trueCase[1].split(",").map((name) => name.trim()).filter(Boolean).sort();
 }
 
 /** Every manifest pattern with its risk class, in source order. */

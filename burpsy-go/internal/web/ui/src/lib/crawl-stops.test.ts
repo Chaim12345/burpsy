@@ -8,19 +8,8 @@ function run(state: CrawlRun["state"], stops?: string[]): Pick<CrawlRun, "state"
  return {
   state,
   report: {
-   seeds: [],
-   form_submission: false,
-   robots_policy: "",
-   fetched: 4,
-   refused: 0,
-   failed: 0,
-   not_captured: 0,
-   links_found: 0,
-   forms_found: 0,
-   forms_submitted: 0,
-   locations: 0,
-   duplicate_locations: 0,
-   elapsed: 0,
+   seeds: [], form_submission: false, robots_policy: "", fetched: 4, refused: 0, failed: 0, not_captured: 0,
+   links_found: 0, forms_found: 0, forms_submitted: 0, locations: 0, duplicate_locations: 0, elapsed: 0,
    ...(stops ? { limits: { stops } } : {}),
   },
  };

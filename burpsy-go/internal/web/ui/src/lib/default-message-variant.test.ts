@@ -21,38 +21,38 @@ import { persistedWorkspace, useApp } from "./store";
 import type { MessageVariant } from "../ui/variant-picker";
 
 function reset() {
- // Zustand's setState with replace, so each test starts from the store's own defaults
- // rather than the previous test's leftovers.
- useApp.setState({ defaultMessageVariant: "original" });
+  // Zustand's setState with replace, so each test starts from the store's own defaults
+  // rather than the previous test's leftovers.
+  useApp.setState({ defaultMessageVariant: "original" });
 }
 
 describe("the default message reading is a persisted preference", () => {
- beforeEach(reset);
+  beforeEach(reset);
 
- test("partialize carries the reading, so it survives the session", () => {
-  useApp.getState().setDefaultMessageVariant("auto-modified");
-  const persisted = persistedWorkspace(useApp.getState());
-  // The key must be present by name: a persisted object that serializes the value into a
-  // different key would pass a value check and lose the setting on load.
-  expect(Object.keys(persisted)).toContain("defaultMessageVariant");
-  expect(persisted.defaultMessageVariant).toBe("auto-modified");
- });
+  test("partialize carries the reading, so it survives the session", () => {
+    useApp.getState().setDefaultMessageVariant("auto-modified");
+    const persisted = persistedWorkspace(useApp.getState());
+    // The key must be present by name: a persisted object that serializes the value into a
+    // different key would pass a value check and lose the setting on load.
+    expect(Object.keys(persisted)).toContain("defaultMessageVariant");
+    expect(persisted.defaultMessageVariant).toBe("auto-modified");
+  });
 
- test("the out-of-box default is Original, Burp's own construction default", () => {
-  // Not "edited": Burp initialises both direction entries to Zpg8.ORIGINAL, and a migrated
-  // operator's habits expect exactly that. This is the line that keeps the parity honest.
-  expect(useApp.getState().defaultMessageVariant).toBe("original");
-  const persisted = persistedWorkspace(useApp.getState());
-  expect(persisted.defaultMessageVariant).toBe("original");
- });
+  test("the out-of-box default is Original, Burp's own construction default", () => {
+    // Not "edited": Burp initialises both direction entries to Zpg8.ORIGINAL, and a migrated
+    // operator's habits expect exactly that. This is the line that keeps the parity honest.
+    expect(useApp.getState().defaultMessageVariant).toBe("original");
+    const persisted = persistedWorkspace(useApp.getState());
+    expect(persisted.defaultMessageVariant).toBe("original");
+  });
 
- test("every variant the picker offers is a value the setting can hold", () => {
-  // The three-way contract: if the picker's union ever gains or renames a reading, this loop
-  // fails until the settings panel's option table and the store's type agree again.
-  const readings: MessageVariant[] = ["original", "edited", "auto-modified"];
-  for (const reading of readings) {
-   useApp.getState().setDefaultMessageVariant(reading);
-   expect(useApp.getState().defaultMessageVariant).toBe(reading);
-  }
- });
+  test("every variant the picker offers is a value the setting can hold", () => {
+    // The three-way contract: if the picker's union ever gains or renames a reading, this loop
+    // fails until the settings panel's option table and the store's type agree again.
+    const readings: MessageVariant[] = ["original", "edited", "auto-modified"];
+    for (const reading of readings) {
+      useApp.getState().setDefaultMessageVariant(reading);
+      expect(useApp.getState().defaultMessageVariant).toBe(reading);
+    }
+  });
 });

@@ -15,8 +15,8 @@ const RESPONSE = [
  "<html><body>",
  '<form method="post">',
  '<input type="hidden" NAME="csrf_token" value="a1b2c3d4">',
- "<input type='text' name='user' value='ignored'>",
- '<select name="locale"><option value="en">en</option></select>',
+ '<input type=\'text\' name=\'user\' value=\'ignored\'>',
+ "<select name=\"locale\"><option value=\"en\">en</option></select>",
  "</form>",
  "</body></html>",
 ].join("\r\n");

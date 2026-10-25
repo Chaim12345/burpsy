@@ -41,76 +41,82 @@ import type { MenuGroup } from "../ui/menu";
  * rather than a heading that opens onto nothing.
  */
 export function usePluginExchangeActions(): ReturnType<typeof useExchangeActions> {
- const base = useExchangeActions();
- const extensions = useExtensions();
- const invoke = useInvokeExtension();
+  const base = useExchangeActions();
+  const extensions = useExtensions();
+  const invoke = useInvokeExtension();
 
- // The mutation object is new on every render, so the callback is memoised on `mutate` — which is
- // stable — rather than on `invoke`. Without that, `menu` would change identity every render and
- // every page's memoised menu groups would rebuild on every keystroke elsewhere in the page.
- const mutate = invoke.mutate;
- const run = useMemo(
-  () => (call: PluginInvocation, target: PluginTarget) => {
-   void (async () => {
-    let raw = target.raw;
-    if (raw === undefined && target.message !== undefined) {
-     try {
-      raw = await fetchRaw(target.message);
-     } catch (failure: unknown) {
-      toast.error(
-       failure instanceof Error
-        ? `Could not read the request to hand ${call.plugin}: ${failure.message}`
-        : `Could not read the request to hand ${call.plugin}`,
-      );
-      return;
-     }
-    }
-    mutate(
-     {
-      name: call.plugin,
-      registration: call.registration.id,
-      exchange: target.exchange,
-      raw,
-     },
-     {
-      onSuccess: (response) => {
-       const text = response.result.output ?? response.result.text ?? "";
-       // The same rule the Extender page's Run button follows: an empty answer is reported as
-       // an empty answer. A plugin whose whole effect was to log something has nothing to
-       // return, and inventing "done" for it would be a fabricated result.
-       toast.success(text || `${call.registration.label} answered with no text. Anything it did is on ${call.plugin}'s consoles.`);
-      },
-      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : `Invoking ${call.registration.label} failed`),
-     },
-    );
-   })();
-  },
-  [mutate],
- );
+  // The mutation object is new on every render, so the callback is memoised on `mutate` — which is
+  // stable — rather than on `invoke`. Without that, `menu` would change identity every render and
+  // every page's memoised menu groups would rebuild on every keystroke elsewhere in the page.
+  const mutate = invoke.mutate;
+  const run = useMemo(
+    () => (call: PluginInvocation, target: PluginTarget) => {
+      void (async () => {
+        let raw = target.raw;
+        if (raw === undefined && target.message !== undefined) {
+          try {
+            raw = await fetchRaw(target.message);
+          } catch (failure: unknown) {
+            toast.error(
+              failure instanceof Error
+                ? `Could not read the request to hand ${call.plugin}: ${failure.message}`
+                : `Could not read the request to hand ${call.plugin}`,
+            );
+            return;
+          }
+        }
+        mutate(
+          {
+            name: call.plugin,
+            registration: call.registration.id,
+            exchange: target.exchange,
+            raw,
+          },
+          {
+            onSuccess: (response) => {
+              const text = response.result.output ?? response.result.text ?? "";
+              // The same rule the Extender page's Run button follows: an empty answer is reported as
+              // an empty answer. A plugin whose whole effect was to log something has nothing to
+              // return, and inventing "done" for it would be a fabricated result.
+              toast.success(
+                text || `${call.registration.label} answered with no text. Anything it did is on ${call.plugin}'s consoles.`,
+              );
+            },
+            onError: (failure: unknown) =>
+              toast.error(
+                failure instanceof Error ? failure.message : `Invoking ${call.registration.label} failed`,
+              ),
+          },
+        );
+      })();
+    },
+    [mutate],
+  );
 
- const list = extensions.data;
- const baseMenu = base.menu;
- const menu = useMemo(
-  () =>
-   (exchange: Parameters<typeof baseMenu>[0], extra: MenuGroup[] = []): MenuGroup[] =>
-    baseMenu(exchange, [
-     ...extra,
-     ...pluginMenuItems(list, exchange.id, (call, target) =>
-      // The row's request message is what a context-menu plugin acts on: Burp's own
-      // ContextMenuItemsProvider is handed the selected request/response pair, and the request is
-      // the half every such plugin reads first. `target.exchange` still travels, so a plugin that
-      // only wants the id has it.
-      //
-      // OMITTED rather than zero when the row has no request. A blind CONNECT tunnel has no
-      // request bytes, and handing a plugin `message: 0` would point it at the first request the
-      // project ever captured — a different exchange's bytes, acted on under this row's name
-      // (burpsy-react-ui-wtov). A plugin that needs the message reads `undefined` and can say so;
-      // one that only wants the id still has `target.exchange`.
-      run(call, exchange.request === null ? { ...target, message: undefined } : { ...target, message: exchange.request }),
-     ),
-    ]),
-  [baseMenu, list, run],
- );
+  const list = extensions.data;
+  const baseMenu = base.menu;
+  const menu = useMemo(
+    () => (exchange: Parameters<typeof baseMenu>[0], extra: MenuGroup[] = []): MenuGroup[] =>
+      baseMenu(exchange, [
+        ...extra,
+        ...pluginMenuItems(list, exchange.id, (call, target) =>
+          // The row's request message is what a context-menu plugin acts on: Burp's own
+          // ContextMenuItemsProvider is handed the selected request/response pair, and the request is
+          // the half every such plugin reads first. `target.exchange` still travels, so a plugin that
+          // only wants the id has it.
+          //
+          // OMITTED rather than zero when the row has no request. A blind CONNECT tunnel has no
+          // request bytes, and handing a plugin `message: 0` would point it at the first request the
+          // project ever captured — a different exchange's bytes, acted on under this row's name
+          // (burpsy-react-ui-wtov). A plugin that needs the message reads `undefined` and can say so;
+          // one that only wants the id still has `target.exchange`.
+          run(call, exchange.request === null
+            ? { ...target, message: undefined }
+            : { ...target, message: exchange.request }),
+        ),
+      ]),
+    [baseMenu, list, run],
+  );
 
- return { ...base, menu };
+  return { ...base, menu };
 }

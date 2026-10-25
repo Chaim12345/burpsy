@@ -14,17 +14,17 @@ import type { PointView } from "./types.tools";
 export type PayloadPlacement = IntruderConfig["payloadPlacement"];
 
 export const PAYLOAD_PLACEMENTS: { value: PayloadPlacement; label: string; detail: string }[] = [
- {
-  value: "replace",
-  label: "Replace base parameter value",
-  detail: "Each payload overwrites the parameter's value.",
- },
- {
-  value: "append",
-  label: "Append to base parameter value",
-  detail:
-   "Each payload is added after the parameter's value, which is sent as captured. Applies to parameter values only — names, paths, headers and the whole body still replace.",
- },
+  {
+    value: "replace",
+    label: "Replace base parameter value",
+    detail: "Each payload overwrites the parameter's value.",
+  },
+  {
+    value: "append",
+    label: "Append to base parameter value",
+    detail:
+      "Each payload is added after the parameter's value, which is sent as captured. Applies to parameter values only — names, paths, headers and the whole body still replace.",
+  },
 ];
 
 /**
@@ -34,7 +34,7 @@ export const PAYLOAD_PLACEMENTS: { value: PayloadPlacement; label: string; detai
  * is replace.
  */
 export function placementFields(placement: PayloadPlacement | undefined): { payload_placement?: "append" } {
- return placement === "append" ? { payload_placement: "append" } : {};
+  return placement === "append" ? { payload_placement: "append" } : {};
 }
 
 /**
@@ -43,7 +43,7 @@ export function placementFields(placement: PayloadPlacement | undefined): { payl
  * goes, not what the parameter holds.
  */
 export function describePoint(point: Pick<PointView, "kind" | "offset" | "current" | "placement">): string {
- const value = point.current === "" ? "(empty)" : point.current;
- if (point.placement === "append") return `${point.kind} · offset ${point.offset} · appends to ${value}`;
- return `${point.kind} · offset ${point.offset} · ${value}`;
+  const value = point.current === "" ? "(empty)" : point.current;
+  if (point.placement === "append") return `${point.kind} · offset ${point.offset} · appends to ${value}`;
+  return `${point.kind} · offset ${point.offset} · ${value}`;
 }

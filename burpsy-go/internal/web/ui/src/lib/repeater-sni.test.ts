@@ -11,7 +11,7 @@ import { join } from "node:path";
 const page = readFileSync(join(import.meta.dir, "..", "pages", "repeater.tsx"), "utf8");
 
 describe("the Repeater page carries a tab's Override SNI", () => {
- test("on the single send, the group send and the hand-off's own send", () => {
-  expect(page.match(/\.\.\.sniFor\(tab\)/g)?.length).toBe(3);
- });
+  test("on the single send, the group send and the hand-off's own send", () => {
+    expect(page.match(/\.\.\.sniFor\(tab\)/g)?.length).toBe(3);
+  });
 });

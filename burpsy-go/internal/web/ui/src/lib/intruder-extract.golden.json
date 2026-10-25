@@ -1,37 +1,37 @@
 {
- "_comment": "Golden cases for Define extract grep from response (burpsy-react-ui-df8r). intruder-extract.test.ts asserts buildExtractRule produces each regex and its preview extracts value at [start,end); internal/web/intruder_extract_golden_test.go runs each regex as grep_extract through POST /api/intruder/run against a target answering with response and asserts the engine extracts the same value.",
- "cases": [
-  {
-   "name": "metacharacters",
-   "response": "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 66\r\n\r\n<html><title>Shop</title><td>price: $5.00 (approx) [x]</td></html>",
-   "start": 101,
-   "end": 105,
-   "regex": "price: \\$([\\s\\S]*?) \\(approx",
-   "value": "5.00"
-  },
-  {
-   "name": "repeated tokens",
-   "response": "HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n<td>alice</td><td>bob</td><td>carol</td>",
-   "start": 57,
-   "end": 60,
-   "regex": "td><td>([\\s\\S]*?)</td><",
-   "value": "bob"
-  },
-  {
-   "name": "multi-line",
-   "response": "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 35\r\n\r\nError:\r\n  line one\r\n  line two\r\nEnd",
-   "start": 68,
-   "end": 88,
-   "regex": "Error:\\r\\n  ([\\s\\S]*?)\\r\\nEnd",
-   "value": "line one\r\n  line two"
-  },
-  {
-   "name": "at the end",
-   "response": "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\ntoken=abc123",
-   "start": 45,
-   "end": 51,
-   "regex": "token=([\\s\\S]*?)$",
-   "value": "abc123"
-  }
- ]
+  "_comment": "Golden cases for Define extract grep from response (burpsy-react-ui-df8r). intruder-extract.test.ts asserts buildExtractRule produces each regex and its preview extracts value at [start,end); internal/web/intruder_extract_golden_test.go runs each regex as grep_extract through POST /api/intruder/run against a target answering with response and asserts the engine extracts the same value.",
+  "cases": [
+    {
+      "name": "metacharacters",
+      "response": "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 66\r\n\r\n<html><title>Shop</title><td>price: $5.00 (approx) [x]</td></html>",
+      "start": 101,
+      "end": 105,
+      "regex": "price: \\$([\\s\\S]*?) \\(approx",
+      "value": "5.00"
+    },
+    {
+      "name": "repeated tokens",
+      "response": "HTTP/1.1 200 OK\r\nContent-Length: 40\r\n\r\n<td>alice</td><td>bob</td><td>carol</td>",
+      "start": 57,
+      "end": 60,
+      "regex": "td><td>([\\s\\S]*?)</td><",
+      "value": "bob"
+    },
+    {
+      "name": "multi-line",
+      "response": "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 35\r\n\r\nError:\r\n  line one\r\n  line two\r\nEnd",
+      "start": 68,
+      "end": 88,
+      "regex": "Error:\\r\\n  ([\\s\\S]*?)\\r\\nEnd",
+      "value": "line one\r\n  line two"
+    },
+    {
+      "name": "at the end",
+      "response": "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\ntoken=abc123",
+      "start": 45,
+      "end": 51,
+      "regex": "token=([\\s\\S]*?)$",
+      "value": "abc123"
+    }
+  ]
 }

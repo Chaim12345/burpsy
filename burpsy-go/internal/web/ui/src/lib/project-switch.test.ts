@@ -83,11 +83,7 @@ describe("api() on a gated route", () => {
    const url = String(input);
    const headers = new Headers(init?.headers);
    calls.push({ url, method: init?.method ?? "GET", token: headers.get(CONFIRM_HEADER), body: (init?.body as string) ?? null });
-   if (url.endsWith("/confirm"))
-    return new Response(
-     JSON.stringify({ token: "t-1", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
-     { status: 200 },
-    );
+   if (url.endsWith("/confirm")) return new Response(JSON.stringify({ token: "t-1", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
    return new Response(JSON.stringify({ name: "B", unnamed: false, persisted: true, backupable: true }), { status: 200 });
   }) as typeof fetch;
 
@@ -123,9 +119,7 @@ describe("forgetOutgoingProjectPointers", () => {
    checkedExchanges: [0, 1],
    historyQuery: "host = a",
    repeaterTabs: [{ id: "t1", name: "login", target: "https://a", protocol: "https", request: "GET / HTTP/1.1\r\n\r\n", fromExchange: 7 }],
-   closedRepeaterTabs: [
-    { id: "t0", name: "old", target: "https://a", protocol: "https", request: "GET /x HTTP/1.1\r\n\r\n", fromExchange: 2 },
-   ],
+   closedRepeaterTabs: [{ id: "t0", name: "old", target: "https://a", protocol: "https", request: "GET /x HTTP/1.1\r\n\r\n", fromExchange: 2 }],
    intruder: { ...state.intruder, msgId: "4", target: "https://a", payloadTexts: ["admin"] },
   }));
 

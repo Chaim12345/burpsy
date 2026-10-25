@@ -13,20 +13,7 @@ import type { WsConnection, WsRow } from "../lib/types";
 import type { WsMessageDetail } from "../lib/types.observe";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, RefreshButton } from "../ui/layout";
-import {
- Badge,
- Empty,
- ErrorNotice,
- IconButton,
- Input,
- Metric,
- Select,
- Tabs,
- TabsContent,
- TabsList,
- TabsTrigger,
- Toolbar,
-} from "../ui/primitives";
+import { Badge, Empty, ErrorNotice, IconButton, Input, Metric, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { DetailList } from "../ui/json";
 import { VirtualTable, type Column } from "../ui/table";
@@ -79,24 +66,12 @@ function ConnectionRow({
    <Badge>{conn.messages}</Badge>
   </button>
  );
- return (
-  <ContextMenu groups={menuGroups} docTopic="websockets">
-   {row}
-  </ContextMenu>
- );
+ return <ContextMenu groups={menuGroups} docTopic="websockets">{row}</ContextMenu>;
 }
 
 /** Renders one frame's payload. A frame is one of three disjoint shapes on the wire — text, hex, or
  * a close frame's {code, reason} — and each gets its own presentation rather than a generic dump. */
-function PayloadView({
- message,
- isFetching,
- detailMenu,
-}: {
- message: WsMessageDetail | undefined;
- isFetching: boolean;
- detailMenu?: MenuGroup[];
-}): JSX.Element {
+function PayloadView({ message, isFetching, detailMenu }: { message: WsMessageDetail | undefined; isFetching: boolean; detailMenu?: MenuGroup[] }): JSX.Element {
  if (isFetching && !message) return <Empty title="Loading payload…" detail="Fetching the frame's bytes." />;
  if (!message) return <Empty title="No frame selected" detail="Pick a row from the frame table to inspect its payload." />;
 
@@ -207,11 +182,10 @@ export function WebSocketPage(): JSX.Element {
 
  const totals = useMemo(
   () =>
-   conns.reduce((acc, c) => ({ frames: acc.frames + c.messages, sent: acc.sent + c.sent, received: acc.received + c.received }), {
-    frames: 0,
-    sent: 0,
-    received: 0,
-   }),
+   conns.reduce(
+    (acc, c) => ({ frames: acc.frames + c.messages, sent: acc.sent + c.sent, received: acc.received + c.received }),
+    { frames: 0, sent: 0, received: 0 },
+   ),
   [conns],
  );
 
@@ -280,7 +254,8 @@ export function WebSocketPage(): JSX.Element {
     header: "Edited",
     size: 76,
     accessorFn: (row: WsRow) => row.edited,
-    cell: (info) => (info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>),
+    cell: (info) =>
+     info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>,
    },
    {
     // The capture's notes (Burp's Notes column): whatever the relay recorded about this frame —
@@ -290,13 +265,7 @@ export function WebSocketPage(): JSX.Element {
     size: 160,
     cell: (info) => {
      const note = info.getValue<string>() ?? "";
-     return note ? (
-      <span className="cell-note" title={note}>
-       {note}
-      </span>
-     ) : (
-      <span className="cell-dim">—</span>
-     );
+     return note ? <span className="cell-note" title={note}>{note}</span> : <span className="cell-dim">—</span>;
     },
    },
    {
@@ -327,12 +296,7 @@ export function WebSocketPage(): JSX.Element {
     size: 104,
     cell: (info) => <span className="cell-num">#{info.getValue<number>()}</span>,
    },
-   {
-    accessorKey: "at_ms",
-    header: "Age",
-    size: 90,
-    cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span>,
-   },
+   { accessorKey: "at_ms", header: "Age", size: 90, cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span> },
   ],
   [],
  );
@@ -369,55 +333,55 @@ export function WebSocketPage(): JSX.Element {
      payload === null
       ? []
       : [
-         {
-          id: "send-to-repeater",
-          label: "Send to Repeater",
-          icon: Repeat2,
-          onSelect: () => sendFrameToRepeater(row),
-         },
-         {
-          id: "copy-payload",
-          label: isText ? "Copy payload text" : "Copy payload as hex",
-          icon: Copy,
-          onSelect: () => {
-           void copyToClipboard(bytes);
-           toast.success("Payload copied");
-          },
-         },
-         {
-          id: "decoder",
-          label: "Send payload to Decoder",
-          icon: FileOutput,
-          onSelect: () => {
-           setDecoderSeed({ label, input: bytes });
-           setRoute("decoder");
-          },
-         },
-         {
-          id: "compare-a",
-          label: "Send payload to Comparer (A)",
-          icon: Combine,
-          onSelect: () => {
-           setComparerSlot("a", bytes);
-           setRoute("comparer");
-          },
-         },
-         {
-          id: "compare-b",
-          label: "Send payload to Comparer (B)",
-          icon: ArrowRightLeft,
-          onSelect: () => {
-           setComparerSlot("b", bytes);
-           setRoute("comparer");
-          },
-         },
-         {
-          id: "save",
-          label: "Save payload to file",
-          icon: FileCode2,
-          onSelect: () => downloadText(`ws-message-${row.id}.${isText ? "txt" : "hex"}`, bytes),
-         },
-        ],
+       {
+        id: "send-to-repeater",
+        label: "Send to Repeater",
+        icon: Repeat2,
+        onSelect: () => sendFrameToRepeater(row),
+       },
+       {
+        id: "copy-payload",
+        label: isText ? "Copy payload text" : "Copy payload as hex",
+        icon: Copy,
+        onSelect: () => {
+         void copyToClipboard(bytes);
+         toast.success("Payload copied");
+        },
+       },
+       {
+        id: "decoder",
+        label: "Send payload to Decoder",
+        icon: FileOutput,
+        onSelect: () => {
+         setDecoderSeed({ label, input: bytes });
+         setRoute("decoder");
+        },
+       },
+       {
+        id: "compare-a",
+        label: "Send payload to Comparer (A)",
+        icon: Combine,
+        onSelect: () => {
+         setComparerSlot("a", bytes);
+         setRoute("comparer");
+        },
+       },
+       {
+        id: "compare-b",
+        label: "Send payload to Comparer (B)",
+        icon: ArrowRightLeft,
+        onSelect: () => {
+         setComparerSlot("b", bytes);
+         setRoute("comparer");
+        },
+       },
+       {
+        id: "save",
+        label: "Save payload to file",
+        icon: FileCode2,
+        onSelect: () => downloadText(`ws-message-${row.id}.${isText ? "txt" : "hex"}`, bytes),
+       },
+      ],
    },
    {
     id: "frame",
@@ -433,23 +397,25 @@ export function WebSocketPage(): JSX.Element {
       label: "Copy frame summary",
       icon: Copy,
       onSelect: () => {
-       void copyToClipboard(`#${row.id} ${row.direction} ${row.opcode} ${row.len}B ${new Date(row.at_ms).toISOString()}`);
+       void copyToClipboard(
+        `#${row.id} ${row.direction} ${row.opcode} ${row.len}B ${new Date(row.at_ms).toISOString()}`,
+       );
        toast.success("Frame summary copied");
       },
      },
      ...(selectedExchange === null
       ? []
       : [
-         {
-          id: "show-history",
-          label: `Show connection exchange #${selectedExchange} in HTTP history`,
-          icon: ExternalLink,
-          onSelect: () => {
-           focusExchange(selectedExchange);
-           setRoute("history");
-          },
-         },
-        ]),
+       {
+        id: "show-history",
+        label: `Show connection exchange #${selectedExchange} in HTTP history`,
+        icon: ExternalLink,
+        onSelect: () => {
+         focusExchange(selectedExchange);
+         setRoute("history");
+        },
+       },
+      ]),
     ],
    },
   ];
@@ -592,15 +558,15 @@ export function WebSocketPage(): JSX.Element {
          hasFilter
           ? "No frames match the filters"
           : selectedExchange === null
-            ? "No WebSocket traffic captured yet"
-            : "No frames on this connection"
+           ? "No WebSocket traffic captured yet"
+           : "No frames on this connection"
         }
         detail={
          hasFilter
           ? "Clear the filters to see the frames this connection holds."
           : selectedExchange === null
-            ? "Point a client at the proxy and upgrade a connection to start capturing frames."
-            : "Select another connection, or clear the selection to see every frame."
+           ? "Point a client at the proxy and upgrade a connection to start capturing frames."
+           : "Select another connection, or clear the selection to see every frame."
         }
        />
       }
@@ -644,26 +610,26 @@ export function WebSocketPage(): JSX.Element {
        <TabsContent value="frame" className="tabs-fill">
         {selectedFrame ? (
          <PayloadView
-          message={frame.data}
-          isFetching={frame.isFetching}
-          detailMenu={
-           selectedFrame && selectedFrame.opcode !== "close"
-            ? [
-               {
-                id: "payload-send",
-                actions: [
-                 {
-                  id: "send-to-repeater",
-                  label: "Send to Repeater",
-                  icon: Repeat2,
-                  onSelect: () => sendFrameToRepeater(selectedFrame),
-                 },
-                ],
-               },
-              ]
-            : undefined
-          }
-         />
+         message={frame.data}
+         isFetching={frame.isFetching}
+         detailMenu={
+          selectedFrame && selectedFrame.opcode !== "close"
+           ? [
+            {
+             id: "payload-send",
+             actions: [
+              {
+               id: "send-to-repeater",
+               label: "Send to Repeater",
+               icon: Repeat2,
+               onSelect: () => sendFrameToRepeater(selectedFrame),
+              },
+             ],
+            },
+           ]
+           : undefined
+        }
+        />
         ) : (
          <Empty title="No frame selected" detail="Choose a row in the frame table to read its exact payload." />
         )}
@@ -700,10 +666,7 @@ export function WebSocketPage(): JSX.Element {
        </TabsContent>
       </Tabs>
      ) : (
-      <Empty
-       title="No connection selected"
-       detail="Pick a connection on the left to see its frames and the HTTP handshake that opened it."
-      />
+      <Empty title="No connection selected" detail="Pick a connection on the left to see its frames and the HTTP handshake that opened it." />
      )}
     </div>
    </div>

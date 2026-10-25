@@ -27,27 +27,27 @@ import { showLineBreaks } from "./line-breaks";
 import { headerSpans, parseMessage, parseRequestLine } from "./message";
 
 export interface H2Field {
- name: string;
- value: string;
+  name: string;
+  value: string;
 }
 
 export interface KettleReason {
- kind: string;
- index: number;
- name: string;
- text: string;
+  kind: string;
+  index: number;
+  name: string;
+  text: string;
 }
 
 /** POST /api/http2/kettle's answer. */
 export interface KettleAnswer {
- kettled: boolean;
- reasons: KettleReason[];
- send_refusals: string[];
+  kettled: boolean;
+  reasons: KettleReason[];
+  send_refusals: string[];
 }
 
 /** The request draft's version token is HTTP/2. */
 export function isHttp2Request(raw: string): boolean {
- return parseRequestLine(parseMessage(raw).startLine)?.version === "HTTP/2";
+  return parseRequestLine(parseMessage(raw).startLine)?.version === "HTTP/2";
 }
 
 /** The pseudo-header names, in the order a seeded list carries them. */
@@ -66,34 +66,34 @@ const PSEUDO_ORDER = [":method", ":scheme", ":authority", ":path"] as const;
  * :authority).
  */
 export function seedH2Fields(raw: string, tls: boolean): { fields: H2Field[]; headerRowField: number[] } {
- const request = parseRequestLine(parseMessage(raw).startLine);
- const spans = headerSpans(raw);
- const hostRow = spans.findIndex((span) => span.name.toLowerCase() === "host");
- const pseudo: Record<(typeof PSEUDO_ORDER)[number], string | undefined> = {
-  ":method": request?.method ?? "GET",
-  ":scheme": tls ? "https" : "http",
-  ":authority": hostRow >= 0 ? spans[hostRow]!.value : undefined,
-  ":path": request?.target || "/",
- };
- const fields: H2Field[] = [];
- const at: Partial<Record<string, number>> = {};
- for (const name of PSEUDO_ORDER) {
-  const value = pseudo[name];
-  if (value === undefined) continue;
-  at[name] = fields.length;
-  fields.push({ name, value });
- }
- const headerRowField = spans.map((span, row) => {
-  if (row === hostRow) return at[":authority"]!;
-  fields.push({ name: span.name.toLowerCase(), value: span.value });
-  return fields.length - 1;
- });
- return { fields, headerRowField };
+  const request = parseRequestLine(parseMessage(raw).startLine);
+  const spans = headerSpans(raw);
+  const hostRow = spans.findIndex((span) => span.name.toLowerCase() === "host");
+  const pseudo: Record<(typeof PSEUDO_ORDER)[number], string | undefined> = {
+    ":method": request?.method ?? "GET",
+    ":scheme": tls ? "https" : "http",
+    ":authority": hostRow >= 0 ? spans[hostRow]!.value : undefined,
+    ":path": request?.target || "/",
+  };
+  const fields: H2Field[] = [];
+  const at: Partial<Record<string, number>> = {};
+  for (const name of PSEUDO_ORDER) {
+    const value = pseudo[name];
+    if (value === undefined) continue;
+    at[name] = fields.length;
+    fields.push({ name, value });
+  }
+  const headerRowField = spans.map((span, row) => {
+    if (row === hostRow) return at[":authority"]!;
+    fields.push({ name: span.name.toLowerCase(), value: span.value });
+    return fields.length - 1;
+  });
+  return { fields, headerRowField };
 }
 
 /** CR and LF removed — what normalising does to a field HTTP/1 cannot carry. */
 function flatten(text: string): string {
- return text.replace(/[\r\n]/g, "");
+  return text.replace(/[\r\n]/g, "");
 }
 
 /**
@@ -106,36 +106,36 @@ function flatten(text: string): string {
  * which is what RFC 9113 §8.2.3 says passing them to HTTP/1 means.
  */
 export function renderNormalised(fields: H2Field[], body: string): string {
- const first = (name: string) => fields.find((field) => field.name.toLowerCase() === name)?.value;
- const method = flatten(first(":method") ?? "GET").replace(/ /g, "") || "GET";
- const path = flatten(first(":path") ?? "/").replace(/ /g, "%20") || "/";
- const authority = first(":authority");
- const lines = [`${method} ${path} HTTP/2`];
- if (authority !== undefined) lines.push(`Host: ${flatten(authority)}`);
- const cookies = fields.filter((field) => field.name.toLowerCase() === "cookie").map((field) => flatten(field.value));
- let cookieWritten = false;
- for (const field of fields) {
-  const name = flatten(field.name);
-  if (name === "" || name.includes(":")) continue;
-  if (name.toLowerCase() === "cookie") {
-   if (cookieWritten) continue;
-   cookieWritten = true;
-   lines.push(`${name}: ${cookies.join("; ")}`);
-   continue;
+  const first = (name: string) => fields.find((field) => field.name.toLowerCase() === name)?.value;
+  const method = flatten(first(":method") ?? "GET").replace(/ /g, "") || "GET";
+  const path = flatten(first(":path") ?? "/").replace(/ /g, "%20") || "/";
+  const authority = first(":authority");
+  const lines = [`${method} ${path} HTTP/2`];
+  if (authority !== undefined) lines.push(`Host: ${flatten(authority)}`);
+  const cookies = fields.filter((field) => field.name.toLowerCase() === "cookie").map((field) => flatten(field.value));
+  let cookieWritten = false;
+  for (const field of fields) {
+    const name = flatten(field.name);
+    if (name === "" || name.includes(":")) continue;
+    if (name.toLowerCase() === "cookie") {
+      if (cookieWritten) continue;
+      cookieWritten = true;
+      lines.push(`${name}: ${cookies.join("; ")}`);
+      continue;
+    }
+    lines.push(`${name}: ${flatten(field.value)}`);
   }
-  lines.push(`${name}: ${flatten(field.value)}`);
- }
- return `${lines.join("\r\n")}\r\n\r\n${body}`;
+  return `${lines.join("\r\n")}\r\n\r\n${body}`;
 }
 
 /** The body of a draft: everything after its head. */
 export function requestBody(raw: string): string {
- return raw.slice(parseMessage(raw).bodyOffset);
+  return raw.slice(parseMessage(raw).bodyOffset);
 }
 
 /** Whether two drafts differ anywhere before the body. */
 export function requestHeadChanged(before: string, after: string): boolean {
- return before.slice(0, parseMessage(before).bodyOffset) !== after.slice(0, parseMessage(after).bodyOffset);
+  return before.slice(0, parseMessage(before).bodyOffset) !== after.slice(0, parseMessage(after).bodyOffset);
 }
 
 /**
@@ -144,13 +144,13 @@ export function requestHeadChanged(before: string, after: string): boolean {
  * edit to a value alone never adds an uppercase-name reason the operator did not ask for.
  */
 export function kettleHeaderEdit(raw: string, tls: boolean, row: number, originalName: string, name: string, value: string): H2Field[] {
- const { fields, headerRowField } = seedH2Fields(raw, tls);
- const index = headerRowField[row];
- if (index === undefined) return fields;
- const seeded = fields[index]!;
- const renamed = name !== originalName;
- fields[index] = { name: renamed ? name : seeded.name, value };
- return fields;
+  const { fields, headerRowField } = seedH2Fields(raw, tls);
+  const index = headerRowField[row];
+  if (index === undefined) return fields;
+  const seeded = fields[index]!;
+  const renamed = name !== originalName;
+  fields[index] = { name: renamed ? name : seeded.name, value };
+  return fields;
 }
 
 /**
@@ -158,5 +158,5 @@ export function kettleHeaderEdit(raw: string, tls: boolean, row: number, origina
  * included, CR and LF shown as ␍ ␊ so a value never splits into a line it is not, then the body.
  */
 export function kettledListText(fields: H2Field[], body: string): string {
- return `${fields.map((field) => `${showLineBreaks(field.name)}: ${showLineBreaks(field.value)}`).join("\r\n")}\r\n\r\n${body}`;
+  return `${fields.map((field) => `${showLineBreaks(field.name)}: ${showLineBreaks(field.value)}`).join("\r\n")}\r\n\r\n${body}`;
 }

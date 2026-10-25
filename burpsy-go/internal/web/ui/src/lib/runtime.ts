@@ -8,50 +8,50 @@
 export type RuntimeMode = "desktop" | "web";
 
 export function getRuntimeMode(): RuntimeMode {
- return typeof window !== "undefined" && (window as any).runtime ? "desktop" : "web";
+  return typeof window !== "undefined" && (window as any).runtime ? "desktop" : "web";
 }
 
 export function isDesktop(): boolean {
- return getRuntimeMode() === "desktop";
+  return getRuntimeMode() === "desktop";
 }
 
 /**
  * Native file save dialog wrapper. Falls back to browser download in web mode.
  */
 export async function saveFileDialog(filename: string, defaultPath?: string): Promise<string | null> {
- if (isDesktop() && (window as any).go?.main?.App?.SaveFileDialog) {
-  try {
-   return await (window as any).go.main.App.SaveFileDialog(filename, defaultPath ?? "");
-  } catch {
-   return null;
+  if (isDesktop() && (window as any).go?.main?.App?.SaveFileDialog) {
+    try {
+      return await (window as any).go.main.App.SaveFileDialog(filename, defaultPath ?? "");
+    } catch {
+      return null;
+    }
   }
- }
- return null;
+  return null;
 }
 
 /**
  * Native file open dialog wrapper. Falls back to web input in web mode.
  */
 export async function openFileDialog(title: string, filter?: string): Promise<string | null> {
- if (isDesktop() && (window as any).go?.main?.App?.OpenFileDialog) {
-  try {
-   return await (window as any).go.main.App.OpenFileDialog(title, filter ?? "");
-  } catch {
-   return null;
+  if (isDesktop() && (window as any).go?.main?.App?.OpenFileDialog) {
+    try {
+      return await (window as any).go.main.App.OpenFileDialog(title, filter ?? "");
+    } catch {
+      return null;
+    }
   }
- }
- return null;
+  return null;
 }
 
 /**
  * Native desktop notification wrapper. Falls back to web Notification API / sonner toast.
  */
 export function notifyDesktop(title: string, body: string): void {
- if (isDesktop() && (window as any).go?.main?.App?.Notify) {
-  (window as any).go.main.App.Notify(title, body);
- } else if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-  new Notification(title, { body });
- }
+  if (isDesktop() && (window as any).go?.main?.App?.Notify) {
+    (window as any).go.main.App.Notify(title, body);
+  } else if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    new Notification(title, { body });
+  }
 }
 
 /**
@@ -61,11 +61,11 @@ export function notifyDesktop(title: string, body: string): void {
  * and a keyboard shortcut still land in the identical handler either way.
  */
 export function onDesktopEvent(eventName: string, handler: (...args: unknown[]) => void): (() => void) | null {
- if (!isDesktop()) return null;
- const wails = (window as any).runtime;
- if (typeof wails?.EventsOn !== "function") return null;
- wails.EventsOn(eventName, handler);
- return () => {
-  if (typeof wails.EventsOff === "function") wails.EventsOff(eventName);
- };
+  if (!isDesktop()) return null;
+  const wails = (window as any).runtime;
+  if (typeof wails?.EventsOn !== "function") return null;
+  wails.EventsOn(eventName, handler);
+  return () => {
+    if (typeof wails.EventsOff === "function") wails.EventsOff(eventName);
+  };
 }

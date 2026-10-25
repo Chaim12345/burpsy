@@ -1,20 +1,4 @@
-import {
- ChevronDown,
- ChevronRight,
- ChevronsDownUp,
- ChevronsUpDown,
- Columns3,
- Combine,
- Crosshair,
- ExternalLink,
- Folder,
- FolderOpen,
- Globe,
- Repeat2,
- Search,
- ShieldCheck,
- X,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { TargetAnalyzerView } from "../ui/target-analyzer-view";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
@@ -25,14 +9,7 @@ import type { FindingDetail } from "../lib/types.attack";
 import { exchangeUrl, useSendShortcuts } from "../lib/actions";
 import { engagementToolsGroup, type EngagementSeed } from "../lib/engagement-menu";
 import { putSeed } from "../lib/page-seed";
-import {
- DEFAULT_PRESCAN_FILTERS,
- countFiltered,
- parseExtensions,
- prescanExclude,
- BURP_DEFAULT_HIDDEN_EXTENSIONS,
- type PrescanFilters,
-} from "../lib/prescan-filters";
+import { DEFAULT_PRESCAN_FILTERS, countFiltered, parseExtensions, prescanExclude, BURP_DEFAULT_HIDDEN_EXTENSIONS, type PrescanFilters } from "../lib/prescan-filters";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { requestSettingsSection } from "../lib/settings-sections";
 import { useApp } from "../lib/store";
@@ -176,7 +153,7 @@ function flatten(
   // Filtering forces a matching branch open so the match underneath is reachable; otherwise fall
   // back to the operator's own toggle, defaulting to the first two levels expanded.
   const key = nodeKey(node);
-  const isExpanded = narrowed ? true : (expanded[key] ?? depth < 2);
+  const isExpanded = narrowed ? true : expanded[key] ?? depth < 2;
   out.push({ node, depth, host: rowHost, key, parentKey, hasChildren, expanded: isExpanded });
   if (hasChildren && isExpanded) out.push(...flatten(node.children ?? [], depth + 1, rowHost, key, term, f, expanded));
  }
@@ -249,11 +226,7 @@ function TreeRow({
     tabIndex={-1}
     data-node-key={node.key}
     className={cn("tree-row", selected && "active", outOfScope && "tree-row-out-of-scope")}
-    style={{
-     paddingLeft: `${8 + depth * 14}px`,
-     outline: cursor ? "2px solid var(--accent)" : undefined,
-     outlineOffset: cursor ? -2 : undefined,
-    }}
+    style={{ paddingLeft: `${8 + depth * 14}px`, outline: cursor ? "2px solid var(--accent)" : undefined, outlineOffset: cursor ? -2 : undefined }}
     onClick={onSelect}
    >
     {/* A leaf gets a spacer, not a disabled button. The button was rendered unconditionally and a
@@ -297,10 +270,7 @@ function TreeRow({
      {/* An unrequested item (t3zk): linked from proxied traffic, never fetched. Marked like an
          operator-added node, for the same reason: its zero counts are not a clean observation. */}
      {node.unrequested ? (
-      <span
-       className="tree-row-scope tree-row-added"
-       title={`Linked from ${node.linked_from ?? "a proxied page"}. Nothing has requested it yet.`}
-      >
+      <span className="tree-row-scope tree-row-added" title={`Linked from ${node.linked_from ?? "a proxied page"}. Nothing has requested it yet.`}>
        unrequested
       </span>
      ) : null}
@@ -361,9 +331,7 @@ export function SiteMapPage(): JSX.Element {
  // host is the FlatRow's resolved rowHost — the connection's hostname — not node.segment, which
  // for depth>0 rows is the last path component. The server keys suppression on host:port:tls, so
  // sending the segment would silently no-op.
- const [confirmDelete, setConfirmDelete] = useState<undefined | { node: SiteNode; host: string; kind: "host" | "branch" | "item" }>(
-  undefined,
- );
+ const [confirmDelete, setConfirmDelete] = useState<undefined | { node: SiteNode; host: string; kind: "host" | "branch" | "item" }>(undefined);
  /**
   * Which of Burp's two site-map views is showing.
   *
@@ -559,7 +527,10 @@ export function SiteMapPage(): JSX.Element {
   );
  }, [selected, issues.data, nodeExchanges]);
 
- const activeExchange = useMemo(() => nodeExchanges.find((ex) => ex.id === selectedExchange) ?? null, [nodeExchanges, selectedExchange]);
+ const activeExchange = useMemo(
+  () => nodeExchanges.find((ex) => ex.id === selectedExchange) ?? null,
+  [nodeExchanges, selectedExchange],
+ );
  const request = useMessage(activeExchange?.request);
  const response = useMessage(activeExchange?.response ?? null);
 
@@ -662,13 +633,7 @@ export function SiteMapPage(): JSX.Element {
    <Toolbar className="pane-toolbar">
     <div className="search-field">
      <Search size={15} />
-     <Input
-      aria-label="Filter site map"
-      title="Filter site map"
-      value={filter}
-      onChange={(event) => setFilter(event.target.value)}
-      placeholder="Filter by segment or path"
-     />
+     <Input aria-label="Filter site map" title="Filter site map" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter by segment or path" />
      {filter ? (
       <IconButton label="Clear filter" size="small" onClick={() => setFilter("")}>
        <X size={13} />
@@ -697,23 +662,15 @@ export function SiteMapPage(): JSX.Element {
      onReset={() => setSfilter((f) => ({ ...f, statuses: [] }))}
     />
     <Checkbox checked={sfilter.scopeOnly} onCheckedChange={(on) => setSfilter((f) => ({ ...f, scopeOnly: on }))} label="In scope only" />
-    <Checkbox
-     checked={sfilter.requestedOnly}
-     onCheckedChange={(on) => setSfilter((f) => ({ ...f, requestedOnly: on }))}
-     label="Requested only"
-    />
-    <Checkbox
-     checked={sfilter.paramsOnly}
-     onCheckedChange={(on) => setSfilter((f) => ({ ...f, paramsOnly: on }))}
-     label="Parameterized only"
-    />
-    <Checkbox
-     checked={sfilter.hideNotFound}
-     onCheckedChange={(on) => setSfilter((f) => ({ ...f, hideNotFound: on }))}
-     label="Hide not-found"
-    />
+    <Checkbox checked={sfilter.requestedOnly} onCheckedChange={(on) => setSfilter((f) => ({ ...f, requestedOnly: on }))} label="Requested only" />
+    <Checkbox checked={sfilter.paramsOnly} onCheckedChange={(on) => setSfilter((f) => ({ ...f, paramsOnly: on }))} label="Parameterized only" />
+    <Checkbox checked={sfilter.hideNotFound} onCheckedChange={(on) => setSfilter((f) => ({ ...f, hideNotFound: on }))} label="Hide not-found" />
     {filterActive(sfilter) ? (
-     <IconButton label="Clear filters" size="small" onClick={() => setSfilter(NO_SITEMAP_FILTER)}>
+     <IconButton
+      label="Clear filters"
+      size="small"
+      onClick={() => setSfilter(NO_SITEMAP_FILTER)}
+     >
       <X size={13} />
      </IconButton>
     ) : null}
@@ -768,9 +725,7 @@ export function SiteMapPage(): JSX.Element {
            onSelect: () => {
             setExpanded((current) => setExpandedKeys(current, branch.keys, true));
             if (branch.truncated) {
-             toast.warning(
-              `Expanded ${branch.keys.length.toLocaleString()} of ${branch.total.toLocaleString()} folders — the rest stay closed so the tree stays responsive`,
-             );
+             toast.warning(`Expanded ${branch.keys.length.toLocaleString()} of ${branch.total.toLocaleString()} folders — the rest stay closed so the tree stays responsive`);
             }
            },
           },
@@ -838,11 +793,11 @@ export function SiteMapPage(): JSX.Element {
              const retention =
               target.depth === 0
                ? `host = ${target.host}`
-               : // The node path IS the branch: keep it and everything beneath it. The exchange-level
-                 // crawlFrom strips the last segment because there path is a FILE the crawl was launched
-                 // from; here the operator aimed at the branch itself, so stripping one level would
-                 // widen the keep-filter to the parent ("/mango" becoming `path ~ "/"` — the whole host).
-                 `path ~ "${target.node.path.endsWith("/") ? target.node.path : target.node.path + "/"}"`;
+               // The node path IS the branch: keep it and everything beneath it. The exchange-level
+               // crawlFrom strips the last segment because there path is a FILE the crawl was launched
+               // from; here the operator aimed at the branch itself, so stripping one level would
+               // widen the keep-filter to the parent ("/mango" becoming `path ~ "/"` — the whole host).
+               : `path ~ "${target.node.path.endsWith("/") ? target.node.path : target.node.path + "/"}"`;
              startCrawl.mutate(
               // retention_query is the crawl's keep-path filter — the same DSL clause the
               // exchange-level crawlFrom composes (actions.ts:427), so a branch crawl only
@@ -880,12 +835,12 @@ export function SiteMapPage(): JSX.Element {
            },
            ...(target.depth > 0
             ? [
-               {
-                id: "delete-item",
-                label: "Delete this item only",
-                onSelect: () => setConfirmDelete({ node: target.node, host: target.host, kind: "item" }),
-               },
-              ]
+             {
+              id: "delete-item",
+              label: "Delete this item only",
+              onSelect: () => setConfirmDelete({ node: target.node, host: target.host, kind: "item" }),
+             },
+            ]
             : []),
           ],
          },
@@ -936,9 +891,7 @@ export function SiteMapPage(): JSX.Element {
      </h3>
     </div>
     <div className="detail-actions">
-     <Badge tone={statusTone(activeExchange.status)}>
-      {activeExchange.status ?? (activeExchange.source === "schema" ? "not sent" : "pending")}
-     </Badge>
+     <Badge tone={statusTone(activeExchange.status)}>{activeExchange.status ?? (activeExchange.source === "schema" ? "not sent" : "pending")}</Badge>
      <Badge>{formatDuration(activeExchange.duration_ms)}</Badge>
      <Button variant="outline" size="small" onClick={() => void actions.sendToRepeater(activeExchange)}>
       <Repeat2 size={13} />
@@ -994,7 +947,10 @@ export function SiteMapPage(): JSX.Element {
    </div>
   </div>
  ) : (
-  <Empty title="No request selected" detail="Choose a row above to read its exact request and response bytes." />
+  <Empty
+   title="No request selected"
+   detail="Choose a row above to read its exact request and response bytes."
+  />
  );
 
  const contentPane = !selected ? (
@@ -1003,9 +959,7 @@ export function SiteMapPage(): JSX.Element {
   <div className="pane">
    <div className="detail-head">
     <div className="detail-head-title">
-     <span className="eyebrow">
-      {selected.depth === 0 ? "host" : selected.node.requested ? "path" : "folder (never requested directly)"}
-     </span>
+     <span className="eyebrow">{selected.depth === 0 ? "host" : selected.node.requested ? "path" : "folder (never requested directly)"}</span>
      {/* Was an <h3> directly under the page's <h1>, skipping h2 — a heading outline that
               tells a screen-reader user there is a missing level between the page and this pane.
               This is the pane's own heading, so it is the h2. */}
@@ -1028,7 +982,11 @@ export function SiteMapPage(): JSX.Element {
       </Badge>
      ))}
      <Tooltip
-      content={nodeFindings.length ? "Findings observed on this node's exchanges" : "No findings observed on this node's exchanges"}
+      content={
+       nodeFindings.length
+        ? "Findings observed on this node's exchanges"
+        : "No findings observed on this node's exchanges"
+      }
      >
       <Button
        variant="outline"
@@ -1109,9 +1067,7 @@ export function SiteMapPage(): JSX.Element {
        menuGroups={(row) => actions.menu(row, [exchangeEngagement(row)])}
        multiSelect
        menuGroupsMany={(rows) => actions.menuMany(rows)}
-       rowClassName={(row) =>
-        highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined
-       }
+       rowClassName={(row) => (highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined)}
       />
      )
     }
@@ -1131,7 +1087,12 @@ export function SiteMapPage(): JSX.Element {
                   host"; crawl paths answers "what should have linked to the page I expected and
                   cannot find". Different questions, so a toggle rather than a merged tree. */}
        <div className="chip-row" role="group" aria-label="Site map view">
-        <Button variant={view === "urls" ? "outline" : "quiet"} size="small" aria-pressed={view === "urls"} onClick={() => setView("urls")}>
+        <Button
+         variant={view === "urls" ? "outline" : "quiet"}
+         size="small"
+         aria-pressed={view === "urls"}
+         onClick={() => setView("urls")}
+        >
          URL view
         </Button>
         <Button
@@ -1178,7 +1139,12 @@ export function SiteMapPage(): JSX.Element {
         }
        >
         <span>
-         <Button variant="outline" size="small" disabled={!selected || passiveScan.isPending} onClick={() => setPrescanOpen(true)}>
+         <Button
+          variant="outline"
+          size="small"
+          disabled={!selected || passiveScan.isPending}
+          onClick={() => setPrescanOpen(true)}
+         >
           <ShieldCheck size={13} />
           {passiveScan.isPending ? "Scanning…" : "Passive scan branch"}
          </Button>
@@ -1233,14 +1199,7 @@ export function SiteMapPage(): JSX.Element {
    ) : view === "analyzer" ? (
     <TargetAnalyzerView seed={analyzerSeed} />
    ) : (
-    <SplitPane
-     storageId="sitemap"
-     orientation="horizontal"
-     defaultMasterSize="28"
-     minMasterSize="16"
-     master={treePane}
-     detail={contentPane}
-    />
+    <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}
    <Modal
     open={confirmDelete !== undefined}
@@ -1353,15 +1312,16 @@ function PassiveScanDialog({
       label={`Remove items with no parameters${filters.removeNoParameters && counts.noParameters > 0 ? ` (${counts.noParameters.toLocaleString()})` : ""}`}
      />
      <span className="field-hint">
-      A path with no query string has no parameters to probe, so a bounded sweep aimed at the parameterised pages spends its budget there.
+      A path with no query string has no parameters to probe, so a bounded sweep aimed at the
+      parameterised pages spends its budget there.
      </span>
     </div>
 
     <p className="field-hint">
-     <strong>Out-of-scope items are already removed</strong> by the sweep, under the scope in force now rather than the one the bytes were
-     captured under, and it reports how many it refused.
-     <strong> Duplicates cannot be removed</strong>: a branch sweep reads stored exchanges, and two rows with the same URL and parameters
-     are one request seen twice.
+     <strong>Out-of-scope items are already removed</strong> by the sweep, under the scope in force now
+     rather than the one the bytes were captured under, and it reports how many it refused.
+     <strong> Duplicates cannot be removed</strong>: a branch sweep reads stored exchanges, and two
+     rows with the same URL and parameters are one request seen twice.
      {empty ? " This branch has no captured exchanges, so every filter has nothing to act on." : null}
     </p>
 
@@ -1382,13 +1342,12 @@ function PassiveScanDialog({
      >
       Reset to Burp's defaults
      </Button>
-     <Button onClick={() => onScan(filters)} disabled={empty || pending}>
+     <Button
+      onClick={() => onScan(filters)}
+      disabled={empty || pending}
+     >
       <ShieldCheck size={13} />
-      {pending
-       ? "Scanning…"
-       : removes > 0
-         ? `Scan ${(items.length - counts.total).toLocaleString()} of ${items.length.toLocaleString()}`
-         : "Scan branch"}
+      {pending ? "Scanning…" : removes > 0 ? `Scan ${(items.length - counts.total).toLocaleString()} of ${items.length.toLocaleString()}` : "Scan branch"}
      </Button>
     </div>
    </div>

@@ -22,9 +22,7 @@ import {
  ScanSearch,
  ShieldCheck,
  Terminal,
- Waypoints,
- Activity,
-} from "lucide-react";
+ Waypoints, Activity } from "lucide-react";
 import { openDetailWindow } from "../pages/detailwindow";
 import { toast } from "sonner";
 import { openUrlInBrowser } from "./data.browser";
@@ -78,7 +76,7 @@ export async function fetchRaw(messageId: number | null, what = "request"): Prom
  if (messageId === null) {
   throw new Error(
    `This exchange has no ${what} to read — it is a blind tunnel, and burpsy did not look inside it. ` +
-    `Turn interception off for this host to relay its bytes untouched.`,
+   `Turn interception off for this host to relay its bytes untouched.`,
   );
  }
  const message = await api<MessageView>(`/api/message/${messageId}`);
@@ -176,7 +174,7 @@ export function dechunkBody(raw: string): string {
  let body = raw.slice(split + 4).replace(/^\r?\n/, "");
  if (!/transfer-encoding:\s*chunked/i.test(head)) return raw;
  let plain = "";
- for (;;) {
+ for (; ;) {
   const lineEnd = body.indexOf("\r\n");
   if (lineEnd < 0) break;
   const size = parseInt(body.slice(0, lineEnd).trim(), 16);
@@ -184,10 +182,7 @@ export function dechunkBody(raw: string): string {
   plain += body.slice(lineEnd + 2, lineEnd + 2 + size);
   body = body.slice(lineEnd + 2 + size + 2); // chunk + its trailing CRLF
  }
- return `${head
-  .split(/\r?\n/)
-  .filter((line) => !/^transfer-encoding:/i.test(line))
-  .join("\r\n")}\r\n\r\n${plain}`;
+ return `${head.split(/\r?\n/).filter((line) => !/^transfer-encoding:/i.test(line)).join("\r\n")}\r\n\r\n${plain}`;
 }
 
 /** Chunk a plain body with hex-length framing and swap Content-Length for Transfer-Encoding. */
@@ -267,11 +262,7 @@ export function useExchangeActions(): {
  // was invoked on. The issues list invalidates by key prefix after any triage write, so the
  // recorded finding appears without a manual refresh.
  const queryClient = useQueryClient();
- const record = useMutation<
-  { id: number; recorded: boolean },
-  Error,
-  { name: string; description: string; severity: string; exchange_id: number }
- >({
+ const record = useMutation<{ id: number; recorded: boolean }, Error, { name: string; description: string; severity: string; exchange_id: number }>({
   mutationFn: (body) => api("/api/issues/record", json("POST", body)),
   onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
  });
@@ -287,7 +278,7 @@ export function useExchangeActions(): {
    if (exchange.request === null) {
     throw new Error(
      "This exchange has no request to read — it is a blind tunnel, and burpsy did not look inside it. " +
-      "Turn interception off for this host to relay its bytes untouched.",
+     "Turn interception off for this host to relay its bytes untouched.",
     );
    }
    const message = await api<MessageView>(`/api/message/${exchange.request}`);
@@ -321,35 +312,35 @@ export function useExchangeActions(): {
   toast.success(`Exchange #${exchange.id} sent to Intruder`);
  };
 
- // Send to Sequencer (fhp): the capture needs the request bytes and the authority — exactly
- // what the exchange carries. Fetching the raw bytes here (like sendToComparer) means the
- // capture tab is filled on arrival, not on the sequencer page's own fetch.
- const sendToSequencer = async (exchange: Exchange) => {
-  try {
-   const raw = await fetchRaw(exchange.request);
-   // The response rides along when it exists (6t8): the token-location picker lists the
-   // cookies, headers and form fields actually present in it. A request with no response yet
-   // (a hand-off before any send) seeds the request alone.
-   let response: string | null = null;
-   if (exchange.response !== null) {
-    try {
-     response = await fetchRaw(exchange.response);
-    } catch {
-     response = null; // a response that cannot be read leaves the picker to the typed path
+  // Send to Sequencer (fhp): the capture needs the request bytes and the authority — exactly
+  // what the exchange carries. Fetching the raw bytes here (like sendToComparer) means the
+  // capture tab is filled on arrival, not on the sequencer page's own fetch.
+  const sendToSequencer = async (exchange: Exchange) => {
+   try {
+    const raw = await fetchRaw(exchange.request);
+    // The response rides along when it exists (6t8): the token-location picker lists the
+    // cookies, headers and form fields actually present in it. A request with no response yet
+    // (a hand-off before any send) seeds the request alone.
+    let response: string | null = null;
+    if (exchange.response !== null) {
+     try {
+      response = await fetchRaw(exchange.response);
+     } catch {
+      response = null; // a response that cannot be read leaves the picker to the typed path
+     }
     }
+    setSequencerSeed({
+     request: raw,
+     target: exchangeAuthority(exchange),
+     label: `#${exchange.id} ${exchange.method} ${exchange.path}`,
+     response,
+    });
+    setRoute("sequencer");
+    toast.success(`Exchange #${exchange.id} sent to Sequencer`);
+   } catch (error) {
+    toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
    }
-   setSequencerSeed({
-    request: raw,
-    target: exchangeAuthority(exchange),
-    label: `#${exchange.id} ${exchange.method} ${exchange.path}`,
-    response,
-   });
-   setRoute("sequencer");
-   toast.success(`Exchange #${exchange.id} sent to Sequencer`);
-  } catch (error) {
-   toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
-  }
- };
+  };
 
  const sendToComparer = async (exchange: Exchange, slot: "a" | "b") => {
   try {
@@ -374,30 +365,28 @@ export function useExchangeActions(): {
   }
  };
 
- // "Add to site map" (amu). Burp's own wording for the row action, on the row's own host/port/path —
- // not a URL the operator types, because a map node names an authority and a path, and the exchange
- // already carries exactly that.
- //
- // The response's `already_seen` is what makes the toast honest: a URL the proxy has already seen is
- // on the map because of traffic, and telling an operator they "added" it would credit them with a
- // fact the map recorded for a stronger reason.
- const addToSiteMap = async (exchange: Exchange) => {
-  try {
-   const out = await api<{ inserted?: string; already_seen?: boolean; note?: string }>("/api/sitemap", {
-    method: "POST",
-    body: JSON.stringify({ host: exchange.host, port: exchange.port, tls: exchange.tls, path: exchange.path }),
-   });
-   if (out.already_seen) {
-    toast.message(
-     `${exchange.path || "/"} is already on the site map — it was observed there, which is a stronger fact than a note to self`,
-    );
-   } else {
-    toast.success(`${exchange.host}${exchange.path} added to the site map — recorded by you, with nothing observed there yet`);
-   }
-  } catch (error) {
-   toast.error(`Could not add to the site map: ${error instanceof Error ? error.message : String(error)}`);
+// "Add to site map" (amu). Burp's own wording for the row action, on the row's own host/port/path —
+// not a URL the operator types, because a map node names an authority and a path, and the exchange
+// already carries exactly that.
+//
+// The response's `already_seen` is what makes the toast honest: a URL the proxy has already seen is
+// on the map because of traffic, and telling an operator they "added" it would credit them with a
+// fact the map recorded for a stronger reason.
+const addToSiteMap = async (exchange: Exchange) => {
+ try {
+  const out = await api<{ inserted?: string; already_seen?: boolean; note?: string }>("/api/sitemap", {
+   method: "POST",
+   body: JSON.stringify({ host: exchange.host, port: exchange.port, tls: exchange.tls, path: exchange.path }),
+  });
+  if (out.already_seen) {
+   toast.message(`${exchange.path || "/"} is already on the site map — it was observed there, which is a stronger fact than a note to self`);
+  } else {
+   toast.success(`${exchange.host}${exchange.path} added to the site map — recorded by you, with nothing observed there yet`);
   }
- };
+ } catch (error) {
+  toast.error(`Could not add to the site map: ${error instanceof Error ? error.message : String(error)}`);
+ }
+};
 
  const copyUrl = async (exchange: Exchange) => {
   await copyToClipboard(exchangeUrl(exchange));
@@ -447,8 +436,7 @@ export function useExchangeActions(): {
   }
   void queryClient.invalidateQueries({ queryKey: ["scope"] });
   const added = hosts.length - failed.length;
-  if (failed.length === 0)
-   toast.success(hosts.length === 1 ? `${hosts[0]} added to scope` : `${added} hosts added to scope: ${hosts.join(", ")}`);
+  if (failed.length === 0) toast.success(hosts.length === 1 ? `${hosts[0]} added to scope` : `${added} hosts added to scope: ${hosts.join(", ")}`);
   else if (added === 0) toast.error(`Could not scope ${failed.join(", ")}`);
   else toast.warning(`${added} of ${hosts.length} hosts added to scope; refused: ${failed.join(", ")}`);
  };
@@ -507,7 +495,7 @@ export function useExchangeActions(): {
   }
  };
 
- const auditSelection = async (exchange: Exchange, spans: [number, number][]) => {
+const auditSelection = async (exchange: Exchange, spans: [number, number][]) => {
   try {
    await api<unknown>(`/api/audit/${exchange.id}`, json("POST", { insertion_spans: spans }));
    toast.success(`Active audit queued for the marked span on exchange #${exchange.id}`);
@@ -575,12 +563,7 @@ export function useExchangeActions(): {
    const name = `${exchange.method}-${exchange.host}${exchange.path}`.replace(/[^a-z0-9.\-/]+/gi, "_").slice(0, 80);
    downloadText(
     `${name}-exchange.txt`,
-    [
-     "=============== REQUEST ===============",
-     request,
-     "=============== RESPONSE ===============",
-     response ?? "(no response was captured for this exchange)",
-    ].join("\n"),
+    ["=============== REQUEST ===============", request, "=============== RESPONSE ===============", response ?? "(no response was captured for this exchange)"].join("\n"),
    );
    toast.success(`Exchange #${exchange.id} saved with its response`);
   } catch (error) {
@@ -595,16 +578,16 @@ export function useExchangeActions(): {
   */
  const requestInBrowser = (exchange: Exchange) => void openUrlInBrowser(exchangeUrl(exchange));
 
- /**
-  * Burp's "Show response in browser" (burpsy-react-ui-js5y): the operator's own browser opens
-  * a URL that serves THIS exchange's stored response verbatim — relative links resolve, and
-  * the page renders as the target produced it. Unlike Open URL, nothing is re-fetched: what
-  * the browser shows is what burpsy holds, which is the point in an access-control test.
-  */
- const showResponseInBrowser = (exchange: Exchange) => {
-  window.open(`/api/exchange/in-browser/${exchange.id}`, "_blank", "noopener");
-  toast.info(`Serving the stored response of #${exchange.id} — relative links resolve against this console's origin`);
- };
+/**
+ * Burp's "Show response in browser" (burpsy-react-ui-js5y): the operator's own browser opens
+ * a URL that serves THIS exchange's stored response verbatim — relative links resolve, and
+ * the page renders as the target produced it. Unlike Open URL, nothing is re-fetched: what
+ * the browser shows is what burpsy holds, which is the point in an access-control test.
+ */
+const showResponseInBrowser = (exchange: Exchange) => {
+ window.open(`/api/exchange/in-browser/${exchange.id}`, "_blank", "noopener");
+ toast.info(`Serving the stored response of #${exchange.id} — relative links resolve against this console's origin`);
+};
 
  /** Flip GET/POST on a copy and hand it to Repeater; history rows stay immutable. */
  const changeRequestMethod = async (exchange: Exchange) => {
@@ -699,7 +682,8 @@ export function useExchangeActions(): {
   */
  const crawlFrom = async (exchange: Exchange, scope: "branch" | "host") => {
   const url = exchangeUrl(exchange);
-  const retention = scope === "host" ? `host = ${exchange.host}` : `path ~ "${exchange.path.replace(/\/[^/]*$/, "")}/"`;
+  const retention =
+   scope === "host" ? `host = ${exchange.host}` : `path ~ "${exchange.path.replace(/\/[^/]*$/, "")}/"`;
   try {
    await api<{ task_id: number }>("/api/crawl", json("POST", { seeds: [url], retention_query: retention }));
    toast.success(`${scope === "branch" ? "Branch" : "Host"} crawl started — retained where ${retention}`);
@@ -728,7 +712,8 @@ export function useExchangeActions(): {
   annotate.mutate(
    { id: exchange.id, highlight: colour },
    {
-    onError: (error) => toast.error(`Could not highlight #${exchange.id}: ${error instanceof Error ? error.message : String(error)}`),
+    onError: (error) =>
+     toast.error(`Could not highlight #${exchange.id}: ${error instanceof Error ? error.message : String(error)}`),
    },
   );
  };
@@ -761,7 +746,8 @@ export function useExchangeActions(): {
     { id: exchange.id, notes: trimmed === "" ? null : trimmed },
     {
      onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
-     onError: (error) => toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
+     onError: (error) =>
+      toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
     },
    );
   });
@@ -902,7 +888,7 @@ export function useExchangeActions(): {
        }),
       },
      ],
-     onSelect: () => {},
+     onSelect: () => { },
     },
     {
      id: "comment",
@@ -985,7 +971,7 @@ export function useExchangeActions(): {
   copyLinks,
   saveItems,
   requestInBrowser,
-  showResponseInBrowser,
+ showResponseInBrowser,
   changeRequestMethod,
   toggleChunkedFraming,
   convertBodyEncoding,

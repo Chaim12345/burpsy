@@ -53,8 +53,7 @@ describe("tableRowMatches matches any flattened value, literally", () => {
   reflected: true,
   count: 7,
   first_ordinal: 11,
-  example_request_id: null,
-  example_response_id: 90,
+  example_request_id: null, example_response_id: 90,
   grep_matches: 2,
   grep_extract: "token=[abc]",
   grep_match_totals: [],
@@ -103,8 +102,7 @@ describe("tableRowMatches over the attempt rows it will filter", () => {
   response_len: 0,
   duration_ms: 1200,
   reflected: false,
-  request_id: null,
-  response_id: null,
+  request_id: null, response_id: null,
   error: "dial tcp: connection refused",
   grep_matched: false,
   grep_extract: null,
@@ -136,8 +134,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    reflected: true,
    count: 3,
    first_ordinal: 0,
-   example_request_id: null,
-   example_response_id: 1,
+   example_request_id: null, example_response_id: 1,
    grep_matches: 0,
    grep_extract: null,
    grep_match_totals: [],
@@ -148,8 +145,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    reflected: false,
    count: 1,
    first_ordinal: 3,
-   example_request_id: null,
-   example_response_id: null,
+   example_request_id: null, example_response_id: null,
    grep_matches: 2,
    grep_extract: "token=[x]",
    grep_match_totals: [],
@@ -160,8 +156,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
    reflected: false,
    count: 1,
    first_ordinal: 4,
-   example_request_id: null,
-   example_response_id: null,
+   example_request_id: null, example_response_id: null,
    grep_matches: 0,
    grep_extract: null,
    grep_match_totals: [],
@@ -174,9 +169,7 @@ describe("filterTableRows keeps the count and the table in agreement", () => {
  });
 
  test("accessorFn columns are searched by their computed value", () => {
-  const columns: Column<ResultBucket>[] = [
-   { accessorFn: (bucket) => (bucket.reflected ? "yes" : "no"), id: "reflected", header: "Reflected" },
-  ];
+  const columns: Column<ResultBucket>[] = [{ accessorFn: (bucket) => (bucket.reflected ? "yes" : "no"), id: "reflected", header: "Reflected" }];
   expect(filterTableRows(buckets, columns, "yes").map((bucket) => bucket.status)).toEqual([200]);
   expect(filterTableRows(buckets, columns, "no").map((bucket) => bucket.status)).toEqual([404, null]);
  });

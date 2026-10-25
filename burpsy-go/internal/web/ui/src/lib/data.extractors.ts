@@ -77,7 +77,11 @@ export type ExtractValues = Record<string, Record<string, string | null>>;
  * keeps the previous values visible while a new page loads, so scrolling or a filter edit does not
  * blank every derived cell for a beat.
  */
-export function useHistoryExtractValues(ids: readonly number[], signature: string, enabled: boolean): UseQueryResult<ExtractValues> {
+export function useHistoryExtractValues(
+ ids: readonly number[],
+ signature: string,
+ enabled: boolean,
+): UseQueryResult<ExtractValues> {
  return useExtractValues("ids", ids, signature, enabled);
 }
 
@@ -87,7 +91,11 @@ export function useHistoryExtractValues(ids: readonly number[], signature: strin
  * response_id as an exchange id would resolve an unrelated exchange and show its value as the
  * attempt's. The server keeps the two in separate fields; the answer is keyed by message id.
  */
-export function useMessageExtractValues(messageIds: readonly number[], signature: string, enabled: boolean): UseQueryResult<ExtractValues> {
+export function useMessageExtractValues(
+ messageIds: readonly number[],
+ signature: string,
+ enabled: boolean,
+): UseQueryResult<ExtractValues> {
  return useExtractValues("messages", messageIds, signature, enabled);
 }
 

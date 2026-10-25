@@ -16,7 +16,8 @@ export const SCOPE_LIBRARY_DAMAGED = -1;
 
 /** True when the server could not read this library's rules. Such a row must never be loadable:
  *  the server refuses it anyway (500), and offering the button would be an invitation to an error. */
-export const isScopeLibraryDamaged = (entry: ScopeLibraryEntry): boolean => entry.rules === SCOPE_LIBRARY_DAMAGED || entry.rules < 0;
+export const isScopeLibraryDamaged = (entry: ScopeLibraryEntry): boolean =>
+ entry.rules === SCOPE_LIBRARY_DAMAGED || entry.rules < 0;
 
 /** "1 rule" / "4 rules", so the sentences below read as English rather than as "1 rules". */
 export const scopeRuleCount = (n: number): string => `${n} ${n === 1 ? "rule" : "rules"}`;

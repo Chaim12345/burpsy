@@ -58,7 +58,19 @@ export const workbenchKeys = {
  * Keep this in step with AllLayers() in codec.go. `internal/web/toolkit_codec_honesty_test.go`
  * already asserts against this array, which is why it lives here rather than in the page.
  */
-export const DECODE_LAYERS = ["url", "html", "base64", "base64url", "hex", "octal", "binary", "gzip", "deflate", "jwt", "ascii"] as const;
+export const DECODE_LAYERS = [
+ "url",
+ "html",
+ "base64",
+ "base64url",
+ "hex",
+ "octal",
+ "binary",
+ "gzip",
+ "deflate",
+ "jwt",
+ "ascii",
+] as const;
 
 /**
  * Encodings `handleToolsEncode` implements, via the same codec table. Anything
@@ -211,10 +223,7 @@ export function useSequencerAnalyseTokens() {
   { tokens: string[]; encoding: string; significancePercent: string; handling?: TokenHandling }
  >({
   mutationFn: ({ tokens, encoding, significancePercent, handling }) =>
-   api<SequencerAnalysisWithEntropy>(
-    "/api/sequencer/analyse",
-    json("POST", analyseBody({ tokens }, encoding, significancePercent, handling)),
-   ),
+   api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ tokens }, encoding, significancePercent, handling))),
  });
 }
 
@@ -382,13 +391,15 @@ export function useTransformPipeline() {
  * Nothing is ever hidden. The backend labels differences that fall inside a discounted header and
  * reports both verdicts — see `CompareResponse.identical_ignoring_uninteresting`.
  */
-export const useUninterestingHeaders = () => useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
+export const useUninterestingHeaders = () =>
+ useResource<UninterestingHeaders>(["uninteresting-headers"], "/api/headers/uninteresting");
 
 /** Replace the discount lists. Omit a direction to leave it untouched. */
 export function useSetUninterestingHeaders() {
  const client = useQueryClient();
  return useMutation<UninterestingHeaders, Error, { request?: string[]; response?: string[] }>({
-  mutationFn: (body) => api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
+  mutationFn: (body) =>
+   api<UninterestingHeaders>("/api/headers/uninteresting", json("PUT", body)),
   onSuccess: () => void client.invalidateQueries({ queryKey: ["uninteresting-headers"] }),
  });
 }
