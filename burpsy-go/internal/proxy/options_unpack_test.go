@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/burpsy-go/burpsy/internal/httputil"
+
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
@@ -104,11 +106,11 @@ func TestAResponseRuleReachesAGzippedBodyWhenUnpackingIsOn(t *testing.T) {
 		t.Errorf("Content-Encoding survived on a decompressed body\n%q", text)
 	}
 	// And the length must follow the body it now describes.
-	_, body, _, ok := splitMessage(out)
+	_, body, _, ok := httputil.SplitHeadBody(out)
 	if !ok {
 		t.Fatal("the rebuilt response has no separator")
 	}
-	if got := headerValue(out[:bytes.Index(out, []byte("\r\n\r\n"))], "Content-Length"); got != strconv.Itoa(len(body)) {
+	if got, _ := httputil.HeaderValue(out[:bytes.Index(out, []byte("\r\n\r\n"))], "Content-Length"); got != strconv.Itoa(len(body)) {
 		t.Errorf("Content-Length = %q, body is %d bytes", got, len(body))
 	}
 

@@ -3,6 +3,7 @@ package httputil
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,54 @@ func FuzzDechunk(f *testing.F) {
 		if !bytes.Equal(got, data) {
 			t.Fatalf("round-trip lost bytes: framed %q, got %q, want %q", framed.Bytes(), got, data)
 		}
+	})
+}
+
+// FuzzSplitHeadBody fuzzes the head/body cut: whatever the input, a reported split must
+// reassemble to the input exactly, and a refusal must mean neither separator spelling is
+// present. HeadEnd must always agree with the split.
+func FuzzSplitHeadBody(f *testing.F) {
+	f.Add([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\nbody"))
+	f.Add([]byte("HTTP/1.1 200 OK\n\nbody"))
+	f.Add([]byte("no separator at all"))
+	f.Add([]byte("\r\n\r\n"))
+	f.Add([]byte("a\r\n\r\nb\n\nc"))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		head, body, sep, ok := SplitHeadBody(raw)
+		if !ok {
+			if HeadEnd(raw) >= 0 {
+				t.Fatalf("no split but HeadEnd = %d on %q", HeadEnd(raw), raw)
+			}
+			return
+		}
+		if got := HeadEnd(raw); got != len(head)+len(sep) {
+			t.Fatalf("HeadEnd = %d, split says %d on %q", got, len(head)+len(sep), raw)
+		}
+		reassembled := append(append(append([]byte{}, head...), sep...), body...)
+		if !bytes.Equal(reassembled, raw) {
+			t.Fatalf("head+sep+body != raw on %q", raw)
+		}
+	})
+}
+
+// FuzzHeaderValue fuzzes the header read: a found value must appear on some line of the head
+// after that line's colon, under the same case-insensitive name.
+func FuzzHeaderValue(f *testing.F) {
+	f.Add([]byte("GET / HTTP/1.1\r\nHost: example.test\r\nAccept: */*"), "host")
+	f.Add([]byte("HTTP/1.1 200 OK\nContent-Length: 5"), "CONTENT-LENGTH")
+	f.Add([]byte("X: a\r\nX: b"), "x")
+	f.Add([]byte("NoColonLines"), "x")
+	f.Fuzz(func(t *testing.T, head []byte, name string) {
+		value, ok := HeaderValue(head, name)
+		if !ok {
+			return
+		}
+		for _, line := range HeadLines(head) {
+			k, v, found := bytes.Cut(line, []byte(":"))
+			if found && strings.EqualFold(strings.TrimSpace(string(k)), name) && strings.TrimSpace(string(v)) == value {
+				return
+			}
+		}
+		t.Fatalf("value %q for %q is on no line of %q", value, name, head)
 	})
 }

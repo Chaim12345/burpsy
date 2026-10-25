@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // MAX_EXTRACT is the longest grep-extract this will report.
@@ -171,8 +172,8 @@ func (ml *MatchList) counts(raw []byte) []int {
 	out := make([]int, len(ml.Items))
 	if ml.ExcludeHeaders {
 		// The first double CRLF is the header/body boundary. Everything from there on is body.
-		if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
-			raw = raw[i+4:]
+		if _, body, ok := httputil.CutHead(raw); ok {
+			raw = body
 		}
 	}
 	for i, re := range ml.Items {

@@ -2312,7 +2312,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// keeps the control from being a no-op — invisible_proxy is seeded ON, so a plain
 		// "listener OR global" would have made a listener ticked OFF still answer
 		// origin-form requests.
-		if h := headerValue(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
+		if h, _ := httputil.HeaderValue(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
 			host, port = parseHostPort(h)
 		}
 	}

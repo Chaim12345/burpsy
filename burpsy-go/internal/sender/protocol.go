@@ -62,7 +62,6 @@
 package sender
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -72,6 +71,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/core"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ProtocolSupport is what this tool knows about one authority's ALPN.
@@ -676,7 +676,7 @@ type h2Plan struct {
 // header section, request line, then fields left to right — so two requests that break the same rule
 // first are reported the same way, and a report is reproducible.
 func planH2(raw []byte) (h2Plan, *Downgrade) {
-	head, body, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	head, body, ok := httputil.CutHead(raw)
 	if !ok {
 		return h2Plan{}, &Downgrade{Reason: DowngradeHeadersNotTerminated}
 	}

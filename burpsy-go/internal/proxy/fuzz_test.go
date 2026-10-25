@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ibhs: native fuzz for the proxy's own parsers. Crashers, if any, land in testdata
@@ -76,7 +78,7 @@ func FuzzProxyDechunk(f *testing.F) {
 	f.Add([]byte("zz\r\n"))
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, body []byte) {
-		out, ok := dechunk(body)
+		out, ok := httputil.Dechunk(body)
 		if ok && len(out) > len(body) {
 			t.Fatalf("dechunk grew the body: %d bytes in, %d out", len(body), len(out))
 		}

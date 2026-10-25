@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/tools"
 )
 
@@ -230,11 +231,11 @@ func ApplyUserAgent(raw []byte, ua string) []byte {
 // ok is false only when there is no request line at all — an empty or blank input — which is the
 // one case that gives the callers above nothing safe to reconstruct.
 func splitRequest(raw []byte) (requestLine []byte, headers [][]byte, body []byte, hasBody bool, ok bool) {
-	head := raw
-	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
-		head = raw[:i]
-		body = raw[i+4:]
-		hasBody = true
+	head, cut, found := httputil.CutHead(raw)
+	if !found {
+		head = raw
+	} else {
+		body, hasBody = cut, true
 	}
 	lines := bytes.Split(head, []byte("\r\n"))
 	if len(lines) == 0 || len(lines[0]) == 0 {

@@ -3,7 +3,9 @@ package proxy
 import (
 	"bytes"
 	"errors"
+
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"io"
 	"net"
 	"net/http"
@@ -30,7 +32,7 @@ func htmlResponse(body string) []byte {
 // body rather than about the whole message.
 func bodyOf(t *testing.T, raw []byte) string {
 	t.Helper()
-	_, body, _, ok := splitMessage(raw)
+	_, body, _, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		t.Fatalf("response has no header/body separator: %q", raw)
 	}

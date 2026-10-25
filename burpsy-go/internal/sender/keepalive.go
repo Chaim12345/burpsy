@@ -34,6 +34,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // routeState fingerprints what a connection to this authority would be dialled under right
@@ -185,8 +187,8 @@ func reusableAfter(request, response []byte) bool {
 	if !requestEndsAtFraming(request) {
 		return false
 	}
-	reqHead, _, _ := bytes.Cut(request, []byte("\r\n\r\n"))
-	respHead, _, ok := bytes.Cut(response, []byte("\r\n\r\n"))
+	reqHead, _, _ := httputil.CutHead(request)
+	respHead, _, ok := httputil.CutHead(response)
 	if !ok {
 		return false
 	}
@@ -228,7 +230,7 @@ func reusableAfter(request, response []byte) bool {
 // waiting for bytes, which the next send would supply). The header checks reuse planH2's octet rules
 // (protocol.go) so the two readings of a request's head cannot disagree about what a field is.
 func requestEndsAtFraming(raw []byte) bool {
-	head, rest, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	head, rest, ok := httputil.CutHead(raw)
 	if !ok {
 		return false
 	}

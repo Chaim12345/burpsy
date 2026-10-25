@@ -522,17 +522,20 @@ func exchangeAllowsReuse(req, resp []byte) bool {
 	if connectionSaysClose(respHeaders) {
 		return false
 	}
-	head := resp[:bytes.Index(resp, []byte("\r\n\r\n"))+4]
-	return classifyFraming(head) != framingEOF
+	head, _, ok := httputil.CutHead(resp)
+	if !ok {
+		return false
+	}
+	return classifyFraming(resp[:len(head)+4]) != framingEOF
 }
 
 // splitHead cuts a message into its start line and parsed header fields.
 func splitHead(msg []byte) (start string, headers textproto.MIMEHeader, ok bool) {
-	end := bytes.Index(msg, []byte("\r\n\r\n"))
-	if end < 0 {
+	head, _, ok := httputil.CutHead(msg)
+	if !ok {
 		return "", nil, false
 	}
-	block := msg[:end+4]
+	block := msg[:len(head)+4]
 	nl := bytes.Index(block, []byte("\r\n"))
 	start = string(block[:nl])
 	headers, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(block[nl+2:]))).ReadMIMEHeader()

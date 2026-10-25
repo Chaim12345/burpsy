@@ -98,7 +98,7 @@ func (s *Server) streamsResponse(host string, head []byte) bool {
 // text/event-stream; charset=utf-8` is the same media type as `text/event-stream` and an operator
 // who turned the switch on means both.
 func headIsEventStream(head []byte) bool {
-	ct := headerValue(head, "Content-Type")
+	ct, _ := httputil.HeaderValue(head, "Content-Type")
 	if ct == "" {
 		return false
 	}

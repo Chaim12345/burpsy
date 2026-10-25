@@ -530,12 +530,12 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 // a rule half a document — or handing the client one — is worse than not unpacking: the rule would
 // rewrite what it could see and the browser would receive a document cut in the middle.
 func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
-	head, body, sep, ok := splitMessage(raw)
+	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		o.skippedUnframed.Add(1)
 		return raw, false
 	}
-	encoding := headerValue(head, "Content-Encoding")
+	encoding, _ := httputil.HeaderValue(head, "Content-Encoding")
 	if encoding == "" || strings.EqualFold(encoding, "identity") {
 		// Nothing to unpack. Not counted at all: an uncompressed message is not a skip, it is a
 		// message the switch has no business touching, and counting it would make the skip ratios
@@ -551,12 +551,13 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		return raw, false
 	}
 
-	chunked := strings.EqualFold(headerValue(head, "Transfer-Encoding"), "chunked")
+	te, _ := httputil.HeaderValue(head, "Transfer-Encoding")
+	chunked := strings.EqualFold(te, "chunked")
 	compressed := body
 	if chunked {
 		// Dechunk before decompressing: the chunk sizes frame the compressed bytes, and feeding
 		// `size CRLF data CRLF` to gzip decodes the size prefix as payload.
-		decoded, dok := dechunk(body)
+		decoded, dok := httputil.Dechunk(body)
 		if !dok {
 			o.skippedUnframed.Add(1)
 			return raw, false
@@ -683,12 +684,12 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 	}
 	o.considered.Add(1)
 
-	head, body, sep, ok := splitMessage(raw)
+	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		o.skippedUnframed.Add(1)
 		return raw
 	}
-	if encoding := headerValue(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
+	if encoding, _ := httputil.HeaderValue(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		// Unpack when the operator asked for it, then carry on with the decompressed message — this is
 		// the whole point of the switch: "the rule found nothing to rewrite" and "the rule was never
 		// allowed to look" were the two states this package was built to distinguish, and a
@@ -712,7 +713,7 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		// used: the message now carries no Content-Encoding, so a second pass could not reach this
 		// branch again, and an explicit re-split says that rather than relying on it.
 		raw = unpacked
-		head, body, sep, ok = splitMessage(raw)
+		head, body, sep, ok = httputil.SplitHeadBody(raw)
 		if !ok {
 			o.skippedUnframed.Add(1)
 			return raw
@@ -760,10 +761,11 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		return raw
 	}
 
-	chunked := strings.EqualFold(headerValue(head, "Transfer-Encoding"), "chunked")
+	te, _ := httputil.HeaderValue(head, "Transfer-Encoding")
+	chunked := strings.EqualFold(te, "chunked")
 	plain := body
 	if chunked {
-		decoded, ok := dechunk(body)
+		decoded, ok := httputil.Dechunk(body)
 		if !ok {
 			o.skippedUnframed.Add(1)
 			// The body rules are out, but the head rule is not: it never needed the body. A
@@ -1033,61 +1035,22 @@ func concatMessage(head, sep, body []byte) []byte {
 
 // ---- message surgery -----------------------------------------------------------
 
-// splitMessage returns the head (status line and headers, without the terminator),
-// the body, and the separator that divided them, so a rebuild can put back the same
-// line endings it found rather than normalising a message it was only asked to edit.
-func splitMessage(raw []byte) (head, body, sep []byte, ok bool) {
-	if idx := bytes.Index(raw, []byte("\r\n\r\n")); idx >= 0 {
-		return raw[:idx], raw[idx+4:], []byte("\r\n\r\n"), true
-	}
-	if idx := bytes.Index(raw, []byte("\n\n")); idx >= 0 {
-		return raw[:idx], raw[idx+2:], []byte("\n\n"), true
-	}
-	return nil, nil, nil, false
-}
-
 // requestHead returns the head of a message, or the whole thing when there is no
 // separator. Used by the plain-HTTP path to read a Host header out of bytes it has
 // already buffered, rather than consuming the reader a second time.
 func requestHead(raw []byte) []byte {
-	if head, _, _, ok := splitMessage(raw); ok {
+	if head, _, _, ok := httputil.SplitHeadBody(raw); ok {
 		return head
 	}
 	return raw
-}
-
-// headerValue reads one header out of a head block, or "" when it is absent. The
-// first occurrence wins, matching how every parser in this tree reads a header that
-// should not be repeated.
-func headerValue(head []byte, name string) string {
-	prefix := strings.ToLower(name) + ":"
-	for _, line := range splitHeadLines(head) {
-		if len(line) == 0 {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(string(line)), prefix) {
-			return strings.TrimSpace(string(line[len(prefix):]))
-		}
-	}
-	return ""
-}
-
-// splitHeadLines splits a head into lines, skipping the status/request line, and
-// tolerating both CRLF and bare LF.
-func splitHeadLines(head []byte) [][]byte {
-	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
-	lines := bytes.Split(normalised, []byte("\n"))
-	if len(lines) <= 1 {
-		return nil
-	}
-	return lines[1:]
 }
 
 // isHTMLResponse reports whether the Content-Type names HTML. A response with no
 // Content-Type at all is treated as not-HTML: guessing from the body would mean
 // these rules rewriting something whose type nobody declared.
 func isHTMLResponse(head []byte) bool {
-	ct := strings.ToLower(headerValue(head, "Content-Type"))
+	ct0, _ := httputil.HeaderValue(head, "Content-Type")
+	ct := strings.ToLower(ct0)
 	return strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml")
 }
 
@@ -1095,7 +1058,7 @@ func isHTMLResponse(head []byte) bool {
 // whether anything was removed. Only the head is touched, and the separator and body
 // are copied through unchanged.
 func removeHeader(raw []byte, name string) ([]byte, bool) {
-	head, body, sep, ok := splitMessage(raw)
+	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		return raw, false
 	}
@@ -1138,7 +1101,7 @@ func removeHeader(raw []byte, name string) ([]byte, bool) {
 // the point: the family (Proxy-Connection, Proxy-Authorization, …) is defined by the
 // prefix, not by a closed list.
 func stripProxyHeaderFamily(raw []byte) ([]byte, bool) {
-	head, body, sep, ok := splitMessage(raw)
+	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		return raw, false
 	}
@@ -1179,7 +1142,7 @@ func stripProxyHeaderFamily(raw []byte) ([]byte, bool) {
 // when absent) — Burp's "Set Connection: close on requests and on responses". The
 // response half is the relay's job: it closes after one exchange when this option is on.
 func forceConnectionClose(raw []byte) []byte {
-	head, body, sep, ok := splitMessage(raw)
+	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
 		return raw
 	}
@@ -1288,47 +1251,4 @@ func rebuild(head, sep, body []byte, wasChunked, wasEncoded bool) []byte {
 	out.Write(sep)
 	out.Write(body)
 	return out.Bytes()
-}
-
-// dechunk collapses `size CRLF data CRLF … 0 CRLF trailer CRLF` to the data. It
-// returns false for framing it cannot parse, so a malformed body is left alone
-// rather than guessed at.
-func dechunk(body []byte) ([]byte, bool) {
-	var out bytes.Buffer
-	rest := body
-	for {
-		eol := bytes.IndexByte(rest, '\n')
-		if eol < 0 {
-			return nil, false
-		}
-		sizeLine := strings.TrimSpace(string(rest[:eol]))
-		rest = rest[eol+1:]
-		// A chunk extension (`1a;name=value`) is legal and its size is the part
-		// before the semicolon.
-		if semi := strings.IndexByte(sizeLine, ';'); semi >= 0 {
-			sizeLine = strings.TrimSpace(sizeLine[:semi])
-		}
-		size, err := strconv.ParseInt(sizeLine, 16, 64)
-		if err != nil || size < 0 {
-			return nil, false
-		}
-		if size == 0 {
-			// Terminating chunk. The trailer, if any, is discarded with the framing
-			// it belonged to: a Content-Length body has nowhere to put one.
-			return out.Bytes(), true
-		}
-		if int64(len(rest)) < size {
-			return nil, false
-		}
-		out.Write(rest[:size])
-		rest = rest[size:]
-		// The CRLF after the chunk data.
-		if len(rest) >= 2 && rest[0] == '\r' && rest[1] == '\n' {
-			rest = rest[2:]
-		} else if len(rest) >= 1 && rest[0] == '\n' {
-			rest = rest[1:]
-		} else {
-			return nil, false
-		}
-	}
 }

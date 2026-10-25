@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
@@ -32,7 +34,7 @@ func responseAttributes(raw []byte, status *int, length int, cookies []string) m
 	if status != nil {
 		attrs["status_code"] = strconv.Itoa(*status)
 	}
-	head, body, _ := bytes.Cut(raw, []byte("\r\n\r\n"))
+	head, body, _ := httputil.CutHead(raw)
 	for _, line := range bytes.Split(head, []byte("\r\n"))[1:] {
 		name, value, ok := bytes.Cut(line, []byte(":"))
 		if !ok {
