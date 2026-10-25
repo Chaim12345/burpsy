@@ -7,6 +7,7 @@ name: Nightly
 #
 #   e2e-go   e2e-go.sh against a local target.
 #   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
+#   fuzz     every listed fuzz target for 5 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
 #            race-web and race-core on every push to master, the race detector covers the whole module.
 #
@@ -149,3 +150,28 @@ jobs:
       - name: burpsy log (on failure)
         if: failure()
         run: tail -100 /tmp/burpsy-bench.log || true
+
+  # One `go test -fuzz` process per target (go test takes one per run). 10 targets x 5 min fits the
+  # timeout. A listed target missing from its package fails the job (ci-fuzz.sh verify). A crasher is
+  # written to internal/<pkg>/testdata/fuzz/<Target>/ and uploaded: commit it as the regression test.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - name: Every listed target exists
+        run: scripts/ci-fuzz.sh verify
+      - name: Fuzz
+        env:
+          CI_FUZZ_TIME: 5m
+        run: scripts/ci-fuzz.sh run
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashers
+          path: burpsy-go/internal/*/testdata/fuzz/
+          if-no-files-found: ignore
