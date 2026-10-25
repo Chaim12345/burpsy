@@ -659,7 +659,7 @@ func opNames(ops []op) []string {
 
 // listTools answers tools/list.
 func (s *Server) listTools(req request) response {
-	return s.ok(req, map[string]any{"tools": s.tools})
+	return s.ok(req, map[string]any{"tools": s.visibleTools()})
 }
 
 // ---- tools/call ---------------------------------------------------------------------------------
@@ -702,6 +702,9 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 		return s.fail(req, codeInvalidParams, "no tool named %q; call tools/list for the surface", params.Name)
 	}
 
+	if why := s.refusedByPolicy(params.Name); why != "" {
+		return s.ok(req, map[string]any{"content": errResult(why).Content, "isError": true})
+	}
 	res := s.invoke(ctx, t, args, call)
 	out := map[string]any{"content": res.Content}
 	if res.IsError {
@@ -814,9 +817,18 @@ func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
 			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
 		}
 	}
+	// Checked before the path is resolved, on what the caller asked for, so the refusal does not depend
+	// on whether the manifest has the route yet.
+	errPolicy := fmt.Errorf("the agent policy is the operator's: it cannot be read or changed over the MCP transport")
+	if isPolicyPath(args.Path) || isPolicyPath(route.Pattern) {
+		return resolvedCall{}, errPolicy
+	}
 	path, err := s.resolvePath(t.Name, route, args)
 	if err != nil {
 		return resolvedCall{}, err
+	}
+	if isPolicyPath(path) {
+		return resolvedCall{}, errPolicy
 	}
 	if method == "" {
 		if method, err = chooseMethod(route, args); err != nil {
@@ -994,6 +1006,9 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	t, ok := s.byName[name]
 	if !ok || name == confirmToolName || name == taskStatusToolName {
 		return s.ok(req, errResult(fmt.Sprintf("%q is not a tool on this surface. Pass \"tool\" (the tool you will call) and \"arguments\" (its exact arguments); the refusal of the call prints both.", name)))
+	}
+	if why := s.refusedByPolicy(name); why != "" {
+		return s.ok(req, errResult(why))
 	}
 	var callArgsOf callArgs
 	if len(args.Arguments) > 0 {
