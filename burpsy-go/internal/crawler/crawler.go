@@ -1125,6 +1125,12 @@ type Crawler struct {
 	graphqlAnswer func(u *url.URL, body []byte) []APIDocEndpoint
 	// guessedGraphQL records the guessed paths already probed, so a host is probed once per path
 	// rather than once per page that happens to sit on it.
+	// startedAt is when Run began, so the requests a visit itself triggers — the GraphQL guess
+	// probes and the introspection query — answer to the same MaxDuration the loop checks between
+	// visits (burpsy-react-ui-u4mm). Set once at Run's first line; a zero value means the check
+	// stands down, which no production path can produce.
+	startedAt time.Time
+
 	guessedGraphQL map[string]bool
 	// introspected records the URLs already introspected, so an endpoint reached from five
 	// pages is asked once rather than five times.
@@ -1566,6 +1572,7 @@ func (c *Crawler) WithTaskID(id uint64) *Crawler {
 
 func (c *Crawler) Run(ctx context.Context) Report {
 	started := time.Now()
+	c.startedAt = started
 	rep := Report{
 		Seeds:              c.cfg.Seeds,
 		SeedsOnly:          c.cfg.SeedsOnly,
@@ -2892,6 +2899,15 @@ func (c *Crawler) armGraphQL() {
 	}
 }
 
+// pastDuration reports whether the crawl's wall-clock limit has already passed, for the requests
+// a visit triggers from INSIDE the visit (burpsy-react-ui-u4mm). The main loop checks MaxDuration
+// between visits; a visit that ends after the limit has passed must not be followed by requests of
+// its own — a probe or introspection sent then is traffic after the operator's time limit, under a
+// report that claims the limit was in force.
+func (c *Crawler) pastDuration() bool {
+	return !c.startedAt.IsZero() && time.Since(c.startedAt) >= c.limits.MaxDuration
+}
+
 // introspect sends one introspection query to a URL the crawl has established is a GraphQL endpoint.
 //
 // Straight to perform, for the reason guessGraphQL gives: this is a request, so it is scope-authorised,
@@ -2902,6 +2918,13 @@ func (c *Crawler) introspect(ctx context.Context, u *url.URL, rep *Report, lim *
 	// finishes, so for the whole crawl it reads zero and a bound checked against it is no bound at
 	// all. Reading the live counter is the difference between a stated request limit and one that
 	// only appears to hold.
+	if c.pastDuration() {
+		c.skips.record(SkipRecord{
+			Reason: SkipGraphQLIntrospection, URL: u.String(), Method: "POST",
+			Detail: "the crawl's time limit has passed, so the endpoint was not introspected",
+		})
+		return
+	}
 	if rep.Fetched >= c.limits.MaxRequests {
 		c.skips.record(SkipRecord{
 			Reason: SkipGraphQLIntrospection, URL: u.String(), Method: "POST",
@@ -2931,6 +2954,16 @@ func (c *Crawler) guessGraphQL(ctx context.Context, u *url.URL, rep *Report, lim
 		probe.Path = path
 		if c.guessedGraphQL[probe.String()] {
 			continue
+		}
+		// The duration bound first (burpsy-react-ui-u4mm): it is checked per probe, not only per
+		// visit, so a probe pass that starts inside the limit still stops the moment it runs out —
+		// up to four requests used to go out after it.
+		if c.pastDuration() {
+			c.skips.record(SkipRecord{
+				Reason: SkipGraphQLIntrospection, URL: probe.String(), Method: "POST",
+				Detail: "the crawl's time limit has passed, so the GraphQL probe was not sent",
+			})
+			return
 		}
 		// The bound is checked BEFORE the request goes out, not after: an operator reading the request
 		// count must never see a number that omits what was actually sent. rep.Fetched, not
