@@ -282,6 +282,40 @@ func BurpsyNativeRows() []BurpsyRow {
 			"transfer per authorisation, one vote per ballot — is a one-per-actor business limit, the " +
 			"access-control class's business-logic edge (CWE-362 beside CWE-284).",
 	}, {
+		Name:      IssueOAuthImplicitFlow,
+		TypeIndex: 0xb5002c50,
+		CWE:       522,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no OAuth row: PortSwigger documents OAuth attacks as an Academy " +
+			"topic tested by hand. The implicit flow puts the access token in the redirect fragment, " +
+			"within reach of browser history and referrer leakage. It rides 'Broken access control' " +
+			"because a token exposed off the back channel is a failed credential control.",
+	}, {
+		Name:      IssueOAuthStateMissing,
+		TypeIndex: 0xb5002c60,
+		CWE:       352,
+		Rides:     "Cross-site request forgery",
+		Why: "Burp's catalogue has no OAuth row. An authorize request honoured without a state " +
+			"parameter is login CSRF - the attacker-initiated flow binds to the victim's session - " +
+			"so it rides the 'Cross-site request forgery' row whose class it belongs to.",
+	}, {
+		Name:      IssueOAuthPKCEAbsentOrPlain,
+		TypeIndex: 0xb5002c70,
+		CWE:       294,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no OAuth row. A code grant issued without S256 PKCE redeems " +
+			"without the verifier, the capture-replay interception PKCE exists to close (CWE-294). " +
+			"It rides 'Broken access control' as a failed grant-binding control.",
+	}, {
+		Name:      IssueOAuthRedirectURIBypass,
+		TypeIndex: 0xb5002c80,
+		CWE:       601,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no OAuth row; its 'Open redirection' rows cover the generic " +
+			"primitive, but a redirect_uri bypass delivers the victim's code or token to an attacker " +
+			"URI - one-click account takeover - so it rides 'Broken access control' beside the other " +
+			"authorization-limit rows.",
+	}, {
 		Name:      IssueLLMPromptInjection,
 		TypeIndex: 0xb5003000,
 		CWE:       1427,

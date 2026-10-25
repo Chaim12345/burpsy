@@ -510,14 +510,14 @@ func FinalCheckDescriptors() []CheckDescriptor {
 			func(c *ScanConfig) bool {
 				return finalChecksEnabled(c) || idorEnabled(c) || loginRateLimitEnabled(c) ||
 					usernameEnumerationEnabled(c) || sessionMgmtEnabled(c) || clientIPSpoofEnabled(c) ||
-					urlAuthBypassEnabled(c) || raceEnabled(c)
+					urlAuthBypassEnabled(c) || raceEnabled(c) || oauthEnabled(c)
 			},
-			withRaceConditions(withURLAuthBypass(withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl))))))),
+			withOAuth(withRaceConditions(withURLAuthBypass(withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl)))))))),
 		// Cross-site WebSocket hijacking (checks_ws_hijack.go) rides this row behind its own switch: it is
 		// a cross-site request forgery of the WebSocket handshake, reported as burpsy's own row (CWE-1385).
 		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest,
-			func(c *ScanConfig) bool { return finalChecksEnabled(c) || wsHijackEnabled(c) },
-			withWebSocketHijacking(checkCSRF)),
+			func(c *ScanConfig) bool { return finalChecksEnabled(c) || wsHijackEnabled(c) || oauthEnabled(c) },
+			withOAuthState(withWebSocketHijacking(checkCSRF))),
 
 		// Timing-only CL.TE / TE.CL / H2 downgrade detection (checks_smuggling.go). Medium tier: each
 		// attack holds a back-end connection open for the read window, though it leaves nothing on it.

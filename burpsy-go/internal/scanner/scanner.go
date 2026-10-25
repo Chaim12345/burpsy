@@ -418,6 +418,10 @@ type ScanConfig struct {
 	// token; a finding stands only when the group wins more than the control's one. Off by
 	// default: it replays a state-changing request several times in one burst.
 	CheckRaceConditions bool
+	// CheckOAuth admits the OAuth/OIDC bundle (checks_oauth.go, 0vzb.9): passive reads of a
+	// captured authorize request (implicit flow answered, no state honoured, PKCE absent or
+	// plain) and the active redirect_uri manipulation replay. Off by default.
+	CheckOAuth bool
 	// CheckURLAuthBypass admits the URL-interpretation access-bypass check (checks_url_bypass.go,
 	// 0vzb.4): on a safe-method request refused with 401/403, normalised spellings of the path
 	// (/%2e/admin, ..;/, trailing %20/%09) and the X-Original-URL / X-Rewrite-URL override headers on

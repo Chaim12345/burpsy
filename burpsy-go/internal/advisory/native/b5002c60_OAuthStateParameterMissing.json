@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687456,
+  "name": "OAuth state parameter missing",
+  "description": "<p>The authorization server honoured an authorize request that carried no state parameter. Without state, the client cannot bind the redirect it receives to the flow it initiated: an attacker can begin a flow and deliver the resulting redirect to a victim, binding the attacker's grant to the victim's session (login cross-site request forgery). The finding was proven from the captured exchange: the request carried no state and was answered 302 with a grant.</p>\n<p>This row is burpsy's own: Burp's catalogue has no OAuth row; the attack belongs to the cross-site request forgery class, whose row it rides.</p>",
+  "remediation": "<p>Require the state parameter on every authorize request and reject requests that omit it. Clients must generate an unguessable per-flow state value and verify it on the redirect.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: OAuth authentication",
+      "url": "https://portswigger.net/web-security/oauth"
+    },
+    {
+      "title": "OAuth 2.0 Security Best Current Practice (RFC 9700)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9700.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-352: Cross-Site Request Forgery (CSRF)",
+      "url": "https://cwe.mitre.org/data/definitions/352.html"
+    }
+  ]
+}

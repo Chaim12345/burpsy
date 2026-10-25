@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687488,
+  "name": "OAuth redirect_uri validation bypass",
+  "description": "<p>The authorization server validates redirect_uri weakly - by string prefix or by first value only - and redirected the flow to a manipulated spelling of the registered callback: an attacker subdomain of the registered host, a userinfo spelling, a traversal under the registered path, or a duplicate redirect_uri parameter whose second value was honoured. Each bypass delivers the victim's authorization code or access token to an attacker-controlled URI, which is one-click account takeover. The finding was proven by replaying the captured authorize request with manipulated redirect_uri values and reading the 302 Location the server produced.</p>\n<p>This row is burpsy's own: Burp's catalogue has no OAuth row; its open-redirection rows cover the generic primitive, but a redirect_uri bypass is an authorization failure, so this row rides 'Broken access control'.</p>",
+  "remediation": "<p>Exact-match the full redirect_uri against the registered callbacks; reject duplicates and unregistered values outright - never prefix-, suffix- or substring-match. Where several callbacks are registered, match the whole string, not the origin.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: OAuth authentication",
+      "url": "https://portswigger.net/web-security/oauth"
+    },
+    {
+      "title": "OAuth 2.0 Security Best Current Practice (RFC 9700)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9700.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-601: URL Redirection to Untrusted Site ('Open Redirect')",
+      "url": "https://cwe.mitre.org/data/definitions/601.html"
+    }
+  ]
+}

@@ -832,6 +832,7 @@ func runtimeScanConfig() *ScanConfig {
 		// proven by the endpoint's own serialisation shape, and reverted; the merge targets are vulnapp's.
 		CheckServerSidePrototypePollution: true,
 		CheckRaceConditions:               true,
+		CheckOAuth:                        true,
 		// LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of
 		// requests a model likely answers; the stand-in models are vulnapp's own.
 		CheckLLMPromptInjection: true,
