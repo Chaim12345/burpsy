@@ -138,15 +138,6 @@ func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Con
 	return burpsyhttp2.RenderResponse(httpResp.StatusCode, headers, respBody), nil
 }
 
-// h2RequestURL builds the request URL for an h2 send without losing the request-target's bytes.
-//
-// The transport writes :path from URL.RequestURI and accepts any value starting with a single '/'
-// (httpcommon.validPseudoPath), so the question is only how to get the operator's exact target into
-// RequestURI. url.Parse is tried first because everything it accepts it also preserves byte-for-byte
-// — "//"-prefixed targets included, which nothing else here can carry. When it refuses, the cause is
-// the percent escapes a path-confusion probe is made of (%%32%65, %zz — CVE-2023-25690's shape), and
-// the answer is URL.Opaque: RequestURI returns a single-slash Opaque unexamined, so :path on the wire
-// is byte-for-byte what the operator wrote.
 // h2IsEventStream reports whether a Content-Type value is text/event-stream, ignoring parameters.
 func h2IsEventStream(contentType string) bool {
 	mt, _, _ := strings.Cut(contentType, ";")

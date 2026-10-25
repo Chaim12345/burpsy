@@ -29,14 +29,17 @@ import (
 
 // RequestURL parses authority + rawTarget into the URL a re-expressed request is built from.
 //
-// The fast path is url.Parse; when the target's escapes are not URL-clean it falls back to an
-// Opaque URL that carries the bytes as written. Rejecting such targets instead hid the answer a
-// probe was written to get (burpsy-react-ui-0vzb.25): a send that errors "invalid URL escape"
-// never asks the server how it normalises the path. Re-escaping instead would be worse than
-// failing: the server would be asked about a request the operator did not write, and the result
-// would read as evidence about their probe.
+// The rule is verbatim carry, never re-encode (burpsy-react-ui-swqq): the parsed form is used
+// only when it round-trips to the exact bytes the operator wrote. url.Parse ACCEPTS-then-
+// TRANSFORMS two shapes - '/a#b' loses its fragment, '/a b' comes back '%20'-encoded - so
+// "Parse succeeded" is not "Parse preserved"; anything it transformed, and anything it refused
+// (the percent escapes a path-confusion probe is made of, burpsy-react-ui-0vzb.25), takes the
+// Opaque path, whose RequestURI is the bytes unexamined. Rejecting such targets hid the answer
+// a probe was written to get; re-encoding them would be worse than failing: the server would be
+// asked about a request the operator did not write, and the result would read as evidence about
+// their probe.
 func RequestURL(authority, rawTarget string) (*url.URL, error) {
-	if parsed, err := url.Parse("https://" + authority + rawTarget); err == nil {
+	if parsed, err := url.Parse("https://" + authority + rawTarget); err == nil && parsed.RequestURI() == rawTarget {
 		return parsed, nil
 	}
 	path, query, hasQuery := strings.Cut(rawTarget, "?")

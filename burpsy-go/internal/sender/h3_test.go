@@ -52,7 +52,9 @@ func startH3Server(t *testing.T) (host string, port uint16, seen <-chan string) 
 			if err != nil {
 				t.Errorf("reading the request body: %v", err)
 			}
-			arrived <- fmt.Sprintf("%s %s %s %q", r.Method, r.URL.RequestURI(), r.Header.Get("X-Op"), body)
+			// r.RequestURI, not r.URL.RequestURI(): the server sets it verbatim from :path, so
+			// it is the exact bytes the client put on the wire.
+			arrived <- fmt.Sprintf("%s %s %s %q", r.Method, r.RequestURI, r.Header.Get("X-Op"), body)
 			w.Header().Set("X-Carrier", "h3")
 			_, _ = w.Write([]byte("h3-ok"))
 		}),
@@ -164,5 +166,47 @@ func TestSendRawOutcomeHTTP3FailsAgainstAnEndpointThatDoesNotAnswerQUIC(t *testi
 	_, _, err = sender.SendRawOutcome(ctx, host, uint16(portNum), true, raw, ProtocolPreferenceHTTP3)
 	if err == nil {
 		t.Fatal("an endpoint that never answers QUIC sent something instead of failing")
+	}
+}
+
+// burpsy-react-ui-swqq: the parse-transformed shapes ride h3 byte-for-byte, exactly as h2 carries
+// them - one RequestURL, one verbatim rule, both legs.
+func TestH3SendCarriesParseTransformedTargetsVerbatim(t *testing.T) {
+	for _, target := range []string{"/a#b", "/a?x=1#frag", "/a#b?c=d"} {
+		t.Run(target, func(t *testing.T) {
+			host, port, arrived := startH3Server(t)
+			sender := NewSender(&SenderConfig{TLSVerify: false})
+			raw := []byte("GET " + target + " HTTP/1.1\r\nHost: example.test\r\nX-Op: burpsy\r\n\r\n")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, _, err := sender.SendRawOutcome(ctx, host, port, true, raw, ProtocolPreferenceHTTP3); err != nil {
+				t.Fatalf("SendRawOutcome: %v", err)
+			}
+			select {
+			case got := <-arrived:
+				want := "GET " + target + ` burpsy ""`
+				if got != want {
+					t.Fatalf("the h3 server saw %q, want %q - :path was not verbatim", got, want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the h3 server never saw a request")
+			}
+		})
+	}
+}
+
+// '/a b' never reaches RequestURL on this leg either: the request line's own tokenisation
+// refuses it (same bar as h2), and under the explicit h3 pin the refusal is the strict error.
+func TestH3SendRefusesARawSpaceInTheRequestLine(t *testing.T) {
+	sender := NewSender(&SenderConfig{TLSVerify: false})
+	raw := []byte("GET /a b HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := sender.SendRawOutcome(ctx, "127.0.0.1", 443, true, raw, ProtocolPreferenceHTTP3)
+	if err == nil {
+		t.Fatal("a request line with a raw space went to h3 instead of being refused")
+	}
+	if !strings.Contains(err.Error(), "request line") {
+		t.Fatalf("the refusal must name the request line, got %v", err)
 	}
 }
