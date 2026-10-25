@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,5 +156,30 @@ var settings={};if(settings.html)document.body.innerHTML=settings.html;
 	}
 	if len(markers) != 4 {
 		t.Fatalf("probe canaries are not unique per technique: %v", markers)
+	}
+}
+
+// The hash probe must put a form-encoded query in the fragment EXACTLY ONCE. Assigning an
+// already-encoded string to url.URL.Fragment makes String() escape its '%' again (%5B -> %255B),
+// so a page's URLSearchParams(location.hash.slice(1)) decodes to a literal "%5B" and the bracket
+// and constructor shapes never reach the page's parser.
+func TestHashProbeURLEncodesTheFragmentExactlyOnce(t *testing.T) {
+	for _, technique := range []string{"hash-bracket", "hash-dot", "hash-constructor"} {
+		spec := probeSpec{Marker: "burpsyDIabc", Proof: "__burpsyProofburpsyDIabc", Property: "html", Technique: technique}
+		u, err := url.Parse(probeURL("http://127.0.0.1:1/p?x=1", spec))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(u.EscapedFragment(), "%25") {
+			t.Fatalf("%s: fragment double-encoded: %s", technique, u.EscapedFragment())
+		}
+		q, err := url.ParseQuery(u.Fragment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{"hash-bracket": "__proto__[html]", "hash-dot": "__proto__.html", "hash-constructor": "constructor[prototype][html]"}[technique]
+		if q.Get(want) != "burpsyDIabc" {
+			t.Fatalf("%s: page would not see %q after one decode: %v (raw %s)", technique, want, q, u.EscapedFragment())
+		}
 	}
 }

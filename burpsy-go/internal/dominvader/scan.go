@@ -137,7 +137,11 @@ func probeURL(raw string, p probeSpec) string {
 		}
 		u.RawQuery = q.Encode()
 	} else {
-		u.Fragment = values.Encode()
+		// Append the already form-encoded query verbatim: url.URL.Fragment takes a DECODED
+		// value and String() would escape its '%' a second time (%5B -> %255B), so the page's
+		// own hash parser would never see the bracket/constructor keys.
+		u.Fragment, u.RawFragment = "", ""
+		return u.String() + "#" + values.Encode()
 	}
 	return u.String()
 }
