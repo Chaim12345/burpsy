@@ -3,7 +3,6 @@
 # (scripts/ci-lint.sh vuln) fails only on an id that is NOT listed here. Remove a line when the
 # fix lands; the gate prints entries that no longer fire. Never add a line to get a build green
 # without a bead that owns the fix.
-GO-2026-5841  # github.com/klauspost/compress/s2 OOB read; fixed in v1.18.7
 GO-2026-5932  # x/crypto/openpgp unmaintained (transitive)
 GO-2026-6303  # x/crypto/ssh source-address option (transitive)
 GO-2026-6354  # x/crypto/ssh DoS (transitive)
