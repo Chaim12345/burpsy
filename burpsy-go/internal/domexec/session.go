@@ -34,6 +34,7 @@ package domexec
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -65,10 +66,11 @@ type ScopeGate interface {
 
 // Session is one isolated browser context.
 type Session struct {
-	b     *Browser
-	id    cdp.BrowserContextID
-	gate  ScopeGate
-	proxy *gateProxy
+	b               *Browser
+	id              cdp.BrowserContextID
+	gate            ScopeGate
+	restrictedProbe bool
+	proxy           *gateProxy
 
 	mu      sync.Mutex
 	closed  bool
@@ -311,6 +313,32 @@ func (s *Session) installFetchGate(tabCtx context.Context) error {
 				return
 			}
 			exec := cdp.WithExecutor(tabCtx, c.Target)
+			if s.restrictedProbe && e.ResponseStatusCode != 0 {
+				headers := []*fetch.HeaderEntry{}
+				for _, h := range e.ResponseHeaders {
+					if !strings.EqualFold(h.Name, "Content-Length") && !strings.EqualFold(h.Name, "Content-Encoding") {
+						headers = append(headers, h)
+					}
+				}
+				if e.ResourceType == network.ResourceTypeDocument {
+					headers = append(headers, &fetch.HeaderEntry{Name: "Content-Security-Policy", Value: "worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; sandbox allow-scripts allow-same-origin"})
+					var body []byte
+					var err error
+					if e.ResponseStatusCode < 300 || e.ResponseStatusCode >= 400 {
+						body, err = fetch.GetResponseBody(e.RequestID).Do(exec)
+					}
+					if err == nil {
+						err = fetch.FulfillRequest(e.RequestID, e.ResponseStatusCode).WithResponseHeaders(headers).WithBody(base64.StdEncoding.EncodeToString(body)).Do(exec)
+					}
+					if err != nil {
+						s.recordBlocked("probe CSP response refused: " + err.Error())
+						_ = fetch.FailRequest(e.RequestID, network.ErrorReasonBlockedByClient).Do(exec)
+					}
+				} else {
+					_ = fetch.ContinueResponse(e.RequestID).Do(exec)
+				}
+				return
+			}
 			u, err := url.Parse(e.Request.URL)
 			if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				err = s.gate.AllowURL(u)
@@ -325,12 +353,14 @@ func (s *Session) installFetchGate(tabCtx context.Context) error {
 				_ = fetch.FailRequest(e.RequestID, network.ErrorReasonBlockedByClient).Do(exec)
 				return
 			}
-			_ = fetch.ContinueRequest(e.RequestID).Do(exec)
+			_ = fetch.ContinueRequest(e.RequestID).WithInterceptResponse(s.restrictedProbe).Do(exec)
 		}()
 	})
-	return chromedp.Run(tabCtx, fetch.Enable().WithPatterns([]*fetch.RequestPattern{
-		{URLPattern: "*", RequestStage: fetch.RequestStageRequest},
-	}))
+	patterns := []*fetch.RequestPattern{{URLPattern: "*", RequestStage: fetch.RequestStageRequest}}
+	if s.restrictedProbe {
+		patterns = append(patterns, &fetch.RequestPattern{URLPattern: "*", RequestStage: fetch.RequestStageResponse})
+	}
+	return chromedp.Run(tabCtx, fetch.Enable().WithPatterns(patterns))
 }
 
 // clearCookies empties the session's jar.

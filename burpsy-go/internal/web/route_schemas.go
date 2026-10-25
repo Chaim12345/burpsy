@@ -200,6 +200,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/scanner/secrets":          {body: typeOf[scannerSecretsReq]()},
 	"PUT /api/dominvader":               {body: typeOf[domInvaderReq]()},
 	"POST /api/dominvader/hit":          {body: typeOf[dominvader.Hit]()},
+	"POST /api/dominvader/scan":         noBody,
 	"DELETE /api/dominvader/hits":       noBody,
 	"POST /api/scanner/configs":         {body: typeOf[scanConfigWriteReq]()},
 	"PUT /api/scanner/configs":          {body: typeOf[scanConfigWriteReq]()},

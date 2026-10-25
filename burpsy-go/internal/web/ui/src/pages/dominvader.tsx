@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Copy, Trash2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
-import { useClearDomInvaderHits, useDomInvader, useSetDomInvader, type DomInvaderHit } from "../lib/data.dominvader";
+import { useClearDomInvaderHits, useDomInvader, useSetDomInvader, type DomInvaderHit, useScanDomPollution, type PollutionConfig } from "../lib/data.dominvader";
 import { LoadingPanel, PageHeader, RefreshButton } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, Input, NeedsValueButton, Switch } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
@@ -14,15 +14,18 @@ import { SimpleTable } from "../ui/table";
  * so DOM testing is what a tester finds by browsing with the instrumentation on, not only what a scan
  * decides to run.
  *
- * This is Stage 1: the canary, the switch, and the source/sink hit list. postMessage interception and
- * replay, and the prototype-pollution gadget scan, are later stages.
+ * The canary watcher and bounded, opt-in prototype-pollution probe plan are separate controls.
+ * postMessage interception and replay are a later stage.
  */
 export function DomInvaderPage(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useDomInvader();
  const set = useSetDomInvader();
  const clear = useClearDomInvaderHits();
+ const scan = useScanDomPollution();
+ const [plan, setPlan] = useState<PollutionConfig | null>(null);
  const [canary, setCanary] = useState<string | null>(null);
 
+ const pollution = plan ?? data?.pollution;
  const effectiveCanary = canary ?? data?.canary ?? "";
 
  const saveCanary = () => {
@@ -113,9 +116,38 @@ export function DomInvaderPage(): JSX.Element {
       </div>
      </Card>
 
+     {pollution ? <Card>
+      <div className="stack">
+       <h2>Prototype pollution probes</h2>
+       <p>Off by default. Each probe uses a fresh isolated browser context, not your operator login. Only the target origin and current engagement scope are allowed. Workers, frames and popups are blocked.</p>
+       <span>Opt into active pollution probes</span>
+       <Switch id="pollution-enabled" label="Opt into active pollution probes" checked={pollution.enabled}
+        onCheckedChange={(enabled) => setPlan({ ...pollution, enabled })} />
+       <Field label="Target document" hint="absolute HTTP(S) URL inside explicit scope; empty scope is refused">
+        {(id) => <Input id={id} value={pollution.target} onChange={(e) => setPlan({ ...pollution, target: e.target.value })} />}
+       </Field>
+       <Field label="Gadget property vocabulary" hint="comma-separated property names, 1 to 16; not an exhaustive gadget search">
+        {(id) => <Input id={id} value={(pollution.properties ?? []).join(",")} onChange={(e) => setPlan({ ...pollution, properties: e.target.value.split(",").map((v) => v.trim()) })} />}
+       </Field>
+       {(["query", "hash", "json", "nested"] as const).map((key) => <div key={key} style={{display:"flex",gap:8,alignItems:"center"}}><Switch id={`pollution-${key}`} label={key === "nested" ? "Also try constructor.prototype nesting" : `Try ${key} inputs`} checked={pollution[key]}
+        onCheckedChange={(on) => setPlan({ ...pollution, [key]: on })} /><span>{key === "nested" ? "Also try constructor.prototype nesting" : `Try ${key} inputs`}</span></div>)}
+       <div style={{ display: "flex", gap: 8 }}>
+        <Button variant="outline" disabled={set.isPending} onClick={() => set.mutate({ pollution }, { onSuccess: () => {setPlan(null); toast.success("Probe plan saved");}, onError: (e) => toast.error(e.message) })}>Save probe plan</Button>
+        <Button disabled={!!plan || !data.enabled || !data.pollution.enabled || scan.isPending} onClick={() => scan.mutate(undefined, {onError: (e) => toast.error(e.message)})}>{scan.isPending ? "Probing..." : "Run saved probe plan"}</Button>
+       </div>
+       <span className="cell-dim">Source proof and observed sink gadgets are separate hits. No gadget hit is not proof of safety. JSON mode modifies objects returned by the page's JSON.parse in the isolated probe only.</span>
+       {scan.data ? <div className="stack">
+        <p>{scan.data.probes} probes; {scan.data.hits.length} hits; {scan.data.blocked.length} refused requests</p>
+        <p>{scan.data.limitations}</p>
+        {scan.data.errors.map((e, i) => <p key={i}>{e}</p>)}
+        {scan.data.blocked.map((e, i) => <code key={i}>{e}</code>)}
+       </div> : null}
+      </div>
+     </Card> : null}
+
      <Card>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-       <h3>Reported flows ({data.hits.length})</h3>
+       <h2>Reported flows ({data.hits.length})</h2>
        <Button variant="outline" size="small" onClick={() => clear.mutate()} disabled={clear.isPending || data.hits.length === 0}>
         <Trash2 size={13} />
         Clear
@@ -146,7 +178,7 @@ export function DomInvaderPage(): JSX.Element {
 
 function DomInvaderRow({ hit }: { hit: DomInvaderHit }): JSX.Element {
  return (
-  <tr title={hit.stack || hit.url}>
+  <tr title={[hit.stack || hit.url, hit.property, hit.technique, hit.limitations].filter(Boolean).join("\n")}>
    <td>
     <Badge tone={hit.kind === "sink" ? "warn" : "info"}>{hit.kind}</Badge>
    </td>
