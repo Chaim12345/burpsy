@@ -561,6 +561,48 @@ var MethodSpecs = []MethodSpec{
 			"because a plugin has no route to the traffic store.",
 	},
 	{
+		Name: "event.raise", Direction: PluginToHost, Call: "request",
+		Params: `{"level": "debug"|"info"|"error"|"critical", "message": string}`,
+		Result: `{}`,
+		Why: "The analogue of raiseDebug/Info/Error/CriticalEvent (grant: event.raise): puts a line in the " +
+			"dashboard event log, attributed to the plugin, where log only reaches the plugin's own console. " +
+			"A request so a missing grant is answered with error -32001 rather than dropped.",
+	},
+	{
+		Name: "storage.get", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string}`,
+		Result: `{"found": bool, "value"?: any JSON}`,
+		Why: "persistence().extensionData() (project) and preferences() (grant: storage.get). Values are " +
+			"opaque JSON, at most 1 MiB, keys at most 256 bytes, namespaced by plugin so one plugin cannot read another's.",
+	},
+	{
+		Name: "storage.set", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string, "value": any JSON}`,
+		Result: `{}`,
+		Why:    "Writes one value (grant: storage.set). Same scopes and bounds as storage.get.",
+	},
+	{
+		Name: "storage.delete", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string}`,
+		Result: `{}`,
+		Why:    "Removes one value (grant: storage.delete). Deleting a key that is not there is not an error.",
+	},
+	{
+		Name: "ai.prompt", Direction: PluginToHost, Call: "request",
+		Params: `{"prompt": string, "system"?: string}`,
+		Result: `{"text": string}`,
+		Why: "The analogue of Montoya's ai().prompt() (grant: ai.prompt): one prompt through the endpoint the " +
+			"operator configured. Answers -32002 when the build has no endpoint configured.",
+	},
+	{
+		Name: "http.send", Direction: PluginToHost, Call: "request",
+		Params: `{"request": {"method": string, "url": string, "headers"?: [[name, value]], "body"?: string}}`,
+		Result: `{"response": {"status": int, "headers"?: [[name, value]], "body"?: string}}`,
+		Why: "The analogue of http().sendRequest() (grant: http.send). The request goes through " +
+			"sender.AuthorisedSender, so the engagement scope decides before the dial: an out-of-scope request is " +
+			"answered -32003 and counted, never silently dropped.",
+	},
+	{
 		Name: "log", Direction: PluginToHost, Call: "notification",
 		Params: `{"stream": "output"|"error", "message": string}`,
 		Result: `—`,
@@ -583,10 +625,11 @@ type Unsupported struct {
 // Unsupported is the closed list of things this protocol does not offer.
 var UnsupportedCapabilities = []Unsupported{
 	{
-		What: "A plugin cannot originate an HTTP request through burpsy",
+		What: "A plugin cannot originate an HTTP request unless the operator granted http.send, and never outside scope",
 		Why: "Every request this process sends goes through sender.AuthorisedSender so the " +
-			"engagement scope decides about the bytes before the dial. A plugin send method is real work " +
-			"— it has to bind that authority per call — and it is not wired here. A method that " +
+			"engagement scope decides about the bytes before the dial. http.send binds that authority " +
+			"per call and needs a per-plugin grant (-plugin-grants); without the grant, or with no sender " +
+			"wired in this build, it answers an error rather than pretending to send. A method that " +
 			"answered without sending would turn every plugin that used it into a silent false negative.",
 	},
 	{

@@ -52,6 +52,13 @@ type PluginView struct {
 	ProtocolErrors     int `json:"protocol_errors"`
 	Invocations        int `json:"invocations"`
 	InvocationFailures int `json:"invocation_failures"`
+
+	// Grants are the plugin->host methods the operator allowed this plugin; [] when none.
+	// HostCalls counts granted calls per method for the current load ({} when none), and
+	// RefusedHostCalls counts calls refused for want of a grant or by the engagement scope.
+	Grants           []string       `json:"grants"`
+	HostCalls        map[string]int `json:"host_calls"`
+	RefusedHostCalls int            `json:"refused_host_calls"`
 }
 
 // ListView is every allowlisted plugin plus the breakdown across them.

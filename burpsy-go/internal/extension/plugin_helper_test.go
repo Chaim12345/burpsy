@@ -138,6 +138,29 @@ func runHelperPlugin(behaviour string) {
 			os.Exit(70)
 		}
 
+		if behaviour == "host-caller" && msg.Method == "menu.invoke" {
+			// Makes the plugin->host request the invocation's `selection` field describes
+			// ({"method": ..., "params": ...}), waits for the host's answer on stdin and returns
+			// that answer verbatim as the invocation's output.
+			var call struct {
+				Selection string `json:"selection"`
+			}
+			_ = json.Unmarshal(msg.Params, &call)
+			var want struct {
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal([]byte(call.Selection), &want); err != nil {
+				os.Exit(71)
+			}
+			emit(map[string]any{"jsonrpc": "2.0", "id": 9001, "method": want.Method, "params": want.Params})
+			if !reader.Scan() {
+				os.Exit(72)
+			}
+			reply(msg.ID, map[string]any{"output": strings.TrimSpace(reader.Text())})
+			continue
+		}
+
 		switch msg.Method {
 		case "initialize":
 			switch behaviour {

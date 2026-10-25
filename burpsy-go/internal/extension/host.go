@@ -88,6 +88,12 @@ type Config struct {
 	// not silently mean "burpsy executed three binaries on boot" — see NewHost's own note. A plugin
 	// author who is iterating turns it on; an operator running someone else's plugins leaves it off.
 	ReloadOnStart bool
+	// Grants maps a plugin's allowlist name to the plugin->host methods the operator has
+	// allowed it (see GrantableMethods). A method not listed answers CodeNoGrant. Check the
+	// operator's input with ValidateGrants.
+	Grants map[string][]string
+	// Services is what the grants reach. A nil field answers CodeNotWired.
+	Services Services
 	// AutoReload re-loads a loaded plugin when its executable changes on disk, so an author who has
 	// just rebuilt does not have to press Unload and Load to see the new binary.
 	//
@@ -137,6 +143,8 @@ func (c Config) withDefaults() Config {
 type plugin struct {
 	name string
 	spec PluginSpec
+	// grants is the sorted, de-duplicated set the operator allowed this plugin.
+	grants []string
 
 	console *console
 
@@ -191,6 +199,7 @@ func NewHost(cfg Config) *Host {
 		h.byName[name] = &plugin{
 			name:    name,
 			spec:    spec,
+			grants:  cleanGrants(cfg.Grants[name]),
 			state:   StateUnloaded,
 			console: newConsole(cfg.MaxConsoleLines, cfg.MaxConsoleLineBytes),
 		}
@@ -420,7 +429,8 @@ func (h *Host) Load(name string) (PluginView, error) {
 
 	p.console.append(StreamOutput, SourceHost, "loading "+spec.Path)
 
-	sess, err := spawn(h.ctx, name, spec, p.console, h.cfg.MaxMessageBytes)
+	sess, err := spawn(h.ctx, name, spec, p.console, h.cfg.MaxMessageBytes,
+		newHostAPI(name, p.grants, h.cfg.Services), h.cfg.CallTimeout)
 	if err != nil {
 		return p.markFailed(err.Error()), err
 	}
@@ -738,8 +748,14 @@ func (p *plugin) viewLocked() PluginView {
 		Invocations:          int(p.invocations.Load()),
 		InvocationFailures:   int(p.failures.Load()),
 	}
+	view.Grants = append([]string{}, p.grants...)
+	view.HostCalls = map[string]int{}
 	if p.session != nil {
 		view.ProtocolErrors = int(p.session.protocolErrors.Load())
+		if api := p.session.api; api != nil {
+			view.HostCalls = api.countsCopy()
+			view.RefusedHostCalls = int(api.refused.Load())
+		}
 	}
 	return view
 }
@@ -749,4 +765,17 @@ func orUnnamed(value string) string {
 		return "(unnamed)"
 	}
 	return value
+}
+
+func cleanGrants(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, g := range in {
+		if isGrantable(g) && !seen[g] {
+			seen[g] = true
+			out = append(out, g)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
