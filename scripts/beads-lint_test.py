@@ -43,7 +43,10 @@ class Lint(unittest.TestCase):
     def lint(self, reason, bid="x-a"):
         self.write(jl({"id": "x-a", "status": "closed", "close_reason": reason}, {"id": "x-b", "status": "open"}))
         self.commit("close")
-        p = subprocess.run(["python3", "-I", LINT, "--base", self.base], cwd=self.d, capture_output=True, text=True)
+        # The lint prints "::error::" under GitHub Actions and "error: " elsewhere; pin the second so the
+        # tests read the same everywhere.
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_ACTIONS"}
+        p = subprocess.run(["python3", "-I", LINT, "--base", self.base], cwd=self.d, capture_output=True, text=True, env=env)
         return p.returncode, p.stdout
 
     def test_pr_form_still_accepted(self):
