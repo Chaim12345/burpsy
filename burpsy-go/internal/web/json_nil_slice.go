@@ -4,10 +4,10 @@ package web
 // collections as arrays - "tree":null crashed it until 2f8c1f7d fixed that one route by hand.
 // writeJSON routes every response through normalizeNilSlices, which rebuilds the value with each
 // nil slice replaced by an empty slice of the same type. Only nil slices change: nil pointers,
-// nil maps, nil interfaces, byte slices (a nil []byte encodes as null, an empty one as "" - a
-// string either way, never an array) and the state of types implementing json.Marshaler or
-// encoding.TextMarshaler keep their old encoding, because those nulls carry meaning where a nil
-// slice's never did.
+// nil maps, nil interfaces, byte slices (a nil []byte encodes as null, an empty one as "" -
+// normalising would turn null into a string, and neither shape is an array) and the state of
+// types implementing json.Marshaler or encoding.TextMarshaler keep their old encoding, because
+// those nulls carry meaning where a nil slice's never did.
 
 import (
 	"encoding"
@@ -94,8 +94,10 @@ func (n *nilSliceNormaliser) walk(v reflect.Value) reflect.Value {
 		if seen, ok := n.clones[key]; ok {
 			return seen
 		}
-		// The clone mirrors the source header's len and cap; a clone with less capacity than the
-		// original would let a later append behave differently than it would on the input.
+		// The clone keeps the source header's len and cap so headers that differ only in spare
+		// capacity stay distinct clones. The spare slots are allocated, not copied, and
+		// overlapping slices with different starts or lengths clone independently: alias
+		// identity is a same-header contract, no more.
 		out := reflect.MakeSlice(v.Type(), v.Len(), v.Cap())
 		n.clones[key] = out
 		for i := 0; i < v.Len(); i++ {

@@ -393,7 +393,9 @@ func TestNormalisationPreservesAliases(t *testing.T) {
 		t.Error("the input map was mutated")
 	}
 
-	// Same start and length, different spare capacity: NOT aliases - each gets its own clone.
+	// Same start and length, different spare capacity: these DO alias one backing array, but
+	// they are different headers, and the clone contract covers identical headers only - each
+	// gets its own clone, so the cap difference survives.
 	base := make([]string, 1, 4)
 	capped := base[:1:1]
 	type capDto struct {
