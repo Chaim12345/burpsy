@@ -59,7 +59,7 @@ echo "found $chrome: $("$chrome" --version 2>&1 | head -1)"
 warm_log=$(mktemp)
 warm_rc=$(mktemp)
 warm_start=$(date +%s)
-( rc=0; timeout 120 "$chrome" --headless --no-sandbox --disable-gpu --no-first-run --dump-dom about:blank >/dev/null 2>"$warm_log" || rc=$?
+( rc=0; timeout -k 10 120 "$chrome" --headless --no-sandbox --disable-gpu --no-first-run --dump-dom about:blank >/dev/null 2>"$warm_log" || rc=$?
   echo "$rc $(( $(date +%s) - warm_start ))" >"$warm_rc" ) &
 warm_pid=$!
 warm_report() {
