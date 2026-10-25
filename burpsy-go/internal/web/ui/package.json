@@ -25,6 +25,7 @@
     "@codemirror/search": "^6",
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
+    "@hookform/resolvers": "^6.0.0",
     "@lezer/highlight": "^1",
     "@radix-ui/react-context-menu": "^2",
     "@radix-ui/react-dialog": "^1.1.23",
@@ -40,9 +41,11 @@
     "lucide-react": "^1.28.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-hook-form": "^7.91.0",
     "react-hotkeys-hook": "^5",
     "react-resizable-panels": "^4",
     "sonner": "^2",
+    "zod": "^4.6.7",
     "zustand": "^5"
   },
   "devDependencies": {
