@@ -2861,6 +2861,13 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 
 	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	if format == APIDocGraphQLIntrospection {
+		// A GraphQL operation has no path of its own: it is requested at the endpoint the
+		// document came from, the same admission the live introspection answer gets
+		// (admitGraphQLOperations), tagged and counted the same way.
+		c.admitGraphQLOperations(item.url, eps, rep, lim)
+		return true
+	}
 	for _, ep := range eps {
 		rep.APIEndpointsFound++
 		c.admit(discoveredLink{raw: apiEndpointPath(ep), text: ep.OperationID, tag: "api:" + string(format)},

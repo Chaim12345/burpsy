@@ -94,3 +94,48 @@ func TestIntrospectionImportDoesNotWidenRecognition(t *testing.T) {
 		t.Fatalf("the errors-only answer lost its named failure: %q", failure)
 	}
 }
+
+// End-to-end: a saved introspection result reached by a crawl has its operations ADMITTED
+// against the endpoint the document came from. The parser tests prove the read; this proves
+// the wiring, which is the part that can silently fail - a parser wired into nothing reports
+// the same green suite as one wired into the frontier.
+func TestAnIntrospectionDocumentReachedByACrawlHasItsOperationsAdmitted(t *testing.T) {
+	srv := sitemapTarget(t, map[string]servedPage{
+		"/":            {"<html><body><a href=\"/schema.json\">schema</a></body></html>", "text/html"},
+		"/schema.json": {introspectionDocument, "application/json"},
+	})
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.ParseAPIDefinitions = true
+	rep := run(t, cfg)
+
+	if rep.APIDocumentsRead != 1 {
+		t.Errorf("APIDocumentsRead = %d, want 1; fetches were %v", rep.APIDocumentsRead, fetchLog(rep))
+	}
+	if rep.GraphQLEndpointsFound != 2 {
+		t.Errorf("GraphQLEndpointsFound = %d, want the 2 operations the document declares", rep.GraphQLEndpointsFound)
+	}
+	if rep.APIEndpointsFound != 0 {
+		t.Errorf("APIEndpointsFound = %d; a GraphQL document's operations count as GraphQL endpoints, not REST ones", rep.APIEndpointsFound)
+	}
+}
+
+// The failure half end-to-end: a saved result that announces a schema but is broken is a
+// counted skip with the API-definition reason, never "0 endpoints".
+func TestABrokenIntrospectionDocumentIsCountedAsItsOwnSkip(t *testing.T) {
+	srv := sitemapTarget(t, map[string]servedPage{
+		"/":            {"<html><body><a href=\"/schema.json\">schema</a></body></html>", "text/html"},
+		"/schema.json": {`{"data":{"__schema":{}}}`, "application/json"},
+	})
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.ParseAPIDefinitions = true
+	rep := run(t, cfg)
+
+	if !skippedWith(rep, SkipAPIUnparsed) {
+		t.Errorf("a broken introspection document did not record SkipAPIUnparsed; counts: %+v", rep.Skips.Counts)
+	}
+	if rep.GraphQLEndpointsFound != 0 {
+		t.Errorf("GraphQLEndpointsFound = %d for a document that could not be read", rep.GraphQLEndpointsFound)
+	}
+}
