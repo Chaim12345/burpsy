@@ -14,6 +14,8 @@ const MessageTimeout = 30 * time.Second
 const MaxMessageBody = 1 << 20
 const MaxHeldMessages = 100
 
+var ErrUnknownHold = errors.New("unknown or expired hold")
+
 // Message is an untrusted page observation, never authority for server commands.
 // Body is JSON so replay can preserve strings, arrays and objects. Ports cannot
 // be serialized and are explicitly marked non-replayable.
@@ -43,9 +45,10 @@ type messageFrame struct {
 	expires time.Time
 }
 type messageHold struct {
-	frame    string
-	message  *Message
-	decision *MessageDecision
+	frame     string
+	message   *Message
+	decision  *MessageDecision
+	delivered bool
 }
 
 // MessageStore owns a bounded untrusted log and per-frame decision mailboxes.
@@ -56,6 +59,20 @@ type MessageStore struct {
 	frames map[string]messageFrame
 	held   map[string]*messageHold
 	log    []*Message
+	// intercept is controller-owned. Only SetIntercept (console route) writes it;
+	// no worker report, frame token or message field can change it.
+	intercept bool
+}
+
+func (s *MessageStore) SetIntercept(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.intercept = on
+}
+func (s *MessageStore) Intercept() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.intercept
 }
 
 func NewMessageStore() *MessageStore {
@@ -93,7 +110,7 @@ func (s *MessageStore) frameLocked(token string, now time.Time) (messageFrame, e
 	return f, nil
 }
 
-func (s *MessageStore) Record(token string, m Message, intercept bool, now time.Time) (Message, error) {
+func (s *MessageStore) Record(token string, m Message, now time.Time) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLocked(now)
@@ -113,7 +130,7 @@ func (s *MessageStore) Record(token string, m Message, intercept bool, now time.
 	m.State = "observed"
 	if m.HasPorts {
 		m.State = "not-replayable-ports"
-	} else if intercept {
+	} else if s.intercept {
 		if len(s.held) >= MaxHeldMessages {
 			m.State = "forwarded-queue-full"
 		} else {
@@ -139,22 +156,29 @@ func (s *MessageStore) Record(token string, m Message, intercept bool, now time.
 func (s *MessageStore) expireLocked(now time.Time) {
 	for id, h := range s.held {
 		if !now.Before(h.message.Expires) {
-			h.message.State = "forwarded-on-timeout"
+			switch {
+			case h.delivered:
+				// The worker received the decision but never reported back.
+				h.message.State = h.decision.Action + "-delivered-unacknowledged"
+			default:
+				h.message.State = "forwarded-on-timeout"
+			}
 			delete(s.held, id)
 		}
 	}
 }
 
-func (s *MessageStore) Decide(token, id string, d MessageDecision, now time.Time) error {
+// ControllerDecide records the operator's decision for a server-issued hold ID.
+// It is reachable only from the console controller route. The owning frame is
+// resolved from the server-side hold, never from any caller-supplied token, and
+// the decision is only delivered to that frame's own Poll.
+func (s *MessageStore) ControllerDecide(id string, d MessageDecision, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expireLocked(now)
-	if _, err := s.frameLocked(token, now); err != nil {
-		return err
-	}
 	h, ok := s.held[id]
-	if !ok || h.frame != token {
-		return errors.New("unknown or expired hold for this frame")
+	if !ok {
+		return ErrUnknownHold
 	}
 	if h.decision != nil {
 		return errors.New("hold already decided")
@@ -170,6 +194,9 @@ func (s *MessageStore) Decide(token, id string, d MessageDecision, now time.Time
 	h.decision = &d
 	return nil
 }
+
+// Poll hands a frame its own decided holds once. Delivery to the worker is not
+// application by the page; the hold stays open for that frame's Acknowledge.
 func (s *MessageStore) Poll(token string, now time.Time) []MessageDecision {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,17 +205,36 @@ func (s *MessageStore) Poll(token string, now time.Time) []MessageDecision {
 	if _, err := s.frameLocked(token, now); err != nil {
 		return out
 	}
-	for id, h := range s.held {
-		if h.frame == token && h.decision != nil {
+	for _, h := range s.held {
+		if h.frame == token && h.decision != nil && !h.delivered {
 			out = append(out, *h.decision)
-			h.message.State = "drop-decision-delivered"
-			if h.decision.Action == "forward" {
-				h.message.State = "forward-decision-delivered-synthetic"
-			}
-			delete(s.held, id)
+			h.delivered = true
+			h.message.State = h.decision.Action + "-decision-delivered-to-worker"
 		}
 	}
 	return out
+}
+
+// Acknowledge is the owning frame's worker reporting that it attempted dispatch.
+// It is an untrusted claim about the worker's own action: MAIN-world code can
+// still tamper with or ignore the page-side delivery, so no state claims "applied".
+func (s *MessageStore) Acknowledge(token, id, outcome string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expireLocked(now)
+	if _, err := s.frameLocked(token, now); err != nil {
+		return err
+	}
+	h, ok := s.held[id]
+	if !ok || h.frame != token || !h.delivered {
+		return errors.New("no delivered decision for this frame")
+	}
+	if outcome != "dispatched" && outcome != "failed" {
+		return errors.New("outcome must be dispatched or failed")
+	}
+	h.message.State = h.decision.Action + "-worker-reported-" + outcome + "-unverified"
+	delete(s.held, id)
+	return nil
 }
 func (s *MessageStore) Messages(now time.Time) []Message {
 	s.mu.Lock()

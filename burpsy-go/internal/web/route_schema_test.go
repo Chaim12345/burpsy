@@ -186,6 +186,12 @@ func TestEveryBodyTakingRouteDecodesItsDeclaredType(t *testing.T) {
 			}
 			example, _ := json.Marshal(exampleFrom(schema))
 
+			if domWorkerRoutes[path] {
+				// Capability is checked BEFORE the body is parsed (binding condition), so an
+				// unauthenticated probe can never reach decodeBody. The refusal itself is
+				// covered by TestDomMessageWorkerRoutesRefuseMissingStaleAndWrongCapabilities.
+				continue
+			}
 			p, rec := probe(t, s, method, path, example)
 			switch {
 			case !p.called:

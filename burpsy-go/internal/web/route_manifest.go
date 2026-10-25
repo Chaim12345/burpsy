@@ -958,9 +958,13 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskLocal,
 		summary: "clear the DOM auditor's reported hits",
 	},
-	"/api/dominvader/messages/poll":     {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame decision mailbox"},
-	"/api/dominvader/messages/register": {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame registration"},
-	"/api/dominvader/messages/report":   {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker untrusted message observation"},
+	"/api/dominvader/messages/poll":      {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame decision mailbox"},
+	"/api/dominvader/messages/register":  {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame registration"},
+	"/api/dominvader/messages/ack":       {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame-specific acknowledgment of a delivered decision (unverified worker claim)"},
+	"/api/dominvader/messages":           {methods: []string{"GET"}, risk: riskLocal, summary: "console-only read of the DOM auditor's untrusted page-message observations and hold states"},
+	"/api/dominvader/messages/intercept": {methods: []string{"PUT"}, risk: riskLocal, summary: "console-only switch for holding incoming page messages; controller state a worker report cannot change"},
+	"/api/dominvader/messages/decide":    {methods: []string{"POST"}, risk: riskLocal, summary: "console-only operator decision (forward edited synthetic / drop) on a server-issued hold id; nothing is sent to a target"},
+	"/api/dominvader/messages/report":    {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker untrusted message observation"},
 
 	"/api/scanner/secrets": {
 		// riskLocal: the secret scan reads responses burpsy already captured and sends nothing; the

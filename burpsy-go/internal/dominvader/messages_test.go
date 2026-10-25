@@ -10,19 +10,17 @@ import (
 
 func TestMessageHoldCanOnlyBeDecidedAndConsumedByItsOwnFrame(t *testing.T) {
 	s := NewMessageStore()
+	s.SetIntercept(true)
 	a := s.OpenFrame(1, "top")
 	b := s.OpenFrame(1, "child")
-	msg, err := s.Record(a, Message{Body: `{"hello":"world"}`, Origin: "https://target.example"}, true, time.Now())
+	msg, err := s.Record(a, Message{Body: `{"hello":"world"}`, Origin: "https://target.example"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if msg.State != "held" || msg.HoldID == "" {
 		t.Fatalf("message wasn't held: %+v", msg)
 	}
-	if err := s.Decide(b, msg.HoldID, MessageDecision{Action: "drop"}, time.Now()); err == nil {
-		t.Fatal("other frame decided a hold")
-	}
-	if err := s.Decide(a, msg.HoldID, MessageDecision{Action: "forward", Body: `"edited"`, Origin: "https://synthetic.example"}, time.Now()); err != nil {
+	if err := s.ControllerDecide(msg.HoldID, MessageDecision{Action: "forward", Body: `"edited"`, Origin: "https://synthetic.example"}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Poll(b, time.Now()); len(got) != 0 {
@@ -39,14 +37,15 @@ func TestMessageHoldCanOnlyBeDecidedAndConsumedByItsOwnFrame(t *testing.T) {
 
 func TestMessageTimeoutIsLoggedAsForwardedOnTimeoutAndCannotBeDecidedLater(t *testing.T) {
 	s := NewMessageStore()
+	s.SetIntercept(true)
 	token := s.OpenFrame(1, "top")
 	now := time.Now()
-	m, err := s.Record(token, Message{Body: `"original"`}, true, now)
+	m, err := s.Record(token, Message{Body: `"original"`}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	late := now.Add(MessageTimeout)
-	if err := s.Decide(token, m.HoldID, MessageDecision{Action: "drop"}, late); err == nil {
+	if err := s.ControllerDecide(m.HoldID, MessageDecision{Action: "drop"}, late); err == nil {
 		t.Fatal("expired hold accepted a drop")
 	}
 	rows := s.Messages(late)
@@ -58,7 +57,7 @@ func TestMessageTimeoutIsLoggedAsForwardedOnTimeoutAndCannotBeDecidedLater(t *te
 func TestMessagePortObservationsAreLoggedButNeverHeldForJSONReplay(t *testing.T) {
 	s := NewMessageStore()
 	token := s.OpenFrame(4, "child")
-	m, err := s.Record(token, Message{Body: `null`, HasPorts: true}, true, time.Now())
+	m, err := s.Record(token, Message{Body: `null`, HasPorts: true}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,14 +68,15 @@ func TestMessagePortObservationsAreLoggedButNeverHeldForJSONReplay(t *testing.T)
 
 func TestMessageQueueOverflowIsAnExplicitForwardedBypass(t *testing.T) {
 	s := NewMessageStore()
+	s.SetIntercept(true)
 	token := s.OpenFrame(4, "top")
 	now := time.Now()
 	for i := 0; i < MaxHeldMessages; i++ {
-		if _, err := s.Record(token, Message{Body: `1`}, true, now); err != nil {
+		if _, err := s.Record(token, Message{Body: `1`}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m, err := s.Record(token, Message{Body: `2`}, true, now)
+	m, err := s.Record(token, Message{Body: `2`}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,14 +87,15 @@ func TestMessageQueueOverflowIsAnExplicitForwardedBypass(t *testing.T) {
 
 func TestBusyMessageLogRetainsHeldRowsUntilTheirTimeoutIsVisible(t *testing.T) {
 	s := NewMessageStore()
+	s.SetIntercept(true)
 	token := s.OpenFrame(1, "top")
 	now := time.Now()
-	held, err := s.Record(token, Message{Body: `"held"`}, true, now)
+	held, err := s.Record(token, Message{Body: `"held"`}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2100; i++ {
-		if _, err := s.Record(token, Message{Body: `null`}, false, now); err != nil {
+		if _, err := s.Record(token, Message{Body: `null`}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,17 +119,18 @@ func TestBusyMessageLogRetainsHeldRowsUntilTheirTimeoutIsVisible(t *testing.T) {
 
 func TestMessageDecisionDeliveryDoesNotClaimThePageAppliedIt(t *testing.T) {
 	s := NewMessageStore()
+	s.SetIntercept(true)
 	token := s.OpenFrame(1, "top")
 	now := time.Now()
-	m, err := s.Record(token, Message{Body: `null`}, true, now)
+	m, err := s.Record(token, Message{Body: `null`}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Decide(token, m.HoldID, MessageDecision{Action: "drop"}, now); err != nil {
+	if err := s.ControllerDecide(m.HoldID, MessageDecision{Action: "drop"}, now); err != nil {
 		t.Fatal(err)
 	}
 	s.Poll(token, now)
-	if got := s.Messages(now)[0].State; got != "drop-decision-delivered" {
+	if got := s.Messages(now)[0].State; got != "drop-decision-delivered-to-worker" {
 		t.Fatalf("decision delivery was confused with browser execution: %s", got)
 	}
 }

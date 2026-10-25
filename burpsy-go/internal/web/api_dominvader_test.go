@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,7 +71,7 @@ func TestDomMessageWorkerRoutesRefuseMissingStaleAndWrongCapabilities(t *testing
 	s := newTestServer()
 	launch := s.domInvader.BeginWorkerLaunch("http://localhost/hit")
 	s.domInvader.BeginWorkerLaunch("http://localhost/hit")
-	for _, path := range []string{"/api/dominvader/messages/register", "/api/dominvader/messages/report", "/api/dominvader/messages/poll"} {
+	for _, path := range []string{"/api/dominvader/messages/register", "/api/dominvader/messages/report", "/api/dominvader/messages/poll", "/api/dominvader/messages/ack"} {
 		for _, capability := range []string{"", "wrong", launch.WorkerCapability} {
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
 			req.Header.Set("X-Burpsy-DOM-Worker", capability)
@@ -143,11 +144,13 @@ func TestDomWorkerExceptionThroughGuardedHandlerIsExactAndCapabilityBound(t *tes
 	}
 }
 
-func TestDomWorkerExceptionSetHasExactlyThreeNonControllerRoutes(t *testing.T) {
-	if len(domWorkerRoutes) != 3 {
-		t.Fatal("worker exception set changed; a fourth route requires a new security decision")
+func TestDomWorkerExceptionSetHasExactlyFourNonControllerRoutes(t *testing.T) {
+	// Four: register, report, poll, and the frame-specific ack (added with the
+	// controller slice; the decide/intercept/list controller routes are NOT in it).
+	if len(domWorkerRoutes) != 4 {
+		t.Fatal("worker exception set changed; a new route requires a new security decision")
 	}
-	for _, path := range []string{"/api/dominvader/messages/register", "/api/dominvader/messages/report", "/api/dominvader/messages/poll"} {
+	for _, path := range []string{"/api/dominvader/messages/register", "/api/dominvader/messages/report", "/api/dominvader/messages/poll", "/api/dominvader/messages/ack"} {
 		if !domWorkerRoutes[path] {
 			t.Fatalf("required worker route missing: %s", path)
 		}
@@ -174,5 +177,129 @@ func TestDomWorkerExceptionSetHasExactlyThreeNonControllerRoutes(t *testing.T) {
 	s.guarded.ServeHTTP(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("worker capability was worth something on controller: %d", rec.Code)
+	}
+}
+
+func registerFrame(t *testing.T, s *Server, capability string, tab int, frame string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081/api/dominvader/messages/register", strings.NewReader(fmt.Sprintf(`{"tab":%d,"frame":%q}`, tab, frame)))
+	req.Header.Set(domWorkerHeader, capability)
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	var out struct {
+		Token string `json:"frame_token"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || out.Token == "" {
+		t.Fatalf("register %d %s", rec.Code, rec.Body.String())
+	}
+	return out.Token
+}
+
+func workerPost(s *Server, capability, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8081"+path, strings.NewReader(body))
+	req.Header.Set("Origin", "chrome-extension://test-extension")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set(domWorkerHeader, capability)
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	return rec
+}
+
+func consoleDo(s *Server, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, "http://127.0.0.1:8081"+path, strings.NewReader(body))
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestControllerRoutesRefuseWorkersCrossSiteAndForgedHolds(t *testing.T) {
+	s := newTestServer()
+	cap := s.domInvader.BeginWorkerLaunch("http://localhost/hit").WorkerCapability
+	for _, tc := range []struct{ method, path, body string }{
+		{"PUT", "/api/dominvader/messages/intercept", `{"enabled":true}`},
+		{"POST", "/api/dominvader/messages/decide", `{"hold_id":"x","action":"drop"}`},
+		{"GET", "/api/dominvader/messages", ``},
+	} {
+		// worker capability must not unlock a controller route
+		req := httptest.NewRequest(tc.method, "http://127.0.0.1:8081"+tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Origin", "chrome-extension://test-extension")
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set(domWorkerHeader, cap)
+		rec := httptest.NewRecorder()
+		s.guarded.ServeHTTP(rec, req)
+		if rec.Code != 403 {
+			t.Fatalf("%s %s with worker capability = %d", tc.method, tc.path, rec.Code)
+		}
+		// cross-site page without header is refused too
+		req = httptest.NewRequest(tc.method, "http://127.0.0.1:8081"+tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Origin", "https://evil.example")
+		rec = httptest.NewRecorder()
+		s.guarded.ServeHTTP(rec, req)
+		if rec.Code != 403 {
+			t.Fatalf("%s %s cross-site = %d", tc.method, tc.path, rec.Code)
+		}
+	}
+	if s.domMessages.Intercept() {
+		t.Fatal("interception toggled by a refused request")
+	}
+	if rec := consoleDo(s, "POST", "/api/dominvader/messages/decide", `{"hold_id":"forged","action":"drop"}`); rec.Code != 404 {
+		t.Fatalf("forged hold id = %d", rec.Code)
+	}
+}
+
+func TestWorkerReportNeverBecomesAControllerDecisionAndFullHoldFlowIsFrameBound(t *testing.T) {
+	s := newTestServer()
+	cap := s.domInvader.BeginWorkerLaunch("http://localhost/hit").WorkerCapability
+	top := registerFrame(t, s, cap, 4, "0")
+	child := registerFrame(t, s, cap, 4, "7")
+	rep := func(tok string) *httptest.ResponseRecorder {
+		return workerPost(s, cap, "/api/dominvader/messages/report", fmt.Sprintf(`{"frame_token":%q,"message":{"body":"{\"x\":1}","origin":"https://t.example","state":"held","hold_id":"forged"}}`, tok))
+	}
+	// interception off: observation only, even though the report claims held
+	var m struct {
+		State  string `json:"state"`
+		HoldID string `json:"hold_id"`
+	}
+	rec := rep(top)
+	json.Unmarshal(rec.Body.Bytes(), &m)
+	if rec.Code != 200 || m.State != "observed" || m.HoldID != "" {
+		t.Fatalf("report self-selected hold: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := consoleDo(s, "PUT", "/api/dominvader/messages/intercept", `{"enabled":true}`); rec.Code != 200 || !s.domMessages.Intercept() {
+		t.Fatalf("controller could not enable interception: %d", rec.Code)
+	}
+	rec = rep(top)
+	json.Unmarshal(rec.Body.Bytes(), &m)
+	if m.State != "held" || m.HoldID == "" || m.HoldID == "forged" {
+		t.Fatalf("not held with server hold id: %s", rec.Body.String())
+	}
+	hold := m.HoldID
+	// the worker cannot decide: no decide on worker routes, and a worker-authenticated poll shows nothing yet
+	if rec := workerPost(s, cap, "/api/dominvader/messages/decide", fmt.Sprintf(`{"hold_id":%q,"action":"forward","body":"1"}`, hold)); rec.Code != 403 {
+		t.Fatalf("worker reached decide: %d", rec.Code)
+	}
+	if rec := consoleDo(s, "POST", "/api/dominvader/messages/decide", fmt.Sprintf(`{"hold_id":%q,"action":"forward","body":"{\"edited\":true}"}`, hold)); rec.Code != 200 {
+		t.Fatalf("controller decide %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := workerPost(s, cap, "/api/dominvader/messages/poll", fmt.Sprintf(`{"frame_token":%q}`, child)); strings.Contains(rec.Body.String(), hold) {
+		t.Fatal("decision crossed to sibling frame")
+	}
+	if rec := workerPost(s, cap, "/api/dominvader/messages/ack", fmt.Sprintf(`{"frame_token":%q,"hold_id":%q,"outcome":"dispatched"}`, top, hold)); rec.Code == 200 {
+		t.Fatal("ack accepted before delivery")
+	}
+	if rec := workerPost(s, cap, "/api/dominvader/messages/poll", fmt.Sprintf(`{"frame_token":%q}`, top)); !strings.Contains(rec.Body.String(), hold) {
+		t.Fatalf("own frame poll missed decision: %s", rec.Body.String())
+	}
+	if rec := workerPost(s, cap, "/api/dominvader/messages/ack", fmt.Sprintf(`{"frame_token":%q,"hold_id":%q,"outcome":"dispatched"}`, child, hold)); rec.Code == 200 {
+		t.Fatal("sibling frame acked")
+	}
+	if rec := workerPost(s, cap, "/api/dominvader/messages/ack", fmt.Sprintf(`{"frame_token":%q,"hold_id":%q,"outcome":"dispatched"}`, top, hold)); rec.Code != 200 {
+		t.Fatalf("own ack refused %d %s", rec.Code, rec.Body.String())
+	}
+	list := consoleDo(s, "GET", "/api/dominvader/messages", ``).Body.String()
+	if !strings.Contains(list, "worker-reported-dispatched-unverified") || strings.Contains(list, cap) || strings.Contains(list, top) {
+		t.Fatalf("list wrong or leaks secrets: %s", list)
 	}
 }
