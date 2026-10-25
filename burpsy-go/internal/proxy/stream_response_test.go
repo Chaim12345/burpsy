@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"

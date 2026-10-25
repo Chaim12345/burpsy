@@ -2,9 +2,9 @@ package proxy
 
 import (
 	"bufio"
-	"errors"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
