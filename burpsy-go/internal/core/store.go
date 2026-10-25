@@ -246,6 +246,7 @@ type Protocol int
 const (
 	ProtocolHTTP1 Protocol = iota
 	ProtocolHTTP2
+	ProtocolHTTP3
 )
 
 func (p Protocol) VersionToken() string {
@@ -254,6 +255,8 @@ func (p Protocol) VersionToken() string {
 		return "HTTP/1.1"
 	case ProtocolHTTP2:
 		return "HTTP/2"
+	case ProtocolHTTP3:
+		return "HTTP/3"
 	default:
 		return "HTTP/1.1"
 	}

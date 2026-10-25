@@ -1038,6 +1038,11 @@ func (s *Sender) SendRawOutcome(
 	pref ProtocolPreference,
 ) ([]byte, SendOutcome, error) {
 	settings := s.Network()
+	if pref == ProtocolPreferenceHTTP3 {
+		// h3 shares neither the socket nor the framing with the h1/h2 path below; it has its own
+		// send leg in h3.go.
+		return s.sendH3(ctx, host, port, useTLS, rawRequest)
+	}
 	projectHTTP1 := pref == ProtocolPreferenceAuto && !settings.DefaultToHTTP2() && !burpsyhttp2.IsHTTP2Request(rawRequest)
 	if projectHTTP1 {
 		// Burp's "Default to HTTP/2" off (ry5n): a send that named no protocol is planned as pinned,
