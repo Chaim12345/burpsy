@@ -487,8 +487,15 @@ var groupedTools = []groupSpec{
 //
 // The route surface (-surface routes) still lists all of them, for debugging.
 var notExposed = map[string]string{
-	"GET /":       "the console's own index.html and SPA catch-all — an asset, not an operation",
-	"GET /ca.crt": "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
+	"POST /api/dominvader/messages/register": "private extension-worker route authenticated by a per-launch capability only the extension worker holds; an agent tool cannot and must not call it (k13f)",
+	"POST /api/dominvader/messages/report":   "private extension-worker route authenticated by a per-launch capability only the extension worker holds; an agent tool cannot and must not call it (k13f)",
+	"POST /api/dominvader/messages/poll":     "private extension-worker route authenticated by a per-launch capability only the extension worker holds; an agent tool cannot and must not call it (k13f)",
+	"POST /api/dominvader/messages/ack":      "private extension-worker route authenticated by a per-launch capability only the extension worker holds; an agent tool cannot and must not call it (k13f)",
+	"GET /api/dominvader/messages":           "console-only DOM-auditor message controller; deliberately NOT exposed to agent tools until a ruling decides whether an agent may decide holds (k13f, UNDECIDED, not an omission to fill silently)",
+	"PUT /api/dominvader/messages/intercept": "console-only DOM-auditor message controller; deliberately NOT exposed to agent tools until a ruling decides whether an agent may decide holds (k13f, UNDECIDED, not an omission to fill silently)",
+	"POST /api/dominvader/messages/decide":   "console-only DOM-auditor message controller; deliberately NOT exposed to agent tools until a ruling decides whether an agent may decide holds (k13f, UNDECIDED, not an omission to fill silently)",
+	"GET /":                                  "the console's own index.html and SPA catch-all — an asset, not an operation",
+	"GET /ca.crt":                            "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
 	"GET /api/engagement/clickbandit.js": "the Clickbandit script served as text/javascript for the operator to paste into a " +
 		"browser's developer console — an asset that runs in a browser, not an operation",
 	"GET /reissue/": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
