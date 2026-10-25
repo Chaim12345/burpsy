@@ -40,7 +40,7 @@ func checkClientSidePrototypePollution(ctx context.Context, cc *CheckContext) ([
 		"a URL-controlled value names a property written onto Object.prototype, which every object in the page "+
 			"then inherits. Exploitation additionally requires a gadget - code that reads the polluted property "+
 			"and acts on it. This check looks for the source only and did not search for one, which is the same "+
-			"scope Burp reports here before deferring gadget discovery to DOM Invader")}, nil
+			"scope Burp reports here before deferring gadget discovery to burpsy's DOM auditor (opt-in prototype-pollution probes)")}, nil
 }
 
 // checkPathRelativeStyleSheetImport reports the PRSSI precondition: a stylesheet referenced by

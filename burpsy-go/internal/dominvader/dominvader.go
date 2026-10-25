@@ -37,7 +37,8 @@ type Config struct {
 	Enabled bool `json:"enabled"`
 	// Report is the absolute URL the service worker POSTs each hit to — burpsy's own loopback API,
 	// which the browser's proxy settings bypass so the report is never itself proxied or recorded.
-	Report string `json:"report"`
+	Report    string          `json:"report"`
+	Pollution PollutionConfig `json:"pollution"`
 }
 
 // NewCanary mints a fresh canary: a short, pronounceable-enough marker unlikely to occur in a page by
@@ -92,7 +93,11 @@ func configJS(cfg Config) string {
 type Hit struct {
 	// ID is assigned by the Store on arrival, so the console can key rows and a live update can
 	// address one. Not set by the extension.
-	ID uint64 `json:"id"`
+	ID          uint64 `json:"id"`
+	Property    string `json:"property,omitempty"`
+	Technique   string `json:"technique,omitempty"`
+	Probe       string `json:"probe,omitempty"`
+	Limitations string `json:"limitations,omitempty"`
 	// Kind is "source" (the canary entered the page) or "sink" (it reached a sink).
 	Kind string `json:"kind"`
 	// Sink is the sink tag (the domexec vocabulary: innerHTML, eval, document-write, ...) for a sink
@@ -124,13 +129,14 @@ const maxHits = 2000
 // Store holds the operator's canary, the on/off switch, and the recent hits. One per server; the
 // browser materialises its config from this, and the report endpoint adds to it.
 type Store struct {
-	mu       sync.RWMutex
-	canary   string
-	enabled  bool
-	hits     []*Hit
-	nextID   uint64
-	seen     map[string]uint64 // dedupe key -> hit id, so a repeat bumps the existing row's count
-	onChange func()
+	mu        sync.RWMutex
+	canary    string
+	enabled   bool
+	pollution PollutionConfig
+	hits      []*Hit
+	nextID    uint64
+	seen      map[string]uint64 // dedupe key -> hit id, so a repeat bumps the existing row's count
+	onChange  func()
 }
 
 // NewStore makes a store with a fresh canary and the feature off, Burp's default.
@@ -156,7 +162,7 @@ func (s *Store) signal() {
 func (s *Store) Config(reportURL string) Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return Config{Canary: s.canary, Enabled: s.enabled, Report: reportURL}
+	return Config{Canary: s.canary, Enabled: s.enabled, Report: reportURL, Pollution: s.pollutionCopyLocked()}
 }
 
 // Canary returns the current canary.
@@ -245,4 +251,11 @@ func (s *Store) Clear() {
 	s.seen = map[string]uint64{}
 	s.mu.Unlock()
 	s.signal()
+}
+
+// Caller holds mu; Config must not leak the mutable property slice.
+func (s *Store) pollutionCopyLocked() PollutionConfig {
+	p := s.pollution
+	p.Properties = append([]string(nil), p.Properties...)
+	return p
 }

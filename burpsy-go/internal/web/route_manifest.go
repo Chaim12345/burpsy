@@ -961,6 +961,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "the endpoint burpsy's own DOM-auditor extension reports one source/sink flow to; records a hit the operator's browser produced",
 	},
+	"/api/dominvader/scan": {
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "run the finite opt-in DOM pollution probe plan in an isolated context, same-origin and live engagement-scope gated on each request; workers and frames are not exercised",
+	},
 	"/api/dominvader/hits": {
 		methods: []string{"DELETE"}, risk: riskLocal,
 		summary: "clear the DOM auditor's reported hits",
