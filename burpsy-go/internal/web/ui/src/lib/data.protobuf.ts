@@ -50,6 +50,10 @@ export interface ProtoSchemaOptions {
  message?: string;
  rpc_path?: string;
  direction?: "request" | "response";
+ /** The multi-file form (burpsy-react-ui-rsu2): entry point plus every file of its import graph.
+  *  Mutually exclusive with `proto`; imports resolve across the set. */
+ proto_entry?: string;
+ proto_files?: Record<string, string>;
 }
 
 export function decodeProtobuf(bodyBase64: string, grpc: boolean, schema: ProtoSchemaOptions = {}): Promise<ProtoDecodeResponse> {

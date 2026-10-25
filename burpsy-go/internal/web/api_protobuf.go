@@ -2,6 +2,8 @@ package web
 
 import (
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -62,6 +64,13 @@ type protobufDecodeReq struct {
 	// need not pick one. Direction is "request" or "response". Message, when set, wins.
 	RPCPath   string `json:"rpc_path"`
 	Direction string `json:"direction"`
+	// ProtoEntry and ProtoFiles are the multi-file form (burpsy-react-ui-rsu2): a schema split
+	// across operator files, sent as the entry point's path plus every file of its import graph
+	// (path -> source). Imports resolve across the set; one the set does not contain is the same
+	// hard 400 the single-file form gives, naming the import string. Mutually exclusive with
+	// Proto: one request carries one schema form.
+	ProtoEntry string            `json:"proto_entry"`
+	ProtoFiles map[string]string `json:"proto_files"`
 }
 
 // handleProtobufDecode serves POST /api/protobuf/decode. riskLocal.
@@ -71,21 +80,18 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `the body must be {"body_base64":"...","grpc":bool,"proto":"...","message":"..."}`, http.StatusBadRequest)
 		return
 	}
-	var schema *grpcproto.Schema
-	if strings.TrimSpace(body.Proto) != "" {
-		parsed, perr := grpcproto.ParseProto(body.Proto)
-		if perr != nil {
-			// 400, not a silent schemaless fallback: an operator who pasted a schema and sees unnamed
-			// fields would assume the schema did not match the body, when it did not parse. Per the
-			// 0rrb integrator ruling this holds for unresolved imports too - the error names the
-			// exact import string (a decode built on a partial schema would not read as partial,
-			// and a wrong field attribution in a security tool reads as evidence). The schemaless
-			// fallback stays reachable, and the error says so: resubmit without the proto. A
-			// multi-file upload bead (P3, web lane) is the planned resolution for multi-file schemas.
-			http.Error(w, perr.Error()+"; the body still decodes without a schema (omit the proto)", http.StatusBadRequest)
-			return
-		}
-		schema = parsed
+	// 400, not a silent schemaless fallback, when a supplied schema does not parse: an operator who
+	// pasted a schema and sees unnamed fields would assume the schema did not match the body, when
+	// it did not parse. Per the 0rrb integrator ruling this holds for unresolved imports too - the
+	// error names the exact import string (a decode built on a partial schema would not read as
+	// partial, and a wrong field attribution in a security tool reads as evidence). The schemaless
+	// fallback stays reachable, and the error says so: resubmit without the proto.
+	schema, serr := protoSchemaFromRequest(body.Proto, body.ProtoEntry, body.ProtoFiles)
+	if serr != nil {
+		http.Error(w, serr.Error(), http.StatusBadRequest)
+		return
+	}
+	if schema != nil {
 		if body.Message == "" && body.RPCPath != "" {
 			body.Message = schema.MessageForRPC(body.RPCPath, body.Direction)
 		}
@@ -111,6 +117,62 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// protoSchemaFromRequest resolves the request's schema form, or nil when none was sent. Three
+// forms: none (schemaless decode), proto (a single pasted file), proto_entry + proto_files (the
+// rsu2 file set). The forms are mutually exclusive and the set's paths must stay inside the set -
+// a compile that reached outside it would read host files the operator never sent.
+func protoSchemaFromRequest(proto, entry string, files map[string]string) (*grpcproto.Schema, error) {
+	if len(files) == 0 {
+		if strings.TrimSpace(entry) != "" {
+			return nil, errors.New("proto_entry names a file of proto_files; send the set with it")
+		}
+		if strings.TrimSpace(proto) == "" {
+			return nil, nil
+		}
+		parsed, err := grpcproto.ParseProto(proto)
+		if err != nil {
+			return nil, fmt.Errorf("%s; the body still decodes without a schema (omit the proto)", err)
+		}
+		return parsed, nil
+	}
+	if strings.TrimSpace(proto) != "" {
+		return nil, errors.New("send proto or proto_files, not both: one request carries one schema form")
+	}
+	if strings.TrimSpace(entry) == "" {
+		return nil, errors.New("proto_files needs proto_entry naming the entry point file of the set")
+	}
+	if len(files) > 256 {
+		return nil, fmt.Errorf("proto_files carries %d files; the set is bounded at 256", len(files))
+	}
+	for path := range files {
+		if err := protoSetPathOK(path); err != nil {
+			return nil, err
+		}
+	}
+	if err := protoSetPathOK(entry); err != nil {
+		return nil, err
+	}
+	parsed, err := grpcproto.ParseProtoSet(entry, files)
+	if err != nil {
+		return nil, fmt.Errorf("%s; the body still decodes without a schema (omit the proto)", err)
+	}
+	return parsed, nil
+}
+
+// protoSetPathOK refuses a set path that could reach outside the set: absolute paths, drive
+// letters, backslashes, and any ".." segment.
+func protoSetPathOK(path string) error {
+	if path == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") || strings.Contains(path, ":") {
+		return fmt.Errorf("proto_files path %q is not a relative slash path inside the set", path)
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == ".." || segment == "." || segment == "" {
+			return fmt.Errorf("proto_files path %q has an empty, dot, or parent segment; it must stay inside the set", path)
+		}
+	}
+	return nil
 }
 
 // annotateFields names fields against the chosen message, or returns them untouched when there is no
