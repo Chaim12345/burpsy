@@ -34,9 +34,9 @@ func startTruncatingListingServer(t *testing.T, hold time.Duration) *truncatingL
 		t.Fatalf("listen: %v", err)
 	}
 	s := &truncatingListingServer{
-		addr: ln.Addr().String(),
-		hold: hold,
-		body: "<!DOCTYPE html><html><head><title>listing directory /ftp/</title></head></html>",
+		addr:          ln.Addr().String(),
+		hold:          hold,
+		body:          "<!DOCTYPE html><html><head><title>listing directory /ftp/</title></head></html>",
 		declaredExtra: 59,
 	}
 	t.Cleanup(func() { ln.Close() })

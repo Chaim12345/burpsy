@@ -1,10 +1,10 @@
 package sender
 
 import (
-	"errors"
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
