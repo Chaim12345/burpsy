@@ -55,6 +55,16 @@ TOOLS = {
     # x8 — hidden parameter discovery, second reference for j1mk.13. Release v4.3.0 (2023-05-22);
     # repo last pushed 2024-09, not archived, checked 2026-10-25. Single gzipped binary; the hash
     # is measured on the downloaded asset (x8's releases publish no checksums).
+    # katana — crawler coverage (j1mk.27), ProjectDiscovery's modern baseline. Release v1.8.0
+    # (2026-10-05); the project ships frequently (v1.7.x 2025, checked 2026-10-25): actively
+    # maintained. The pinned hash is the release's own published checksums.txt value.
+    "katana": {
+        "name": "katana", "version": "v1.8.0", "kind": "zip-binary",
+        "url": "https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip",
+        "sha256": "cb027ae99d0757061b70c07a15c7a80f62c5a535ab52c4a329f80c4b0a7309d2",
+        "path_in_archive": "katana",
+        "note": "maintained: release 2026-10-05 (checked 2026-10-25); hash from the release's checksums.txt",
+    },
     "x8": {
         "name": "x8", "version": "v4.3.0", "kind": "gzip-binary",
         "url": "https://github.com/Sh1Yo/x8/releases/download/v4.3.0/x86_64-linux-x8.gz",
@@ -120,7 +130,7 @@ def _installed_files(pin, tdir):
 
 def _describe(pin, tdir, stamp):
     out = {"name": pin["name"], "version": pin["version"], "stamp": str(stamp), "dir": str(tdir)}
-    if pin["kind"] in ("tarball-binary", "gzip-binary"):
+    if pin["kind"] in ("tarball-binary", "gzip-binary", "zip-binary"):
         out["binary"] = str(tdir / pin["path_in_archive"])
     elif pin["kind"] == "script-tarball":
         out["script"] = str(tdir / "src" / pin["entry"])
@@ -141,6 +151,11 @@ def _install(pin, archive, tdir):
     elif pin["kind"] == "tarball-binary":
         with tarfile.open(archive) as tf:
             tf.extractall(tdir, filter="data")
+        os.chmod(Path(tdir) / pin["path_in_archive"], 0o755)
+    elif pin["kind"] == "zip-binary":
+        import zipfile
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(tdir)
         os.chmod(Path(tdir) / pin["path_in_archive"], 0o755)
     elif pin["kind"] == "script-tarball":
         src = Path(tdir) / "src"

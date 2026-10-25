@@ -20,6 +20,50 @@ import json
 import re
 from urllib.parse import parse_qsl, urlsplit
 
+
+def from_katana_jsonl(text, class_name):
+    """katana v1.8.0 `-jsonl`: one JSON object per line, {"request": {"method", "endpoint",
+    "tag", "attribute", "source"}, "response": {...}} — verified against the pinned release
+    (2026-10-25). Each line is one fetched URL; the tag/attribute pair is the discovery
+    mechanism ("a.href", "form.action"), kept as the technique. The seed line carries no tag.
+    Duplicate endpoints collapse (a page linked from two pages is one discovery)."""
+    out = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # katana prints no non-JSON lines in -jsonl mode; tolerate, never invent
+        req = row.get("request") or {}
+        url = req.get("endpoint")
+        if not url:
+            continue
+        tag, attr = req.get("tag") or "", req.get("attribute") or ""
+        technique = f"{tag}.{attr}" if tag or attr else ""
+        out.setdefault(url, _finding(url, "", class_name, technique))
+    return list(out.values())
+
+
+def from_burpsy_crawl_history(rows, class_name):
+    """burpsy's side of a crawl-coverage run: the /api/history rows the crawl's capture path
+    added (CRAWL-02: crawled traffic travels the same store). Each row is one fetched URL,
+    rebuilt as scheme://host:port+path; the comparison normalises default ports away."""
+    out = {}
+    for r in rows:
+        path = r["path"]
+        # burpsy-nf-* is the crawler's own soft-404 calibration probe (internal/crawler/
+        # notfound.go): a request burpsy generated to baseline the target's missing-page
+        # response, never a URL the target offered. Counting it as a discovered URL would be
+        # the harness grading burpsy's instrumentation as coverage.
+        if "/burpsy-nf-" in path:
+            continue
+        scheme = "https" if r.get("tls") else "http"
+        url = f"{scheme}://{r['host']}:{r['port']}{path}"
+        out.setdefault(url, _finding(url, "", class_name))
+    return list(out.values())
+
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 

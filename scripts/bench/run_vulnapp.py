@@ -171,14 +171,16 @@ def configure_scanner(web, ms, profile):
         sys.stderr.write(f"warning: could not set the scanner profile: {e}\n")
 
 
-def confirm(web, method, path, body):
-    """POST the call description to /api/audit/confirm and return the token.
+def confirm(web, method, path, body, confirm_route="/api/audit/confirm"):
+    """POST the call description to the route's confirm endpoint and return the token.
 
-    The audit route is gated (route-risk: attack), so an unconfirmed POST is a 428. The token is
-    bound to the exact (method, path, body) triple, which is why it is fetched per call rather
-    than once."""
+    The gated routes (route-risk: attack) answer an unconfirmed POST with 428. The token is bound
+    to the exact (method, path, body) triple, which is why it is fetched per call rather than
+    once. Each gated route family has its own confirm endpoint (/api/audit/confirm,
+    /api/crawl/confirm, /api/hidden-inputs/confirm); the default is the audit's, the first one
+    this harness used."""
     payload = {"method": method, "url": path, "body": json.dumps(body, separators=(",", ":"))}
-    ans = http_json("POST", f"{web}/api/audit/confirm", payload)
+    ans = http_json("POST", f"{web}{confirm_route}", payload)
     return ans["token"]
 
 

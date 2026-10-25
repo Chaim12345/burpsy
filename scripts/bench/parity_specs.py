@@ -177,3 +177,87 @@ CLASSES["hidden-parameter-discovery-x8"] = {
     "truth": [dict(t) for t in _HIDDEN_TRUTH],
     "tool_args": _x8_args,
 }
+
+
+# ---- j1mk.27: crawler coverage -----------------------------------------------------------------
+#
+# Reference: ProjectDiscovery katana (the modern baseline; ZAP's spiders need a Java stack the
+# nightly runner does not carry — assessed 2026-10-25, filed as a follow-up). The comparison unit
+# is the fetched URL: burpsy's side is the crawl's captured traffic (burpsy_collect "crawl"),
+# katana's is its -jsonl request stream, both from one seed root. Truth comes from the fixture's
+# own declaration (crawlfix.py TRUTH; crawlfix_test.py pins the two copies together), with the
+# exposing mechanism riding in `technique` so it never splits a match key.
+#
+# Both sides run their DEFAULT discovery posture, recorded so the diff reads honestly: katana
+# without -aff (no automatic form fill), burpsy's crawl with SubmitForms/Interact off (the house
+# rule: a no-config crawl never writes). Form actions are therefore measured as DISCOVERED-or-
+# not, never as submitted — /submit in the truth set is exactly the case that separates "found
+# the form's action" from "sent the form". katana runs -jc (JavaScript endpoint parsing) and
+# -kf all (robots.txt + sitemap.xml as known files), matching what burpsy's crawl does by default
+# (JavaScriptLocationsFound, robots/sitemap discovery); -fs rdn is katana's default scope.
+
+CRAWLFIX_BASE = "http://127.0.0.1:19091"
+
+
+def _katana_args(url, desc, out_dir):
+    # -d 5: the fixture's graph is two deep; 5 covers it without inviting katana to wander. -c 5
+    # keeps the loopback target polite. -nc: no ANSI in the jsonl stream.
+    return [desc["binary"], "-u", url, "-jsonl", "-silent", "-nc",
+            "-d", "5", "-kf", "all", "-jc", "-c", "5"]
+
+
+def _katana_headless_args(url, desc, out_dir):
+    # The AJAX half: katana's headless mode renders pages in the system Chrome (rod would
+    # otherwise download its own browser), which is what the js-dom-append mechanism needs.
+    return _katana_args(url, desc, out_dir) + ["-headless", "-system-chrome"]
+
+
+def _crawlfix_truth():
+    rows = [("/", "seed"), ("/a", "href"), ("/b", "href-relative"), ("/abs", "href-absolute"),
+            ("/a/child", "href-depth-2"), ("/search", "form-action-get"),
+            ("/submit", "form-action-post"), ("/b/next", "form-action-depth-2"),
+            ("/meta", "meta-refresh"), ("/comment-link", "html-comment"),
+            ("/js-inline", "js-inline-string"), ("/js-rendered", "js-dom-append"),
+            ("/robots.txt", "known-file"), ("/robots-only", "robots-disallow"),
+            ("/sitemap.xml", "robots-sitemap-directive"), ("/sitemap-only", "sitemap")]
+    return [{"url": CRAWLFIX_BASE + path, "parameter": "",
+             "class": "crawl-coverage", "technique": mechanism} for path, mechanism in rows]
+
+
+CLASSES["crawl-coverage"] = {
+    "name": "crawl-coverage",
+    "bead": "burpsy-react-ui-j1mk.27",
+    "ref_tool": "katana",
+    "ref_name": "katana",
+    "adapter": "katana",
+    "burpsy_collect": "crawl",
+    "targets": [{"url": CRAWLFIX_BASE + "/", "method": "GET", "parameter": ""}],
+    "truth": _crawlfix_truth(),
+    "tool_args": _katana_args,
+}
+
+# The headless spec shares the class label and truth; its slug-named dir keeps its report.
+CLASSES["crawl-coverage-headless"] = {
+    "name": "crawl-coverage",
+    "bead": "burpsy-react-ui-j1mk.27",
+    "ref_tool": "katana",
+    "ref_name": "katana (headless)",
+    "adapter": "katana",
+    "burpsy_collect": "crawl",
+    "targets": [{"url": CRAWLFIX_BASE + "/", "method": "GET", "parameter": ""}],
+    "truth": _crawlfix_truth(),
+    "tool_args": _katana_headless_args,
+}
+
+# vulnapp as-is: no declared link-graph truth (its manifest is scanner rows, not crawl coverage),
+# so this spec diffs the two tools without precision/recall.
+CLASSES["crawl-coverage-vulnapp"] = {
+    "name": "crawl-coverage",
+    "bead": "burpsy-react-ui-j1mk.27",
+    "ref_tool": "katana",
+    "ref_name": "katana",
+    "adapter": "katana",
+    "burpsy_collect": "crawl",
+    "targets": [{"url": TARGET_BASE + "/", "method": "GET", "parameter": ""}],
+    "tool_args": _katana_args,
+}

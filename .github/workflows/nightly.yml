@@ -176,9 +176,10 @@ jobs:
       - name: Start the target and burpsy
         run: |
           nohup /tmp/demo-target -addr 127.0.0.1:19090 >/tmp/parity-target.log 2>&1 &
+          nohup python3 scripts/bench/crawlfix.py -addr 127.0.0.1:19091 >/tmp/parity-crawlfix.log 2>&1 &
           nohup /tmp/burpsy -db /tmp/bsy-parity.db -proxy 127.0.0.1:18080 -web 127.0.0.1:18081 -scope-include 127.0.0.1 >/tmp/burpsy-parity.log 2>&1 &
           for i in $(seq 30); do
-            curl -fsS -o /dev/null http://127.0.0.1:19090/ && curl -fsS -o /dev/null http://127.0.0.1:18081/ && exit 0
+            curl -fsS -o /dev/null http://127.0.0.1:19090/ && curl -fsS -o /dev/null http://127.0.0.1:19091/ && curl -fsS -o /dev/null http://127.0.0.1:18081/ && exit 0
             sleep 1
           done
           tail -50 /tmp/parity-target.log /tmp/burpsy-parity.log

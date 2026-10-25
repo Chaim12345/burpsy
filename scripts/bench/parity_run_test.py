@@ -27,7 +27,7 @@ class TestToolPins(unittest.TestCase):
             self.assertTrue(pin["url"].startswith("https://"), name)
             self.assertEqual(64, len(pin["sha256"]), name)
             int(pin["sha256"], 16)  # hex
-            self.assertIn(pin["kind"], ("pip-tarball", "script-tarball", "tarball-binary", "gzip-binary"), name)
+            self.assertIn(pin["kind"], ("pip-tarball", "script-tarball", "tarball-binary", "gzip-binary", "zip-binary"), name)
             self.assertTrue(pin["note"], name)  # maintenance status, checked when pinned
 
     def test_ensure_downloads_verifies_and_stamps(self):
@@ -249,6 +249,145 @@ class TestSpecs(unittest.TestCase):
         seeded = {t["url"].split("?")[0] for t in spec["targets"]}
         for t in spec["truth"]:
             self.assertIn(t["url"].split("?")[0], seeded)
+
+
+
+
+class TestZipBinaryTool(unittest.TestCase):
+    """katana ships as a zip (j1mk.27): a kind the installer did not have."""
+
+    def test_ensure_installs_a_zip_binary(self):
+        import zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("katana", b"#!/bin/sh\n")
+            zf.writestr("README.md", b"x")
+        payload = buf.getvalue()
+        pin = {"name": "katana", "version": "v1.8.0", "kind": "zip-binary",
+               "url": "https://example.test/k.zip", "sha256": hashlib.sha256(payload).hexdigest(),
+               "path_in_archive": "katana", "note": "test"}
+        fetched = []
+
+        def fetcher(url, dest):
+            fetched.append(url)
+            Path(dest).write_bytes(payload)
+
+        with tempfile.TemporaryDirectory() as d:
+            got = parity_tools.ensure_tool(pin, d, fetcher=fetcher)
+            self.assertTrue(Path(got["binary"]).exists())
+            self.assertTrue(os.access(got["binary"], os.X_OK))
+            got2 = parity_tools.ensure_tool(pin, d, fetcher=fetcher)
+            self.assertEqual(1, len(fetched))  # stamped: no second fetch
+            self.assertEqual(got, got2)
+
+
+# Real katana v1.8.0 -jsonl output lines (bodies trimmed), captured 2026-10-25 against the
+# demo target - the format the adapter is written to, per the harness's "verified against the
+# pinned version" rule.
+KATANA_SAMPLE = (
+    '{"timestamp":"2026-10-25T18:56:02+02:00","request":{"method":"GET",'
+    '"endpoint":"http://127.0.0.1:19091/"},'
+    '"response":{"status_code":200,"headers":{},"content_length":10}}\n'
+    '{"timestamp":"2026-10-25T18:56:03+02:00","request":{"method":"GET",'
+    '"endpoint":"http://127.0.0.1:19091/a","tag":"a","attribute":"href",'
+    '"source":"http://127.0.0.1:19091/"},'
+    '"response":{"status_code":200,"headers":{},"content_length":10}}\n'
+    '{"timestamp":"2026-10-25T18:56:04+02:00","request":{"method":"POST",'
+    '"endpoint":"http://127.0.0.1:19091/submit","tag":"form","attribute":"action",'
+    '"source":"http://127.0.0.1:19091/"},'
+    '"response":{"status_code":200,"headers":{},"content_length":10}}\n'
+    '{"timestamp":"2026-10-25T18:56:05+02:00","request":{"method":"GET",'
+    '"endpoint":"http://127.0.0.1:19091/a","tag":"a","attribute":"href",'
+    '"source":"http://127.0.0.1:19091/b"},'
+    '"response":{"status_code":200,"headers":{},"content_length":10}}\n'
+    'not json at all\n'
+)
+
+
+class TestKatanaAdapter(unittest.TestCase):
+    def test_jsonl_endpoints_deduped_with_mechanism(self):
+        got = parity_adapters.from_katana_jsonl(KATANA_SAMPLE, "crawl-coverage")
+        by_url = {f["url"]: f for f in got}
+        self.assertEqual({"http://127.0.0.1:19091/", "http://127.0.0.1:19091/a",
+                          "http://127.0.0.1:19091/submit"}, set(by_url))
+        for f in got:
+            self.assertEqual("crawl-coverage", f["class"])
+            self.assertEqual("", f["parameter"])
+        self.assertEqual("a.href", by_url["http://127.0.0.1:19091/a"]["technique"])
+        self.assertEqual("form.action", by_url["http://127.0.0.1:19091/submit"]["technique"])
+        # The seed line has no tag/attribute; its technique is empty, not a crash.
+        self.assertEqual("", by_url["http://127.0.0.1:19091/"]["technique"])
+
+    def test_empty_output_is_empty(self):
+        self.assertEqual([], parity_adapters.from_katana_jsonl("", "crawl-coverage"))
+        self.assertEqual([], parity_adapters.from_katana_jsonl(None, "crawl-coverage"))
+
+
+class TestCrawlHistoryAdapter(unittest.TestCase):
+    def test_rows_become_urls(self):
+        rows = [
+            {"id": 9, "host": "127.0.0.1", "port": 19091, "tls": False,
+             "method": "GET", "path": "/a"},
+            {"id": 10, "host": "127.0.0.1", "port": 19091, "tls": False,
+             "method": "GET", "path": "/"},
+            {"id": 11, "host": "127.0.0.1", "port": 19091, "tls": True,
+             "method": "GET", "path": "/tls-page"},
+            {"id": 12, "host": "127.0.0.1", "port": 19091, "tls": False,
+             "method": "GET", "path": "/a/burpsy-nf-03ed818a94a8"},
+        ]
+        got = parity_adapters.from_burpsy_crawl_history(rows, "crawl-coverage")
+        self.assertEqual(
+            {"http://127.0.0.1:19091/a", "http://127.0.0.1:19091/",
+             "https://127.0.0.1:19091/tls-page"},
+            {f["url"] for f in got})
+        for f in got:
+            self.assertEqual("crawl-coverage", f["class"])
+            self.assertEqual("", f["parameter"])
+
+    def test_duplicates_collapse(self):
+        rows = [{"id": i, "host": "h", "port": 80, "tls": False, "method": "GET", "path": "/x"}
+                for i in (1, 2, 3)]
+        got = parity_adapters.from_burpsy_crawl_history(rows, "crawl-coverage")
+        self.assertEqual(1, len(got))
+
+
+CRAWL_SPEC = {
+    "name": "crawl-coverage",
+    "bead": "burpsy-react-ui-j1mk.27",
+    "ref_tool": "katana",
+    "ref_name": "katana",
+    "adapter": "katana",
+    "burpsy_collect": "crawl",
+    "targets": [{"url": "http://127.0.0.1:19091/", "method": "GET", "parameter": ""}],
+    "truth": [{"url": "http://127.0.0.1:19091/a", "parameter": "",
+               "class": "crawl-coverage"}],
+}
+
+
+class TestCrawlSpecOrchestration(unittest.TestCase):
+    def test_run_class_writes_the_report(self):
+        burpsy = [{"url": "http://127.0.0.1:19091/a", "parameter": "",
+                   "class": "crawl-coverage", "technique": ""}]
+        with tempfile.TemporaryDirectory() as d:
+            rc = parity_run.run_classes([dict(CRAWL_SPEC)], d,
+                                        FakeCtx(burpsy, KATANA_SAMPLE))
+            self.assertEqual(0, rc)
+            report = json.loads((Path(d) / "crawl-coverage" / "parity.json").read_text())
+            cls = report["classes"]["crawl-coverage"]
+            self.assertEqual(1, len(cls["both"]))           # /a found by both
+            self.assertEqual(2, len(cls["reference_only"]))  # / and /submit katana-only
+            self.assertEqual(0, len(cls["burpsy_only"]))
+            self.assertIn("truth", report)
+
+    def test_specs_register_the_class(self):
+        from parity_specs import CLASSES
+        for key in ("crawl-coverage", "crawl-coverage-headless", "crawl-coverage-vulnapp"):
+            self.assertIn(key, CLASSES)
+            self.assertEqual("crawl", CLASSES[key]["burpsy_collect"])
+            self.assertEqual("katana", CLASSES[key]["ref_tool"])
+
+
+import os  # noqa: E402
 
 
 if __name__ == "__main__":

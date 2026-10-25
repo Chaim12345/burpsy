@@ -67,6 +67,8 @@ def adapt(spec, raw):
     if kind == "crlfuzz":
         return parity_adapters.from_crlfuzz_text(
             raw, spec["name"], [t["url"] for t in spec["targets"]])
+    if kind == "katana":
+        return parity_adapters.from_katana_jsonl(raw, spec["name"])
     raise ValueError(f"unknown adapter {kind!r}")
 
 
@@ -133,6 +135,8 @@ class LiveCtx:
     def collect_burpsy(self, spec, out_dir):
         if spec.get("burpsy_collect") == "hidden-inputs":
             return self._collect_hidden_inputs(spec, out_dir)
+        if spec.get("burpsy_collect") == "crawl":
+            return self._collect_crawl(spec, out_dir)
         row_to_class = spec.get("burpsy_rows", {})
         # The spec's config switches are applied before its first audit: a miss must be a
         # detection gap, not a family the default profile never switched on (j1mk.14's lesson:
@@ -196,6 +200,37 @@ class LiveCtx:
             return json.dumps(merged) if merged else ""
         return "\n".join(chunks)
 
+
+    def _collect_crawl(self, spec, out_dir):
+        """j1mk.27's burpsy side: a crawl, not an audit. The crawl's captured traffic — it
+        travels the same store path as the proxy's (CRAWL-02), so the /api/history id-difference
+        over the crawl window is the discovered-URL set. The run's own report is kept beside the
+        findings (burpsy_crawl_report.json): its fetched/refused/failed partition, the
+        form_submission flag and the skip ledger are what tell a miss from a refusal when the
+        diff is read."""
+        root = spec["targets"][0]["url"]
+        before = {r["id"] for r in http_json("GET", f"{self.web}/api/history?limit=1000000")}
+        body = {"seeds": [root]}
+        body.update(spec.get("crawl_request") or {})
+        token = confirm(self.web, "POST", "/api/crawl", body, confirm_route="/api/crawl/confirm")
+        started = http_json("POST", f"{self.web}/api/crawl", body, {CONFIRM_HEADER: token},
+                            timeout=30)
+        task = started["task_id"]
+        deadline = time.time() + self.audit_timeout
+        while True:
+            run = http_json("GET", f"{self.web}/api/crawl?task={task}", timeout=15)
+            if run.get("state") != "running":
+                break
+            if time.time() > deadline:
+                raise TimeoutError(f"crawl did not finish within {self.audit_timeout}s on {root}")
+            time.sleep(1.0)
+        if run.get("state") != "done":
+            raise RuntimeError(f"crawl on {root} ended {run.get('state')}: {run.get('error')}")
+        (Path(out_dir) / "burpsy_crawl_report.json").write_text(
+            json.dumps(run.get("report") or {}, indent=1))
+        after = http_json("GET", f"{self.web}/api/history?limit=1000000")
+        rows = [r for r in after if r["id"] not in before]
+        return parity_adapters.from_burpsy_crawl_history(rows, spec["name"])
 
     def _collect_hidden_inputs(self, spec, out_dir):
         """j1mk.13's burpsy side: Param-Miner-style guessing is an on-demand action
