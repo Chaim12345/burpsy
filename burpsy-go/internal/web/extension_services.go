@@ -43,10 +43,12 @@ func (s *Server) ExtensionServices() extension.Services {
 	// The storage document lives beside the project database; a server without
 	// one (tests) gets an in-memory store, which is the honest answer for a
 	// process that has no project to persist into.
-	persister, ok := any(s.persist).(interface{ Path() string })
+	// persist is a concrete *persist.Store: a nil receiver answers "" from
+	// Path, which is also the guard — a bare nil check on the interface would
+	// be true for a typed nil and would root the document at the process cwd.
 	var storagePath string
-	if ok && persister != nil {
-		storagePath = persister.Path() + ".extensions.json"
+	if path := s.persist.Path(); path != "" {
+		storagePath = path + ".extensions.json"
 	}
 	return extension.Services{
 		RaiseEvent: s.extensionRaiseEvent,
