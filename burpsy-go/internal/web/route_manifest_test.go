@@ -424,6 +424,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		// path the caller names: a write that copies credentials to disk (burpsy-react-ui-nvfl).
 		"/api/project/logging",
 		"/api/proxy/ca/import",
+		// The repeater action subtree installs and mutates operator-authored request scripts
+		// that run against targets under the operator's session authority: a stored script can
+		// read and rewrite requests that carry the operator's headers and tokens, so arming one
+		// is the same decision as binding a credential to a host (burpsy-react-ui-1944).
+		"/api/repeater/tabs/",
 		"/api/session/cookies", "/api/session/login",
 		// Resolving a recovery prompt makes burpsy replay the stored login on the operator's behalf,
 		// which is the same authority as the other routes in this class — hence credential, not local.
