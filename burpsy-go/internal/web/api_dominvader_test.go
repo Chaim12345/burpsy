@@ -3,10 +3,14 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 // burpsy-react-ui-wl94: the auditor is off with a fresh canary by default; the operator sets the
@@ -301,5 +305,78 @@ func TestWorkerReportNeverBecomesAControllerDecisionAndFullHoldFlowIsFrameBound(
 	list := consoleDo(s, "GET", "/api/dominvader/messages", ``).Body.String()
 	if !strings.Contains(list, "worker-reported-dispatched-unverified") || strings.Contains(list, cap) || strings.Contains(list, top) {
 		t.Fatalf("list wrong or leaks secrets: %s", list)
+	}
+}
+
+// Drives the real extension sw.js under Node (mocked chrome API, real fetch) against a real server.
+// PROTOCOL + sender-binding evidence only: this is not a browser test.
+func TestExtensionWorkerAgainstRealServerBindsFrameFromSenderAndFollowsControllerDecision(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not on PATH: worker protocol test not run")
+	}
+	s := newTestServer()
+	ts := httptest.NewServer(s.guarded)
+	defer ts.Close()
+	cfg := s.domInvader.BeginWorkerLaunch(ts.URL + "/api/dominvader/hit")
+	cfg.Enabled = true
+	cfg.Canary = "burpsyDItest"
+	dir, err := dominvader.Materialise(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.domMessages.SetIntercept(true)
+	cmd := exec.Command(node, "testdata/sw_harness.js")
+	cmd.Env = append(os.Environ(), "BURPSY_EXT_DIR="+dir)
+	var out, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	// operator side: wait for the held message, then decide through the console route
+	var hold string
+	for i := 0; i < 100 && hold == ""; i++ {
+		time.Sleep(100 * time.Millisecond)
+		for _, m := range s.domMessages.Messages(time.Now()) {
+			if m.State == "held" {
+				hold = m.HoldID
+			}
+		}
+	}
+	if hold == "" {
+		cmd.Process.Kill()
+		t.Fatalf("worker never produced a held message; stderr=%s", stderr.String())
+	}
+	if rec := consoleDo(s, "POST", "/api/dominvader/messages/decide", fmt.Sprintf(`{"hold_id":%q,"action":"forward","body":"{\"edited\":1}"}`, hold)); rec.Code != 200 {
+		t.Fatalf("decide %d %s", rec.Code, rec.Body.String())
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("harness: %v %s", err, stderr.String())
+	}
+	var res struct {
+		Deliveries []struct {
+			Tab      int `json:"tab"`
+			FrameID  int `json:"frameId"`
+			Decision struct {
+				HoldID    string `json:"hold_id"`
+				Synthetic bool   `json:"synthetic"`
+			} `json:"decision"`
+		} `json:"deliveries"`
+		Cap string `json:"capabilityOnPageGlobals"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &res); err != nil {
+		t.Fatalf("harness output %q: %v", out.String(), err)
+	}
+	if len(res.Deliveries) != 1 || res.Deliveries[0].Tab != 4 || res.Deliveries[0].FrameID != 7 || res.Deliveries[0].Decision.HoldID != hold || !res.Deliveries[0].Decision.Synthetic {
+		t.Fatalf("decision not delivered to the sender-bound frame: %+v", res)
+	}
+	rows := s.domMessages.Messages(time.Now())
+	if len(rows) != 1 {
+		t.Fatalf("forged senders produced observations: %+v", rows)
+	}
+	if rows[0].Tab != 4 || rows[0].Frame != "7" || rows[0].Body != `"payload-claims-frame"` || rows[0].State != "forward-worker-reported-dispatched-unverified" {
+		t.Fatalf("binding/ack wrong: %+v", rows[0])
 	}
 }

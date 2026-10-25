@@ -52,19 +52,11 @@ import (
 // is "no UI yet", that is a gap, not an exemption — file it and leave the test red.
 const domWorkerUIExempt = "private extension-worker route: capability-authenticated, never called by the console (k13f)"
 
-// domControllerUIPending is a TEMPORARY, honest exemption: the server controller
-// exists and is tested, but the live console intercept/replay controls are a later
-// k13f slice. Remove this entry when that slice adds the UI call sites.
-const domControllerUIPending = "k13f controller routes shipped server-side first; console UI controls are the later slice (UNIMPLEMENTED in the UI - not a capability claim)"
-
 var uiRouteExempt = map[string]string{
-	"/api/dominvader/messages/register":  domWorkerUIExempt,
-	"/api/dominvader/messages/report":    domWorkerUIExempt,
-	"/api/dominvader/messages/poll":      domWorkerUIExempt,
-	"/api/dominvader/messages/ack":       domWorkerUIExempt,
-	"/api/dominvader/messages":           domControllerUIPending,
-	"/api/dominvader/messages/intercept": domControllerUIPending,
-	"/api/dominvader/messages/decide":    domControllerUIPending,
+	"/api/dominvader/messages/register": domWorkerUIExempt,
+	"/api/dominvader/messages/report":   domWorkerUIExempt,
+	"/api/dominvader/messages/poll":     domWorkerUIExempt,
+	"/api/dominvader/messages/ack":      domWorkerUIExempt,
 	"/api/dominvader/hit": "the DOM-auditor browser extension's service worker POSTs here, not the " +
 		"console (burpsy-react-ui-wl94); the console reads the collected hits via /api/dominvader.",
 	"/": "the console itself; the browser requests it by navigating, not by fetch. The asset paths " +
@@ -118,6 +110,12 @@ var uiRouteExempt = map[string]string{
 // has been fixed, and TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind
 // afterwards. Both directions of the list have now done their job on a real case.
 var uiRouteMissingSurface = map[string]string{
+	// k13f: server-side controller shipped first; the console intercept/replay controls are the
+	// later slice of the same bead. TestNoKnownGapWasQuietlyFixed forces these entries out the
+	// moment the UI references the path, so "temporary" cannot become permanent.
+	"/api/dominvader/messages":           "k13f (console DOM-auditor message list UI not built yet)",
+	"/api/dominvader/messages/intercept": "k13f (console intercept switch not built yet)",
+	"/api/dominvader/messages/decide":    "k13f (console forward/drop controls not built yet)",
 	// Empty since the intruder control half of burpsy-react-ui-wub landed (44f4111): intruder.tsx
 	// carries an AbortController on its run mutation and pause/resume/stop buttons wired to
 	// /api/intruder/attacks/{task_id}/{pause|resume|stop}, so those two entries came off this list —
