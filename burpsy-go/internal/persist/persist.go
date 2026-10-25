@@ -2188,34 +2188,44 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 // SaveTokenRules replaces the project-level token rule set (xe82), whole-list like
 // SaveSessionRules: the set is operator-sized, and `ord` keeps the insertion order across the
 // round trip. The caller passes Coordinator.TokenRules(), which is already in order.
-func (s *Store) SaveTokenRules(rules []*session.TokenRule) {
-	if _, err := s.db.Exec(`DELETE FROM token_rules`); err != nil {
-		s.log("token rules clear", err)
-		return
+//
+// The write is one transaction and its failure is the caller's problem, loudly: these rules carry
+// credentials, and the failure shape to refuse is the silent half-write - a clear that committed
+// and inserts that did not, leaving the store saying "no rules" while the live set keeps
+// injecting. Either the whole set lands or the store keeps what it had, and the error travels
+// back so the caller can drop the in-memory change to match.
+func (s *Store) SaveTokenRules(rules []*session.TokenRule) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("token rules save: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`DELETE FROM token_rules`); err != nil {
+		return fmt.Errorf("token rules clear: %w", err)
 	}
 	for i, r := range rules {
 		hosts, err := json.Marshal(r.ScopeHosts)
 		if err != nil {
-			hosts = nil
+			return fmt.Errorf("token rule %q hosts: %w", r.ID, err)
 		}
 		tools, err := json.Marshal(r.ScopeTools)
 		if err != nil {
-			tools = nil
+			return fmt.Errorf("token rule %q tools: %w", r.ID, err)
 		}
 		ex, err := json.Marshal(r.Extract)
 		if err != nil {
-			ex = nil
+			return fmt.Errorf("token rule %q extraction: %w", r.ID, err)
 		}
-		if _, err := s.db.Exec(
+		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO token_rules
 			 (id, name, enabled, scope_hosts, scope_tools, extraction, inject_header, inject_value, inject_param, ord)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			r.ID, r.Name, boolInt(r.Enabled), hosts, tools, ex,
 			r.InjectHeader, r.InjectValue, r.InjectParam, i); err != nil {
-			s.log("token rule", err)
-			return
+			return fmt.Errorf("token rule %q: %w", r.ID, err)
 		}
 	}
+	return tx.Commit()
 }
 
 // LoadTokenRules restores token rules in their persisted insertion order. The extraction's
@@ -2239,8 +2249,9 @@ func (s *Store) LoadTokenRules() ([]*session.TokenRule, error) {
 			return nil, err
 		}
 		r.Enabled = enabled != 0
-		// Empty columns read as no scope, which is unrestricted - the same fallback the session
-		// rules' scope columns take, for the same reason.
+		// An empty scope_hosts column restores as an empty list, which the coordinator's door
+		// REFUSES: a rule saved before the fail-closed scope default surfaces as a restore
+		// refusal instead of silently covering every host again.
 		if len(hosts) > 0 {
 			_ = json.Unmarshal(hosts, &r.ScopeHosts)
 		}

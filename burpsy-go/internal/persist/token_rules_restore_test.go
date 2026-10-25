@@ -17,7 +17,7 @@ func savedTokenRule(t *testing.T, id, name, header string) *session.TokenRule {
 		t.Fatalf("build extraction: %v", err)
 	}
 	return &session.TokenRule{
-		ID: id, Name: name, Enabled: true, ScopeTools: []string{"repeater"},
+		ID: id, Name: name, Enabled: true, ScopeHosts: []string{"*"}, ScopeTools: []string{"repeater"},
 		Extract: *ex, InjectHeader: header, InjectValue: "Bearer {{csrf}}",
 	}
 }
@@ -50,7 +50,7 @@ func TestRestoreKeepsTokenRuleIDsAndOrder(t *testing.T) {
 	// The restored extraction's matcher was recompiled: it captures from an observed response.
 	sess.ObserveTokenResponse(session.RequestIdentity{Host: "app.test", Tool: "repeater"},
 		map[string]string{}, []byte(`<form><input name="csrf" value="tok-restored"></form>`))
-	if got, ok := sess.TokenValue("csrf"); !ok || got != "tok-restored" {
+	if got, ok := sess.TokenValue(all[1].ID); !ok || got != "tok-restored" {
 		t.Errorf("a restored rule could not capture: %q, %v", got, ok)
 	}
 }

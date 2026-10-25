@@ -53,7 +53,7 @@ func tokenRuleWebTest(t *testing.T, tools ...string) *session.TokenRule {
 		t.Fatalf("build extraction: %v", err)
 	}
 	return &session.TokenRule{
-		Name: "repeater csrf", Enabled: true, ScopeTools: tools,
+		Name: "repeater csrf", Enabled: true, ScopeHosts: []string{"*"}, ScopeTools: tools,
 		Extract: *ex, InjectHeader: "X-CSRF-Token", InjectValue: "{{csrf}}",
 	}
 }
@@ -62,13 +62,14 @@ func TestRepeaterResponseFeedsTokenCaptureWithRepeaterAttribution(t *testing.T) 
 	host, port, closeFn := repeaterTokenTarget(t, "tok-from-repeater")
 	defer closeFn()
 	s := newTestServer()
-	if _, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "repeater")); err != nil {
+	ruleID, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "repeater"))
+	if err != nil {
 		t.Fatalf("add token rule: %v", err)
 	}
 
 	sendOneRaw(t, s, host, port, "/form")
 
-	if got, ok := s.sessionCoordinator.TokenValue("csrf"); !ok || got != "tok-from-repeater" {
+	if got, ok := s.sessionCoordinator.TokenValue(ruleID); !ok || got != "tok-from-repeater" {
 		t.Errorf("the repeater response's token was not captured: %q, %v", got, ok)
 	}
 }
@@ -78,13 +79,14 @@ func TestRepeaterResponseDoesNotOverwriteARuleScopedAwayFromIt(t *testing.T) {
 	defer closeFn()
 	s := newTestServer()
 	// The rule covers the proxy only: a hand-driven repeater response must not re-issue its value.
-	if _, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "proxy")); err != nil {
+	ruleID, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "proxy"))
+	if err != nil {
 		t.Fatalf("add token rule: %v", err)
 	}
 
 	sendOneRaw(t, s, host, port, "/form")
 
-	if got, ok := s.sessionCoordinator.TokenValue("csrf"); ok {
+	if got, ok := s.sessionCoordinator.TokenValue(ruleID); ok {
 		t.Errorf("a proxy-scoped rule captured from a repeater response: %q", got)
 	}
 }
@@ -97,13 +99,14 @@ func TestRepeaterTokenCaptureIgnoresTheCookieMonitorToggle(t *testing.T) {
 	defer closeFn()
 	s := newTestServer()
 	s.sessionCoordinator.SetMonitoredSources([]string{"proxy"})
-	if _, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "repeater")); err != nil {
+	ruleID, err := s.sessionCoordinator.AddTokenRule(tokenRuleWebTest(t, "repeater"))
+	if err != nil {
 		t.Fatalf("add token rule: %v", err)
 	}
 
 	sendOneRaw(t, s, host, port, "/form")
 
-	if got, ok := s.sessionCoordinator.TokenValue("csrf"); !ok || got != "tok-despite-toggle" {
+	if got, ok := s.sessionCoordinator.TokenValue(ruleID); !ok || got != "tok-despite-toggle" {
 		t.Errorf("the cookie monitor toggle silenced a token rule: %q, %v", got, ok)
 	}
 }
@@ -133,7 +136,7 @@ func TestAcceptanceLoginTokenFlowsIntoALaterRepeaterRequest(t *testing.T) {
 
 	s := newTestServer()
 	rec := postJSON(t, s, "/api/session/token-rules", map[string]any{
-		"name": "acceptance", "enabled": true, "scope_tools": []string{"repeater"},
+		"name": "acceptance", "enabled": true, "scope_hosts": []string{host}, "scope_tools": []string{"repeater"},
 		"extract": map[string]any{
 			"name": "csrf", "from": "body", "pattern": `name="csrf" value="([^"]+)"`, "group": 1,
 		},

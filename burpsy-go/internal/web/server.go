@@ -768,10 +768,15 @@ func (s *Server) persistSessionRules() {
 	}
 }
 
-func (s *Server) persistTokenRules() {
-	if s.persist != nil {
-		s.persist.SaveTokenRules(s.sessionCoordinator.TokenRules())
+// persistTokenRules is the token rules' write-through. Unlike the older persist helpers its
+// error travels: a rule set that only lives in memory would keep injecting credentials the
+// project never saved, so the handlers treat a failed write as a failed request and roll the
+// in-memory change back.
+func (s *Server) persistTokenRules() error {
+	if s.persist == nil {
+		return nil
 	}
+	return s.persist.SaveTokenRules(s.sessionCoordinator.TokenRules())
 }
 
 func (s *Server) persistUpstreamProxy() {

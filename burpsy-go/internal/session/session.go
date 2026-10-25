@@ -1568,12 +1568,13 @@ type Coordinator struct {
 	mu    sync.RWMutex
 	rules map[RuleID]*SessionRule
 	// tokenRules is the project-level extraction+injection set (burpsy-react-ui-xe82); tokenValues
-	// holds the latest value each rule's extraction captured, guarded by tokenMu like the script
-	// stores - a response being observed must not hold the rule table's lock.
+	// holds each rule's latest captured value keyed by the RULE's identity - never the extraction's
+	// name, which rules can share - with the origin it was captured from, guarded by tokenMu like
+	// the script stores: a response being observed must not hold the rule table's lock.
 	tokenRules  map[string]*TokenRule
 	tokenOrder  []string
 	tokenMu     sync.Mutex
-	tokenValues map[string]string
+	tokenValues map[string]capturedToken
 	// scriptStores is each rule's pre-request script store (burpsy-react-ui-ydmj): the small string
 	// map a RunScript action reads and writes through `store`, kept across requests so a token
 	// captured from one response is there for the next request. Per rule, so two rules' scripts

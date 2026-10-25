@@ -13,8 +13,23 @@ package session
 //
 // # What it refuses to do
 //
-// A request goes out untouched when no value has been captured yet: an injected header with an
-// empty or invented value would send the request under a lie the response then has to explain.
+// A token rule carries a credential, and the failures that matter here are the ones that send a
+// credential somewhere it was never meant to go. So:
+//
+//   - A rule names its hosts. There is no broad default: an empty scope_hosts is refused at the
+//     door, and the only way to cover every host is to say so - "*" in the list. A session rule's
+//     empty scope fails inert (a rewrite that never fires); a token rule's empty scope is a
+//     credential offered to any origin that asks, so the two reading rules differ on purpose.
+//   - A captured value belongs to ONE rule, keyed by the rule's identity - never by the
+//     extraction's name, which any number of rules can share.
+//   - A value never crosses the origin it was captured from: scheme, host and port all have to
+//     match the request it would ride on. A scope can narrow that further; it can never widen it.
+//   - An edit or a removal drops the captured value at once. The credential the old rule held is
+//     stale the moment the rule that scoped it changes.
+//   - A request goes out untouched when no value has been captured yet: an injected header with
+//     an empty or invented value would send the request under a lie the response then has to
+//     explain.
+//
 // Capture and injection each honour the rule's scope - a response from a host the rule does not
 // cover never overwrites the value, and a tool outside the rule's tools scope never receives it.
 
@@ -32,9 +47,13 @@ type TokenRule struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
-	// ScopeHosts and ScopeTools mirror the session rule's host and tools axes, with the same
-	// reading: empty covers everything.
+	// ScopeHosts names the hosts whose responses may re-issue this rule's value and whose
+	// requests may receive it. Empty is REFUSED - the rule would otherwise default to every
+	// host, and a credential with a broad default is a leak waiting for a cross-origin request.
+	// The deliberate every-host choice is the "*" entry.
 	ScopeHosts []string `json:"scope_hosts,omitempty"`
+	// ScopeTools mirrors the session rule's tools axis, with the same reading: empty covers
+	// every tool, and an unattributed request is not turned away (see MatchTools).
 	ScopeTools []string `json:"scope_tools,omitempty"`
 	// Extract lifts the value from any observed response whose request the rule covers. Its Step
 	// field is meaningless here - there is no macro to index into - and stays zero.
@@ -49,13 +68,12 @@ type TokenRule struct {
 	InjectParam string `json:"inject_param,omitempty"`
 }
 
-// matchHost reads the scope the way SessionRule.MatchHost does: empty covers every host.
+// matchHost answers whether the rule covers one host. An empty list covers NOTHING - the
+// fail-closed half of the scope rule, kept here as well as at validate so a rule that reached
+// the set unvalidated still cannot fire. "*" is the operator's explicit every-host choice.
 func (r *TokenRule) matchHost(host string) bool {
-	if len(r.ScopeHosts) == 0 {
-		return true
-	}
 	for _, h := range r.ScopeHosts {
-		if host == h {
+		if h == "*" || host == h {
 			return true
 		}
 	}
@@ -76,10 +94,14 @@ func (r *TokenRule) matchTool(tool string) bool {
 	return false
 }
 
-// validate refuses a rule that can never capture or never inject.
+// validate refuses a rule that can never capture, never inject, or would hold a credential
+// under a broader authority than the operator named.
 func (r *TokenRule) validate() error {
 	if strings.TrimSpace(r.Name) == "" {
 		return fmt.Errorf("token rule needs a name")
+	}
+	if len(r.ScopeHosts) == 0 {
+		return fmt.Errorf("token rule %q: scope_hosts names no hosts - list the hosts this credential may reach, or \"*\" for every host, deliberately", r.Name)
 	}
 	if err := r.Extract.Recompile(); err != nil {
 		return fmt.Errorf("token rule %q: %w", r.Name, err)
@@ -174,6 +196,42 @@ func (c *Coordinator) TokenRules() []*TokenRule {
 	return out
 }
 
+// ReplaceTokenRules swaps the whole set at once, keeping each rule's ID and the order the caller
+// passes. Values captured by rules the new set drops go with them. This is the rollback half of
+// the web handlers' write-through: when the store refuses a change, the coordinator goes back to
+// exactly the set the store kept, so nothing injects from state the project never saved.
+func (c *Coordinator) ReplaceTokenRules(rules []*TokenRule) error {
+	for _, r := range rules {
+		if r == nil || r.ID == "" {
+			return fmt.Errorf("a replacement token rule needs its ID")
+		}
+		if err := r.validate(); err != nil {
+			return err
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := make(map[string]*TokenRule, len(rules))
+	order := make([]string, 0, len(rules))
+	for _, r := range rules {
+		if _, dup := next[r.ID]; dup {
+			return ErrDuplicateTokenRuleID
+		}
+		next[r.ID] = r
+		order = append(order, r.ID)
+	}
+	c.tokenRules = next
+	c.tokenOrder = order
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	for id := range c.tokenValues {
+		if _, kept := next[id]; !kept {
+			delete(c.tokenValues, id)
+		}
+	}
+	return nil
+}
+
 // ErrNoSuchTokenRule names an edit or delete addressed at a rule that is not registered.
 var ErrNoSuchTokenRule = errors.New("no such token rule")
 
@@ -186,6 +244,8 @@ func (c *Coordinator) TokenRule(id string) *TokenRule {
 
 // UpdateTokenRule replaces one registered rule, keeping its ID and its place in the order: an
 // edit is not a re-add, and the capture order the operator arranged must not shuffle under one.
+// The value the pre-edit rule captured is dropped with it - the rule that scoped that credential
+// no longer exists, so the credential must not survive it.
 func (c *Coordinator) UpdateTokenRule(id string, rule *TokenRule) error {
 	if rule == nil {
 		return fmt.Errorf("no token rule")
@@ -200,10 +260,14 @@ func (c *Coordinator) UpdateTokenRule(id string, rule *TokenRule) error {
 	}
 	rule.ID = id
 	c.tokenRules[id] = rule
+	c.tokenMu.Lock()
+	delete(c.tokenValues, id)
+	c.tokenMu.Unlock()
 	return nil
 }
 
-// RemoveTokenRule deletes one registered rule, reporting whether it existed.
+// RemoveTokenRule deletes one registered rule and the value it captured, reporting whether the
+// rule existed.
 func (c *Coordinator) RemoveTokenRule(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -217,15 +281,64 @@ func (c *Coordinator) RemoveTokenRule(id string) bool {
 			break
 		}
 	}
+	c.tokenMu.Lock()
+	delete(c.tokenValues, id)
+	c.tokenMu.Unlock()
 	return true
 }
 
-// TokenValue is the latest value captured under one extraction name.
-func (c *Coordinator) TokenValue(name string) (string, bool) {
+// capturedToken is one rule's latest captured value and the origin it came from. The origin is
+// the value's travel permit: it is injected only into requests to the same scheme, host and
+// port, whatever the rule's scope would otherwise allow.
+type capturedToken struct {
+	Value  string
+	Scheme string
+	Host   string
+	Port   uint16
+}
+
+// TokenValue is the latest value the rule with this ID captured, keyed by rule identity - two
+// rules extracting the same name each keep their own.
+func (c *Coordinator) TokenValue(ruleID string) (string, bool) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
-	v, ok := c.tokenValues[name]
-	return v, ok
+	v, ok := c.tokenValues[ruleID]
+	return v.Value, ok
+}
+
+// defaultPort normalizes an unset port to its scheme's default, so a value captured from
+// https://app.test (no port on the wire identity) and a request to https://app.test:443 are the
+// same origin. A scheme that is not http or https normalizes to no port: it cannot match, which
+// is the fail-closed reading of an origin the rule never heard of.
+func defaultPort(scheme string, port uint16) uint16 {
+	if port != 0 {
+		return port
+	}
+	switch scheme {
+	case "http":
+		return 80
+	case "https":
+		return 443
+	}
+	return 0
+}
+
+// requestOrigin reads scheme, host and normalized port off a request URL, failing closed: a URL
+// that does not parse to an http(s) origin is no destination a captured value may ride to.
+func requestOrigin(rawURL string) (scheme, host string, port uint16, ok bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return "", "", 0, false
+	}
+	var p uint16
+	if u.Port() != "" {
+		var n int
+		if _, err := fmt.Sscanf(u.Port(), "%d", &n); err != nil || n < 1 || n > 65535 {
+			return "", "", 0, false
+		}
+		p = uint16(n)
+	}
+	return u.Scheme, u.Hostname(), defaultPort(u.Scheme, p), true
 }
 
 // ObserveTokenResponse runs ONLY the token-rule half of response observation: the extractions of
@@ -239,9 +352,14 @@ func (c *Coordinator) ObserveTokenResponse(req RequestIdentity, hdrs map[string]
 }
 
 // observeTokenRules runs every enabled, in-scope rule's extraction over one observed response and
-// keeps the values it resolves. Called from handleResponseFor, after the jar and the validity
-// check - the response is observed once, and everything that reads it reads the same bytes.
+// keeps the values it resolves, each under its own rule's identity with the response's origin
+// attached. Called from handleResponseFor, after the jar and the validity check - the response is
+// observed once, and everything that reads it reads the same bytes.
 func (c *Coordinator) observeTokenRules(req RequestIdentity, hdrs map[string]string, body []byte) {
+	scheme := "http"
+	if req.TLS {
+		scheme = "https"
+	}
 	for _, rule := range c.TokenRules() {
 		if rule == nil || !rule.Enabled || !rule.matchHost(req.Host) || !rule.matchTool(req.Tool) {
 			continue
@@ -252,37 +370,48 @@ func (c *Coordinator) observeTokenRules(req RequestIdentity, hdrs map[string]str
 		}
 		c.tokenMu.Lock()
 		if c.tokenValues == nil {
-			c.tokenValues = map[string]string{}
+			c.tokenValues = map[string]capturedToken{}
 		}
-		c.tokenValues[rule.Extract.Name] = out.Value
+		c.tokenValues[rule.ID] = capturedToken{
+			Value:  out.Value,
+			Scheme: scheme,
+			Host:   req.Host,
+			Port:   defaultPort(scheme, req.Port),
+		}
 		c.tokenMu.Unlock()
 	}
 }
 
 // ApplyTokenRules writes every captured value an enabled, in-scope rule covers into the request:
 // the header its template resolves to, the query parameter it names. A rule with no value captured
-// yet changes nothing.
+// yet changes nothing, and a value captured from another origin - another scheme, host or port -
+// changes nothing either: the credential goes only where it was captured, never further.
 func (c *Coordinator) ApplyTokenRules(tool string, step MacroStep) MacroStep {
-	host := ""
-	if u, err := url.Parse(step.URL); err == nil {
-		host = u.Hostname()
+	reqScheme, reqHost, reqPort, ok := requestOrigin(step.URL)
+	if !ok {
+		return step
 	}
 	for _, rule := range c.TokenRules() {
-		if rule == nil || !rule.Enabled || !rule.matchHost(host) || !rule.matchTool(tool) {
+		if rule == nil || !rule.Enabled || !rule.matchHost(reqHost) || !rule.matchTool(tool) {
 			continue
 		}
-		value, ok := c.TokenValue(rule.Extract.Name)
+		c.tokenMu.Lock()
+		captured, ok := c.tokenValues[rule.ID]
+		c.tokenMu.Unlock()
 		if !ok {
+			continue
+		}
+		if captured.Scheme != reqScheme || captured.Host != reqHost || captured.Port != reqPort {
 			continue
 		}
 		if rule.InjectHeader != "" {
 			if step.Headers == nil {
 				step.Headers = map[string]string{}
 			}
-			step.Headers[rule.InjectHeader] = strings.ReplaceAll(rule.InjectValue, "{{"+rule.Extract.Name+"}}", value)
+			step.Headers[rule.InjectHeader] = strings.ReplaceAll(rule.InjectValue, "{{"+rule.Extract.Name+"}}", captured.Value)
 		}
 		if rule.InjectParam != "" {
-			step.URL = replaceQueryParam(step.URL, rule.InjectParam, value)
+			step.URL = replaceQueryParam(step.URL, rule.InjectParam, captured.Value)
 		}
 	}
 	return step

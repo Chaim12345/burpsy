@@ -70,7 +70,7 @@ func tokenRuleScannerTest(t *testing.T) *session.TokenRule {
 		t.Fatalf("build extraction: %v", err)
 	}
 	return &session.TokenRule{
-		Name: "scanner csrf", Enabled: true,
+		Name: "scanner csrf", Enabled: true, ScopeHosts: []string{"*"},
 		Extract: *ex, InjectHeader: "X-CSRF-Token", InjectValue: "{{csrf}}",
 	}
 }
@@ -83,7 +83,10 @@ func TestScannerProbesCarryTheCapturedToken(t *testing.T) {
 		t.Fatalf("session coordinator: %v", err)
 	}
 	// The value was lifted from observed traffic before the scan reached this exchange.
-	coord.ObserveTokenResponse(session.RequestIdentity{Host: cc.Exchange.Host, Tool: "proxy"},
+	// The full origin identity travels: the value is bound to the scheme, host and port it was
+	// captured from, and the harness's probes reach exactly that origin.
+	coord.ObserveTokenResponse(session.RequestIdentity{
+		Host: cc.Exchange.Host, Port: cc.Exchange.Port, TLS: cc.Exchange.TLS, Tool: "proxy"},
 		map[string]string{}, []byte(`<form><input name="csrf" value="tok-scanned"></form>`))
 
 	if _, err := NewProbeHarness(context.Background(), cc, []string{"query"}); err != nil {

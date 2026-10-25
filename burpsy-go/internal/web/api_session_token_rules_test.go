@@ -6,14 +6,17 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"testing"
 
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"go.uber.org/zap"
 )
 
 func tokenRuleBody(name, header string) map[string]any {
 	return map[string]any{
-		"name": name, "enabled": true,
+		"name": name, "enabled": true, "scope_hosts": []string{"*"},
 		"extract": map[string]any{
 			"name": "csrf", "from": "body", "pattern": `name="csrf" value="([^"]+)"`, "group": 1,
 		},
@@ -108,5 +111,59 @@ func TestSessionTokenRuleValidationAndNotFound(t *testing.T) {
 	rec = deleteReq(t, s, "/api/session/token-rules/token-404")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("deleting an absent rule: %d, want 404", rec.Code)
+	}
+}
+
+// The integrator's remediation pin 5 (xe82 hold ruling): a write the store refuses fails the
+// request with a visible 500 and the in-memory change is rolled back - nothing keeps injecting
+// from state the project never saved, and the store is never left holding a silent half-write.
+// RED against the pre-remediation tree: the writes answered 200 and the unsaved rules stayed live.
+func TestSessionTokenRulePersistFailureRollsBack(t *testing.T) {
+	p, err := persist.Open(filepath.Join(t.TempDir(), "p.db"), zap.NewNop())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s := newTestServer().WithPersist(p)
+
+	// One rule lands while the store is healthy.
+	rec := postJSON(t, s, "/api/session/token-rules", tokenRuleBody("kept", "X-Kept"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create against a healthy store: %d %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		Rule session.TokenRule `json:"rule"`
+	}
+	if err := decodeJSON(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	ruleID := created.Rule.ID
+
+	// The store dies: every later write must fail visibly and leave the live set untouched.
+	if err := p.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	rec = postJSON(t, s, "/api/session/token-rules", tokenRuleBody("unsaved", "X-Unsaved"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("a create the store could not keep answered %d, not 500", rec.Code)
+	}
+	rec = putJSON(t, s, "/api/session/token-rules/"+ruleID, tokenRuleBody("renamed", "X-Renamed"))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("an edit the store could not keep answered %d, not 500", rec.Code)
+	}
+	rec = deleteReq(t, s, "/api/session/token-rules/"+ruleID)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("a removal the store could not keep answered %d, not 500", rec.Code)
+	}
+
+	rec = get(t, s, "/api/session/token-rules")
+	var list struct {
+		Rules []session.TokenRule `json:"rules"`
+	}
+	if err := decodeJSON(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list.Rules) != 1 || list.Rules[0].Name != "kept" {
+		t.Fatalf("the live set drifted from the saved set under failed writes: %+v", list.Rules)
 	}
 }
