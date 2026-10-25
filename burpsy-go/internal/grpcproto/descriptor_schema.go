@@ -27,10 +27,17 @@ import (
 // parseProtoDescriptors compiles src as a single in-memory .proto and returns the
 // Schema built from its linked descriptor.
 func parseProtoDescriptors(src string) (*Schema, error) {
+	return parseProtoDescriptorsFile(src, "input.proto")
+}
+
+// compileProto compiles a single in-memory .proto into its linked descriptor,
+// resolving imports against the well-known types. The reflection test registers
+// the result into a protoregistry; ParseProto builds a Schema from it.
+func compileProto(src, filePath string) (protoreflect.FileDescriptor, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
 			Accessor: func(path string) (io.ReadCloser, error) {
-				if path == "input.proto" {
+				if path == filePath {
 					return io.NopCloser(strings.NewReader(src)), nil
 				}
 				return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
@@ -39,11 +46,20 @@ func parseProtoDescriptors(src string) (*Schema, error) {
 		SourceInfoMode: protocompile.SourceInfoNone,
 		MaxParallelism: 1,
 	}
-	files, err := compiler.Compile(context.Background(), "input.proto")
+	files, err := compiler.Compile(context.Background(), filePath)
 	if err != nil {
 		return nil, fmt.Errorf("proto: %w", err)
 	}
-	fd := files[0]
+	return files[0], nil
+}
+
+// parseProtoDescriptorsFile is parseProtoDescriptors with the file's own path
+// named, so registries key it correctly.
+func parseProtoDescriptorsFile(src, filePath string) (*Schema, error) {
+	fd, err := compileProto(src, filePath)
+	if err != nil {
+		return nil, err
+	}
 	s := &Schema{
 		pkg:   string(fd.Package()),
 		msgs:  map[string]*messageDesc{},
