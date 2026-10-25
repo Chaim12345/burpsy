@@ -12,8 +12,8 @@ import (
 // FuzzDecodeFrameHeader: a decoded header re-encodes to the same nine octets, and
 // decoding those octets reproduces the header — the decoder may never invent bits.
 func FuzzDecodeFrameHeader(f *testing.F) {
-	f.Add([]byte{0, 0, 4, 0x4, 0x0, 0, 0, 0, 1})  // HEADERS
-	f.Add([]byte{0, 0, 0, 0x0, 0x0, 0, 0, 0, 0})   // empty DATA
+	f.Add([]byte{0, 0, 4, 0x4, 0x0, 0, 0, 0, 1}) // HEADERS
+	f.Add([]byte{0, 0, 0, 0x0, 0x0, 0, 0, 0, 0}) // empty DATA
 	f.Add([]byte{0xff, 0xff, 0xff, 0x7, 0xff, 0xff, 0xff, 0xff, 0xff})
 	f.Add([]byte{0, 0, 1})
 	f.Add([]byte{})
@@ -37,9 +37,9 @@ func FuzzDecodeFrameHeader(f *testing.F) {
 // payload, and the complete frames plus the tail account for every octet.
 func FuzzReadFrames(f *testing.F) {
 	f.Add([]byte{0, 0, 4, 0x4, 0x0, 0, 0, 0, 1, 1, 2, 3, 4})
-	f.Add([]byte{0, 0, 4, 0x4, 0x0, 0, 0, 0, 1, 1, 2})       // truncated payload
-	f.Add([]byte{0, 0, 1, 0x7, 0x0, 0, 0, 0, 3, 0})          // GOAWAY
-	f.Add([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))        // preface as frames
+	f.Add([]byte{0, 0, 4, 0x4, 0x0, 0, 0, 0, 1, 1, 2}) // truncated payload
+	f.Add([]byte{0, 0, 1, 0x7, 0x0, 0, 0, 0, 3, 0})    // GOAWAY
+	f.Add([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))  // preface as frames
 	f.Add([]byte{})
 	f.Fuzz(func(t *testing.T, b []byte) {
 		frames, tail := ReadFrames(b)
@@ -69,10 +69,10 @@ func FuzzReadFrames(f *testing.F) {
 // on one decoder (the dynamic table changes the second read), and an
 // encode-then-decode round-trip on fuzzer-shaped header fields.
 func FuzzHpackDecode(f *testing.F) {
-	f.Add([]byte{0x82, 0x86, 0x84}, ":path", "/")                    // static-table indexed
-	f.Add([]byte{0x40, 0x01, 0x61, 0x01, 0x62}, "a", "b")           // literal, incremental
-	f.Add([]byte{0x3f, 0xff, 0xff, 0xff, 0xff, 0x7f}, "x", "y")     // huge size update
-	f.Add([]byte{0x80}, "", "")                                     // index 0 (invalid)
+	f.Add([]byte{0x82, 0x86, 0x84}, ":path", "/")               // static-table indexed
+	f.Add([]byte{0x40, 0x01, 0x61, 0x01, 0x62}, "a", "b")       // literal, incremental
+	f.Add([]byte{0x3f, 0xff, 0xff, 0xff, 0xff, 0x7f}, "x", "y") // huge size update
+	f.Add([]byte{0x80}, "", "")                                 // index 0 (invalid)
 	f.Add([]byte{0xbe}, "n", "v")
 	f.Fuzz(func(t *testing.T, block []byte, name, value string) {
 		fresh := NewDecoder(4096)
