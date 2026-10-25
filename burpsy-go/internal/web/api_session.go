@@ -1240,11 +1240,12 @@ func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	// Normalise before encoding: a nil slice would otherwise leave the process as null, and the
 	// UI types these collections as arrays (burpsy-react-ui-j0s2). See json_nil_slice.go.
 	// A top-level untyped nil normalises to an invalid Value; it encodes as null as it always did.
+	// The header is already written, so an encode error (a client that went away) has nowhere to go.
 	if body == nil {
-		json.NewEncoder(w).Encode(nil)
+		_ = json.NewEncoder(w).Encode(nil)
 		return
 	}
-	json.NewEncoder(w).Encode(normalizeNilSlices(reflect.ValueOf(body)).Interface())
+	_ = json.NewEncoder(w).Encode(normalizeNilSlices(reflect.ValueOf(body)).Interface())
 }
 
 // stepDtoToMacroStep converts one wire step into the coordinator's shape. Headers arrive as an ordered
