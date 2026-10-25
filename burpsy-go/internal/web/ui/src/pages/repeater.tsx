@@ -149,6 +149,42 @@ function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
  return tab.note && tab.note.trim() !== "" ? { note: tab.note } : {};
 }
 
+/**
+ * 1944 correction round: the visible half of a failed tab-close action cleanup. The tab closed
+ * because the operator asked for that, but the orphaned action - its config, store and persisted
+ * row - lives on server-side, so the failure stays listed here, retryable, until the gated DELETE
+ * succeeds or the operator dismisses the notice. Dismiss leaves the orphan; it only clears the
+ * notice, and its title says so. A silent swallow is what the review ruled out. Rendered by both
+ * of the page's returns: closing the last tab lands on the empty state, and the failure must not
+ * disappear with the tab strip.
+ */
+function FailedActionCleanupNotices(): JSX.Element | null {
+ const failedActionCleanups = useApp((state) => state.failedActionCleanups);
+ const clearFailedActionCleanup = useApp((state) => state.clearFailedActionCleanup);
+ if (failedActionCleanups.length === 0) return null;
+ return (
+  <div className="notice" role="alert" aria-label="Failed action cleanups">
+   {failedActionCleanups.map((entry) => (
+    <div className="toolbar" key={entry.tabId}>
+     <Badge tone="warn">action left behind</Badge>
+     <span>Closing this tab did not forget its custom action on the server: {entry.error}</span>
+     <Button size="small" onClick={() => forgetRepeaterTabAction(entry.tabId)}>
+      Retry
+     </Button>
+     <Button
+      variant="quiet"
+      size="small"
+      title="Stop showing this notice. The action stays on the server; nothing is retried."
+      onClick={() => clearFailedActionCleanup(entry.tabId)}
+     >
+      Dismiss
+     </Button>
+    </div>
+   ))}
+  </div>
+ );
+}
+
 export function RepeaterPage(): JSX.Element {
  const tabs = useApp((state) => state.repeaterTabs);
  const activeId = useApp((state) => state.activeRepeaterTab);
@@ -875,6 +911,7 @@ export function RepeaterPage(): JSX.Element {
   return (
    <div className="page">
     <PageHeader title="Repeater" description="Craft one request and read its exact response." />
+    <FailedActionCleanupNotices />
     <Empty
      title="No request open"
      detail="Start a blank request, or right-click any row in HTTP history and choose “Send to Repeater”."
@@ -1684,6 +1721,8 @@ export function RepeaterPage(): JSX.Element {
       </>
      }
     />
+
+    <FailedActionCleanupNotices />
 
     {tabSearch !== null ? (
      <div className="repeater-tab-search">

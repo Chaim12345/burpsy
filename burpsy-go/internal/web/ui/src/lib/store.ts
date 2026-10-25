@@ -784,6 +784,15 @@ interface AppState {
  requestRepeaterTabSearch: () => void;
  /** Reopen-closed stack, most recent last. Session-only by design (see partialize). */
  closedRepeaterTabs: RepeaterTab[];
+ /** 1944 correction round: tab closes whose server-side action cleanup (the gated DELETE)
+  *  failed. The tab still closed - that is what the operator asked for - but the orphaned
+  *  action (its config, store and persisted row) lives on server-side, so the failure is kept
+  *  here for the Repeater page to surface with a Retry rather than swallowed. One entry per
+  *  tab; a retry that fails again refreshes the message in place. Session-only, like the
+  *  reopen stack above. */
+ failedActionCleanups: { tabId: string; error: string }[];
+ noteFailedActionCleanup: (tabId: string, error: string) => void;
+ clearFailedActionCleanup: (tabId: string) => void;
  repeaterGroups: RepeaterGroup[];
  intruderSeed: IntruderSeed | null;
  /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
@@ -1049,6 +1058,13 @@ export const useApp = create<AppState>()(
    activeRepeaterTab: null,
    repeaterTabSearchNonce: 0,
    closedRepeaterTabs: [],
+   failedActionCleanups: [],
+   noteFailedActionCleanup: (tabId, error) =>
+    set((state) => ({
+     failedActionCleanups: [...state.failedActionCleanups.filter((entry) => entry.tabId !== tabId), { tabId, error }],
+    })),
+   clearFailedActionCleanup: (tabId) =>
+    set((state) => ({ failedActionCleanups: state.failedActionCleanups.filter((entry) => entry.tabId !== tabId) })),
    repeaterGroups: [],
    intruderSeed: null,
    customCheckTestIds: [],

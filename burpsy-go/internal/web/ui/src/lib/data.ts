@@ -1,7 +1,7 @@
 import { QueryClient, useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
-import { api, json, query } from "./api";
+import { ApiError, api, json, query } from "./api";
 import { useApp, type RepeaterTab } from "./store";
 import type {
  Dashboard,
@@ -404,9 +404,20 @@ export function useRunRepeaterTabAction(tabId: string) {
 
 /** The tab-close cascade (1944): closing a Repeater tab removes its action, its store and the
  * persisted row server-side. Fire-and-forget from the close paths; a tab with no action answers
- * 404, which is the common case and not an error. */
+ * 404, which is the common case and not an error. Any other failure leaves the action orphaned
+ * server-side, so it is NOT swallowed (1944 correction round): the failure lands in the store's
+ * failedActionCleanups, which the Repeater page renders with a Retry - this same call again -
+ * and a Dismiss. A success, or a 404 saying there was nothing left to forget, clears the entry. */
 export function forgetRepeaterTabAction(tabId: string) {
- void api<{ deleted: string }>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action`, { method: "DELETE" }).catch(() => {});
+ void api<{ deleted: string }>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action`, { method: "DELETE" })
+  .then(() => useApp.getState().clearFailedActionCleanup(tabId))
+  .catch((error: unknown) => {
+   if (error instanceof ApiError && error.status === 404) {
+    useApp.getState().clearFailedActionCleanup(tabId);
+    return;
+   }
+   useApp.getState().noteFailedActionCleanup(tabId, error instanceof Error ? error.message : String(error));
+  });
 }
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
 

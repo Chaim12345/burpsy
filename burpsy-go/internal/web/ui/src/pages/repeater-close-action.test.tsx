@@ -4,24 +4,40 @@
  * restores the request draft, never the action.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { openOnlyTab, renderRepeater } from "../../test/repeater-fake";
 import { useApp } from "../lib/store";
 
-let calls: { method: string; path: string }[];
+let calls: { method: string; path: string; body: string; confirm: string | null }[];
+let deleteStatuses: number[];
 let originalFetch: typeof fetch;
 beforeEach(() => {
  calls = [];
+ deleteStatuses = [200];
  originalFetch = globalThis.fetch;
  window.localStorage.clear();
+ useApp.setState({ failedActionCleanups: [] });
  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), "http://localhost");
-  calls.push({ method: (init?.method ?? "GET").toUpperCase(), path: url.pathname });
+  const method = (init?.method ?? "GET").toUpperCase();
+  calls.push({
+   method,
+   path: url.pathname,
+   body: init?.body === undefined ? "" : String(init.body),
+   confirm: new Headers(init?.headers).get("x-burpsy-confirm"),
+  });
   if (url.pathname === "/api/repeater/tabs/confirm") {
    return new Response(
     JSON.stringify({ token: "tok-1", binding: "b1", call: { method: "DELETE", url: "/", body_bytes: 0, body_sha256: "x", body_kind: "none" }, expiresAt: Date.now() + 60000 }),
     { status: 200, headers: { "content-type": "application/json" } },
    );
+  }
+  if (method === "DELETE" && url.pathname.endsWith("/action")) {
+   const status = deleteStatuses.length > 1 ? deleteStatuses.shift()! : deleteStatuses[0]!;
+   return new Response(status === 200 ? "{}" : "the action store is unavailable", {
+    status,
+    headers: { "content-type": "application/json" },
+   });
   }
   return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
  }) as unknown as typeof fetch;
@@ -54,5 +70,64 @@ describe("Repeater tab close forgets the tab's custom action", () => {
    expect(calls.some((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${first}/action`)).toBe(true);
   });
   expect(calls.some((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${second}/action`)).toBe(false);
+ });
+});
+
+describe("Repeater tab close surfaces a failed action cleanup (1944 correction)", () => {
+ test("a failed DELETE leaves a visible notice that stays, while the tab still closes", async () => {
+  const id = openOnlyTab("https://target.test:443");
+  deleteStatuses = [500];
+  renderRepeater();
+  fireEvent.click(await screen.findByRole("button", { name: /Close t/ }));
+  const alert = await screen.findByRole("alert", { name: "Failed action cleanups" });
+  expect(alert.textContent).toContain("did not forget its custom action");
+  expect(alert.textContent).toContain("the action store is unavailable");
+  // Not a toast: the notice persists until the cleanup is retried or dismissed.
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(screen.getByRole("alert", { name: "Failed action cleanups" }).textContent).toContain("did not forget its custom action");
+  // The tab itself closed - closing is what the operator asked for.
+  expect(useApp.getState().repeaterTabs.some((tab) => tab.id === id)).toBe(false);
+ });
+
+ test("retrying re-issues the gated DELETE and clears the notice once it succeeds", async () => {
+  const id = openOnlyTab("https://target.test:443");
+  deleteStatuses = [500, 200];
+  renderRepeater();
+  fireEvent.click(await screen.findByRole("button", { name: /Close t/ }));
+  await screen.findByRole("alert", { name: "Failed action cleanups" });
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  // Flush the retry inside act rather than polling the DOM with waitFor: a waitFor whose
+  // callback throws on the transient pre-retry state makes testing-library serialize the whole
+  // page DOM per poll for its error message, which is seconds of work and gigabytes of string
+  // garbage on a page this size - that is what the suite's SIGKILL came from. The store is the
+  // cheap truth; one final DOM query confirms the notice unmounted with it.
+  await act(async () => {
+   for (let i = 0; i < 20 && useApp.getState().failedActionCleanups.length > 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+   }
+  });
+  expect(useApp.getState().failedActionCleanups).toHaveLength(0);
+  expect(screen.queryByRole("alert", { name: "Failed action cleanups" })).toBeNull();
+  const deletes = calls.filter((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${id}/action`);
+  expect(deletes.length).toBe(2);
+  // The retried call went through the gate too: one mint per DELETE.
+  const mints = calls.filter((c) => c.method === "POST" && c.path === "/api/repeater/tabs/confirm");
+  expect(mints.length).toBe(2);
+ });
+
+ test("the confirmation token is minted for exactly the tab-action DELETE it then carries", async () => {
+  const id = openOnlyTab("https://target.test:443");
+  renderRepeater();
+  fireEvent.click(await screen.findByRole("button", { name: /Close t/ }));
+  await waitFor(() => {
+   expect(calls.some((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${id}/action`)).toBe(true);
+  });
+  // The mint's body describes the exact call it authorises: DELETE on this tab's action route.
+  const mint = calls.find((c) => c.method === "POST" && c.path === "/api/repeater/tabs/confirm");
+  expect(mint).toBeDefined();
+  expect(JSON.parse(mint!.body)).toMatchObject({ method: "DELETE", url: `/api/repeater/tabs/${id}/action` });
+  // And the DELETE carries the token that mint returned, in the gate's header.
+  const del = calls.find((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${id}/action`);
+  expect(del!.confirm).toBe("tok-1");
  });
 });
