@@ -273,6 +273,13 @@ type PayloadSource struct {
 	// mutation yields another valid sentence rather than a byte-flip that usually breaks
 	// parsing outright.
 	GrammarFuzz *GrammarFuzz
+	// Plugin (burpsy-react-ui-0qwh) names a plugin-provided payload generator: the plugin's
+	// name and its payload-generator registration ID. Like Collaborator, Resolve cannot answer
+	// it — the generator lives in a plugin process the composition layer owns — so the web
+	// layer materializes the set at launch (one host call per position, capped like every
+	// kind) and hands Resolve an ordinary list; a "plugin" source that reaches Resolve
+	// directly is refused loudly, never answered with a substitute.
+	Plugin *PluginSource
 }
 
 // OpenAPIPayloads is the configuration for {"type":"openapi_payloads"}: parses the parameters an
@@ -336,6 +343,13 @@ type RecursiveGrepSource struct {
 // ListSource is the items for {"type":"list"}.
 type ListSource struct {
 	Items []string `json:"items"`
+}
+
+// PluginSource addresses one payload-generator registration on one loaded plugin
+// (burpsy-react-ui-0qwh).
+type PluginSource struct {
+	Plugin       string `json:"plugin"`
+	Registration string `json:"registration"`
 }
 
 // NullSource is the count for {"type":"null"}: N copies of the empty payload.
@@ -954,6 +968,14 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "plugin":
+		// The composition layer materializes plugin payloads into a list BEFORE Resolve
+		// (see the Plugin field doc). Reaching this case means a caller skipped that step;
+		// answer a config error, not an empty set the operator would have to notice.
+		if s.Plugin == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "plugin"}
+		}
+		return nil, fmt.Errorf("plugin payload source %q/%q was not materialized by the composition layer", s.Plugin.Plugin, s.Plugin.Registration)
 	default:
 		return nil, fmt.Errorf("unknown payload source type %q", s.Type)
 	}

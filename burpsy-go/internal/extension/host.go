@@ -751,6 +751,13 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 	return result, nil
 }
 
+// RegistrationKind reports the kind of one plugin's registration, for composition layers
+// that must refuse a misaddressed payload source or rule before any payload is generated —
+// the same check GeneratePayload and ProcessPayload repeat at call time.
+func (h *Host) RegistrationKind(name, registration string) (Kind, error) {
+	return h.kindOf(name, registration)
+}
+
 // ErrWrongKind is a payload call against a registration of the other payload kind.
 var ErrWrongKind = errors.New("registration has a different kind")
 
