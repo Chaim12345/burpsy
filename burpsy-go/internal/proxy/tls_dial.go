@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"strconv"
 
@@ -122,7 +121,7 @@ func (s *Server) dialUpstreamAddr(ctx context.Context, addr string) (net.Conn, e
 // A method rather than a free function because the upstream proxy policy lives on the Server: both
 // legs of this dial — which proxy carries it, and which certificate it presents — are per-server
 // state, and threading either as a parameter would let one call site forget it.
-func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*tls.Conn, string, error) {
+func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (net.Conn, string, error) {
 	policy := s.config.TLS()
 	dialer := alpn.Dialer{
 		InsecureSkipVerify: !policy.Verify(),
@@ -138,7 +137,7 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*
 	if err == nil && s.config.serverCerts != nil {
 		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
 			if port, cerr := strconv.Atoi(portText); cerr == nil {
-				s.config.serverCerts.Record(serverName, uint16(port), conn.ConnectionState().PeerCertificates)
+				s.config.serverCerts.Record(serverName, uint16(port), alpn.PeerCertificates(conn))
 			}
 		}
 	}
