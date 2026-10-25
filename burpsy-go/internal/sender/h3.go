@@ -1,17 +1,13 @@
 package sender
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
-	"net/http"
-
-	"github.com/quic-go/quic-go/http3"
 
 	core "github.com/burpsy-go/burpsy/internal/core"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // sendH3 implements ProtocolPreferenceHTTP3 (burpsy-react-ui-0hgx): one request re-expressed as
@@ -59,41 +55,13 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 		}
 	}
 
-	transport := &http3.Transport{TLSClientConfig: tlsConfig}
-	defer transport.Close()
-
-	target, err := h2RequestURL(fmt.Sprintf("%s:%d", host, port), plan.Path)
+	// The re-expression itself lives in httputil (vln3): one path for the sender's explicit pin
+	// and the proxy's Alt-Svc leg, so the mechanics are reviewed once. An endpoint that does not
+	// answer QUIC surfaces as a dial or handshake failure here - the strict answer, because the
+	// caller asked for h3 and h3 did not happen.
+	resp, err := httputil.RoundTripH3(ctx, tlsConfig, fmt.Sprintf("%s:%d", host, port), plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
-		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 request target: %w", err)
-	}
-	httpReq := &http.Request{
-		Method: plan.Method,
-		URL:    target,
-		// The authority is what the request wrote in its Host field, not the dial address: the two
-		// differ whenever Repeater sends to one host under another's name.
-		Host:   plan.Authority,
-		Header: make(http.Header),
-	}
-	if len(plan.Body) > 0 {
-		httpReq.Body = io.NopCloser(bytes.NewReader(plan.Body))
-		httpReq.ContentLength = int64(len(plan.Body))
-	}
-	httpReq = httpReq.WithContext(ctx)
-	for _, h := range plan.Headers {
-		httpReq.Header.Add(h.Name, h.Value)
-	}
-
-	httpResp, err := transport.RoundTrip(httpReq)
-	if err != nil {
-		// An endpoint that does not answer QUIC surfaces here as a dial or handshake failure. That
-		// is the strict answer: the caller asked for h3 and h3 did not happen.
-		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 round trip: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 read body: %w", err)
+		return nil, SendOutcome{}, err
 	}
 
 	outcome := SendOutcome{
@@ -102,5 +70,5 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 		Rewrites:   plan.Rewrites,
 		Rendered:   burpsyhttp2.RenderRequest(plan.Method, plan.Path, plan.Authority, plan.Headers, plan.Body),
 	}
-	return burpsyhttp2.RenderResponse(httpResp.StatusCode, burpsyhttp2.HeadersFromHTTP(httpResp.Header), respBody), outcome, nil
+	return resp, outcome, nil
 }

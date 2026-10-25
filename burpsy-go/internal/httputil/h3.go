@@ -1,0 +1,104 @@
+package httputil
+
+// The one re-expression path onto HTTP/3 (burpsy-react-ui-vln3). HTTP/3 has no wire form an
+// HTTP/1 byte string can be poured into verbatim, so a request carried over QUIC is always a
+// re-expression: pseudo-headers plus fields, built here for both callers - the sender's explicit
+// h3 pin (0hgx) and the proxy's Alt-Svc-selected h3 (vln3). One path, so the honesty of the
+// re-expression is reviewed once and a bug in it has one place to live.
+//
+// The caller owns everything that is a policy decision: whether the request may go over h3 at
+// all (the carriability bar - planH2 in the sender), the TLS configuration (verification, roots,
+// version floor, SNI, client certificates), and how the outcome is reported. What lives here is
+// only the mechanics that must not diverge: target parsing, request assembly, the round trip, and
+// the HTTP/1-shaped rendering of the response.
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/quic-go/quic-go/http3"
+
+	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+)
+
+// RequestURL parses authority + rawTarget into the URL a re-expressed request is built from.
+//
+// The fast path is url.Parse; when the target's escapes are not URL-clean it falls back to an
+// Opaque URL that carries the bytes as written. Rejecting such targets instead hid the answer a
+// probe was written to get (burpsy-react-ui-0vzb.25): a send that errors "invalid URL escape"
+// never asks the server how it normalises the path. Re-escaping instead would be worse than
+// failing: the server would be asked about a request the operator did not write, and the result
+// would read as evidence about their probe.
+func RequestURL(authority, rawTarget string) (*url.URL, error) {
+	if parsed, err := url.Parse("https://" + authority + rawTarget); err == nil {
+		return parsed, nil
+	}
+	path, query, hasQuery := strings.Cut(rawTarget, "?")
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		// Opaque renders a "//"-prefixed value as scheme:opaque, and a target with no leading
+		// slash is not origin form at all; the carriability bar has already refused those, so
+		// reaching here means the bytes came from a malformed replay. Say what they were.
+		return nil, fmt.Errorf("unusable target %q", rawTarget)
+	}
+	return &url.URL{
+		Scheme:     "https",
+		Host:       authority,
+		Opaque:     path,
+		RawQuery:   query,
+		ForceQuery: hasQuery,
+	}, nil
+}
+
+// RoundTripH3 carries one request over HTTP/3 and returns the response rendered HTTP/1-shaped,
+// the same shape every other leg returns, so downstream readers never branch on the carrier.
+//
+// dialAuthority is the host:port QUIC dials (for the proxy's Alt-Svc leg, the advertised
+// endpoint); authority is the request's :authority - what the request wrote in its Host field.
+// The two differ whenever a send goes to one address under another's name. tlsConfig is the
+// caller's policy, ServerName included; this function sets nothing on it.
+//
+// One transport per call means one QUIC connection per request, matching the proxy's
+// forward-per-request shape; pooling QUIC connections is a separate decision, not smuggled in
+// here.
+func RoundTripH3(ctx context.Context, tlsConfig *tls.Config, dialAuthority, authority, method, rawTarget string, headers []burpsyhttp2.Header, body []byte) ([]byte, error) {
+	target, err := RequestURL(dialAuthority, rawTarget)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP/3 request target: %w", err)
+	}
+	httpReq := &http.Request{
+		Method: method,
+		URL:    target,
+		Host:   authority,
+		Header: make(http.Header),
+	}
+	if len(body) > 0 {
+		httpReq.Body = io.NopCloser(bytes.NewReader(body))
+		httpReq.ContentLength = int64(len(body))
+	}
+	httpReq = httpReq.WithContext(ctx)
+	for _, h := range headers {
+		// Add, not Set: a request may carry two fields of the same name, and Set would silently
+		// keep the last one.
+		httpReq.Header.Add(h.Name, h.Value)
+	}
+
+	transport := &http3.Transport{TLSClientConfig: tlsConfig}
+	defer transport.Close()
+	httpResp, err := transport.RoundTrip(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP/3 round trip: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP/3 read body: %w", err)
+	}
+	return burpsyhttp2.RenderResponse(httpResp.StatusCode, burpsyhttp2.HeadersFromHTTP(httpResp.Header), respBody), nil
+}
