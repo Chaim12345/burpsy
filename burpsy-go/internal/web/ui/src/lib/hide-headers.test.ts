@@ -126,7 +126,7 @@ describe("the editor wire", () => {
 
   test("editing is off while the eye is on, so an edit cannot be written back against a filtered head", () => {
     expect(editor).toMatch(/editable && !charsetActive && !hiding/);
-    expect(editor, "the operator must be told why the pane stopped accepting edits").toMatch(/Press the eye again to edit/);
+    expect(editor, "the operator must be told why the pane stopped accepting edits").toMatch(/Press\s+the\s+eye\s+again\s+to\s+edit/);
   });
 
   test("an unpressed eye follows the Settings default; a pressed one wins for the life of the pane", () => {
