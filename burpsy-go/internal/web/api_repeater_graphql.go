@@ -259,6 +259,7 @@ func graphQLJSONSpans(body string) []graphQLQuerySpan {
 	// "query" key of that object taking it, a non-document or non-string value emptying it.
 	objectSeq := 0
 	slots := map[int]graphQLQuerySpan{}
+	inOrder := map[int]bool{}
 	var order []int
 	for i := off; i < len(body); i++ {
 		c := body[i]
@@ -283,7 +284,11 @@ func graphQLJSONSpans(body string) []graphQLQuerySpan {
 					inString = false
 					i = ve
 					if httputil.LooksLikeGraphQLDocument(httputil.GraphQLJSONStringContentDecode(body[vs:ve])) {
-						if _, seen := slots[objectSeq]; !seen {
+						if !inOrder[objectSeq] {
+							// Membership, not presence: a deleted slot (a shadowing
+							// non-document key) must not append the object twice, or the
+							// span after it answers two indexes.
+							inOrder[objectSeq] = true
 							order = append(order, objectSeq)
 						}
 						slots[objectSeq] = graphQLQuerySpan{start: vs, end: ve, source: "body"}

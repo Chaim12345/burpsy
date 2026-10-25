@@ -487,20 +487,62 @@ function operationFrom(record: Record<string, unknown>): GraphQLOperation | null
  * document the edit route indexes.
  */
 export function graphQLPercentDecode(text: string): string {
- let out = "";
+ // The byte stream first (Go decodes bytes, and a Go string IS its bytes): %XX escapes by
+ // the server's Sscanf semantics, every other char as its UTF-8 bytes.
+ const bytes: number[] = [];
  for (let i = 0; i < text.length; i++) {
   if (text[i] === "%" && i + 2 < text.length) {
-   const h1 = parseInt(text.charAt(i + 1), 16);
-   if (!Number.isNaN(h1)) {
-    const h2 = parseInt(text.charAt(i + 2), 16);
-    out += String.fromCharCode(Number.isNaN(h2) ? h1 : h1 * 16 + h2);
+   const b = sscanfHex2(text.slice(i + 1, i + 3));
+   if (b !== null) {
+    bytes.push(b);
     i += 2;
     continue;
    }
   }
-  out += text[i];
+  const code = text.charCodeAt(i);
+  if (code < 0x80) bytes.push(code);
+  else for (const b of new TextEncoder().encode(text[i]!)) bytes.push(b);
+ }
+ // Then UTF-8, Go's reading: a valid sequence is its rune (no mojibake), an undecodable
+ // byte stands alone.
+ let out = "";
+ for (let i = 0; i < bytes.length; ) {
+  const b = bytes[i]!;
+  if (b < 0x80) {
+   out += String.fromCharCode(b);
+   i++;
+   continue;
+  }
+  const len = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
+  if (i + len <= bytes.length) {
+   try {
+    out += new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes.slice(i, i + len)));
+    i += len;
+    continue;
+   } catch {
+    // An invalid sequence's lead byte stands alone, as Go's bytes do.
+   }
+  }
+  out += String.fromCharCode(b);
+  i++;
  }
  return out;
+}
+
+// fmt.Sscanf(window, "%02X"), exactly: leading whitespace is skipped, then one or two hex
+// digits read greedily - "% 2", "%\t2" and "%2 " all decode to 0x02, "%G2" does not decode.
+function sscanfHex2(window: string): number | null {
+ let i = 0;
+ while (i < window.length && /\s/.test(window[i]!)) i++;
+ let value = 0;
+ let digits = 0;
+ for (; i < window.length && digits < 2; i++) {
+  const d = parseInt(window[i]!, 16);
+  if (Number.isNaN(d)) break;
+  value = value * 16 + d;
+  digits++;
+ }
+ return digits === 0 ? null : value;
 }
 
 /**

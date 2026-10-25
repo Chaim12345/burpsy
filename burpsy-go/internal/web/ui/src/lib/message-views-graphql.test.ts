@@ -83,6 +83,22 @@ describe("the URL carrier is read with the server's decode", () => {
  });
 });
 
+describe("the percent codec matches the server byte-for-byte", () => {
+ // The same edges as TestGraphQLPercentDecodeSscanfAndUTF8Edges in Go.
+ test("Sscanf whitespace and prefix semantics", () => {
+  expect(graphQLPercentDecode("% 2")).toBe("\x02");
+  expect(graphQLPercentDecode("%\t2")).toBe("\x02");
+  expect(graphQLPercentDecode("%2 ")).toBe("\x02");
+  expect(graphQLPercentDecode("%2G")).toBe("\x02");
+  expect(graphQLPercentDecode("%G2")).toBe("%G2");
+ });
+ test("UTF-8 sequences decode to their rune, invalid bytes stand alone", () => {
+  expect(graphQLPercentDecode("%C3%A9")).toBe("é");
+  expect(graphQLPercentDecode("%FF")).toBe("ÿ");
+  expect(graphQLPercentDecode("query+%C3%A9+{a}")).toBe("query+é+{a}");
+ });
+});
+
 describe("carrier precedence is the server's edit precedence", () => {
  test("the URL query parameter wins over the JSON body", () => {
   const doc = detectGraphQL(

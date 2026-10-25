@@ -89,3 +89,22 @@ func TestLooksLikeGraphQLDocumentMatchesTheConsolePredicate(t *testing.T) {
 		}
 	}
 }
+
+// The console's graphQLPercentDecode is the TS spelling of this codec; these pin the Sscanf
+// and UTF-8 edges the port must match byte-for-byte.
+func TestGraphQLPercentDecodeSscanfAndUTF8Edges(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"% 2", "\x02"},  // Sscanf skips leading whitespace in the window
+		{"%\t2", "\x02"}, // ... including tabs
+		{"%2 ", "\x02"},  // one hex digit then a stop
+		{"%2G", "\x02"},  // one hex digit then a non-hex stop
+		{"%G2", "%G2"},   // no hex digit: the escape survives
+		{"%C3%A9", "é"},  // a UTF-8 sequence decodes to its rune, not mojibake
+		{"%FF", "\xff"},  // an undecodable byte stands alone
+	}
+	for _, c := range cases {
+		if got := GraphQLPercentDecode(c.in); got != c.want {
+			t.Errorf("GraphQLPercentDecode(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -249,3 +249,26 @@ func TestRepeaterGraphQLQueryCountsDuplicateKeysLikeJSONParse(t *testing.T) {
 		t.Errorf("a shadowed query key stayed editable: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRepeaterGraphQLQueryAShadowedKeyDoesNotAppendTheObjectTwice(t *testing.T) {
+	s := newTestServer()
+	// valid -> non-document -> valid inside one element: the slot empties on the shadow and
+	// refills on the last key, but the object still holds ONE index - JSON.parse's list is
+	// [{b}, {c}], so index 1 must name {c} and index 2 must name nothing.
+	raw := "POST /graphql HTTP/1.1\r\nHost: shop.example\r\nContent-Length: 60\r\n\r\n" +
+		`[{"query":"{a}","query":"note","query":"{b}"},{"query":"{c}"}]`
+	rec := postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": raw, "index": 1, "query": "{d}",
+	})
+	var resp repeaterGraphQLQueryResp
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp.Request, `[{"query":"{a}","query":"note","query":"{b}"},{"query":"{d}"}]`) {
+		t.Errorf("index 1 did not name the second element:\n%s", resp.Request)
+	}
+	rec = postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": raw, "index": 2, "query": "{d}",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("index 2 named an operation in a two-operation list: %d %s", rec.Code, rec.Body.String())
+	}
+}
