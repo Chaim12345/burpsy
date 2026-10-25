@@ -29,11 +29,13 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 )
 
 // ExtensionServices assembles the services from this server's parts. The
@@ -99,7 +101,11 @@ func (s *Server) extensionSend(ctx context.Context, plugin string, req extension
 	// documents; the byte-level AuthoriseRaw inside SendRequest stays the real
 	// gate, because only the rendered request can be trusted.
 	if !s.scope.Contains(host, port, path, tls) {
-		return extension.SessionResponse{}, fmt.Errorf("%w: %s", extension.ErrOutOfScope, s.scope.Explain(host, port, path, tls))
+		explain := s.scope.Explain(host, port, path, tls)
+		// The attempt is logged even though nothing was dialled: the tool log is
+		// where the operator reconciles what a plugin tried against what left.
+		s.toolLog.Record(toollog.ToolExtension, host, port, tls, strings.ToUpper(req.Method), path, 0, nil, 0, "refused by engagement scope: "+explain, nil)
+		return extension.SessionResponse{}, fmt.Errorf("%w: %s", extension.ErrOutOfScope, explain)
 	}
 	method := strings.ToUpper(req.Method)
 	if method == "" {
@@ -114,6 +120,7 @@ func (s *Server) extensionSend(ctx context.Context, plugin string, req extension
 			hdrs[kv[0]] = kv[1]
 		}
 	}
+	start := time.Now()
 	resp, err := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls).SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    host,
@@ -124,8 +131,11 @@ func (s *Server) extensionSend(ctx context.Context, plugin string, req extension
 		Body:    []byte(req.Body),
 	})
 	if err != nil {
+		s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, 0, nil, uint64(time.Since(start).Milliseconds()), err.Error(), nil)
 		return extension.SessionResponse{}, err
 	}
+	respLen := len(resp.Body)
+	s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, resp.StatusCode, &respLen, uint64(time.Since(start).Milliseconds()), "", nil)
 	out := extension.SessionResponse{Status: resp.StatusCode, Body: string(resp.Body)}
 	for k, v := range resp.Headers {
 		out.Headers = append(out.Headers, []string{k, v})

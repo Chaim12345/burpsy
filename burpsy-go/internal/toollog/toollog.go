@@ -51,12 +51,17 @@ const (
 	// ordinal is what the durable mirror stores, so a new variant goes on the end and never
 	// in the middle.
 	ToolProxy
+	// ToolExtension is a plugin's http.send through the scoped sender
+	// (burpsy-react-ui-wiwh): the operator must see what a plugin sent, and what
+	// it tried to send but was refused. Appended on the end for the same
+	// durability reason as ToolCrawler and ToolProxy.
+	ToolExtension
 )
 
 // ToolAll is every tool, so a caller can build a per-tool histogram without
 // hard-coding the set — the reason a filter that pre-seeds its own list of tool
 // names silently reported zero for any tool added after it was written.
-var ToolAll = [9]Tool{
+var ToolAll = [10]Tool{
 	ToolRepeater,
 	ToolIntruder,
 	ToolScanner,
@@ -66,6 +71,7 @@ var ToolAll = [9]Tool{
 	ToolDecoder,
 	ToolCrawler,
 	ToolProxy,
+	ToolExtension,
 }
 
 func (t Tool) String() string {
@@ -88,6 +94,8 @@ func (t Tool) String() string {
 		return "crawler"
 	case ToolProxy:
 		return "proxy"
+	case ToolExtension:
+		return "extension"
 	default:
 		return "unknown"
 	}
@@ -610,6 +618,7 @@ var (
 		ToolDecoder:   1 << 6,
 		ToolCrawler:   1 << 7,
 		ToolProxy:     1 << 8,
+		ToolExtension: 1 << 9,
 	}
 )
 

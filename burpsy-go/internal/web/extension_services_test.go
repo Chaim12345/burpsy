@@ -150,3 +150,47 @@ func TestExtensionTrafficReadsTheStoreAndScope(t *testing.T) {
 		t.Fatalf("out-of-scope = %v %v", out, err)
 	}
 }
+func TestExtensionSendIsRecordedInTheToolLog(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "served")
+	}))
+	defer origin.Close()
+	host, _, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+
+	s := newTestServer()
+	s.scope.AddInclude(host)
+	svc := s.ExtensionServices()
+
+	if _, err := svc.Send(context.Background(), "plug", extension.SessionRequest{Method: "GET", URL: origin.URL + "/from-plugin"}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	entries := s.toolLog.All()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1 (the plugin's send)", len(entries))
+	}
+	e := entries[0]
+	if e.Tool.String() != "extension" {
+		t.Fatalf("tool = %q, want extension", e.Tool.String())
+	}
+	if e.Method != "GET" || e.Path != "/from-plugin" || e.Status != http.StatusOK {
+		t.Fatalf("entry = %s %s status %d, want GET /from-plugin 200", e.Method, e.Path, e.Status)
+	}
+	if e.ResponseLen == nil || *e.ResponseLen != len("served") {
+		t.Fatalf("ResponseLen = %v, want %d", e.ResponseLen, len("served"))
+	}
+
+	// A refused send never dials, but the attempt still lands in the log: the
+	// operator must be able to see that a plugin TRIED to leave the engagement.
+	_, _ = svc.Send(context.Background(), "plug", extension.SessionRequest{Method: "GET", URL: "http://elsewhere.invalid:8080/"})
+	entries = s.toolLog.All()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (the refused attempt is logged)", len(entries))
+	}
+	e = entries[1]
+	if e.Tool.String() != "extension" || e.Status != 0 || !strings.Contains(e.Note, "scope") {
+		t.Fatalf("refused entry = %s status %d note %q, want a scope refusal", e.Tool.String(), e.Status, e.Note)
+	}
+	if e.ResponseLen != nil {
+		t.Fatalf("a refused send carries no response length, got %v", *e.ResponseLen)
+	}
+}
