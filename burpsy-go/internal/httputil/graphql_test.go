@@ -9,8 +9,8 @@ import "testing"
 func TestGraphQLPercentCodecRoundTripsTheSharedFixtures(t *testing.T) {
 	cases := []struct{ decoded, encoded string }{
 		{`{book(title:"Dune"){author}}`, "%7Bbook(title:%22Dune%22)%7Bauthor%7D%7D"},
-		{"a+b", "a%2Bb"},   // '+' is data, not a space, in both directions
-		{"a b", "a%20b"},   // space never travels as '+'
+		{"a+b", "a%2Bb"}, // '+' is data, not a space, in both directions
+		{"a b", "a%20b"}, // space never travels as '+'
 		{"x&y=z", "x%26y%3Dz"},
 	}
 	for _, c := range cases {

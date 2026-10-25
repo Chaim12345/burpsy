@@ -1,13 +1,16 @@
 package web
 
 // Repeater's GraphQL query editing and validation (burpsy-react-ui-4xqt.3), Burp's GraphQL
-// request view grown up: the typed view stops being read-only. Validation parses the document
-// with the pinned gqlparser exactly as the scanner's ingest gate does - same parser, same token
-// limit - so "valid here" and "scanned there" cannot drift. Editing replaces ONE operation's
-// query inside its carrier surgically: every other byte of the request - variables, operation
-// name, extensions, formatting, header order - reaches the draft unchanged, because the edit is
-// the query and nothing else. The carrier codecs are httputil's, body-identical to the
-// scanner's, so the document the operator edits is the document the scanner would prove.
+// request view grown up: the typed view stops being read-only. Validation is SYNTAX-ONLY:
+// the same pinned gqlparser and token limit as the scanner's ingest gate, without the gate's
+// 64KiB document cap and union-of-decodings, so a document that passes here can still be one
+// the ingest gate declines. Editing replaces ONE operation's query inside its carrier
+// surgically: every other byte of the request - variables, operation name, extensions,
+// formatting, header order - reaches the draft unchanged, because the edit is the query and
+// nothing else. The carrier codecs are httputil's, semantically the scanner's: the encoded
+// form differs only where the JSON grammar does (U+2028/U+2029 and invalid UTF-8, which
+// Go's encoder escapes and the scanner's byte-level decode does not) - the same document,
+// not the same bytes.
 
 import (
 	"errors"
@@ -132,8 +135,14 @@ type graphQLQuerySpan struct {
 // replaceGraphQLQuery rewrites the Index'th operation's query inside raw, returning the whole
 // request with exactly that span changed - plus Content-Length, when a body edit moved it.
 func replaceGraphQLQuery(raw string, index int, query string) (string, string, error) {
+	if refusal := graphQLAmbiguousFramingRefusal(raw); refusal != "" {
+		return "", "", errors.New(refusal)
+	}
 	spans := findGraphQLQuerySpans(raw)
 	if len(spans) == 0 {
+		if reason := graphQLUneditableCarrierReason(raw); reason != "" {
+			return "", "", errors.New(reason)
+		}
 		return "", "", errors.New("no GraphQL carrier: the request has no query parameter and no " +
 			"JSON body field named \"query\" - write the query in the Raw view instead")
 	}
@@ -204,6 +213,12 @@ func graphQLParamSpans(head string) []graphQLQuerySpan {
 	rest := target[q+1:]
 	for _, p := range strings.Split(rest, "&") {
 		if strings.HasPrefix(p, "query=") {
+			// The console lists this carrier only when the value reads as a GraphQL document;
+			// the server indexes the same list (httputil.LooksLikeGraphQLDocument is the one
+			// predicate), or an index would land on a parameter the operator never saw.
+			if !httputil.LooksLikeGraphQLDocument(httputil.GraphQLPercentDecode(p[len("query="):])) {
+				return nil
+			}
 			start := targetOff + q + 1 + strings.Index(rest, p) + len("query=")
 			return []graphQLQuerySpan{{start: start, end: start + len(p) - len("query="), source: "params"}}
 		}
@@ -250,8 +265,13 @@ func graphQLJSONSpans(body string) []graphQLQuerySpan {
 		case !inString && c == '"':
 			inString = true
 			if end, ok := graphQLKeyContent(body, i); ok && depth == wantDepth {
-				// i is at the opening quote of a key "query"; find its string value.
-				if vs, ve, ok := graphQLStringValueSpan(body, end); ok {
+				// i is at the opening quote of a key "query"; find its string value. Only a
+				// value that reads as a GraphQL document is an operation (the console's list
+				// is this same filter - one predicate, httputil.LooksLikeGraphQLDocument): a
+				// batch element whose "query" is a URL or a note is data, not an operation,
+				// and indexing it would land the edit on an entry the operator never saw.
+				if vs, ve, ok := graphQLStringValueSpan(body, end); ok &&
+					httputil.LooksLikeGraphQLDocument(httputil.GraphQLJSONStringContentDecode(body[vs:ve])) {
 					spans = append(spans, graphQLQuerySpan{start: vs, end: ve, source: "body"})
 					// The value is consumed through its closing quote: leave string state and
 					// skip the content, so a "query" inside it is data, not a key.
@@ -295,14 +315,14 @@ func graphQLKeyContent(body string, i int) (int, bool) {
 		return 0, false
 	}
 	j := end + 1
-	for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
+	for j < len(body) && isJSONSpace(body[j]) {
 		j++
 	}
 	if j >= len(body) || body[j] != ':' {
 		return 0, false
 	}
 	j++
-	for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
+	for j < len(body) && isJSONSpace(body[j]) {
 		j++
 	}
 	return j, true
@@ -352,4 +372,73 @@ func rewriteContentLength(raw string) string {
 		}
 	}
 	return raw
+}
+
+// isJSONSpace is the JSON grammar's whole whitespace set: space, tab, LF and CR. A body
+// pretty-printed by a client puts newlines around the colon, and a walker that reads only
+// space and tab loses the carrier the console found.
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// graphQLAmbiguousFramingRefusal names why a request's framing makes it uneditable, or ""
+// when it does not. Duplicate Content-Length is the request-smuggling shape: which length a
+// server trusts is not this route's guess to make, and the edit rewrites framing bytes, so
+// the refusal is by name rather than a winner picked in silence. Any Transfer-Encoding is
+// the same class: the edit rewrites Content-Length and does not re-frame chunks.
+func graphQLAmbiguousFramingRefusal(raw string) string {
+	head, _, _ := splitRequestHead(raw)
+	contentLengths := 0
+	for _, line := range strings.Split(head, "\r\n") {
+		name, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.EqualFold(strings.TrimSpace(name), "Content-Length"):
+			contentLengths++
+		case strings.EqualFold(strings.TrimSpace(name), "Transfer-Encoding"):
+			return "ambiguous framing: the request carries Transfer-Encoding - the edit path " +
+				"rewrites Content-Length and will not re-frame a chunked or otherwise encoded " +
+				"message; edit it on the Raw view instead"
+		}
+	}
+	if contentLengths > 1 {
+		return fmt.Sprintf("ambiguous framing: the request carries %d Content-Length headers - "+
+			"the edit path rewrites framing bytes and refuses to guess which one a server "+
+			"trusts; edit it on the Raw view instead", contentLengths)
+	}
+	return ""
+}
+
+// graphQLUneditableCarrierReason names a carrier the console reads but the edit path does
+// not rewrite, or "" when no half-recognized carrier is present. A request whose body IS
+// the document (application/graphql) or whose form carries query= is GraphQL the operator
+// can see; answering "no GraphQL carrier" would deny what the screen shows, so the refusal
+// names the carrier and the way out.
+func graphQLUneditableCarrierReason(raw string) string {
+	head, body, _ := splitRequestHead(raw)
+	contentType := ""
+	for _, line := range strings.Split(head, "\r\n") {
+		if name, value, ok := strings.Cut(line, ":"); ok &&
+			strings.EqualFold(strings.TrimSpace(name), "Content-Type") {
+			contentType = strings.ToLower(strings.TrimSpace(value))
+			break
+		}
+	}
+	switch {
+	case strings.Contains(contentType, "application/graphql") && !strings.Contains(contentType, "json"):
+		return "uneditable carrier: the body IS the GraphQL document (application/graphql) - " +
+			"the edit path rewrites the URL query parameter and JSON body carriers only; edit " +
+			"it on the Raw view instead"
+	case strings.Contains(contentType, "x-www-form-urlencoded"):
+		for _, pair := range strings.Split(body, "&") {
+			if strings.HasPrefix(pair, "query=") {
+				return "uneditable carrier: the GraphQL document rides a url-encoded form " +
+					"field - the edit path rewrites the URL query parameter and JSON body " +
+					"carriers only; edit it on the Raw view instead"
+			}
+		}
+	}
+	return ""
 }

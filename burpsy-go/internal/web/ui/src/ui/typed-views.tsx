@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy } from "lucide-react";
 import { copyToClipboard } from "../lib/api";
 import {
@@ -52,10 +52,19 @@ export function GraphQLView({
  raw?: string;
  onChange?: (next: string) => void;
 }): JSX.Element {
- const canEdit = raw !== undefined && onChange !== undefined;
+ // The edit-apply route rewrites the URL query parameter and the JSON body; every other
+ // carrier it names and refuses, so the editor appears only where Apply can land.
+ const carrierEditable = doc.source === "query string" || doc.source === "JSON body" || doc.source.startsWith("batched JSON body");
+ const canEdit = raw !== undefined && onChange !== undefined && carrierEditable;
  return (
   <div className="typed-view">
    <p className="typed-source">Carried in the {doc.source}.</p>
+   {raw !== undefined && onChange !== undefined && !carrierEditable ? (
+    <Note>
+     The edit path rewrites the URL query parameter and JSON body carriers only - edit this one on
+     the Raw view.
+    </Note>
+   ) : null}
    {doc.operations.map((operation, index) => (
     <div className="typed-operation" key={index}>
      <Section
@@ -63,7 +72,13 @@ export function GraphQLView({
       detail={doc.operations.length > 1 ? `${index + 1} of ${doc.operations.length}` : undefined}
      >
       {canEdit ? (
-       <GraphQLOperationEditor raw={raw} index={index} operation={operation} onChange={onChange} />
+       <GraphQLOperationEditor
+        key={`${index}:${operation.query}`}
+        raw={raw}
+        index={index}
+        operation={operation}
+        onChange={onChange}
+       />
       ) : (
        <Block text={operation.query} />
       )}
@@ -117,6 +132,17 @@ function GraphQLOperationEditor({
  const [errors, setErrors] = useState<GraphQLValidationError[] | null>(null);
  const [busy, setBusy] = useState(false);
  const [applyError, setApplyError] = useState<string | null>(null);
+ // The draft follows the operation the request now carries: after an Apply lands, and after
+ // the editor is reused for another message, no earlier text survives (the key on this
+ // component remounts it on the same change; the effect covers it inside one mount).
+ useEffect(() => {
+  setDraft(operation.query);
+  setErrors(null);
+  setApplyError(null);
+ }, [operation.query]);
+ // Apply resolves asynchronously; a draft the operator has since typed over must not be
+ // overwritten by the older resolution (the rsu2 pick-batch generation guard).
+ const applyGen = useRef(0);
  const dirty = draft !== operation.query;
  const check = () => {
   setBusy(true);
@@ -126,10 +152,17 @@ function GraphQLOperationEditor({
    .finally(() => setBusy(false));
  };
  const apply = () => {
+  const gen = ++applyGen.current;
   setBusy(true);
   setApplyError(null);
   applyGraphQLQuery(raw, index, draft)
-   .then((result) => onChange(result.request))
+   .then((result) => {
+    if (gen !== applyGen.current) {
+     setApplyError("The draft changed while Apply was running - the request was left alone; Apply again to land it.");
+     return;
+    }
+    onChange(result.request);
+   })
    .catch((failure: unknown) => setApplyError(failure instanceof Error ? failure.message : String(failure)))
    .finally(() => setBusy(false));
  };
@@ -141,6 +174,7 @@ function GraphQLOperationEditor({
     rows={Math.min(18, Math.max(6, draft.split("\n").length + 1))}
     value={draft}
     onChange={(event) => {
+     applyGen.current++;
      setDraft(event.target.value);
      setErrors(null);
     }}

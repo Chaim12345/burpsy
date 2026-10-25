@@ -436,6 +436,9 @@ const GRAPHQL_BODY_LIMIT = 512 * 1024;
  * is written to avoid.
  */
 export function looksLikeGraphQLDocument(text: string): boolean {
+ // One predicate, two spellings: this one, and httputil.LooksLikeGraphQLDocument in Go. The
+ // console lists the operations it will edit by this test and the edit-apply route indexes
+ // by it - the two lists must be the same list, so any change here is a change there.
  // Leading `#` comments are legal GraphQL and would otherwise hide the operation.
  const trimmed = text.replace(/^(?:\s*#[^\n]*\n)+/, "").trimStart();
  if (!trimmed) return false;
@@ -479,6 +482,12 @@ function operationFrom(record: Record<string, unknown>): GraphQLOperation | null
 /**
  * The GraphQL document a request carries, or null when it carries none.
  *
+ * The precedence is the server's edit precedence (burpsy-react-ui-4xqt.3): the URL query
+ * parameter first, then the JSON body - the carrier this view offers to edit is the carrier
+ * the edit-apply route would rewrite, never a different one it happens to show first. The
+ * url-encoded form and application/graphql bodies follow, read-only: the route names them
+ * as carriers it will not rewrite.
+ *
  * Responses are excluded on purpose: a GraphQL response is a JSON envelope and the
  * Pretty view already renders it better than a query/variables split would.
  */
@@ -488,12 +497,23 @@ export function detectGraphQL(raw: string): GraphQLDocument | null {
  const contentType = (headerValue(parsed.headers, "content-type") ?? "").toLowerCase();
  const body = parsed.body;
 
- // application/graphql: the body IS the document, no envelope.
- if (contentType.includes("application/graphql") && !contentType.includes("json")) {
-  if (!looksLikeGraphQLDocument(body)) return null;
+ // GET /graphql?query={__typename} — the server's first carrier, whatever the body holds.
+ const target = parsed.startLine.split(/\s+/)[1] ?? "";
+ const inQuery = queryOf(target);
+ const queryParam = inQuery.find(([name]) => name === "query")?.[1];
+ if (queryParam !== undefined && looksLikeGraphQLDocument(queryParam)) {
+  const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
+  const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
   return {
-   source: "application/graphql body",
-   operations: [{ operationName: null, query: body, variables: null, extensions: null }],
+   source: "query string",
+   operations: [
+    {
+     operationName: nameRaw ?? null,
+     query: queryParam,
+     variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
+     extensions: null,
+    },
+   ],
   };
  }
 
@@ -539,23 +559,12 @@ export function detectGraphQL(raw: string): GraphQLDocument | null {
   }
  }
 
- // GET /graphql?query={__typename} — the third encoding graphqlmap can emit.
- const target = parsed.startLine.split(/\s+/)[1] ?? "";
- const inQuery = queryOf(target);
- const query = inQuery.find(([name]) => name === "query")?.[1];
- if (query !== undefined && looksLikeGraphQLDocument(query)) {
-  const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
-  const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
+ // application/graphql: the body IS the document, no envelope.
+ if (contentType.includes("application/graphql") && !contentType.includes("json")) {
+  if (!looksLikeGraphQLDocument(body)) return null;
   return {
-   source: "query string",
-   operations: [
-    {
-     operationName: nameRaw ?? null,
-     query,
-     variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
-     extensions: null,
-    },
-   ],
+   source: "application/graphql body",
+   operations: [{ operationName: null, query: body, variables: null, extensions: null }],
   };
  }
 

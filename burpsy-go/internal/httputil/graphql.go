@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // GraphQLPercentDecode decodes %XX escapes and nothing else: '+' is an ordinary byte, not a
@@ -96,4 +97,45 @@ func GraphQLJSONStringContentEncode(s string) string {
 	out := sb.String()
 	// Encode appends a newline; the quotes are the replacer's, not ours.
 	return strings.TrimSuffix(out, "\n")[1 : len(strings.TrimSuffix(out, "\n"))-1]
+}
+
+// LooksLikeGraphQLDocument reports whether text reads as a GraphQL document: a leading
+// operation keyword, or a '{' opener that does not parse as JSON (an anonymous operation and
+// a JSON object share the opener; only one of them parses). Leading '#' comment lines are
+// legal GraphQL and are skipped first.
+//
+// This is one predicate with two spellings: this Go one, and looksLikeGraphQLDocument in
+// internal/web/ui/src/lib/message-views.ts. The console lists the operations it will edit by
+// this test, and the edit-apply route indexes by it - the two lists must be the same list or
+// an index lands on an operation the operator never saw, so any change here is a change
+// there.
+func LooksLikeGraphQLDocument(text string) bool {
+	trimmed := strings.TrimLeftFunc(text, unicode.IsSpace)
+	for strings.HasPrefix(trimmed, "#") {
+		nl := strings.IndexByte(trimmed, '\n')
+		if nl < 0 {
+			return false
+		}
+		trimmed = strings.TrimLeftFunc(trimmed[nl+1:], unicode.IsSpace)
+	}
+	if trimmed == "" {
+		return false
+	}
+	for _, kw := range []string{"query", "mutation", "subscription", "fragment"} {
+		if rest, ok := strings.CutPrefix(trimmed, kw); ok {
+			if rest == "" || !isGraphQLNameRune(rune(rest[0])) {
+				return true
+			}
+		}
+	}
+	if trimmed[0] != '{' {
+		return false
+	}
+	return !json.Valid([]byte(trimmed))
+}
+
+// isGraphQLNameRune mirrors the \b in the console's keyword test: a keyword followed by a
+// name character (a letter, digit, '_' or '$') is a longer word, not the keyword.
+func isGraphQLNameRune(r rune) bool {
+	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
