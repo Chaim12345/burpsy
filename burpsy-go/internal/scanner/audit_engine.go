@@ -382,6 +382,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckWebSocketHijacking = false
 		case "CheckClientIPSpoofing":
 			cfg.CheckClientIPSpoofing = false
+		case "CheckURLAuthBypass":
+			cfg.CheckURLAuthBypass = false
 		case "CheckCookieAttributes":
 			cfg.CheckCookieAttributes = false
 		case "CheckSubdomainTakeover":

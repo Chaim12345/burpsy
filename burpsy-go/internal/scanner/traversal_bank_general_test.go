@@ -52,3 +52,33 @@ func TestTraversalPayloadsPreserveThePointsOwnSuffixAndPrefix(t *testing.T) {
 		t.Errorf("a base already carrying a NUL produced derived forms (%d vs %d)", n, m)
 	}
 }
+
+// TestTraversalBankHasEncodedBackslashAndOverlongForms pins the 0vzb.4 remainder: an encoded
+// backslash climb for a Windows filter that contains-checks a literal `..\` but decodes %5c, and
+// overlong UTF-8 forms for a filter that validates the string before an overlong-tolerant decoder
+// turns %c0%af back into a separator (the Tomcat/IIS CVE-2000-0884 class).
+func TestTraversalBankHasEncodedBackslashAndOverlongForms(t *testing.T) {
+	has := func(want string) bool {
+		for _, s := range PathTraversalPayloads {
+			if s == want {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{
+		// Encoded backslash, same Windows target as the literal climb.
+		`..%5c..%5c..%5c..%5c..%5c..%5c..%5c..%5cboot.ini`,
+		// Mixed encoded separators: a filter matching only one literal form.
+		`..%5c..%2f..%5c..%2fetc%2fpasswd`,
+		// Overlong UTF-8: slash only, and dots+slash.
+		"..%c0%af..%c0%af..%c0%afetc%c0%afpasswd",
+		"%c0%ae%c0%ae%c0%af%c0%ae%c0%ae%c0%afetc%c0%afpasswd",
+		// Overlong backslash for the Windows case.
+		`..%c1%9c..%c1%9cwindows%c1%9cwin.ini`,
+	} {
+		if !has(want) {
+			t.Errorf("missing 0vzb.4 bank entry %q", want)
+		}
+	}
+}
