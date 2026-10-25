@@ -130,6 +130,23 @@ const (
 	// hotkey here is a suite-wide binding, which is also what Burp's context-less
 	// overload means ("it will fire for any supported context").
 	KindHotKey Kind = "hotkey"
+	// KindPayloadGenerator is the analogue of registerPayloadGeneratorProvider (burpsy-react-ui-0qwh):
+	// an Intruder payload source the plugin computes, pulled one position at a time through
+	// payload.generate until the plugin answers done.
+	KindPayloadGenerator Kind = "payload-generator"
+	// KindPayloadProcessor is the analogue of registerPayloadProcessor: a rewrite applied to each
+	// payload before it is sent, through payload.process. Neither payload kind has a console
+	// surface; the Intruder engine is their consumer, through Host.GeneratePayload and
+	// Host.ProcessPayload.
+	KindPayloadProcessor Kind = "payload-processor"
+	// KindHTTPHandler, KindProxyHandler and KindWebSocketHandler are the traffic hooks
+	// (burpsy-react-ui-tvv5): registerHttpHandler (every tool's requests and responses),
+	// proxy().registerRequestHandler/registerResponseHandler, and the WebSocket created and message
+	// handlers. They have no console surface; the proxy, the sender and the WebSocket layer call
+	// Host.Hook. A hook never blocks or half-applies a message: see Host.Hook.
+	KindHTTPHandler      Kind = "http-handler"
+	KindProxyHandler     Kind = "proxy-handler"
+	KindWebSocketHandler Kind = "websocket-handler"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
@@ -137,7 +154,8 @@ const (
 // UI is indistinguishable from a working one.
 var validKinds = map[Kind]bool{
 	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
-	KindHotKey: true,
+	KindHotKey: true, KindPayloadGenerator: true, KindPayloadProcessor: true,
+	KindHTTPHandler: true, KindProxyHandler: true, KindWebSocketHandler: true,
 }
 
 // NormaliseChord spells a Burp-Settings hotkey ("Ctrl+Shift+P") in the console's own
@@ -359,6 +377,47 @@ type InvokeParams struct {
 	// process's traffic store, and giving it one would be a second egress path.
 	Raw       string `json:"raw,omitempty"`
 	Selection string `json:"selection,omitempty"`
+	// Selected and Editor are hotkey.invoke's payload (burpsy-react-ui-gqvg): the rows the
+	// operator had highlighted and the message open in the editor when the chord fired, the
+	// analogue of HotKeyEvent.selectedRequestResponses and messageEditorRequestResponse.
+	// Host.Invoke forwards them to hotkey.invoke only; every other method's documented params
+	// omit them. Both are absent from the wire when empty, so a plugin written before this
+	// sees the old shape.
+	Selected []SelectedExchange `json:"selected,omitempty"`
+	Editor   *EditorMessage     `json:"editor,omitempty"`
+
+	// Position, Payload, BaseValue and Encoding are the payload.generate / payload.process payload.
+	// Position is the payload's 0-based index in the attack, a pointer because 0 is real. Payload and
+	// BaseValue are text, or base64 when Encoding is "base64" (set whenever the bytes are not valid
+	// UTF-8), pointers because an empty payload is a real value.
+	Position  *int    `json:"position,omitempty"`
+	Payload   *string `json:"payload,omitempty"`
+	BaseValue *string `json:"base_value,omitempty"`
+	Encoding  string  `json:"encoding,omitempty"`
+
+	// Phase, and Raw/Encoding above, are the hook methods' payload: Phase is "request" or "response"
+	// (http.handle, proxy.handle) or "created" or "message" (websocket.handle), and Raw is the message
+	// bytes (base64 when Encoding says so, since a hook sees binary frames).
+	Phase string `json:"phase,omitempty"`
+}
+
+// MaxHotkeySelection bounds the rows one hotkey invocation may carry. The caller already
+// holds the bytes, so the bound protects the plugin pipe, not the traffic store.
+const MaxHotkeySelection = 100
+
+// SelectedExchange is one highlighted row. Exchange is a pointer for the same reason
+// InvokeParams.Exchange is: 0 is a real id. Raw is optional because the caller may hold only
+// the id.
+type SelectedExchange struct {
+	Exchange *int   `json:"exchange"`
+	Raw      string `json:"raw,omitempty"`
+}
+
+// EditorMessage is the message open in an editor when the hotkey fired. Message is a pointer
+// because message 0 is a real id.
+type EditorMessage struct {
+	Message *int   `json:"message,omitempty"`
+	Raw     string `json:"raw,omitempty"`
 }
 
 // InvokeResult is what a plugin answers an invocation with. `editor.render` fills
@@ -373,6 +432,14 @@ type InvokeResult struct {
 	// (a plugin that only observes, or only rewrote the jar through burpsy's cookies), and is
 	// therefore distinguished from an empty object only by being absent.
 	Request *SessionRequest `json:"request,omitempty"`
+	// Payload, Encoding, Done and Action are the payload methods' answers: payload.generate fills
+	// Payload (or Done when the plugin has no more), payload.process fills Payload or Action "skip".
+	Payload  *string `json:"payload,omitempty"`
+	Encoding string  `json:"encoding,omitempty"`
+	Done     bool    `json:"done,omitempty"`
+	Action   string  `json:"action,omitempty"`
+	// HookRaw is a hook's replacement message bytes, under the key "raw". Absent means unchanged.
+	HookRaw *string `json:"raw,omitempty"`
 }
 
 // SessionRequest is one request inside a sessionAction.invoke call, in the sender's own vocabulary.
@@ -524,13 +591,113 @@ var MethodSpecs = []MethodSpec{
 	},
 	{
 		Name: "hotkey.invoke", Direction: HostToPlugin, Call: "request", Kind: KindHotKey,
-		Params: `{"registration": string}`,
+		Params: `{"registration": string, "selected"?: [{"exchange": int, "raw"?: string}], "editor"?: {"message"?: int, "raw"?: string}}`,
 		Result: `{"output"?: string}`,
 		Why: "The analogue of registerHotKeyHandler: the console dispatches the registration's " +
-			"declared chord to this method. No exchange and no message are passed, because a " +
-			"hotkey fires with no selection behind it — the same shape as menu.invoke, reached " +
-			"from the keyboard instead of a menu. The plugin asked for the binding at the " +
-			"handshake; this is the host keeping its end.",
+			"declared chord to this method. selected is the rows the operator had highlighted " +
+			"(HotKeyEvent.selectedRequestResponses) and editor the message open in an editor " +
+			"(messageEditorRequestResponse); both are omitted when there was none, which is the " +
+			"menu.invoke shape. At most 100 rows are carried. The ids and bytes are handed in " +
+			"because a plugin has no route to the traffic store.",
+	},
+	{
+		Name: "http.handle", Direction: HostToPlugin, Call: "request", Kind: KindHTTPHandler,
+		Params: `{"registration": string, "phase": "request"|"response", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of registerHttpHandler (grant: hook.traffic): called for each request about to be " +
+			"sent and each response received by any tool. The plugin answers the message to use, or nothing to " +
+			"leave it. drop is not offered here, as in Montoya. A plugin that errors, answers something invalid " +
+			"or exceeds the hook timeout is counted, explained on its console, and the original bytes go through; " +
+			"a plugin that keeps failing is suspended for a cooldown.",
+	},
+	{
+		Name: "proxy.handle", Direction: HostToPlugin, Call: "request", Kind: KindProxyHandler,
+		Params: `{"registration": string, "phase": "request"|"response", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue"|"drop"|"intercept"|"do-not-intercept", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of proxy().registerRequestHandler/registerResponseHandler (grant: hook.traffic): " +
+			"continue (optionally with a replacement), drop, or force the intercept decision. The first " +
+			"drop or intercept decision ends the chain. Same failure contract as http.handle.",
+	},
+	{
+		Name: "websocket.handle", Direction: HostToPlugin, Call: "request", Kind: KindWebSocketHandler,
+		Params: `{"registration": string, "phase": "created"|"message", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue"|"drop", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of registerWebSocketCreatedHandler and the message handlers (grant: hook.traffic). " +
+			"For created, raw is the upgrade request; for message, one frame's payload. Same failure contract.",
+	},
+	{
+		Name: "payload.generate", Direction: HostToPlugin, Call: "request", Kind: KindPayloadGenerator,
+		Params: `{"registration": string, "position": int}`,
+		Result: `{"payload"?: string, "encoding"?: "base64", "done"?: bool}`,
+		Why: "The analogue of PayloadGenerator.generatePayloadFor: the Intruder engine asks for the payload at " +
+			"a position and the plugin answers it, or answers done when it has no more. Text, or base64 when the " +
+			"bytes are not valid UTF-8. A plugin that fails or times out ends that attack's generator; the engine " +
+			"never substitutes a payload the plugin did not produce.",
+	},
+	{
+		Name: "payload.process", Direction: HostToPlugin, Call: "request", Kind: KindPayloadProcessor,
+		Params: `{"registration": string, "payload": string, "base_value"?: string, "encoding"?: "base64"}`,
+		Result: `{"payload"?: string, "encoding"?: "base64", "action"?: "skip"}`,
+		Why: "The analogue of PayloadProcessor.processPayload: rewrite one payload before it is sent, or answer " +
+			"action skip to drop it. A failing processor is an error the engine handles by keeping the original " +
+			"payload and counting the failure; a half-processed value is never returned beside an error.",
+	},
+	{
+		Name: "event.raise", Direction: PluginToHost, Call: "request",
+		Params: `{"level": "debug"|"info"|"error"|"critical", "message": string}`,
+		Result: `{}`,
+		Why: "The analogue of raiseDebug/Info/Error/CriticalEvent (grant: event.raise): puts a line in the " +
+			"dashboard event log, attributed to the plugin, where log only reaches the plugin's own console. " +
+			"A request so a missing grant is answered with error -32001 rather than dropped.",
+	},
+	{
+		Name: "storage.get", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string}`,
+		Result: `{"found": bool, "value"?: any JSON}`,
+		Why: "persistence().extensionData() (project) and preferences() (grant: storage.get). Values are " +
+			"opaque JSON, at most 1 MiB, keys at most 256 bytes, namespaced by plugin so one plugin cannot read another's.",
+	},
+	{
+		Name: "storage.set", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string, "value": any JSON}`,
+		Result: `{}`,
+		Why:    "Writes one value (grant: storage.set). Same scopes and bounds as storage.get.",
+	},
+	{
+		Name: "storage.delete", Direction: PluginToHost, Call: "request",
+		Params: `{"scope": "project"|"preferences", "key": string}`,
+		Result: `{}`,
+		Why:    "Removes one value (grant: storage.delete). Deleting a key that is not there is not an error.",
+	},
+	{
+		Name: "ai.prompt", Direction: PluginToHost, Call: "request",
+		Params: `{"prompt": string, "system"?: string}`,
+		Result: `{"text": string}`,
+		Why: "The analogue of Montoya's ai().prompt() (grant: ai.prompt): one prompt through the endpoint the " +
+			"operator configured. Answers -32002 when the build has no endpoint configured.",
+	},
+	{
+		Name: "http.send", Direction: PluginToHost, Call: "request",
+		Params: `{"request": {"method": string, "url": string, "headers"?: [[name, value]], "body"?: string}}`,
+		Result: `{"response": {"status": int, "headers"?: [[name, value]], "body"?: string}}`,
+		Why: "The analogue of http().sendRequest() (grant: http.send). The request goes through " +
+			"sender.AuthorisedSender, so the engagement scope decides before the dial: an out-of-scope request is " +
+			"answered -32003 and counted, never silently dropped.",
+	},
+	{
+		Name: "traffic.query", Direction: PluginToHost, Call: "request",
+		Params: `{"source": "proxy"|"sitemap"|"organizer", "host"?: string, "method"?: string, "status"?: int, "contains"?: string, "offset"?: int, "limit"?: int, "include_bodies"?: bool}`,
+		Result: `{"items": [{"id": int, "method": string, "url": string, "status": int, "request"?: string, "response"?: string}], "total": int}`,
+		Why: "Read access to the traffic store (grant: traffic.query): proxy().history(filter), " +
+			"siteMap().requestResponses() and organizer().items(). Paged, 50 by default and 200 at most; raw " +
+			"messages are included only with include_bodies, and an answer over the message bound is an error " +
+			"rather than a plugin left waiting. Read-only: a plugin changes traffic only through http.send.",
+	},
+	{
+		Name: "scope.check", Direction: PluginToHost, Call: "request",
+		Params: `{"url": string}`,
+		Result: `{"in_scope": bool}`,
+		Why:    "The analogue of scope().isInScope(url) (grant: scope.check): the engagement scope's answer for one URL.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",
@@ -555,10 +722,11 @@ type Unsupported struct {
 // Unsupported is the closed list of things this protocol does not offer.
 var UnsupportedCapabilities = []Unsupported{
 	{
-		What: "A plugin cannot originate an HTTP request through burpsy",
+		What: "A plugin cannot originate an HTTP request unless the operator granted http.send, and never outside scope",
 		Why: "Every request this process sends goes through sender.AuthorisedSender so the " +
-			"engagement scope decides about the bytes before the dial. A plugin send method is real work " +
-			"— it has to bind that authority per call — and it is not wired here. A method that " +
+			"engagement scope decides about the bytes before the dial. http.send binds that authority " +
+			"per call and needs a per-plugin grant (-plugin-grants); without the grant, or with no sender " +
+			"wired in this build, it answers an error rather than pretending to send. A method that " +
 			"answered without sending would turn every plugin that used it into a silent false negative.",
 	},
 	{

@@ -29,6 +29,12 @@ type session struct {
 
 	maxMessageBytes int
 
+	// api holds the plugin's grants and the services behind the plugin->host methods; ctx is
+	// the host's, so closing the host cancels calls in flight, and callTimeout bounds each.
+	api         *hostAPI
+	ctx         context.Context
+	callTimeout time.Duration
+
 	// writeMu serialises writes to the child's stdin. One JSON value per line is
 	// only a framing if two goroutines cannot interleave halves of two lines.
 	writeMu sync.Mutex
@@ -105,7 +111,7 @@ func childEnv(name string, extra []string) []string {
 // ctx bounds the process for its whole life, not just the launch: it is the host's
 // context, so closing the host kills every plugin it started rather than leaving
 // orphans behind a dead server.
-func spawn(ctx context.Context, name string, spec PluginSpec, con *console, maxMessageBytes int) (*session, error) {
+func spawn(ctx context.Context, name string, spec PluginSpec, con *console, maxMessageBytes int, api *hostAPI, callTimeout time.Duration) (*session, error) {
 	if spec.Path == "" {
 		return nil, fmt.Errorf("plugin %q maps to an empty path", name)
 	}
@@ -137,6 +143,9 @@ func spawn(ctx context.Context, name string, spec PluginSpec, con *console, maxM
 		cmd:             cmd,
 		console:         con,
 		maxMessageBytes: maxMessageBytes,
+		api:             api,
+		ctx:             ctx,
+		callTimeout:     callTimeout,
 		stdin:           stdin,
 		pending:         make(map[int64]chan rpcMessage),
 		done:            make(chan struct{}),
@@ -247,6 +256,14 @@ func (s *session) dispatch(msg rpcMessage) {
 // against the PluginToHost entries of MethodSpecs. A switch would be the same code
 // with nothing checkable about it.
 var inbound = map[string]func(*session, rpcMessage){
+	"event.raise":    hostEventRaise,
+	"storage.get":    hostStorageGet,
+	"storage.set":    hostStorageSet,
+	"storage.delete": hostStorageDelete,
+	"ai.prompt":      hostAIPrompt,
+	"http.send":      hostHTTPSend,
+	"traffic.query":  hostTrafficQuery,
+	"scope.check":    hostScopeCheck,
 	"log": func(s *session, msg rpcMessage) {
 		var params LogParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {

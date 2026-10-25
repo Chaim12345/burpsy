@@ -52,6 +52,19 @@ type PluginView struct {
 	ProtocolErrors     int `json:"protocol_errors"`
 	Invocations        int `json:"invocations"`
 	InvocationFailures int `json:"invocation_failures"`
+
+	// Grants are the plugin->host methods the operator allowed this plugin; [] when none.
+	// HostCalls counts granted calls per method for the current load ({} when none), and
+	// RefusedHostCalls counts calls refused for want of a grant or by the engagement scope.
+	Grants           []string       `json:"grants"`
+	HostCalls        map[string]int `json:"host_calls"`
+	RefusedHostCalls int            `json:"refused_host_calls"`
+
+	// Hook counters for the current load: hooks called, hooks that failed (error, invalid answer,
+	// timeout), and whether the plugin is suspended from hooks after repeated failures.
+	HookCalls     int  `json:"hook_calls"`
+	HookFailures  int  `json:"hook_failures"`
+	HookSuspended bool `json:"hook_suspended"`
 }
 
 // ListView is every allowlisted plugin plus the breakdown across them.
@@ -166,19 +179,29 @@ func KindCount() int { return len(kindLabels) }
 // which Montoya call it is the analogue of, so the APIs tab can be read next to
 // Burp's own documentation.
 var kindLabels = map[Kind]string{
-	KindContextMenu:   "Context-menu item",
-	KindMenu:          "Menu action",
-	KindEditorTab:     "Message-editor tab",
-	KindSessionAction: "Session-handling action",
-	KindHotKey:        "Hotkey",
+	KindContextMenu:      "Context-menu item",
+	KindMenu:             "Menu action",
+	KindEditorTab:        "Message-editor tab",
+	KindSessionAction:    "Session-handling action",
+	KindHotKey:           "Hotkey",
+	KindHTTPHandler:      "HTTP handler (hook)",
+	KindProxyHandler:     "Proxy handler (hook)",
+	KindWebSocketHandler: "WebSocket handler (hook)",
+	KindPayloadGenerator: "Intruder payload generator",
+	KindPayloadProcessor: "Intruder payload processor",
 }
 
 var kindMontoya = map[Kind]string{
-	KindContextMenu:   "registerContextMenuItemsProvider",
-	KindMenu:          "registerMenuBarItem",
-	KindEditorTab:     "registerHttpRequestEditorProvider (read-only half only)",
-	KindSessionAction: "registerSessionHandlingAction",
-	KindHotKey:        "registerHotKeyHandler",
+	KindContextMenu:      "registerContextMenuItemsProvider",
+	KindMenu:             "registerMenuBarItem",
+	KindEditorTab:        "registerHttpRequestEditorProvider (read-only half only)",
+	KindSessionAction:    "registerSessionHandlingAction",
+	KindHotKey:           "registerHotKeyHandler",
+	KindHTTPHandler:      "registerHttpHandler",
+	KindProxyHandler:     "proxy().registerRequestHandler / registerResponseHandler",
+	KindWebSocketHandler: "registerWebSocketCreatedHandler",
+	KindPayloadGenerator: "registerPayloadGeneratorProvider",
+	KindPayloadProcessor: "registerPayloadProcessor",
 }
 
 func kindViews() []KindView {

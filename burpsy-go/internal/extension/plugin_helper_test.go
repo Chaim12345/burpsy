@@ -99,6 +99,23 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "repeater-collision", "kind": "hotkey", "label": "Collides with Repeater", "chord": "Ctrl+R"},
 			},
 		}
+	case "payloads":
+		return map[string]any{
+			"name": "payloader", "version": "0.1", "type": "go-test", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "tokens", "kind": "payload-generator", "label": "Signed tokens"},
+				{"id": "upper", "kind": "payload-processor", "label": "Upper-case"},
+			},
+		}
+	case "hooks":
+		return map[string]any{
+			"name": "hooker", "version": "0.1", "type": "go-test", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "http", "kind": "http-handler", "label": "Sign requests"},
+				{"id": "proxy", "kind": "proxy-handler", "label": "Proxy rules"},
+				{"id": "ws", "kind": "websocket-handler", "label": "WS fuzz"},
+			},
+		}
 	case "no-registrations":
 		return map[string]any{"name": "quiet", "version": "1.0", "type": "shell", "protocol": ProtocolVersion}
 	default:
@@ -136,6 +153,29 @@ func runHelperPlugin(behaviour string) {
 		}
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			os.Exit(70)
+		}
+
+		if behaviour == "host-caller" && msg.Method == "menu.invoke" {
+			// Makes the plugin->host request the invocation's `selection` field describes
+			// ({"method": ..., "params": ...}), waits for the host's answer on stdin and returns
+			// that answer verbatim as the invocation's output.
+			var call struct {
+				Selection string `json:"selection"`
+			}
+			_ = json.Unmarshal(msg.Params, &call)
+			var want struct {
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal([]byte(call.Selection), &want); err != nil {
+				os.Exit(71)
+			}
+			emit(map[string]any{"jsonrpc": "2.0", "id": 9001, "method": want.Method, "params": want.Params})
+			if !reader.Scan() {
+				os.Exit(72)
+			}
+			reply(msg.ID, map[string]any{"output": strings.TrimSpace(reader.Text())})
+			continue
 		}
 
 		switch msg.Method {
@@ -180,6 +220,65 @@ func runHelperPlugin(behaviour string) {
 				continue
 			}
 			reply(msg.ID, map[string]any{"output": "method=" + msg.Method + " params=" + string(msg.Params)})
+
+		case "http.handle", "proxy.handle", "websocket.handle":
+			var in struct {
+				Phase string `json:"phase"`
+				Raw   string `json:"raw"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			name := os.Getenv("BURPSY_PLUGIN_NAME")
+			switch in.Raw {
+			case "hang":
+				select {}
+			case "crash":
+				os.Exit(5)
+			case "garbage":
+				reply(msg.ID, map[string]any{"action": "explode"})
+			case "drop":
+				reply(msg.ID, map[string]any{"action": "drop"})
+			case "intercept":
+				reply(msg.ID, map[string]any{"action": "intercept"})
+			case "binary":
+				reply(msg.ID, map[string]any{"action": "continue", "raw": "/wCA", "encoding": "base64"})
+			case "noop":
+				reply(msg.ID, map[string]any{"action": "continue"})
+			case "echo":
+				reply(msg.ID, map[string]any{"action": "continue", "raw": in.Raw})
+			default:
+				reply(msg.ID, map[string]any{"action": "continue", "raw": in.Raw + "[" + name + ":" + in.Phase + "]"})
+			}
+
+		case "payload.generate":
+			var in struct {
+				Position int `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			switch {
+			case in.Position >= 3:
+				reply(msg.ID, map[string]any{"done": true})
+			case in.Position == 1:
+				// Not valid UTF-8 as text, so it travels as base64.
+				reply(msg.ID, map[string]any{"payload": "/wCA", "encoding": "base64"})
+			default:
+				reply(msg.ID, map[string]any{"payload": fmt.Sprintf("tok-%d", in.Position)})
+			}
+
+		case "payload.process":
+			var in struct {
+				Payload   string `json:"payload"`
+				BaseValue string `json:"base_value"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			switch in.Payload {
+			case "drop":
+				reply(msg.ID, map[string]any{"action": "skip"})
+			case "boom":
+				emit(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(msg.ID),
+					"error": map[string]any{"code": -32000, "message": "processor failed"}})
+			default:
+				reply(msg.ID, map[string]any{"payload": strings.ToUpper(in.Payload) + "|" + in.BaseValue})
+			}
 
 		case "editor.render":
 			reply(msg.ID, map[string]any{"text": "method=" + msg.Method + " params=" + string(msg.Params)})
