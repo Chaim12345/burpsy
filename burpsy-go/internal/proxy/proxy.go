@@ -881,6 +881,25 @@ type ProxyConfig struct {
 type NetworkSettings struct {
 	Resolution sender.ResolutionSettings
 	Continue   sender.ContinueSettings
+	// http3AltSvc is the mandatory kill switch for the h3 Alt-Svc leg (burpsy-react-ui-vln3,
+	// integrator ruling C): when on - the default - forwarded responses teach the proxy which
+	// origins advertise HTTP/3 and later forwards to those origins may ride QUIC. Off makes the
+	// feature inert: nothing learned, nothing ridden. Unexported so the zero value cannot be
+	// mistaken for a choice; the seed and the switch are the accessors below.
+	http3AltSvc bool
+}
+
+// SetHTTP3AltSvc flips the h3 Alt-Svc kill switch (ruling C).
+func (n *NetworkSettings) SetHTTP3AltSvc(on bool) {
+	if n == nil {
+		return
+	}
+	n.http3AltSvc = on
+}
+
+// HTTP3AltSvcEnabled reports whether the h3 Alt-Svc leg is live. Default ON.
+func (n *NetworkSettings) HTTP3AltSvcEnabled() bool {
+	return n != nil && n.http3AltSvc
 }
 
 // NewNetworkSettings returns the live holder with the defaults this leg has always had plus the one
@@ -888,7 +907,8 @@ type NetworkSettings struct {
 // any client and Burp does the same (burpsy-react-ui-o1eu).
 func NewNetworkSettings() *NetworkSettings {
 	return &NetworkSettings{
-		Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		Continue:    sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		http3AltSvc: true,
 	}
 }
 
@@ -927,6 +947,8 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		// (sender.DefaultNetworkSettings).
 		network: &NetworkSettings{
 			Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+			// Default ON per ruling C: the operator's switch is SetHTTP3AltSvc, not a zero value.
+			http3AltSvc: true,
 		},
 	}
 	// On, matching Burp's default. A proxy that let permessage-deflate be
@@ -3580,6 +3602,13 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 		// learned nonce outlives the connection in the credential store rather than in a socket.
 		if headEnd := requestHeadEnd(resp); headEnd > 0 {
 			learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(resp[:headEnd]))
+			// Alt-Svc discovery (vln3): only responses burpsy itself received teach the table, and
+			// only while the operator's kill switch leaves the leg live.
+			if tls && s.config.network.HTTP3AltSvcEnabled() {
+				if value, ok := headerValueFold(string(resp[:headEnd]), "alt-svc"); ok {
+					s.config.altSvc.learn(host, port, value, time.Now())
+				}
+			}
 		}
 	}
 	return resp, serverIP, firstByte, err
