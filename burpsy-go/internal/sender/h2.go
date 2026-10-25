@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -90,15 +91,21 @@ func sendOverH2(ctx context.Context, conn net.Conn, req h2Request) ([]byte, erro
 // h2RoundTrip runs one request on an h2 client connection. conn is the socket under it, which a
 // per-send streaming window (of0z) re-arms once the response head says the body is an event stream.
 func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Conn, req h2Request) ([]byte, error) {
-	var body io.Reader
-	if len(req.Body) > 0 {
-		body = bytes.NewReader(req.Body)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, "https://"+req.Authority+req.Path, body)
+	target, err := h2RequestURL(req.Authority, req.Path)
 	if err != nil {
-		return nil, fmt.Errorf("h2 request: %w", err)
+		return nil, err
 	}
-	httpReq.Host = req.Authority
+	httpReq := &http.Request{
+		Method: req.Method,
+		URL:    target,
+		Host:   req.Authority,
+		Header: make(http.Header),
+	}
+	if len(req.Body) > 0 {
+		httpReq.Body = io.NopCloser(bytes.NewReader(req.Body))
+		httpReq.ContentLength = int64(len(req.Body))
+	}
+	httpReq = httpReq.WithContext(ctx)
 	for _, h := range req.Headers {
 		// Add, not Set: a request may carry two fields of the same name, and Set would silently keep the
 		// last one.
@@ -129,6 +136,41 @@ func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Con
 	}
 	headers := burpsyhttp2.HeadersFromHTTP(httpResp.Header)
 	return burpsyhttp2.RenderResponse(httpResp.StatusCode, headers, respBody), nil
+}
+
+// h2RequestURL builds the request URL for an h2 send without losing the request-target's bytes.
+//
+// The transport writes :path from URL.RequestURI and accepts any value starting with a single '/'
+// (httpcommon.validPseudoPath), so the question is only how to get the operator's exact target into
+// RequestURI. url.Parse is tried first because everything it accepts it also preserves byte-for-byte
+// — "//"-prefixed targets included, which nothing else here can carry. When it refuses, the cause is
+// the percent escapes a path-confusion probe is made of (%%32%65, %zz — CVE-2023-25690's shape), and
+// the answer is URL.Opaque: RequestURI returns a single-slash Opaque unexamined, so :path on the wire
+// is byte-for-byte what the operator wrote.
+//
+// Rejecting such targets instead (the old behaviour, through http.NewRequest) hid the answer a probe
+// was written to get (burpsy-react-ui-0vzb.25): a send that errors "invalid URL escape" never asks
+// the server how it normalises the path. Re-escaping instead would be worse than failing: the server
+// would be asked about a request the operator did not write, and the result would read as evidence
+// about their probe.
+func h2RequestURL(authority, rawTarget string) (*url.URL, error) {
+	if parsed, err := url.Parse("https://" + authority + rawTarget); err == nil {
+		return parsed, nil
+	}
+	path, query, hasQuery := strings.Cut(rawTarget, "?")
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		// Opaque renders a "//"-prefixed value as scheme:opaque, and a target with no leading slash is
+		// not origin form at all; planH2 has already refused those for h2, so reaching here means the
+		// bytes came from a malformed replay. Say what they were.
+		return nil, fmt.Errorf("h2 request: unusable target %q", rawTarget)
+	}
+	return &url.URL{
+		Scheme:     "https",
+		Host:       authority,
+		Opaque:     path,
+		RawQuery:   query,
+		ForceQuery: hasQuery,
+	}, nil
 }
 
 // h2IsEventStream reports whether a Content-Type value is text/event-stream, ignoring parameters.
