@@ -936,6 +936,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "decode a protobuf or gRPC-framed body into a field tree without a .proto (burpsy-react-ui-3x2g), so an operator can read an otherwise opaque binary body; a pure transform that sends nothing",
 	},
+	"/api/protobuf/reflect-decode": {
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "fetch a target's schema via gRPC server reflection the operator explicitly named, then decode the body with it (burpsy-react-ui-47id); one bounded exchange to the target per call, scope-authorised before any dial, and the response marks the target-served names as reflection-sourced",
+	},
 	"/api/protobuf/encode": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "re-encode an edited protobuf field tree back to body bytes, re-framing it when it was gRPC (burpsy-react-ui-3x2g)",

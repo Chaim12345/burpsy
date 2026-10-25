@@ -1099,6 +1099,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/dominvader/hit", s.handleDomInvaderHit)
 	s.route("/api/dominvader/hits", s.handleDomInvaderHits)
 	s.route("/api/protobuf/decode", s.handleProtobufDecode)
+	s.route("/api/protobuf/reflect-decode", s.handleProtobufReflectDecode)
 	s.route("/api/protobuf/encode", s.handleProtobufEncode)
 	s.route("/api/authz/identities", s.handleAuthzIdentities)
 	s.route("/api/authz/test", s.handleAuthzTest)

@@ -40,6 +40,12 @@ type protoDecodeResponse struct {
 	// several and the operator has not chosen, in which case the fields are shown unnamed).
 	Messages []string `json:"messages,omitempty"`
 	Message  string   `json:"message,omitempty"`
+	// SchemaSource and SchemaFiles are the names' provenance (47id): "reflection"
+	// means a TARGET supplied the schema over the network - adversary-controllable
+	// input that must never read as operator-supplied .proto - and SchemaFiles is
+	// what it served. Empty means an operator-pasted .proto or no schema.
+	SchemaSource string   `json:"schema_source,omitempty"`
+	SchemaFiles  []string `json:"schema_files,omitempty"`
 }
 
 // protobufDecodeReq is the request body handleProtobufDecode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
@@ -94,18 +100,32 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	raw, err := base64.StdEncoding.DecodeString(body.BodyBase64)
+	raw, err := decodeBase64Body(w, body.BodyBase64)
 	if err != nil {
-		http.Error(w, "body_base64 is not valid base64", http.StatusBadRequest)
-		return
+		return // decodeBase64Body already wrote the 400
 	}
 
-	resp := protoDecodeResponse{GRPC: body.GRPC}
-	if body.GRPC {
+	resp, herr := decodeProtobufBody(schema, body.Message, raw, body.GRPC)
+	if herr != "" {
+		http.Error(w, herr, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// annotateFields names fields against the chosen message, or returns them untouched when there is no
+// schema or no message chosen. The message was validated before decoding began, so an Annotate error
+// here cannot happen; falling back to the unnamed tree keeps the handler total regardless.
+// decodeProtobufBody decodes raw (gRPC-framed when grpcFramed) against schema and
+// message, shared by the local decode route and the reflection fetch route (47id).
+// The second return is the client error for framing so broken there is nothing
+// to show; per-frame failures ride in the frame views.
+func decodeProtobufBody(schema *grpcproto.Schema, message string, raw []byte, grpcFramed bool) (protoDecodeResponse, string) {
+	resp := protoDecodeResponse{GRPC: grpcFramed}
+	if grpcFramed {
 		frames, err := grpcproto.Unframe(raw)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+			return resp, err.Error()
 		}
 		for _, fr := range frames {
 			view := protoFrameView{Compressed: fr.Compressed, Trailer: fr.Trailer}
@@ -118,7 +138,7 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 				if fields, derr := grpcproto.Decode(fr.Message); derr != nil {
 					view.Error = derr.Error()
 				} else {
-					view.Fields, view.Error = validateAndAnnotate(schema, body.Message, fr.Message, fields)
+					view.Fields, view.Error = validateAndAnnotate(schema, message, fr.Message, fields)
 				}
 			}
 			resp.Frames = append(resp.Frames, view)
@@ -129,20 +149,17 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		if derr != nil {
 			view.Error = derr.Error()
 		} else {
-			view.Fields, view.Error = validateAndAnnotate(schema, body.Message, raw, fields)
+			view.Fields, view.Error = validateAndAnnotate(schema, message, raw, fields)
 		}
 		resp.Frames = []protoFrameView{view}
 	}
 	if schema != nil {
 		resp.Messages = schema.Messages()
-		resp.Message = body.Message
+		resp.Message = message
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, ""
 }
 
-// annotateFields names fields against the chosen message, or returns them untouched when there is no
-// schema or no message chosen. The message was validated before decoding began, so an Annotate error
-// here cannot happen; falling back to the unnamed tree keeps the handler total regardless.
 // validateAndAnnotate runs the 0rrb 2b oracle before the schema's names are
 // applied: a body the descriptor cannot hold (invalid UTF-8 in a declared
 // string, a missing proto2 required field) is reported as the mismatch it is,

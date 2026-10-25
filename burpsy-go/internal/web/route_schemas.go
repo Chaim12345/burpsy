@@ -303,6 +303,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/tools/rules/test":            {body: typeOf[matchReplaceTestReq]()},
 	"PUT /api/tools/rules":                  {body: typeOf[matchReplaceSetSpec]()},
 	"POST /api/protobuf/decode":             {body: typeOf[protobufDecodeReq]()},
+	"POST /api/protobuf/reflect-decode":     {body: typeOf[protobufReflectReq]()},
 	"POST /api/protobuf/encode":             {body: typeOf[protobufEncodeReq]()},
 	"POST /api/tools/log":                   {body: typeOf[toolLogSetCaptureReq]()},
 	"DELETE /api/tools/log":                 noBody,
