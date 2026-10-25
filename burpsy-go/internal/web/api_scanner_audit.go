@@ -69,10 +69,6 @@ func (s *Server) auditContext(ctx context.Context, poolName string) (context.Con
 
 // handleScannerAudit is the legacy /api/scanner/audit alias for /api/audit/{id}.
 func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req scannerAuditReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -101,10 +97,6 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 
 // handleAuditByPath serves POST /api/audit/{id}, running an active scan over one exchange.
 func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/audit/")
 	id, err := strconv.ParseUint(strings.TrimSuffix(idStr, "/"), 10, 64)
 	// `err != nil` only — a parse failure, nothing else. Zero is a valid exchange id, not a sentinel:
@@ -401,10 +393,6 @@ type auditSelectedReq struct {
 // exists: an endpoint that accepts a configuration name and runs something else must be detectable
 // from its own reply.
 func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req auditSelectedReq
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)

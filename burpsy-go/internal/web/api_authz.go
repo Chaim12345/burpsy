@@ -233,10 +233,6 @@ type authzTestReq struct {
 // handleAuthzTest serves POST /api/authz/test. riskAttack: it re-sends a captured request to its
 // target several times under different credentials — traffic to the target, and the whole point.
 func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.sender == nil {
 		http.Error(w, "no sender is configured, so a request cannot be re-sent", http.StatusServiceUnavailable)
 		return

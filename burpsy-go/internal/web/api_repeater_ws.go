@@ -136,10 +136,6 @@ func wsSchemeTarget(target string) (string, bool, error) {
 
 // handleRepeaterWsSend resends one WebSocket frame over a fresh connection.
 func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterWsSendReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

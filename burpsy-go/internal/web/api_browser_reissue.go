@@ -76,10 +76,6 @@ type repeaterBrowserReissueReq struct {
 // because the comparison is the deliverable, and an operator who must mint twice would see
 // the first outcome before the second's context existed.
 func (s *Server) handleRepeaterBrowserReissue(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// A pointer, not a plain uint64: exchange ids are 0-based (position-is-the-id), so 0 is
 	// the FIRST exchange and a plain field cannot tell "named the first exchange" from "named
 	// nothing". Nil is the absence; 0 is an id like any other.
@@ -151,10 +147,6 @@ func (s *Server) handleRepeaterBrowserReissue(w http.ResponseWriter, r *http.Req
 // outcomes are also recorded as exchanges, so the two variants appear in history like any
 // other send — the comparison survives the dialog.
 func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	token := strings.TrimPrefix(r.URL.Path, "/reissue/")
 	rec, ok := s.reissueSpend(token)
 	if !ok {

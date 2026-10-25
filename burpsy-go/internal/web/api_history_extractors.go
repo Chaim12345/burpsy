@@ -190,10 +190,6 @@ type historyExtractReq struct {
 // value" (no match, no such header, a walk that found nothing), distinct from "" which is a value the
 // extractor really captured. A row with no stored response is absent from the answer.
 func (s *Server) handleHistoryExtract(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var body historyExtractReq
 	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"ids":[...]} or {"messages":[...]}`, http.StatusBadRequest)

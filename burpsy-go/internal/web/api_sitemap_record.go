@@ -40,11 +40,6 @@ type sitemapRecordView struct {
 }
 
 func (s *Server) handleSitemapRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sitemapRecordReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON {\"exchange_id\": N}", http.StatusBadRequest)

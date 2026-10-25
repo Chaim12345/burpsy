@@ -75,11 +75,6 @@ func viewOf(sk skills.Skill, disabled map[string]bool) skillView {
 }
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	names, persisted, derr := s.disabledSkills()
 	view := skillsView{Skills: []skillView{}, Refused: []skills.LoadError{}, Disabled: names, Persisted: persisted}
 	if derr != nil {
@@ -109,11 +104,6 @@ type skillPromptView struct {
 }
 
 func (s *Server) handleSkill(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/skills/"), "/")
 	sk, ok := s.skills.Get(name)
 	if !ok {
@@ -154,11 +144,6 @@ type skillsDisabledReq struct {
 }
 
 func (s *Server) handleSkillsDisabled(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.Header().Set("Allow", http.MethodPut)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req skillsDisabledReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON {\"disabled\": [names]}", http.StatusBadRequest)

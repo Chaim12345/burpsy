@@ -42,11 +42,6 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // "Delete items" / "Clear (tool)". The confirmation gate stands in front of it as riskDestructive, so
 // by the time a request is here a human-minted token has been spent on it.
 func (s *Server) handleHistoryRows(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		w.Header().Set("Allow", http.MethodDelete)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	s.historyDelete(w, r)
 }
 
@@ -172,10 +167,6 @@ func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 
 // handleMessage serves GET /api/message/{id} -> MessageView{id,len,text}.
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/message/"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid message ID", http.StatusBadRequest)
@@ -300,10 +291,6 @@ func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id 
 
 // handleStats serves GET /api/stats -> Stats{exchanges,messages,stored_bytes}.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	messages, exchanges := s.store.Count()
 	w.Header().Set("Content-Type", "application/json")
 	view := StatsView{
@@ -1173,10 +1160,6 @@ func derefMsgID(id *core.MsgId) uint64 {
 // error-shaped body that would render as a broken panel. When a BCheck corpus is loaded via
 // --bchecks, enabled is true and loaded names how many passive checks will run.
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	findings := s.findings.All()
 	views := make([]issueFindingView, 0, len(findings))
 	// truthy, not == "1": the route declares a boolean, so an agent sends "true" (route_schemas.go).
@@ -1444,10 +1427,6 @@ type manualIssueReq struct {
 // occurrences, which is the ordinary semantics — "add to a previously created issue", which is
 // Burp's other documented mode for this action).
 func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req manualIssueReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1516,10 +1495,6 @@ func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
 
 // handleFindings is the legacy /api/findings endpoint, kept for tools that predate /api/issues.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	findings := s.findings.All()
 	views := make([]FindingView, 0, len(findings))
 	for _, f := range findings {
@@ -1778,10 +1753,6 @@ func sortedUints(vs []uint16) []uint16 {
 // than no file, because a browser will accept the download and then fail to import it, which sends
 // the operator looking for the fault in their browser rather than in their burpsy flags.
 func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	pemBytes := s.currentCACertPEM()
 	if len(pemBytes) == 0 {
 		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls", http.StatusNotFound)

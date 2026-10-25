@@ -51,10 +51,6 @@ type caExportRequest struct {
 
 // handleCAExport serves POST /api/proxy/ca/export.
 func (s *Server) handleCAExport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req caExportRequest
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxCAExportRequestBytes)).Decode(&req); err != nil {
 		http.Error(w, `the body must be a JSON object such as {"kind":"cert"}`, http.StatusBadRequest)

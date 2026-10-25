@@ -162,10 +162,6 @@ func exchangeURL(ex *core.Exchange) string {
 // A fold over the index rather than a second stored structure: two copies of "which connections
 // exist" could disagree, one derived view cannot, and the fold is over fixed-size rows.
 func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	conns := s.store.WsConnections()
 	live := map[core.ExchangeID]bool{}
 	if s.proxyServer != nil {
@@ -207,10 +203,6 @@ func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
 // payload exactly once through the same WsPayload handle the detail view uses, and the rows the
 // operator sees are the rows that actually matched.
 func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
@@ -308,10 +300,6 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 // both as lossy text and as lowercase hex. A close frame's status code is decoded as a number —
 // showing its two bytes as characters would render mojibake instead of 1000.
 func (s *Server) handleWSMessage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/ws/message/"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid message ID", http.StatusBadRequest)

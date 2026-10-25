@@ -509,10 +509,6 @@ type recordedLoginReplayResponse struct {
 }
 
 func (s *Server) handleRecordedLoginReplay(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req recordedLoginReplayReq
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)

@@ -34,10 +34,6 @@ type protocolAuthorityView struct {
 // targets do not speak h2; the reasons are what tell an operator whether that is true or whether every
 // probe they wrote carries a Transfer-Encoding.
 func (s *Server) handleProtocols(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.sender == nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -123,10 +119,6 @@ type frameView struct {
 // operator doing smuggling research needs to read *which construct* stopped them, and an error string
 // would drop the structure the classifier worked to produce.
 func (s *Server) handleHTTP2Program(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.sender == nil {
 		http.Error(w, "no sender is wired, so nothing can be sent", http.StatusServiceUnavailable)
 		return

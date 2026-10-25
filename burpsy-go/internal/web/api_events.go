@@ -52,10 +52,6 @@ const (
 )
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// Without a Flusher every frame would sit in the response buffer until the stream closed, which for
 	// a stream that never closes means the operator sees nothing at all. Better to say so than to serve
 	// a connection that looks alive and delivers nothing — the client falls back to polling on the error.
@@ -135,10 +131,6 @@ func writeFrame(w http.ResponseWriter, flusher http.Flusher, frame liveFrame) bo
 // It exists because a push stream that quietly stops pushing looks exactly like a quiet system. These
 // counters are how an operator (or a test) tells those apart without reading the server's mind.
 func (s *Server) handleEventsStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.live.stats())
 }

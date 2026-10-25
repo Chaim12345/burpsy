@@ -153,10 +153,6 @@ type intruderAttacksResp struct {
 // handleIntruderAttacks serves GET /api/intruder/attacks: every attack this process is running and
 // can be controlled.
 func (s *Server) handleIntruderAttacks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	running := s.attacks.snapshot()
 	out := make([]intruderAttackView, 0, len(running))
 	for _, a := range running {
@@ -174,10 +170,6 @@ func (s *Server) handleIntruderAttacks(w http.ResponseWriter, r *http.Request) {
 // success — the shape /api/sequencer/stop used to have before it grew a real loop to stop — is how a
 // stop button that does nothing reads as a stop button that worked.
 func (s *Server) handleIntruderAttackAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/intruder/attacks/")
 	idStr, action, ok := strings.Cut(rest, "/")
 	if !ok {

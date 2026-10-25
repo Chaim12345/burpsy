@@ -67,10 +67,6 @@ type extensionNameRequest struct {
 // The policy travels with the list rather than living only on its own route because the empty case
 // needs it: a list of no plugins is only readable next to "here is the flag that admits one".
 func (s *Server) handleExtensions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, s.extensionHost().List())
 }
 
@@ -123,10 +119,6 @@ func (s *Server) handleExtensionUnload(w http.ResponseWriter, r *http.Request) {
 // render an output console from one instant and an error console from another, and the interesting case
 // — a plugin that logged a line and then died — is exactly where those two disagree.
 func (s *Server) handleExtensionConsole(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		http.Error(w, "a console needs the name of an allowlisted plugin: ?name=<name>", http.StatusBadRequest)
@@ -156,10 +148,6 @@ func (s *Server) handleExtensionConsole(w http.ResponseWriter, r *http.Request) 
 // into the UI: a hand-maintained copy of a wire protocol drifts, and a plugin author cannot tell that
 // it has.
 func (s *Server) handleExtensionAPIs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, extension.API())
 }
 
@@ -197,10 +185,6 @@ type extensionInvokeRequest struct {
 // store — and a plugin still has no route to that store at all, which is what UnsupportedCapabilities
 // says on the APIs tab.
 func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req extensionInvokeRequest
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable invocation: "+err.Error(), http.StatusBadRequest)
@@ -256,10 +240,6 @@ type extensionOrderRequest struct {
 // is the defect this route exists to avoid: the reordering has to be the thing that dispatches, and
 // an operator has to be able to tell a move that happened from one that could not.
 func (s *Server) handleExtensionOrder(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req extensionOrderRequest
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable move: "+err.Error(), http.StatusBadRequest)

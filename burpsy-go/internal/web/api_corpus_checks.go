@@ -69,11 +69,6 @@ type corpusCheckView struct {
 // handleCorpusChecks serves GET /api/scanner/checks: the loaded corpus as rows, both buckets,
 // counting from the loader.
 func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "the corpus is listed with GET", http.StatusMethodNotAllowed)
-		return
-	}
 
 	// The coverage counter is keyed by name, so one snapshot serves every row's RunCount lookup.
 	var coverageByName map[string]scanner.CheckCoverage
@@ -177,11 +172,6 @@ type corpusCheckEnableReq struct {
 // because a disable that names nothing would take effect on a corpus loaded later and silently
 // switch off a check the operator never saw.
 func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.Header().Set("Allow", http.MethodPut)
-		http.Error(w, "a check is enabled or disabled with PUT", http.StatusMethodNotAllowed)
-		return
-	}
 	var body corpusCheckEnableReq
 	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "the body must be {\"name\": ..., \"enabled\": bool}", http.StatusBadRequest)

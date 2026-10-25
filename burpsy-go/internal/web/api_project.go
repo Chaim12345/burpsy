@@ -73,10 +73,6 @@ func (s *Server) handleProjectName(w http.ResponseWriter, r *http.Request) {
 // durable, which is the precondition for every other Project-menu item saying "unavailable"
 // honestly rather than disabled-with-no-reason.
 func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	view := projectView{
 		Name:       "Unnamed",
 		Unnamed:    true,

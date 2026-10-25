@@ -120,10 +120,6 @@ func fetchErr(code int, format string, args ...any) error {
 
 // handleAPIScanFetch serves POST /api/apiscan/fetch.
 func (s *Server) handleAPIScanFetch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req apiScanFetchReq
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)

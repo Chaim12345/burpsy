@@ -159,10 +159,6 @@ func (s *Server) triageCfg() (scanner.TriageEndpointConfig, bool, error) {
 
 // handleIssueTriageRun serves POST /api/issues/triage: the pass over every gated finding.
 func (s *Server) handleIssueTriageRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed: POST /api/issues/triage", http.StatusMethodNotAllowed)
-		return
-	}
 	cfg, on, err := s.triageCfg()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

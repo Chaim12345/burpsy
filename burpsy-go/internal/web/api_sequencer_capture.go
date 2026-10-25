@@ -463,10 +463,6 @@ const maxCaptureThreads = 32
 
 // handleSequencerCaptureStart serves POST /api/sequencer/capture, beginning a real capture.
 func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sequencerCaptureReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

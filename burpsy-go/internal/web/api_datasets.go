@@ -594,11 +594,6 @@ type datasetSourceInfo struct {
 }
 
 func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/datasets/"), "/")
 	if rest == "" {
 		listing := datasetListing{Sources: make([]datasetSourceInfo, 0, len(datasetSources))}

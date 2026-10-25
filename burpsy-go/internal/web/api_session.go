@@ -1026,10 +1026,6 @@ func (lr *sessionLoginRuns) observed(ruleID int64) []sessionStepDto {
 // they are logged in. HandleRecovery and EnsureLoggedIn were fully implemented and tested with no
 // caller outside their own package; this is the caller.
 func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sessionLoginReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

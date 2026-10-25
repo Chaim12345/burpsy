@@ -175,10 +175,6 @@ type suiteSearchResponse struct {
 // contract compileHistorySearch already documents on the client ("empty text means no search is
 // active, whatever the modifiers hold").
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	opts, err := parseSuiteSearchOptions(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

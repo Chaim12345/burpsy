@@ -61,11 +61,6 @@ import (
 // dispatch: "in-browser" would never parse as an id, but an explicit subtree keeps the
 // manifest entry and the handler's own 405 honest instead of relying on a fallthrough.
 func (s *Server) handleExchangeInBrowserByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/exchange/in-browser/"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)

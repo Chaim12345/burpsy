@@ -136,10 +136,6 @@ func (s *Server) handleDomInvader(w http.ResponseWriter, r *http.Request) {
 // browser reaches directly, and gating it behind a mint the extension cannot perform would only
 // silence the auditor.
 func (s *Server) handleDomInvaderHit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var h dominvader.Hit
 	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
 		http.Error(w, "the body must be one hit object", http.StatusBadRequest)
@@ -155,10 +151,6 @@ func (s *Server) handleDomInvaderHit(w http.ResponseWriter, r *http.Request) {
 
 // handleDomInvaderHits serves DELETE /api/dominvader/hits — clear the list. riskLocal.
 func (s *Server) handleDomInvaderHits(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	s.domInvader.Clear()
 	w.WriteHeader(http.StatusNoContent)
 }

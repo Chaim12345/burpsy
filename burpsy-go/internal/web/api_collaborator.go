@@ -626,10 +626,6 @@ func payloadViews(minted []mintedPayload, all []oob.Interaction) []collaboratorP
 // 4xx. "This installation has no interaction server" is a true answer to the question, not a failure
 // to answer it, and a page that polls must not spend its life logging errors to say so.
 func (s *Server) handleCollaboratorStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
 }
 
@@ -749,10 +745,6 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 // see pollingContract for what does and does not happen, and note that the reply carries it so a
 // caller reading only the JSON still learns that no server poll was forced.
 func (s *Server) handleCollaboratorPoll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// The body is optional: an empty POST is the original "re-read now" and answers exactly as it
 	// always did. payload_ids / wait_seconds / min_interactions are the filtered long-poll
 	// (burpsy-react-ui-myr2, api_collaborator_poll.go).
@@ -786,10 +778,6 @@ type collaboratorPayloadReq struct {
 // that can block: `Channel()` waits on a public DNS registration for up to its configured timeout.
 // That cost belongs to an explicit click and nowhere else.
 func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	// Batch generation (burpsy-react-ui-v8q): Burp's "Payloads to generate" field. 1 (or absent)
 	// is the historical single mint, so the existing client keeps working. The ceiling keeps a
@@ -945,10 +933,6 @@ func mintedMarkers(minted []mintedPayload) []string {
 
 // handleCollaboratorInteractions serves GET /api/collaborator/interactions: index rows only.
 func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	s.collabSync()
 	reg, configured := s.wiredScanner().OOBRegistration()
@@ -1000,10 +984,6 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 // 404 an unresolvable id would produce first — see route_manifest_test.go's pathValidatedFirst, which
 // this route does not need because of that ordering.
 func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	raw := strings.TrimPrefix(r.URL.Path, "/api/collaborator/interaction/")
 	id, err := strconv.Atoi(strings.TrimSuffix(raw, "/"))

@@ -43,10 +43,6 @@ const maxUploadDirEntries = 200
 // lists.txt at once. Random names keep both impossible; the response carries the resolved path
 // and the operator's original name rides along for display only.
 func (s *Server) handleIntruderPayloadUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if r.Body == nil {
 		http.Error(w, "request body is the wordlist itself: text, one payload per line", http.StatusBadRequest)
 		return

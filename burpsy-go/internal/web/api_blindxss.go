@@ -135,11 +135,6 @@ type blindxssCounts struct {
 // handleBlindXSS serves GET /api/blindxss: the channel's state, every payload minted through it, and
 // every callback recorded against those payloads.
 func (s *Server) handleBlindXSS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, s.blindXSSState())
 }
 
@@ -150,11 +145,6 @@ func (s *Server) handleBlindXSS(w http.ResponseWriter, r *http.Request) {
 // will now serve a script for this token and record callbacks against it. A GET that minted would be
 // a state change on a safe verb, which is the same defect the sequencer's `GET .../stop` had.
 func (s *Server) handleBlindXSSPayload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	channel := s.blindxss
 	if channel == nil || channel.listener == nil {
 		// 503 with the reason, never a fabricated payload. A token minted against no listener would be

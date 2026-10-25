@@ -444,10 +444,6 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterSendReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -682,10 +678,6 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 	// decoder, failed on an empty body and answered "Invalid request body" — a complaint about the
 	// payload for what is really a wrong-method call. Phase 1's move to Go 1.22 `"POST /api/..."`
 	// patterns makes the whole class unrepresentable; until then it is spelled out.
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req intruderPointsReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1120,10 +1112,6 @@ func intruderSessionCookieView(jarHeader string, exempt map[string]bool) intrude
 // renders. Anything else gets the full RunView. Both shapes come off the same engine, so the
 // legacy array is a projection of the report.
 func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req intruderRunReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -2161,10 +2149,6 @@ func parseEncoding(name string) (sequencer.Encoding, error) {
 // record. The response is the full SequencerReport (internal/web/ui/src/
 // sequencer.ts), not the legacy aggregate shape this endpoint used to return.
 func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sequencerAnalyseReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

@@ -252,10 +252,6 @@ func fixedParameters(req apiScanReq) []string {
 // definition summary on the run record. Two read doors onto one registry would be two chances for them
 // to disagree about what a run was.
 func (s *Server) handleAPIScan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req apiScanReq
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)

@@ -60,10 +60,6 @@ type repeaterWsAttachResp struct {
 
 // handleRepeaterWsAttach writes one frame into a live proxied WebSocket.
 func (s *Server) handleRepeaterWsAttach(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterWsAttachReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

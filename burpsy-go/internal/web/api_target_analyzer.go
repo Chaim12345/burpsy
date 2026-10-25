@@ -52,11 +52,6 @@ type analyzerReport struct {
 }
 
 func (s *Server) handleTargetAnalyze(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	q := r.URL.Query()
 	host := strings.ToLower(strings.TrimSpace(q.Get("host")))
 	if host == "" {

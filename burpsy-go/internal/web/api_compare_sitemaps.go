@@ -57,10 +57,6 @@ type toolsCompareSitemapsReq struct {
 // the same call this API's other compare route makes. riskRead: nothing is sent to any target;
 // the walk is over the local store.
 func (s *Server) handleToolsCompareSitemaps(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req toolsCompareSitemapsReq
 	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

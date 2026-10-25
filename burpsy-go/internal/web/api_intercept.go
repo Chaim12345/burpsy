@@ -98,10 +98,6 @@ type interceptStatusResp struct {
 }
 
 func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	enabled := s.intercept.Enabled()
 	reqRules := s.intercept.Rules(intercept.DirectionRequest)
 	respRules := s.intercept.Rules(intercept.DirectionResponse)
@@ -155,10 +151,6 @@ type interceptEnableReq struct {
 }
 
 func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req interceptEnableReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -286,10 +278,6 @@ type interceptInScopeOnlyReq struct {
 // The answer echoes both the new value and whether a scope is attached, so a caller cannot conclude
 // the filter is in force when there is nothing for it to filter against.
 func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req interceptInScopeOnlyReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -353,10 +341,6 @@ func (s *Server) handleInterceptNewlineCorrection(w http.ResponseWriter, r *http
 // body to read on purpose: the engine applies no edits and no content-length
 // rewrite, because nobody has looked at what a bulk forward sends.
 func (s *Server) handleInterceptForwardAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	forwarded := s.intercept.ForwardAll()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"forwarded": forwarded})
@@ -373,10 +357,6 @@ type interceptDropAllReq struct {
 // message resolved elsewhere between the page's last poll and this request is
 // not double-counted, so the toast the UI shows cannot overstate.
 func (s *Server) handleInterceptDropAll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req interceptDropAllReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -542,10 +522,6 @@ type interceptAnnotateReq struct {
 // matching the shared annotation vocabulary; unknown ids 404 because a stale queue render
 // must be told the message resolved, not told "done".
 func (s *Server) handleInterceptAnnotate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// The route is /api/intercept/annotate/{id}; the held queue's own sub-paths
 	// (/api/intercept/{id}/forward|drop) keep their shape, and "annotate" as the first
 	// segment cannot be an id, so the two surfaces cannot collide.
@@ -601,10 +577,6 @@ type interceptDropReq struct {
 
 // handleInterceptHeld serves POST /api/intercept/{id}/forward and /api/intercept/{id}/drop.
 func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	rest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/intercept/"), "/")
 	parts := strings.SplitN(rest, "/", 2)
 	if len(parts) != 2 {

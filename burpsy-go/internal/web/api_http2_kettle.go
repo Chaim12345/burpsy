@@ -120,10 +120,6 @@ func kettleAnswer(fields []http2.HeaderField, tls bool) h2KettleResp {
 
 // handleHTTP2Kettle serves POST /api/http2/kettle. It sends nothing.
 func (s *Server) handleHTTP2Kettle(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req h2KettleReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

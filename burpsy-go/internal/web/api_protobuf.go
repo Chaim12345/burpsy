@@ -60,10 +60,6 @@ type protobufDecodeReq struct {
 
 // handleProtobufDecode serves POST /api/protobuf/decode. riskLocal.
 func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var body protobufDecodeReq
 	if err := requestJSON(w, r, io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"body_base64":"...","grpc":bool,"proto":"...","message":"..."}`, http.StatusBadRequest)
@@ -161,10 +157,6 @@ type protobufEncodeReq struct {
 
 // handleProtobufEncode serves POST /api/protobuf/encode. riskLocal.
 func (s *Server) handleProtobufEncode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var body protobufEncodeReq
 	if err := requestJSON(w, r, io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"grpc":bool,"frames":[...]}`, http.StatusBadRequest)
