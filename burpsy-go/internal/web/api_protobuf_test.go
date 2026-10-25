@@ -144,7 +144,7 @@ func TestProtobufDecodeNamesFieldsFromAProto(t *testing.T) {
 func TestProtobufDecodeResolvesTheMessageFromTheRPCPath(t *testing.T) {
 	s := newTestServer()
 	b64 := base64.StdEncoding.EncodeToString(protoSample(t))
-	const proto = `package p; message A { int32 a_id = 1; string a_s = 2; } message B { int32 b_id = 1; string b_s = 2; }
+	const proto = `syntax = "proto3"; package p; message A { int32 a_id = 1; string a_s = 2; } message B { int32 b_id = 1; string b_s = 2; }
 service S { rpc Call (A) returns (B); }`
 	for dir, want := range map[string]string{"request": "a_id", "response": "b_id"} {
 		rec := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto, "rpc_path": "/p.S/Call", "direction": dir})

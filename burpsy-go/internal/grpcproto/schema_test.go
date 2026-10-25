@@ -80,7 +80,7 @@ func TestParseProtoListsEveryMessageNestedIncluded(t *testing.T) {
 	if d := s.DefaultMessage(); d != "" {
 		t.Fatalf("DefaultMessage = %q, want empty for a two-message schema", d)
 	}
-	one := mustParse(t, `message Only { int32 a = 1; }`)
+	one := mustParse(t, `syntax = "proto3"; message Only { int32 a = 1; }`)
 	if d := one.DefaultMessage(); d != "Only" {
 		t.Fatalf("DefaultMessage = %q, want Only", d)
 	}
@@ -139,7 +139,7 @@ func TestAnnotateNamesFieldsAndNestedMessages(t *testing.T) {
 }
 
 func TestAnnotateCorrectsTheSchemalessGuess(t *testing.T) {
-	s := mustParse(t, `message M { string note = 1; bytes blob = 2; Inner inner = 3; } message Inner { int32 n = 1; }`)
+	s := mustParse(t, `syntax = "proto3"; message M { string note = 1; bytes blob = 2; Inner inner = 3; } message Inner { int32 n = 1; }`)
 
 	// A declared string whose bytes happen to parse as protobuf: the schemaless guess says "message".
 	lookalike := []byte{0x08, 0x01} // field 1 varint 1 — also the two bytes "\x08\x01"
@@ -206,7 +206,7 @@ func TestAnnotateMapEntriesAndNestedTypeScopes(t *testing.T) {
 }
 
 func TestAnnotateRefusesAnUnknownOrAmbiguousMessage(t *testing.T) {
-	s := mustParse(t, `package a; message X {} message Y { message X { int32 n = 1; } }`)
+	s := mustParse(t, `syntax = "proto3"; package a; message X {} message Y { message X { int32 n = 1; } }`)
 	if _, err := s.Annotate(nil, "Nope"); err == nil || !strings.Contains(err.Error(), "a.X") {
 		t.Fatalf("an unknown message should be refused, listing the real ones; got %v", err)
 	}
@@ -222,7 +222,6 @@ func TestAnnotateRefusesAnUnknownOrAmbiguousMessage(t *testing.T) {
 
 func TestParseProtoRefusesWhatItCannotReadFaithfully(t *testing.T) {
 	for name, src := range map[string]string{
-		"a group":            `message M { optional group G = 1 { optional int32 a = 2; } }`,
 		"no messages":        `syntax = "proto3";`,
 		"unclosed message":   `message M { int32 a = 1;`,
 		"a bad field number": `message M { int32 a = zero; }`,
@@ -231,6 +230,15 @@ func TestParseProtoRefusesWhatItCannotReadFaithfully(t *testing.T) {
 		if _, err := ParseProto(src); err == nil {
 			t.Errorf("%s: want a parse error, got none", name)
 		}
+	}
+}
+
+func TestParseProtoReadsAGroup(t *testing.T) {
+	// 0rrb: the hand parser refused groups; the descriptor compiler reads them.
+	s := mustParse(t, `syntax = "proto2"; message M { optional group G = 1 { optional int32 a = 2; } }`)
+	got := strings.Join(s.Messages(), ",")
+	if got != "M,M.G" {
+		t.Fatalf("Messages = %s, want M,M.G", got)
 	}
 }
 
