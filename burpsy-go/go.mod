@@ -17,7 +17,7 @@ require (
 	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	go.uber.org/zap v1.26.0
-	golang.org/x/crypto v0.54.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0
