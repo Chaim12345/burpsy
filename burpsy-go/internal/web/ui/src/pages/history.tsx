@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { usePublishHotkeyRows } from "../lib/hotkey-context";
 import { parseListenerPorts } from "../lib/listener-filter";
 import {
  BookOpen,
@@ -640,6 +641,15 @@ export function HistoryPage(): JSX.Element {
  const checkedRows = useMemo(() => new Set(checkedExchanges), [checkedExchanges]);
  const selectedIdStrings = useMemo(() => checkedExchanges.map(String), [checkedExchanges]);
  const auditSelected = useAuditSelected();
+ // What a plugin hotkey sees: the ticked rows, or the one open row when none are ticked (gqvg).
+ // Ids only: the plugin sees the rows on screen, and exchange 0 is a row.
+ usePublishHotkeyRows(
+  checkedExchanges.length > 0
+   ? checkedExchanges.map((exchange) => ({ exchange }))
+   : selectedId !== null
+     ? [{ exchange: selectedId }]
+     : null,
+ );
 
  // Another page asked to filter here (for example "filter by this host").
  useEffect(() => {
