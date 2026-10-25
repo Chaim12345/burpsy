@@ -18,6 +18,13 @@ Checks, each reported with the bead id it concerns:
      a changed close_reason) has a close_reason that either
        a. cites `PR #N (<sha>)` or `PR #N (merge <sha>)` — the form both the close script and the
           existing closures use — and every cited sha is a commit that is an ancestor of HEAD; or
+          starts with `MERGED via integrator` and names the landed commit(s) in its opening clause,
+          only as "(<sha>)", "at <sha>" or "(<sha>+<sha>)", each an ancestor of HEAD. Shas are lowercase hex.
+          A "+" after a citation that does not continue it as "+<sha>" (spaces around it, a word after
+          it) is rejected as malformed. A sha written in prose after the citation, as in
+          "(<sha>, W3 tip <sha>)", is NOT read or checked: only the cited position is. This is for
+          merges the integrator made without a PR; no PR number is invented and a closure with no sha
+          is still rejected; or
        b. says it fixed nothing and names why: starts with "Duplicate of <id>" / "Superseded by
           <id>" (an id in this file), or with "WONTFIX", "Won't fix", "INVALID" or "Not a defect".
           Those land no code, so there is no commit to cite; they are not an escape hatch for work
@@ -42,6 +49,31 @@ import sys
 
 JSONL = ".beads/issues.jsonl"
 FIX_RX = re.compile(r"PR #(\d+) \((?:merge )?([0-9a-f]{7,40})\)")
+# "MERGED via integrator (<sha>)", "... at <sha>", "... fast-track (<sha>+<sha>)": the form closures use when a
+# change lands by the integrator's own merge and no PR number exists (none may be invented). Only the
+# opening clause is read. A sha counts only in one of those positions: right after "(" or "at ", with
+# further shas joined by "+". A hex-looking word elsewhere in the clause is not a citation.
+MERGED_RX = re.compile(r"^MERGED via integrator\b[^.:;\n]{0,80}")
+_SHA = r"[0-9a-f]{7,40}\b"
+SHA_RX = re.compile(r"(?:\(|\bat\s+)(" + _SHA + r"(?:\+" + _SHA + r")*)")
+
+
+def merged_citations(clause):
+    """(shas, malformed) for the opening clause of a 'MERGED via integrator' closure.
+
+    Every sha is lowercase hex, 7-40 chars, right after "(" or "at ", further shas joined by a bare "+".
+    A "+" left after a citation (a space around it, a non-sha part, uppercase) is reported as malformed
+    rather than ignored, so no cited sha goes unchecked.
+    """
+    shas = []
+    for m in SHA_RX.finditer(clause):
+        rest = clause[m.end():]
+        if re.match(r"\s*\+", rest):
+            return [], f"unparsed '+' after {m.group(1)!r}"
+        shas.extend(m.group(1).split("+"))
+    return shas, ""
+
+
 NOFIX_REF_RX = re.compile(r"^(?:duplicate of|superseded by)\s+([A-Za-z0-9][A-Za-z0-9._-]*)", re.I)
 NOFIX_RX = re.compile(r"^(?:wontfix|won't fix|invalid|not a defect)\b", re.I)
 
@@ -157,6 +189,27 @@ def main():
         cites = FIX_RX.findall(reason)
         if cites:
             bad = [f"{sha} {why}" for _, sha in cites if (why := is_landed(sha))]
+            if bad:
+                errors.append(f"{bid}: close_reason cites " + "; ".join(bad))
+            else:
+                fixed += 1
+            continue
+        mm = MERGED_RX.match(reason)
+        if mm:
+            shas, malformed = merged_citations(mm.group(0))
+            if malformed:
+                errors.append(
+                    f"{bid}: 'MERGED via integrator' citation is malformed ({malformed}); write the shas "
+                    f"joined by a bare '+', lowercase hex, e.g. '(<sha>+<sha>)'; got {reason[:90]!r}"
+                )
+                continue
+            if not shas:
+                errors.append(
+                    f"{bid}: 'MERGED via integrator' must cite the landed commit, e.g. "
+                    f"'MERGED via integrator (<sha>)' (lowercase hex, 7-40 chars); got {reason[:90]!r}"
+                )
+                continue
+            bad = [f"{sha} {why}" for sha in shas if (why := is_landed(sha))]
             if bad:
                 errors.append(f"{bid}: close_reason cites " + "; ".join(bad))
             else:
