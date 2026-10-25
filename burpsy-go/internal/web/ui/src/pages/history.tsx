@@ -1640,6 +1640,7 @@ export function HistoryPage(): JSX.Element {
    <div>
     <PageHeader
      title="HTTP history"
+     settingsSection="proxy"
      actions={
       <>
        <Badge tone={rows.length === data?.length ? "neutral" : "info"}>

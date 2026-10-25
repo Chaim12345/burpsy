@@ -2289,6 +2289,7 @@ export function IntruderPage(): JSX.Element {
       <div>
         <PageHeader
           title="Intruder"
+          settingsSection="resource-pools"
           description={label || "Payload-driven attacks with explicit bounds and honest result accounting."}
           actions={
             <>

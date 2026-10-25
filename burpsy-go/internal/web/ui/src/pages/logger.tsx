@@ -521,6 +521,7 @@ export function LoggerPage(): JSX.Element {
    <div>
     <PageHeader
      title="Tool log"
+     settingsSection="logging"
      actions={
       <>
        <Badge tone="info">
