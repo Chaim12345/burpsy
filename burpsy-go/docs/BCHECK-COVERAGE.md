@@ -84,8 +84,9 @@ run and fire against traffic:
 4. **`given insertion point` / active checks** — these need the active-audit
    path, not passive proxying.
 
-5. **The HPACK Huffman seam** — a documented, deliberate seam
-   (`HpackHuffmanNotImplemented`) that is **identical in the Rust reference**
+5. **The HPACK Huffman seam** — CLOSED 2026-10-25 (bead cgim): Go decodes
+   Huffman-coded strings via x/net/http2/hpack and refuses malformed coding as
+   `HpackHuffmanInvalid`. The Rust reference keeps its seam
    (`slice 2b's seam`), so it is parity, not a Go shortfall.
 
 ## How burpsy reports coverage honestly at runtime
