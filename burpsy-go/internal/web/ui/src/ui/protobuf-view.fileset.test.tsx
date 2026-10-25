@@ -65,6 +65,48 @@ describe("the .proto file set on the Protobuf tab", () => {
   expect(last.proto_files).toBeUndefined();
  });
 
+ test("same-named files with different content are dropped loudly, never silently collapsed", async () => {
+  renderWithProviders(<ProtobufView bodyBase64="CgN4" grpc={false} direction="request" />);
+  await pickFiles([
+   new File(['syntax = "proto3"; message One { int32 a = 1; }'], "dup.proto"),
+   new File(['syntax = "proto3"; message Two { int32 b = 2; }'], "dup.proto"),
+   new File(['syntax = "proto3"; message Three { int32 c = 3; }'], "solo.proto"),
+  ]);
+  await waitFor(() => expect(useApp.getState().protoSchema?.files).toBeTruthy());
+  const schema = useApp.getState().protoSchema;
+  expect(Object.keys(schema?.files ?? {}).sort()).toEqual(["dup.proto", "solo.proto"]);
+  expect(schema?.files?.["dup.proto"]).toContain("message One");
+  expect(schema?.name).toBe("2 .proto files");
+ });
+
+ test("re-picking the entry clears the message types chosen against the old one", async () => {
+  useApp.setState({
+   protoSchema: {
+    name: "2 .proto files",
+    text: "b",
+    files: { "a.proto": "a", "b.proto": "b" },
+    entry: "a.proto",
+   },
+   protoMessages: { request: "shop.GetReq" },
+  } as never);
+  renderWithProviders(<ProtobufView bodyBase64="CgN4" grpc={false} direction="request" />);
+  const entrySelect = await screen.findByLabelText("Entry point of the .proto file set");
+  fireEvent.change(entrySelect, { target: { value: "b.proto" } });
+  await waitFor(() => expect(useApp.getState().protoSchema?.entry).toBe("b.proto"));
+  expect(useApp.getState().protoMessages).toEqual({});
+ });
+
+ test("a pick batch a newer pick superseded never lands", async () => {
+  renderWithProviders(<ProtobufView bodyBase64="CgN4" grpc={false} direction="request" />);
+  const slow = new File(['syntax = "proto3"; message Slow { int32 a = 1; }'], "slow.proto");
+  slow.text = () => new Promise<string>((resolve) => setTimeout(() => resolve('syntax = "proto3"; message Slow { int32 a = 1; }'), 50));
+  await pickFiles([slow]);
+  await pickFiles([new File(['syntax = "proto3"; message Fast { int32 a = 1; }'], "fast.proto")]);
+  await waitFor(() => expect(useApp.getState().protoSchema?.name).toBe("fast.proto"));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(useApp.getState().protoSchema?.name).toBe("fast.proto");
+ });
+
  test("the entry point is re-pickable and the next decode uses it", async () => {
   useApp.setState({
    protoSchema: {
@@ -78,8 +120,6 @@ describe("the .proto file set on the Protobuf tab", () => {
   const entrySelect = await screen.findByLabelText("Entry point of the .proto file set");
   fireEvent.change(entrySelect, { target: { value: "b.proto" } });
   await waitFor(() => expect(useApp.getState().protoSchema?.entry).toBe("b.proto"));
-  await waitFor(() =>
-   expect(decodeCalls.some((c) => c.proto_entry === "b.proto")).toBe(true),
-  );
+  await waitFor(() => expect(decodeCalls.some((c) => c.proto_entry === "b.proto")).toBe(true));
  });
 });

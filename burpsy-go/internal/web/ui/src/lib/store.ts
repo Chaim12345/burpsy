@@ -1082,7 +1082,8 @@ export const useApp = create<AppState>()(
    // A new schema clears the per-direction choices: they named messages of the old one.
    setProtoSchema: (protoSchema) => set({ protoSchema, protoMessages: {} }),
    setProtoSchemaEntry: (entry) =>
-    set((state) => (state.protoSchema ? { protoSchema: { ...state.protoSchema, entry } } : {})),
+    // A new entry is a new schema root: a message type chosen against the old one is stale.
+    set((state) => (state.protoSchema ? { protoSchema: { ...state.protoSchema, entry }, protoMessages: {} } : {})),
    setProtoMessage: (direction, message) =>
     set((state) => ({ protoMessages: { ...state.protoMessages, [direction]: message || undefined } })),
    setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),

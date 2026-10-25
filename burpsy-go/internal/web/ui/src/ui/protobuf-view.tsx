@@ -336,6 +336,8 @@ function SchemaBar({
  const [pasting, setPasting] = useState(false);
  const [draft, setDraft] = useState("");
  const fileRef = useRef<HTMLInputElement>(null);
+ // Pick batches resolve asynchronously; a batch a newer pick has superseded must not land.
+ const pickGen = useRef(0);
 
  // One file is the single-file schema form; several are the rsu2 file SET, whose imports resolve
  // across the set. The entry point defaults to the first file and is re-pickable below.
@@ -354,20 +356,43 @@ function SchemaBar({
     if (picked.length === 0) return;
     const first = picked[0];
     if (!first) return;
+    const gen = ++pickGen.current;
     if (picked.length === 1) {
      const file = first;
      void file.text().then((text) => {
+      if (gen !== pickGen.current) return;
       setProtoSchema({ name: file.name, text });
       toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
      });
      return;
     }
-    void Promise.all(picked.map(async (f) => [f.name, await f.text()] as const)).then((entries) => {
-     const files = Object.fromEntries(entries);
-     const head = entries[0];
+    void Promise.all(picked.map(async (f) => ({ name: f.name, text: await f.text() }))).then((list) => {
+     if (gen !== pickGen.current) return;
+     // The picker supplies basenames only, so the map key - the import path the backend
+     // resolves - cannot tell two same-named files apart. Identical content is the same file
+     // picked twice; different content under one name cannot both load, and keeping either
+     // silently would compile the wrong set, so the drop is said out loud.
+     const files: Record<string, string> = {};
+     const dropped: string[] = [];
+     for (const { name, text } of list) {
+      if (name in files) {
+       if (files[name] !== text) dropped.push(name);
+       continue;
+      }
+      files[name] = text;
+     }
+     const head = list[0];
      if (!head) return;
-     setProtoSchema({ name: `${picked.length} .proto files`, text: head[1], files, entry: head[0] });
-     toast.success(`Loaded ${picked.length} .proto files — imports between them resolve`);
+     const entry = files[head.name] !== undefined ? head.name : (Object.keys(files)[0] ?? "");
+     const count = Object.keys(files).length;
+     setProtoSchema({ name: `${count} .proto files`, text: files[entry] ?? "", files, entry });
+     if (dropped.length > 0) {
+      toast.warning(
+       `Loaded ${count} of ${list.length} .proto files - dropped ${dropped.join(", ")}: same name, different content, and the picker cannot tell same-named files apart`,
+      );
+     } else {
+      toast.success(`Loaded ${count} .proto files — imports between them resolve`);
+     }
     });
    }}
   />
