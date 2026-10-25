@@ -112,3 +112,68 @@ CLASSES["cors-misconfiguration"] = {
     "tool_args": _corsy_args,
     "tool_output": "merged-json-file",
 }
+
+def _arjun_args(url, desc, out_dir):
+    import os
+    wordlist = os.path.join(os.path.dirname(desc["venv_bin"].rstrip("/")), "lib",
+                            "python3.10", "site-packages", "arjun", "db", "small.txt")
+    # small.txt is the pinned version's 835-name list; both fixture names sit on it (checked
+    # 2026-10-25), so a miss is detection, not coverage. --stable: arjun's own consistency pass.
+    return [desc["venv_bin"] + "/arjun", "-u", url, "-oJ", out_dir + "/arjun.json",
+            "--stable", "-t", "15", "-T", "8", "-w", wordlist, "-q"]
+
+
+def _x8_args(url, desc, out_dir):
+    return [desc["binary"], "-u", url, "-O", "json", "--disable-progress-bar",
+            "--disable-colors", "-c", "5"]
+
+
+# j1mk.13: hidden parameter discovery vs Arjun (and x8 as the second reference). Targets are the
+# vulnapp hidden-input fixtures (internal/vulnapp/vulnapp_hidden_inputs.go): /hidden/account reads
+# a hidden query param (preview), a hidden header (X-Api-Version), a hidden cookie (premium) and a
+# reflected query param (ref); /hidden/random answers noise (a finding there is a false positive);
+# /hidden/echo reflects everything (the other false-positive shape). burpsy's side is its
+# Param-Miner action (POST /api/hidden-inputs), not an audit - per the engine's own design note.
+# Arjun/x8 discover query parameters only; the header/cookie truth rows are theirs to miss and the
+# report says so, which is the comparison the bead asks for (Param Miner behaviour vs a
+# query-only guesser).
+_HIDDEN_TARGETS = [
+    {"url": TARGET_BASE + "/hidden/account", "method": "GET", "parameter": ""},
+    {"url": TARGET_BASE + "/hidden/random", "method": "GET", "parameter": ""},
+    {"url": TARGET_BASE + "/hidden/echo", "method": "GET", "parameter": ""},
+]
+_HIDDEN_TRUTH = [
+    {"url": TARGET_BASE + "/hidden/account", "parameter": "preview",
+     "class": "hidden-parameter-discovery"},
+    {"url": TARGET_BASE + "/hidden/account", "parameter": "ref",
+     "class": "hidden-parameter-discovery"},
+    {"url": TARGET_BASE + "/hidden/account", "parameter": "x-api-version",
+     "class": "hidden-parameter-discovery"},
+    {"url": TARGET_BASE + "/hidden/account", "parameter": "premium",
+     "class": "hidden-parameter-discovery"},
+]
+
+CLASSES["hidden-parameter-discovery"] = {
+    "name": "hidden-parameter-discovery",
+    "bead": "burpsy-react-ui-j1mk.13",
+    "ref_tool": "arjun",
+    "ref_name": "Arjun",
+    "adapter": "arjun",
+    "burpsy_collect": "hidden-inputs",
+    "targets": [dict(t) for t in _HIDDEN_TARGETS],
+    "truth": [dict(t) for t in _HIDDEN_TRUTH],
+    "tool_args": _arjun_args,
+    "tool_output": "merged-json-file",
+}
+
+CLASSES["hidden-parameter-discovery-x8"] = {
+    "name": "hidden-parameter-discovery",
+    "bead": "burpsy-react-ui-j1mk.13",
+    "ref_tool": "x8",
+    "ref_name": "x8",
+    "adapter": "x8",
+    "burpsy_collect": "hidden-inputs",
+    "targets": [dict(t) for t in _HIDDEN_TARGETS],
+    "truth": [dict(t) for t in _HIDDEN_TRUTH],
+    "tool_args": _x8_args,
+}

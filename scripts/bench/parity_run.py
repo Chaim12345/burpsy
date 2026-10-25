@@ -62,6 +62,8 @@ def adapt(spec, raw):
         return parity_adapters.from_arjun_json(raw, spec["name"])
     if kind == "corsy":
         return parity_adapters.from_corsy_json(raw, spec["name"])
+    if kind == "x8":
+        return parity_adapters.from_x8_json(raw, spec["name"])
     if kind == "crlfuzz":
         return parity_adapters.from_crlfuzz_text(
             raw, spec["name"], [t["url"] for t in spec["targets"]])
@@ -121,6 +123,8 @@ class LiveCtx:
         self.audit_timeout = audit_timeout
 
     def collect_burpsy(self, spec, out_dir):
+        if spec.get("burpsy_collect") == "hidden-inputs":
+            return self._collect_hidden_inputs(spec, out_dir)
         row_to_class = spec.get("burpsy_rows", {})
         # The spec's config switches are applied before its first audit: a miss must be a
         # detection gap, not a family the default profile never switched on (j1mk.14's lesson:
@@ -165,16 +169,65 @@ class LiveCtx:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=900)
             (tdir / "stdout.txt").write_text(proc.stdout)
             (tdir / "stderr.txt").write_text(proc.stderr)
+            # The exit code is an artifact too: a tool that died must not read as "found nothing"
+            # (pre-review on j1mk.14, 2026-10-25).
+            (tdir / "exit_code.txt").write_text(str(proc.returncode))
+            jsons = list(tdir.glob("*.json")) if spec.get("tool_output") == "merged-json-file" else []
+            if proc.returncode != 0 and not proc.stdout.strip() and not jsons:
+                raise RuntimeError(
+                    f"{spec['ref_name']} exited {proc.returncode} with no output on {t['url']}; "
+                    f"stderr in {tdir}/stderr.txt")
             if spec.get("tool_output") == "merged-json-file":
                 # The tool writes a per-run JSON file instead of printing (Corsy). A missing
                 # file is the tool saying "nothing found"; the per-target objects merge into one.
-                for f in tdir.glob("*.json"):
+                for f in jsons:
                     merged.update(json.loads(f.read_text()))
             else:
                 chunks.append(proc.stdout)
         if spec.get("tool_output") == "merged-json-file":
             return json.dumps(merged) if merged else ""
         return "\n".join(chunks)
+
+
+    def _collect_hidden_inputs(self, spec, out_dir):
+        """j1mk.13's burpsy side: Param-Miner-style guessing is an on-demand action
+        (POST /api/hidden-inputs), never part of an audit, so this class collects from the
+        guessing run's confirmed inputs instead of audit findings."""
+        findings = []
+        kinds = spec.get("hidden_kinds", ["query", "cookie", "header"])
+        for t in spec["targets"]:
+            before = {r["id"] for r in http_json("GET", f"{self.web}/api/history")}
+            proxied_through(self.proxy, t["url"], t.get("method", "GET"), headers=t.get("headers"))
+            time.sleep(0.05)
+            new_ids = [r["id"] for r in http_json("GET", f"{self.web}/api/history")
+                       if r["id"] not in before]
+            if not new_ids:
+                raise RuntimeError(f"the proxy did not capture {t['url']} (out of scope?)")
+            body = {"exchange_id": new_ids[-1], "kinds": kinds}
+            raw_body = json.dumps(body, separators=(",", ":"))
+            tok = http_json("POST", f"{self.web}/api/hidden-inputs/confirm",
+                            {"method": "POST", "url": "/api/hidden-inputs", "body": raw_body})["token"]
+            started = http_json("POST", f"{self.web}/api/hidden-inputs", body,
+                                {CONFIRM_HEADER: tok}, timeout=30)
+            task = started["task_id"]
+            deadline = time.time() + self.audit_timeout
+            while True:
+                run = http_json("GET", f"{self.web}/api/hidden-inputs?task={task}", timeout=15)
+                if run.get("state") != "running":
+                    break
+                if time.time() > deadline:
+                    raise TimeoutError(f"hidden-input guessing did not finish within "
+                                       f"{self.audit_timeout}s on {t['url']}")
+                time.sleep(1.0)
+            res = run.get("result") or {}
+            if run.get("state") == "failed":
+                raise RuntimeError(f"hidden-input run failed on {t['url']}: "
+                                   f"{res.get('reason') or run.get('summary')}")
+            for inp in res.get("inputs") or []:
+                technique = inp.get("kind", "") + ("/reflected" if inp.get("reflected") else "")
+                findings.append({"url": t["url"], "parameter": inp.get("name", ""),
+                                 "class": spec["name"], "technique": technique})
+        return findings
 
 
 def _wait_task(web, task, timeout):
