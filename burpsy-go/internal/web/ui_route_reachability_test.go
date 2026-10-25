@@ -226,6 +226,14 @@ func readUISourceForRoutes(t *testing.T) (string, int) {
 		default:
 			return nil
 		}
+		// The generated route tables (gen:gated-routes) mirror the manifest; a route's presence in
+		// them says nothing about whether the console can reach it - they would mask genuine gaps
+		// from TestEveryOperatorFacingRoute and trip TestNoKnownGapWasQuietlyFixed the moment a
+		// missing-surface route is regenerated in (47id's /api/protobuf/reflect-decode did exactly
+		// that). Generated files are not callers.
+		if base := filepath.Base(path); base == "gated-routes.ts" || base == "route-risk.ts" {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
