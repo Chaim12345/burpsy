@@ -105,6 +105,10 @@ type burpCrawlConfigKey struct {
 	// applyCrawlKey has to be able to see that this row is neither a switch nor a crawl-wide bound,
 	// because folding it into either would put it on the wrong half of the Config.
 	configCountField string
+	// loginField names a CrawlConfig bool in the login-functions family (burpsy-react-ui-uzil). Its
+	// own kind on the errorhandling.go precedent: the rows and their decoding live in
+	// credential_login.go beside the behaviour they switch, registered through the same init seam.
+	loginField string
 	// strategy marks crawl_optimization/crawl_strategy (8bp2), a named level rather than a value.
 	strategy bool
 }
@@ -210,6 +214,23 @@ type CrawlConfig struct {
 	// when Burp's character test would not have. A bool rather than a Limits field because it is
 	// a switch, not a bound — the same reason RequestSpeculative has no Limits row.
 	FragmentsRoute bool
+	// AttemptSelfRegister is the crawler/login_functions/attempt_to_self_register_a_user flag
+	// (burpsy-react-ui-uzil): on, the crawl registers a generated account at a discovered
+	// registration form and crawls with the session that earns. Burp ships it true; here it
+	// defaults off — creating an account is a write, and this engine's rule is that writes are
+	// opt-in (the same divergence from Burp's shipped defaults that SubmitForms records).
+	AttemptSelfRegister bool
+	// TriggerLoginFailures is the crawler/login_functions/trigger_login_failures flag
+	// (burpsy-react-ui-uzil): on, the crawl submits one deliberately-invalid username per login
+	// form so the application's bad-login response is seen. Burp ships it true; here it defaults
+	// off, on the same writes-are-opt-in rule.
+	TriggerLoginFailures bool
+	// ProvidedLoginsOnly is the crawler/crawl_optimization/crawl_using_provided_logins_only flag
+	// (burpsy-react-ui-uzil): on, authentication comes from the provided credentials alone — no
+	// self-registration, no invalid usernames. Burp ships it false, as does the zero value here.
+	// Burp's DAST UI also has it skip the unauthenticated phase; this reading is the key's own
+	// name, and the narrower one — the phase skip is a named follow-up.
+	ProvidedLoginsOnly bool
 	// ErrorHandling is the `crawler/error_handling/*` family as the file set it, every field a POINTER
 	// so a 0 the operator wrote is distinguishable from a key the file never mentioned
 	// (burpsy-react-ui-o0c5). See errorhandling.go for why that distinction is the whole feature.
@@ -331,6 +352,9 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 			c.FragmentsRoute = b
 		}
 		return nil
+	}
+	if row.loginField != "" {
+		return c.applyLoginKey(row, raw)
 	}
 	if row.configCountField != "" {
 		// A bound on a PHASE rather than on the crawl: a number, refused rather than coerced, on the

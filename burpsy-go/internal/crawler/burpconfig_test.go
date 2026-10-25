@@ -123,16 +123,17 @@ func TestAnUnknownCrawlSectionIsReportedAsASection(t *testing.T) {
 }
 
 // A section listed with no keys behind it is still reported, not treated as absent: Burp's shipped
-// files carry sections like `login_functions` that burpsy has no field for, and silence about them is
-// the difference between "your configuration said nothing" and "your configuration said something we
-// could not use".
+// files carry customization keys burpsy has no field for, and silence about them is the difference
+// between "your configuration said nothing" and "your configuration said something we could not
+// use". (login_functions was this test's example until uzil gave its keys a field — which is the
+// test working as intended.)
 func TestAKnownSectionWithNoKeysBehindItIsStillReported(t *testing.T) {
-	doc := []byte(`{"crawler":{"login_functions": {"trigger_login_failures": true}}}`)
+	doc := []byte(`{"crawler":{"customization": {"allow_all_clickables": true}}}`)
 	cfg, err := ParseBurpCrawlConfig(doc)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(cfg.UnrepresentableKeys) != 1 || cfg.UnrepresentableKeys[0] != "login_functions/trigger_login_failures" {
+	if len(cfg.UnrepresentableKeys) != 1 || cfg.UnrepresentableKeys[0] != "customization/allow_all_clickables" {
 		t.Errorf("UnrepresentableKeys = %v, want the one key inside a section burpsy lists but has no "+
 			"field for; the section being known does not make the key applicable", cfg.UnrepresentableKeys)
 	}

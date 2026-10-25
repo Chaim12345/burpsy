@@ -104,9 +104,20 @@ type discoveredForm struct {
 	// hasFileInput records that the form carries a file input, which is why a urlencoded submission
 	// of it would not be the submission the application expects.
 	hasFileInput bool
-	// isLoginForm identifies this form as a login form (burpsy-react-ui-uzil): contains an input
-	// element with type=password. This is Burp's own rule for identifying login forms.
+	// isLoginForm identifies this form as a login form (burpsy-react-ui-uzil): it carries an
+	// input with type=password AND a non-empty name — Burp's own rule
+	// (identifying-login-forms.html), both halves of it: an unnamed control is not a successful
+	// control, no browser submits it, and Burp does not treat the form as a login for it.
 	isLoginForm bool
+	// passwordField is the name of the form's first named password input, and usernameField the
+	// last text/email input before it in document order — the pair a credential login maps its
+	// values onto. Empty when the form has no such control.
+	passwordField string
+	usernameField string
+	// passwordFields are every named password input, in document order. Two or more is Burp's
+	// practical distinguishing mark of a REGISTRATION form (password plus confirmation — his
+	// ordered criteria put the form with the most password fields first).
+	passwordFields []string
 }
 
 // signature is the form's identity for the per-form submission cap (burpsy-react-ui-u0k3).
@@ -771,13 +782,17 @@ func readInput(n *html.Node, f *discoveredForm, label *strings.Builder) {
 		f.hasFileInput = true
 		return
 	case "password":
-		// Login form detection (burpsy-react-ui-uzil): Burp identifies login forms as those
-		// containing an input with type=password. Mark the form accordingly.
-		f.isLoginForm = true
 		name, ok := attr(n, "name")
 		if !ok || name == "" {
+			// An unnamed password input is not a successful control: no browser submits it, and
+			// Burp's login-form rule (a password input WITH a name) does not fire on it.
 			return
 		}
+		f.isLoginForm = true
+		if f.passwordField == "" {
+			f.passwordField = name
+		}
+		f.passwordFields = append(f.passwordFields, name)
 		f.fields = append(f.fields, formField{name: name, value: fillValue(typ, existing)})
 		return
 	}
@@ -798,6 +813,14 @@ func readInput(n *html.Node, f *discoveredForm, label *strings.Builder) {
 		}
 		f.fields = append(f.fields, formField{name: name, value: existing})
 		return
+	}
+	// A text-like control seen before the password field is the credential login's username
+	// candidate (Burp maps the username onto the text input that accompanies the password one).
+	// The empty type is the HTML default, which is text. Once the password field has passed, a
+	// later text field is something else — a captcha answer, a profile field — and must not
+	// displace the candidate.
+	if (typ == "" || typ == "text" || typ == "email") && f.passwordField == "" {
+		f.usernameField = name
 	}
 	f.fields = append(f.fields, formField{name: name, value: fillValue(typ, existing)})
 }

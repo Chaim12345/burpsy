@@ -1028,6 +1028,14 @@ type frontierItem struct {
 	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
 	// crawl would not have found at all.
 	renderedOrigin bool
+	// maskValues are the secrets this request carries on the wire whose values history must not
+	// keep: the stored exchange's request bytes replace each with a placeholder (credential
+	// login, burpsy-react-ui-uzil). Nil for every ordinary request.
+	maskValues []string
+	// loginCred is the username this item logs in as, and marks the item as a credential login
+	// submission: its response's Set-Cookie is harvested into the crawl's session jar. Empty for
+	// every ordinary request.
+	loginCred string
 	// tag is the element the item was discovered from — "a", "img", "script", "form", "sitemap",
 	// "api:openapi", and so on. Carried onto the item because the scope gate has to distinguish a
 	// SUBRESOURCE refusal from a navigational one (burpsy-react-ui-hgor), and the tag is the only
@@ -1218,6 +1226,10 @@ type Crawler struct {
 	relogins int
 	// login is the recorded login's jar and report, nil without Config.BrowserLogin.
 	login *loginState
+	// credLoginLocationBase is len(c.locations) at the moment the first credential login
+	// succeeded: locations the crawl already knew before it had a session, so the report's
+	// PagesFoundAfterLogin counts what the login actually unlocked rather than the whole map.
+	credLoginLocationBase int
 	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
 	// in New so a malformed pattern is a construction error, never a per-URL surprise.
 	loginPage *regexp.Regexp
@@ -1249,6 +1261,12 @@ func New(cfg Config) (*Crawler, error) {
 	}
 	if cfg.Capture.Store == nil {
 		return nil, fmt.Errorf("a crawl needs a traffic store: CRAWL-02 requires crawled traffic to be captured through the same path as proxied traffic, and there is nowhere to capture it to")
+	}
+	if cfg.BrowserLogin != nil && len(cfg.LoginCredentials) > 0 {
+		// Burp's own rule: one authentication method per scan — a recorded login replaces
+		// credentials, never joins them. Two methods would leave the report unable to say which
+		// session a page was reached under.
+		return nil, fmt.Errorf("a crawl gets one authentication method: BrowserLogin (a recorded login) and LoginCredentials (form login) are alternatives, not a pair — set one")
 	}
 
 	seeds := make([]*url.URL, 0, len(cfg.Seeds))
@@ -1708,6 +1726,11 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		login := c.login.report
 		if login.Authenticated {
 			login.PagesFoundAfterLogin = rep.Locations
+			if login.Method == "credentials" {
+				// The crawl ran unauthenticated until it found the form; only what it
+				// reached after the first successful login is "found after login".
+				login.PagesFoundAfterLogin = rep.Locations - c.credLoginLocationBase
+			}
 		}
 		rep.Login = &login
 	}
@@ -2042,12 +2065,14 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	ex, cerr := c.cfg.Capture.Record(scanner.CapturedExchange{
-		Host:     item.url.Hostname(),
-		Port:     portOf(item.url),
-		TLS:      strings.EqualFold(item.url.Scheme, "https"),
-		Method:   item.method,
-		Path:     item.url.RequestURI(),
-		Request:  raw,
+		Host:   item.url.Hostname(),
+		Port:   portOf(item.url),
+		TLS:    strings.EqualFold(item.url.Scheme, "https"),
+		Method: item.method,
+		Path:   item.url.RequestURI(),
+		// Masked, when this request carries credential values: the wire bytes were the real
+		// ones, history's are not (burpsy-react-ui-uzil; HeadersWithheld is the precedent).
+		Request:  maskStoredValues(raw, item.maskValues),
 		Response: res.Raw,
 		Started:  time.Now().Add(-res.Duration),
 		Duration: res.Duration,
@@ -2078,6 +2103,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 
 	// A session the application rotates is kept current from every response the crawl captured.
 	c.login.absorb(item.url, res.Raw)
+
+	// A credential login's response is where the session arrives (burpsy-react-ui-uzil).
+	if item.loginCred != "" {
+		c.completeCredentialLogin(item, res.Raw, rep, lim)
+	}
 
 	rep.Fetched++
 	if item.depth > lim.DeepestDepth {
@@ -3238,12 +3268,48 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 
 	// The destructive check reads the whole request intent, not just the action: a hidden
 	// `action=delete` field is the request that deletes, and an action URL alone would miss it.
+	//
+	// Placed before the credential branches below, so it gates EVERY submission kind: the
+	// ordinary placeholder submission and the credential, registration and invalid-username
+	// ones alike. The credential mapping swaps only the username/password VALUES; the signals
+	// this check reads — the action and the field names and hidden values — are identical in
+	// all of them, so one check here is the check for every kind, and a login form whose intent
+	// is destructive is refused even with credentials configured.
 	if v := classifyDestructive(u.String()+" "+encoded, f.label); v.Refused {
 		c.skips.record(SkipRecord{
 			Reason: v.Reason, URL: u.String(), Method: f.method, Text: f.label,
 			Signal: v.Signal, FoundAt: base.String(),
 		})
 		return
+	}
+
+	// A registration form (Burp's distinguishing rule: the password-carrying form with the most
+	// password fields — two or more in practice) gets a generated account when the operator opted
+	// in, never a provided credential: credentials belong to login forms.
+	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly {
+		c.admitSelfRegistration(f, base, u, depth, rep, lim)
+		return
+	}
+	// A login form with credentials configured is not an ordinary submission: it is the crawl's
+	// way in. One submission per credential, values mapped from the credential rather than the
+	// placeholder fill, the credential values masked in the stored exchange (burpsy-react-ui-uzil).
+	// An opted-in invalid-username probe (Burp's trigger_login_failures) joins it; either replaces
+	// the placeholder submission, which for a login form is junk that only looks like a failed
+	// login. crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from
+	// the provided credentials alone: no self-registration above, no invalid usernames here.
+	if f.isLoginForm {
+		handled := false
+		if len(c.cfg.LoginCredentials) > 0 {
+			c.admitCredentialLogins(f, base, u, depth, rep, lim)
+			handled = true
+		}
+		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly {
+			c.admitInvalidUsernameLogin(f, base, u, depth, rep, lim)
+			handled = true
+		}
+		if handled {
+			return
+		}
 	}
 
 	names := make([]string, 0, len(f.fields))
