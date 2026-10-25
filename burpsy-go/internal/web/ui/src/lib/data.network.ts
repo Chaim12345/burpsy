@@ -73,6 +73,11 @@ export interface NetworkSettings {
   */
  http1?: { enable_keep_alive: boolean };
  http2?: { enable_http2: boolean };
+ /**
+  * burpsy's own HTTP/3 panel (Burp has none): the proxy's Alt-Svc kill switch. The server omits the
+  * section until it is set, and omitted means ON, so a panel must read a missing key as on.
+  */
+ http3?: { enable_http3_alt_svc: boolean };
  continue: {
   understand_100_continue: boolean;
   remove_expect_header: boolean;

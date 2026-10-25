@@ -1081,7 +1081,7 @@ function ScannerSettingsSection(): JSX.Element {
 // raising both timeouts hit a refusal halfway through a legal edit, and would refuse a half-typed
 // override row on every character. So the draft is local until Save, and Save sends only the sections
 // that actually changed.
-function NetworkSection(): JSX.Element {
+export function NetworkSection(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useNetworkSettings();
  const save = useSaveNetworkSettings();
 
@@ -1464,7 +1464,7 @@ function NetworkSection(): JSX.Element {
       JavaScript-driven redirects are not followed: that would mean running the page's script, which this sender does not do.
      </p>
 
-     <h3 className="subheading">HTTP/1 and HTTP/2</h3>
+     <h3 className="subheading">HTTP/1, HTTP/2 and HTTP/3</h3>
      <div className="switch-grid">
       <label className="switch-row" htmlFor="network-http1-keep-alive">
        <span>
@@ -1494,6 +1494,22 @@ function NetworkSection(): JSX.Element {
         label="Default to HTTP/2 if the server supports it"
         checked={draft.http2?.enable_http2 !== false}
         onCheckedChange={(on) => patchSection("http2", { enable_http2: on })}
+       />
+      </label>
+      <label className="switch-row" htmlFor="network-http3-alt-svc">
+       <span>
+        <span>HTTP/3 Alt-Svc on forwarded responses</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         On by default. The proxy learns which origins advertise HTTP/3 from their Alt-Svc headers, and later forwards to those origins may
+         ride QUIC, shown on the exchange row. Off, nothing is learned and nothing rides QUIC. An explicit HTTP/3 pin on a request is not
+         affected: this governs discovery only.
+        </span>
+       </span>
+       <Switch
+        id="network-http3-alt-svc"
+        label="HTTP/3 Alt-Svc on forwarded responses"
+        checked={draft.http3?.enable_http3_alt_svc !== false}
+        onCheckedChange={(on) => patchSection("http3", { enable_http3_alt_svc: on })}
        />
       </label>
      </div>
