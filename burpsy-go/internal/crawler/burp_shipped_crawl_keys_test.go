@@ -150,12 +150,14 @@ func TestEveryShippedCrawlKeyIsClassifiedNoneIsDropped(t *testing.T) {
 	// them by value. The two speculative keys (burpsy-react-ui-t5m0) make nine, the four
 	// API-discovery customization keys (burpsy-react-ui-bwwg) make thirteen, crawl_strategy
 	// (burpsy-react-ui-8bp2) makes fourteen, and application_uses_fragments_for_routing
-	// (burpsy-react-ui-wbqx) makes fifteen.
+	// (burpsy-react-ui-wbqx) makes fifteen. The login-functions family (burpsy-react-ui-uzil) —
+	// login_functions' two keys and crawl_optimization's crawl_using_provided_logins_only —
+	// makes eighteen.
 	//
 	// The number is a census, not a target: it moves when this engine gains a field for a key Burp
 	// ships, and that is the point of the test — a key that becomes applicable and is still reported
 	// unrepresentable tells an operator migrating a configuration that their setting was dropped.
-	const wantApplied = 15
+	const wantApplied = 18
 	if len(cfg.AppliedKeys) != wantApplied {
 		t.Errorf("AppliedKeys = %v (%d), want exactly %d: crawl_limits' three keys plus "+
 			"error_handling's four, the two speculative keys, the four API-discovery keys, crawl_strategy and application_uses_fragments_for_routing are the "+

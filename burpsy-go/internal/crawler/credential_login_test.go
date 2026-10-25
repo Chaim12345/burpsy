@@ -440,3 +440,86 @@ func TestProvidedLoginsOnlySkipsSelfRegisterAndInvalidUsernames(t *testing.T) {
 		}
 	}
 }
+
+// Session loss after a credential login: the expiry detector's re-login re-submits the same form
+// through the same send-and-capture path, and the crawl continues behind the fresh session. This
+// is the recorded-login recovery story with the form as the replay.
+func TestACredentialSessionIsRestoredAfterItExpires(t *testing.T) {
+	var mu sync.Mutex
+	valid := map[string]bool{}
+	n := 0
+	var loginPosts int
+	mint := func() string {
+		n++
+		tok := "tok" + string(rune('A'+n))
+		valid[tok] = true
+		return tok
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodPost && r.URL.Path == "/login" {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			mu.Lock()
+			loginPosts++
+			mu.Unlock()
+			vals, _ := url.ParseQuery(string(body))
+			if vals.Get("user") == "alice" && vals.Get("pass") == "s3cret" {
+				mu.Lock()
+				tok := mint()
+				mu.Unlock()
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: tok, Path: "/"})
+				_, _ = w.Write([]byte(`<html><body><a href="/home">home</a></body></html>`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		c, err := r.Cookie("session")
+		mu.Lock()
+		ok := err == nil && valid[c.Value]
+		mu.Unlock()
+		if r.URL.Path != "/robots.txt" && !ok {
+			// Logged out: every page is the login form at 200, the shape only the login-page
+			// pattern sees.
+			_, _ = w.Write([]byte(`<html><body><form action="/login" method="post">` +
+				`<input name="user" type="text"><input type="password" name="pass"></form></body></html>`))
+			return
+		}
+		switch r.URL.Path {
+		case "/home":
+			_, _ = w.Write([]byte(`<html><body><a href="/checkpoint">next</a></body></html>`))
+		case "/checkpoint":
+			mu.Lock()
+			valid = map[string]bool{}
+			mu.Unlock()
+			_, _ = w.Write([]byte(`<html><body><a href="/after">after</a></body></html>`))
+		case "/after":
+			_, _ = w.Write([]byte(`<html><body>past the re-login</body></html>`))
+		default:
+			_, _ = w.Write([]byte(`<html><body>seed</body></html>`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginPagePattern = `type="password"`
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	rep := run(t, cfg)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if loginPosts != 2 {
+		t.Errorf("POST /login reached the target %d times, want 2: the crawl's login and the "+
+			"re-login after /checkpoint", loginPosts)
+	}
+	if got := statusOf(rep, "/after"); got != 200 {
+		t.Errorf("/after: last status %d, want 200 — the re-login should carry the crawl past the "+
+			"expiry", got)
+	}
+	if rep.Login == nil || rep.Login.Relogins != 1 || rep.Login.Attempts != 2 {
+		t.Errorf("login block = %+v, want 2 attempts with 1 relogin", rep.Login)
+	}
+}
