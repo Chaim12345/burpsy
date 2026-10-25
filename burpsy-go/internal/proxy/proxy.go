@@ -3119,6 +3119,22 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 // nothing calls would leave the reader-consuming shape available to the next caller
 // that needs a header early, which is exactly how the bug arrived.
 
+// parseRequestLine splits a request line into method and target. The split is
+// strings.Fields over the trimmed line: any whitespace separates, leading and
+// trailing whitespace is dropped, and tokens past the second are ignored — so
+// "GET /a b HTTP/1.1" yields method GET and target /a, with the version token
+// never examined. Fewer than two tokens is not a request. This is the split both
+// the plaintext listener and the tunnel loop made inline; it is extracted so the
+// most smuggling-critical parse burpsy owns is a named contract with pins and a
+// fuzz target (ibhs), and it is deliberately behavior-preserving.
+func parseRequestLine(requestLine string) (method, target string, ok bool) {
+	parts := strings.Fields(strings.TrimSpace(requestLine))
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // readFullRequest reads one whole HTTP request off the client connection: the request line, the
 // header block, and the body under the framing the head actually declares.
 //
@@ -3138,22 +3154,6 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 // be decoded again at each of those. The rewiring is a rewrite of `Content-Length` alone; the
 // original chunk-size and chunk extensions are not preserved, because the head no longer advertises
 // them.
-// parseRequestLine splits a request line into method and target. The split is
-// strings.Fields over the trimmed line: any whitespace separates, leading and
-// trailing whitespace is dropped, and tokens past the second are ignored — so
-// "GET /a b HTTP/1.1" yields method GET and target /a, with the version token
-// never examined. Fewer than two tokens is not a request. This is the split both
-// the plaintext listener and the tunnel loop made inline; it is extracted so the
-// most smuggling-critical parse burpsy owns is a named contract with pins and a
-// fuzz target (ibhs), and it is deliberately behavior-preserving.
-func parseRequestLine(requestLine string) (method, target string, ok bool) {
-	parts := strings.Fields(strings.TrimSpace(requestLine))
-	if len(parts) < 2 {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
-}
-
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(requestLine)
