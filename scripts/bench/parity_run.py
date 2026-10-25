@@ -41,7 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parity  # noqa: E402
 import parity_adapters  # noqa: E402
 import parity_tools  # noqa: E402
-from run_vulnapp import CONFIRM_HEADER, confirm, http_json, proxied_through  # noqa: E402
+from run_vulnapp import (  # noqa: E402
+    CONFIRM_HEADER, configure_scanner, confirm, http_json, proxied_through,
+)
 
 
 def load_spec(name):
@@ -120,13 +122,27 @@ class LiveCtx:
 
     def collect_burpsy(self, spec, out_dir):
         row_to_class = spec.get("burpsy_rows", {})
+        # The spec's config switches are applied before its first audit: a miss must be a
+        # detection gap, not a family the default profile never switched on (j1mk.14's lesson:
+        # the CORS rows gate on check_headers, off in the default profile). Keys the spec does
+        # not name keep the server's current value; the burpsy_rows filter keeps the comparison
+        # to the class's rows either way.
+        if spec.get("burpsy_config"):
+            configure_scanner(self.web, 30000, dict(spec["burpsy_config"]))
         findings = []
         for t in spec["targets"]:
+            # The new exchange is identified by difference, not position: /api/history's ordering
+            # and paging are the server's business, and taking rows[-1] audited the FIRST capture
+            # for every target (j1mk.14/15's first reports blamed the scanner for this harness
+            # bug - every "safe-twin FP" was the same audit re-matched).
+            before = {r["id"] for r in http_json("GET", f"{self.web}/api/history")}
             proxied_through(self.proxy, t["url"], t.get("method", "GET"), headers=t.get("headers"))
             time.sleep(0.05)
-            ex = _latest_exchange(self.web)
-            if ex is None:
+            after = http_json("GET", f"{self.web}/api/history")
+            new_ids = [r["id"] for r in after if r["id"] not in before]
+            if not new_ids:
                 raise RuntimeError(f"the proxy did not capture {t['url']} (out of scope?)")
+            ex = new_ids[-1]
             body = {"async": True}
             token = confirm(self.web, "POST", f"/api/audit/{ex}", body)
             started = http_json("POST", f"{self.web}/api/audit/{ex}", body,
@@ -159,11 +175,6 @@ class LiveCtx:
         if spec.get("tool_output") == "merged-json-file":
             return json.dumps(merged) if merged else ""
         return "\n".join(chunks)
-
-
-def _latest_exchange(web):
-    rows = http_json("GET", f"{web}/api/history")
-    return rows[-1]["id"] if rows else None
 
 
 def _wait_task(web, task, timeout):

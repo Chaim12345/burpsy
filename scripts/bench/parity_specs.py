@@ -45,8 +45,11 @@ CLASSES = {
         ],
         "truth": [
             {"url": TARGET_BASE + "/crlf/r/home", "parameter": "", "class": "crlf-injection"},
-            {"url": TARGET_BASE + "/crlf/ref", "parameter": "referer", "class": "crlf-injection"},
-            {"url": TARGET_BASE + "/crlf/unicode", "parameter": "msg", "class": "crlf-injection"},
+            # burpsy's row is resource-level (no parameter attribution, measured 2026-10-25), so
+            # the truth keys at endpoint granularity; per-parameter/encoding detail lives in the
+            # reference technique column.
+            {"url": TARGET_BASE + "/crlf/ref", "parameter": "", "class": "crlf-injection"},
+            {"url": TARGET_BASE + "/crlf/unicode", "parameter": "", "class": "crlf-injection"},
         ],
         "tool_args": _crlfuzz_args,
     },
@@ -81,19 +84,31 @@ CLASSES["cors-misconfiguration"] = {
         "Cross-origin resource sharing: unencrypted origin trusted": "cors-misconfiguration",
         "Cross-origin resource sharing: all subdomains trusted": "cors-misconfiguration",
     },
+    # Every seed carries an Origin: burpsy's CORS rows evaluate the exchange's Origin against the
+    # response's ACAO (it probes actively too, but the captured Origin is what the per-request
+    # dispatch reads), and a seed without one measures the harness, not the scanner. Measured
+    # 2026-10-25: with no Origin seeded, zero rows fired even with check_headers on; with it,
+    # both rows fired on /hd/cors-unenc.
     "targets": [
-        {"url": TARGET_BASE + "/hd/cors-unenc", "method": "GET", "parameter": ""},
-        {"url": TARGET_BASE + "/hd/cors-subs", "method": "GET", "parameter": ""},
-        {"url": TARGET_BASE + "/rm/catalog", "method": "GET", "parameter": ""},
-        {"url": TARGET_BASE + "/hd/safe/cors-unenc", "method": "GET", "parameter": ""},
-        {"url": TARGET_BASE + "/hd/safe/cors-subs", "method": "GET", "parameter": ""},
-        {"url": TARGET_BASE + "/rm/safe/catalog", "method": "GET", "parameter": ""},
+        {"url": TARGET_BASE + "/hd/cors-unenc", "method": "GET", "parameter": "",
+         "headers": {"Origin": "https://evil.example.com"}},
+        {"url": TARGET_BASE + "/hd/cors-subs", "method": "GET", "parameter": "",
+         "headers": {"Origin": "https://app.evil.example"}},
+        {"url": TARGET_BASE + "/rm/catalog", "method": "GET", "parameter": "",
+         "headers": {"Origin": "https://evil.example.com"}},
+        {"url": TARGET_BASE + "/hd/safe/cors-unenc", "method": "GET", "parameter": "",
+         "headers": {"Origin": "http://evil.example.com"}},
+        {"url": TARGET_BASE + "/hd/safe/cors-subs", "method": "GET", "parameter": "",
+         "headers": {"Origin": "https://app.evil.example"}},
+        {"url": TARGET_BASE + "/rm/safe/catalog", "method": "GET", "parameter": "",
+         "headers": {"Origin": "https://evil.example.com"}},
     ],
     "truth": [
         {"url": TARGET_BASE + "/hd/cors-unenc", "parameter": "", "class": "cors-misconfiguration"},
         {"url": TARGET_BASE + "/hd/cors-subs", "parameter": "", "class": "cors-misconfiguration"},
         {"url": TARGET_BASE + "/rm/catalog", "parameter": "", "class": "cors-misconfiguration"},
     ],
+    "burpsy_config": {"check_headers": True},
     "tool_args": _corsy_args,
     "tool_output": "merged-json-file",
 }
