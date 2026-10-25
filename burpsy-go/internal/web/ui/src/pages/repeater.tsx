@@ -46,7 +46,7 @@ import {
  useSendRepeaterGroup,
  type RepeaterWsSendBody,
 } from "../lib/data.tools";
-import { useWsConnections, useWsHistory, useWsMessage } from "../lib/data";
+import { forgetRepeaterTabAction, useWsConnections, useWsHistory, useWsMessage } from "../lib/data";
 import { effectiveWsMode, planWsSend, toClientRuns, wsModeOptions, type WsConnectionMode } from "../lib/repeater-ws-connection";
 import { kettledListText, renderNormalised, requestBody, seedH2Fields, type H2Field, type KettleAnswer } from "../lib/kettle";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
@@ -169,6 +169,32 @@ export function RepeaterPage(): JSX.Element {
  const closeOtherRepeaterTabs = useApp((state) => state.closeOtherRepeaterTabs);
  const closeRepeaterTabsLeftOf = useApp((state) => state.closeRepeaterTabsLeftOf);
  const closeRepeaterTabsRightOf = useApp((state) => state.closeRepeaterTabsRightOf);
+ // 1944: closing a tab ends its custom action's life - the server forgets the config, the store
+ // and the persisted row. Reopen restores the request draft, never the action.
+ const closeTab = (id: string) => {
+  closeRepeaterTab(id);
+  forgetRepeaterTabAction(id);
+ };
+ const closeOtherTabs = (id: string) => {
+  for (const tab of tabs) {
+   if (tab.id !== id) forgetRepeaterTabAction(tab.id);
+  }
+  closeOtherRepeaterTabs(id);
+ };
+ const closeTabsLeftOf = (id: string) => {
+  const index = tabs.findIndex((tab) => tab.id === id);
+  if (index > 0) {
+   for (const tab of tabs.slice(0, index)) forgetRepeaterTabAction(tab.id);
+  }
+  closeRepeaterTabsLeftOf(id);
+ };
+ const closeTabsRightOf = (id: string) => {
+  const index = tabs.findIndex((tab) => tab.id === id);
+  if (index >= 0) {
+   for (const tab of tabs.slice(index + 1)) forgetRepeaterTabAction(tab.id);
+  }
+  closeRepeaterTabsRightOf(id);
+ };
  const duplicateRepeaterTab = useApp((state) => state.duplicateRepeaterTab);
  const reopenClosedRepeaterTab = useApp((state) => state.reopenClosedRepeaterTab);
  const createRepeaterGroup = useApp((state) => state.createRepeaterGroup);
@@ -676,7 +702,7 @@ export function RepeaterPage(): JSX.Element {
  // (lib/commands.ts). Each passes null when it cannot run — no tab, nothing closed, already at the
  // first send — so the palette says so and the chord is left to the browser.
  const tabIndex = active ? tabs.findIndex((tab) => tab.id === active.id) : -1;
- useCommandHandler("tab.close", active ? () => closeRepeaterTab(active.id) : "No Repeater tab is open");
+ useCommandHandler("tab.close", active ? () => closeTab(active.id) : "No Repeater tab is open");
  useCommandHandler("tab.reopen", closedTabs.length > 0 ? () => reopenClosedRepeaterTab() : "No closed tab to reopen");
  useCommandHandler("tab.duplicate", active ? () => duplicateRepeaterTab(active.id) : "No Repeater tab is open");
  useCommandHandler(
@@ -1166,14 +1192,14 @@ export function RepeaterPage(): JSX.Element {
    {
     id: "lifecycle",
     actions: [
-     { id: "close", label: "Close", danger: true, onSelect: () => closeRepeaterTab(tab.id) },
-     { id: "close-others", label: "Close other tabs", disabled: tabs.length < 2, onSelect: () => closeOtherRepeaterTabs(tab.id) },
-     { id: "close-left", label: "Close tabs to the left", disabled: index <= 0, onSelect: () => closeRepeaterTabsLeftOf(tab.id) },
+     { id: "close", label: "Close", danger: true, onSelect: () => closeTab(tab.id) },
+     { id: "close-others", label: "Close other tabs", disabled: tabs.length < 2, onSelect: () => closeOtherTabs(tab.id) },
+     { id: "close-left", label: "Close tabs to the left", disabled: index <= 0, onSelect: () => closeTabsLeftOf(tab.id) },
      {
       id: "close-right",
       label: "Close tabs to the right",
       disabled: index < 0 || index >= tabs.length - 1,
-      onSelect: () => closeRepeaterTabsRightOf(tab.id),
+      onSelect: () => closeTabsRightOf(tab.id),
      },
      {
       id: "reopen",
@@ -1290,7 +1316,7 @@ export function RepeaterPage(): JSX.Element {
       aria-label={`Close ${tab.name}`}
       onClick={(event) => {
        event.stopPropagation();
-       closeRepeaterTab(tab.id);
+       closeTab(tab.id);
       }}
      >
       <X size={11} />

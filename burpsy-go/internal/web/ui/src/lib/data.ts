@@ -391,12 +391,22 @@ export function useDeleteRepeaterTabAction(tabId: string) {
  });
 }
 
+/** Runs the tab's script on demand, or (mode "last") replays the recorded run. Both go through
+ * the gated POST: the answer carries script-derived output, which GET never serves (1944). */
 export function useRunRepeaterTabAction(tabId: string) {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: () => api<RepeaterTabActionRun>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action/run`, json("POST", {})),
+  mutationFn: (mode: "run" | "last" = "run") =>
+   api<RepeaterTabActionRun>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action/run`, json("POST", { mode })),
   onSuccess: () => invalidate([keys.repeaterTabAction(tabId)]),
  });
+}
+
+/** The tab-close cascade (1944): closing a Repeater tab removes its action, its store and the
+ * persisted row server-side. Fire-and-forget from the close paths; a tab with no action answers
+ * 404, which is the common case and not an error. */
+export function forgetRepeaterTabAction(tabId: string) {
+ void api<{ deleted: string }>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action`, { method: "DELETE" }).catch(() => {});
 }
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
 

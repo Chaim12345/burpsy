@@ -1020,16 +1020,28 @@ export interface RepeaterTabAction {
  auto_run: boolean;
 }
 
+/** What one run produced - SCRIPT-DERIVED output (1944 remediation): it can carry response
+ * secrets, so it is served only by the confirmation-gated POST run, never by GET. */
 export interface RepeaterTabActionRun {
  log: string[];
+ store: Record<string, string>;
  request: string;
  error?: string;
+ error_kind?: string;
  ran_at_ms: number;
+ input_truncated?: string[];
+ draft_truncated?: boolean;
 }
 
+/** The GET answer: the definition and run METADATA only. No log, no store, no draft, and no
+ * error TEXT (a script can throw its secrets) - only the error's kind. */
 export interface RepeaterTabActionState {
  action: RepeaterTabAction;
- last_run?: RepeaterTabActionRun;
+ runs: number;
+ has_error: boolean;
+ error_kind?: string;
+ last_run_at_ms?: number;
+ installed_at_ms?: number;
 }
 
 export interface ToolOutput {

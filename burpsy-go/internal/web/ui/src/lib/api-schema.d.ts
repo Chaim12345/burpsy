@@ -2383,19 +2383,19 @@ export type paths = {
             cookie?: never;
         };
         /**
-         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the definition and run metadata only, DELETE removes it, POST {id}/action/run executes it or replays the recorded run and is the only surface for the script's derived output
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         get: operations["getApiRepeaterTabsByIdAction"];
         /**
-         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the definition and run metadata only, DELETE removes it, POST {id}/action/run executes it or replays the recorded run and is the only surface for the script's derived output
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         put: operations["putApiRepeaterTabsByIdAction"];
         post?: never;
         /**
-         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the definition and run metadata only, DELETE removes it, POST {id}/action/run executes it or replays the recorded run and is the only surface for the script's derived output
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         delete: operations["deleteApiRepeaterTabsByIdAction"];
         options?: never;
@@ -2413,8 +2413,8 @@ export type paths = {
         get?: never;
         put?: never;
         /**
-         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the definition and run metadata only, DELETE removes it, POST {id}/action/run executes it or replays the recorded run and is the only surface for the script's derived output
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         post: operations["postApiRepeaterTabsByIdActionRun"];
         delete?: never;
@@ -10124,7 +10124,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    mode?: string;
+                };
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
