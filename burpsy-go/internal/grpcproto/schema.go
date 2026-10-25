@@ -36,6 +36,9 @@ import (
 	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // scalarTypes are the proto scalar type names; anything else a field names is a message or enum.
@@ -77,6 +80,10 @@ type Schema struct {
 	order []string // message full names in source order
 	// rpcs maps a gRPC call path, "/pkg.Service/Method", to its request and response message names.
 	rpcs map[string]rpcDesc
+	// descs carries the protoreflect descriptor behind each message, for the
+	// dynamicpb validation oracle (0rrb 2b): descriptors own presentation and
+	// conformance, protowire owns the bytes.
+	descs map[string]protoreflect.MessageDescriptor
 }
 
 // rpcDesc is one service method's signature, by resolved message full name. A side whose type is not
@@ -167,6 +174,37 @@ func (s *Schema) Annotate(fields []Field, root string) ([]Field, error) {
 		return nil, fmt.Errorf("no message named %q in the schema (messages: %s)", root, strings.Join(s.order, ", "))
 	}
 	return annotate(fields, md), nil
+}
+
+// Validate is the dynamicpb oracle (0rrb 2b, integrator ruling (a)+(b)): it reads
+// raw as the message called root and refuses what the declared schema cannot
+// hold and the raw protowire walk skims past - invalid UTF-8 in a declared
+// string, a missing proto2 required field. It writes nothing and presents
+// nothing: the field tree still comes from the byte-exact protowire walk. A
+// body that fails here is not the message the schema declares (or the schema is
+// stale); the caller reports the mismatch honestly rather than presenting a
+// skimmed tree as conforming.
+//
+// A wire type that does not match the declaration is deliberately NOT refused:
+// protobuf's unmarshal carries it as an unknown field by spec, so a body from a
+// newer schema version still validates. Pinned in validate_test.go.
+func (s *Schema) Validate(root string, raw []byte) error {
+	md, hits := s.lookup(root)
+	if md == nil {
+		if len(hits) > 1 {
+			sort.Strings(hits)
+			return fmt.Errorf("message %q is ambiguous: %s", root, strings.Join(hits, ", "))
+		}
+		return fmt.Errorf("no message named %q in the schema", root)
+	}
+	desc := s.descs[md.full]
+	if desc == nil {
+		return fmt.Errorf("no descriptor for %q", md.full)
+	}
+	if err := proto.Unmarshal(raw, dynamicpb.NewMessage(desc)); err != nil {
+		return fmt.Errorf("%s: %w", md.full, err)
+	}
+	return nil
 }
 
 func annotate(fields []Field, md *messageDesc) []Field {
