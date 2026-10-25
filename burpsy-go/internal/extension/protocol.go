@@ -359,6 +359,33 @@ type InvokeParams struct {
 	// process's traffic store, and giving it one would be a second egress path.
 	Raw       string `json:"raw,omitempty"`
 	Selection string `json:"selection,omitempty"`
+	// Selected and Editor are hotkey.invoke's payload (burpsy-react-ui-gqvg): the rows the
+	// operator had highlighted and the message open in the editor when the chord fired, the
+	// analogue of HotKeyEvent.selectedRequestResponses and messageEditorRequestResponse.
+	// Host.Invoke forwards them to hotkey.invoke only; every other method's documented params
+	// omit them. Both are absent from the wire when empty, so a plugin written before this
+	// sees the old shape.
+	Selected []SelectedExchange `json:"selected,omitempty"`
+	Editor   *EditorMessage     `json:"editor,omitempty"`
+}
+
+// MaxHotkeySelection bounds the rows one hotkey invocation may carry. The caller already
+// holds the bytes, so the bound protects the plugin pipe, not the traffic store.
+const MaxHotkeySelection = 100
+
+// SelectedExchange is one highlighted row. Exchange is a pointer for the same reason
+// InvokeParams.Exchange is: 0 is a real id. Raw is optional because the caller may hold only
+// the id.
+type SelectedExchange struct {
+	Exchange *int   `json:"exchange"`
+	Raw      string `json:"raw,omitempty"`
+}
+
+// EditorMessage is the message open in an editor when the hotkey fired. Message is a pointer
+// because message 0 is a real id.
+type EditorMessage struct {
+	Message *int   `json:"message,omitempty"`
+	Raw     string `json:"raw,omitempty"`
 }
 
 // InvokeResult is what a plugin answers an invocation with. `editor.render` fills
@@ -524,13 +551,14 @@ var MethodSpecs = []MethodSpec{
 	},
 	{
 		Name: "hotkey.invoke", Direction: HostToPlugin, Call: "request", Kind: KindHotKey,
-		Params: `{"registration": string}`,
+		Params: `{"registration": string, "selected"?: [{"exchange": int, "raw"?: string}], "editor"?: {"message"?: int, "raw"?: string}}`,
 		Result: `{"output"?: string}`,
 		Why: "The analogue of registerHotKeyHandler: the console dispatches the registration's " +
-			"declared chord to this method. No exchange and no message are passed, because a " +
-			"hotkey fires with no selection behind it — the same shape as menu.invoke, reached " +
-			"from the keyboard instead of a menu. The plugin asked for the binding at the " +
-			"handshake; this is the host keeping its end.",
+			"declared chord to this method. selected is the rows the operator had highlighted " +
+			"(HotKeyEvent.selectedRequestResponses) and editor the message open in an editor " +
+			"(messageEditorRequestResponse); both are omitted when there was none, which is the " +
+			"menu.invoke shape. At most 100 rows are carried. The ids and bytes are handed in " +
+			"because a plugin has no route to the traffic store.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",

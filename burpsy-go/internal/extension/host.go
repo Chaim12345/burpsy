@@ -61,6 +61,8 @@ var (
 	ErrNotLoaded = errors.New("plugin is not loaded")
 	// ErrUnknownRegistration means the plugin never registered that id.
 	ErrUnknownRegistration = errors.New("plugin registered no such id")
+	// ErrSelectionTooLarge is a hotkey invocation carrying more than MaxHotkeySelection rows.
+	ErrSelectionTooLarge = errors.New("hotkey selection too large")
 )
 
 // Config is the operator's allowlist and every bound this host imposes.
@@ -648,6 +650,16 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 	p.mu.Unlock()
 	if !found {
 		return InvokeResult{}, fmt.Errorf("%q registration %q: %w", name, params.Registration, ErrUnknownRegistration)
+	}
+
+	if kind == KindHotKey {
+		if len(params.Selected) > MaxHotkeySelection {
+			return InvokeResult{}, fmt.Errorf("%q registration %q: %d rows, limit %d: %w",
+				name, params.Registration, len(params.Selected), MaxHotkeySelection, ErrSelectionTooLarge)
+		}
+	} else {
+		// Only hotkey.invoke documents these; do not widen another method's params.
+		params.Selected, params.Editor = nil, nil
 	}
 
 	if ctx == nil {
