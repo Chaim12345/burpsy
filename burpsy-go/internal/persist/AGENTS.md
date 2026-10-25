@@ -27,6 +27,14 @@ is no Rust counterpart crate — persistence is a Go-tree concern.
   436 MB, and a restart of 288ms/22 MB vs 3.1s/623 MB. `raw` stays `NOT NULL` (SQLite can't relax it
   via ALTER); a span row writes a zero-length blob. `LoadMessages` requires a `*core.SegmentLog` to
   resolve spans and **refuses** a span row with no segment log rather than reading it as empty.
+- **Schema changes are versioned steps (migrate.go).** `Open` runs the `migrations` list in order and
+  stamps `PRAGMA user_version` after each; step 1 is the old additive `CREATE TABLE IF NOT EXISTS` /
+  `addColumn` code (`migrateAdditive`), which is idempotent and so also upgrades a database that has
+  no version yet. Add a new change as the next numbered step, never by editing a released one. A
+  database whose version is newer than the build is refused untouched. **Non-goal (khk9):** the three
+  scope tables (`scope_rules`, `_v2`, `_v3`) are NOT merged into one: `SaveScope` writes all three on
+  purpose so an older build opened on the same file still finds a scope instead of default-allow.
+  Merge them only after a version-floor policy (refusing older builds) is adopted.
 - **Schema evolution is additive, and old rows must still load.** `migrate` runs `CREATE TABLE IF
   NOT EXISTS` then `addColumn` (idempotent, checks `PRAGMA table_info` first). A row written by an
   older build carries no new column and reads back as NULL — and every NULL fallback is chosen so the
