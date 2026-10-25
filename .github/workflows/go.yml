@@ -319,6 +319,12 @@ jobs:
 
       # tsc --noEmit, token checks, the gated-routes check, script tests and the src/lib tests (which
       # hold the no-native-dialogs guard). `bun run build` does NOT type-check; this step does.
+      # check:api-types regenerates src/lib/api-schema.d.ts via openapi-typescript, which lives in
+      # tools/api-types (kept out of the UI's bun deps so bun.lock stays the pinned-bun bundle lock).
+      # Without this install the check exits "openapi-typescript is not installed" (run 40212590940).
+      - name: install api-types generator deps
+        run: npm --prefix tools/api-types ci --no-audit --no-fund
+
       - name: bun run check
         run: bun run check
 
