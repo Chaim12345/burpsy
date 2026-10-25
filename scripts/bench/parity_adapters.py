@@ -15,6 +15,11 @@ parity_tools.py, not remembered:
   into the path and into a `crlfuzz` query parameter it adds itself. The adapter maps each hit
   back to the seeded target URL it extends (the harness knows the seeds; the tool does not report
   them), and recovers the injected parameter when the hit is a query-string hit.
+- OpenRedireX 383aea0: stdout lines, `[FOUND] <url> redirects to <chain>` (multi-hop) or
+  `[INFO] <url> redirects to <chain>` (single hop). Both count: the tool prints whenever its
+  HEAD request was redirected at all; a refused payload prints nothing.
+- Oralyzer 2.0.0 `-o`: one JSON array, [{"type", "request_url", "payload", "status_code",
+  "destination"}]. A missing file means "nothing found".
 """
 import json
 import re
@@ -168,6 +173,61 @@ def _split_hit(url, base):
                 return base_noquery, k
         return base_noquery, next(iter(base_q), "")
     return base.split("?", 1)[0], ""
+
+
+def _seed_and_param(hit_url, base):
+    """Map a redirect-tool hit URL back to (seed endpoint, injected parameter).
+
+    Both open-redirect tools fuzz one query parameter of the seed at a time, so the injected
+    parameter is the one whose value changed; when nothing differs (the tool rewrote the whole
+    query), fall back to the seed's first parameter. Without a seed match, keep the hit's own
+    endpoint so the report still shows it."""
+    if base is None:
+        u = urlsplit(hit_url)
+        return f"{u.scheme}://{u.netloc}{u.path}", ""
+    base_q = dict(parse_qsl(urlsplit(base).query))
+    hit_q = dict(parse_qsl(urlsplit(hit_url).query))
+    target = base.split("?", 1)[0]
+    for k, v in hit_q.items():
+        if base_q.get(k) != v:
+            return target, k
+    return target, next(iter(base_q), "")
+
+
+def from_openredirex_text(text, class_name, base_urls):
+    """OpenRedireX stdout. A printed line means "sending this payload produced a redirect":
+    [FOUND] is its multi-hop highlight, [INFO] a single hop - the tool HEAD-follows every
+    redirect and prints whenever response.history is non-empty, so BOTH are its idea of a hit,
+    and an endpoint that refuses the payload (no redirect at all) prints nothing. The followed
+    chain is kept as the technique. ANSI-coloured in a terminal."""
+    out = []
+    for line in (text or "").splitlines():
+        line = _ANSI.sub("", line).strip()
+        m = re.match(r"^\[(?:FOUND|INFO)\]\s+(\S+)\s+redirects to\s+(.+)$", line)
+        if not m:
+            continue
+        url, chain = m.group(1), m.group(2)
+        base = _longest_base(url, base_urls)
+        target, parameter = _seed_and_param(url, base)
+        out.append(_finding(target, parameter, class_name, technique=chain))
+    return out
+
+
+def from_oralyzer_json(text, class_name, base_urls):
+    """Oralyzer -o output: a JSON array of {"type", "request_url", "payload", "status_code",
+    "destination"}. A header finding means the 3xx Location CONTAINED the payload string -
+    substring semantics, not "the browser would leave the origin", which is exactly the
+    difference this class measures. The type+destination is kept as the technique."""
+    if not text:
+        return []
+    out = []
+    for item in json.loads(text):
+        url = item.get("request_url", "")
+        base = _longest_base(url, base_urls)
+        target, parameter = _seed_and_param(url, base)
+        technique = f"{item.get('type', '')}: {item.get('destination', '')}"
+        out.append(_finding(target, parameter, class_name, technique))
+    return out
 
 
 def from_burpsy_findings(findings, url, row_to_class):

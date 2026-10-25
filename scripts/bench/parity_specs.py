@@ -10,6 +10,8 @@ endpoints, compare what each finds" auditable across classes.
 The spec shape is documented in parity_run.py's module docstring.
 """
 
+from pathlib import Path
+
 TARGET_BASE = "http://127.0.0.1:19090"
 
 
@@ -17,6 +19,44 @@ def _crlfuzz_args(url, desc, out_dir):
     # -s: one vulnerable URL per line. Concurrency capped so a nightly run stays polite to the
     # loopback target it shares with burpsy's audit.
     return [desc["binary"], "-u", url, "-s", "-c", "10"]
+
+
+def _openredirex_args(url, desc, out_dir):
+    # Payloads: the pinned tool's own payloads.txt with the marker hosts rewritten to the
+    # loopback target (see the class comment). The rewrite is destination-host-only.
+    src = Path(desc["script"]).with_name("payloads.txt")
+    text = src.read_text()
+    for host in ("google.com", "example.com"):
+        text = text.replace(host, "127.0.0.1:19090")
+    rewritten = Path(out_dir) / "payloads.txt"
+    rewritten.write_text(text)
+    # -c capped so a nightly run stays polite to the loopback target it shares with burpsy.
+    return [desc["venv_bin"] + "/python", desc["script"], "-p", str(rewritten), "-c", "10"]
+
+
+def _openredirex_stdin(url, desc, out_dir):
+    # OpenRedireX reads the target list from stdin (fuzzify_url replaces every parameter value
+    # with FUZZ; our seeds carry one parameter each).
+    return url + "\n"
+
+
+def _oralyzer_args(url, desc, out_dir):
+    # Console script from the pip install. -o: per-run JSON array (a missing file = no
+    # findings). Stock payloads stay verbatim except the four IPv6-literal lines: an unbalanced
+    # bracketed netloc raises ValueError("Invalid IPv6 URL") out of urlsplit, Oralyzer 2.0.0 does
+    # not guard it, and one bad payload kills the target's whole run (exit 1, zero findings on
+    # endpoints that redirect). No host rewrite is needed: the tool never follows redirects
+    # (allow_redirects=False), so an off-site-looking payload never leaves the box.
+    argv = [desc["venv_bin"] + "/oralyzer", "-u", url, "-o", str(Path(out_dir) / "oralyzer.json"),
+            "--no-color", "--timeout", "15"]
+    stock = sorted(Path(desc["venv_bin"]).parent.glob(
+        "lib/python*/site-packages/oralyzer/data/payloads.txt"))
+    if stock:
+        kept = [ln for ln in stock[0].read_text().splitlines() if "[" not in ln and "]" not in ln]
+        out = Path(out_dir) / "payloads.txt"
+        out.write_text("\n".join(kept) + "\n")
+        argv += ["-p", str(out)]
+    return argv
 
 
 CLASSES = {
@@ -271,3 +311,66 @@ CLASSES["crawl-coverage-vulnapp"] = {
     "crawl_request": {"submit_forms": False, "interact": False, "request_speculative": False},
     "tool_args": _katana_args,
 }
+    # j1mk.16: open redirect vs OpenRedireX (383aea0). Targets are the vulnapp redirect fixtures
+    # (internal/vulnapp/vulnapp.go): /redirect is wide open; /redirect/origin prepends the request
+    # origin with NO separator (the userinfo bypass: @host makes the app host the credentials);
+    # /safe/redirect refuses off-site targets (backslash-aware); /safe/redirect/origin prepends
+    # origin + "/", which keeps every value in the app's own path under WHATWG parsing - the twin
+    # a substring matcher false-positives on. burpsy's row resolves the Location the way a browser
+    # does (redirectTargetHost); OpenRedireX HEAD-follows and reports any redirect at all, so its
+    # hit on the safe origin twin (Go's mux 301s the cleaned path) is an EXPECTED reference FP -
+    # that difference is the comparison, not noise.
+    #
+    # The tool reads targets on stdin and its stock payloads point off-box (google.com /
+    # example.com) while it HEAD-follows every redirect; tool_args rewrites only the marker hosts
+    # to the loopback target, keeping the bypass shapes byte-identical, so the run stays hermetic.
+CLASSES["open-redirect"] = {
+        "name": "open-redirect",
+        "bead": "burpsy-react-ui-j1mk.16",
+        "ref_tool": "openredirex",
+        "ref_name": "OpenRedireX",
+        "adapter": "openredirex",
+        "burpsy_rows": {"Open redirection (reflected)": "open-redirect"},
+        "burpsy_config": {"check_reflection_probes": True},
+        "targets": [
+            {"url": TARGET_BASE + "/redirect?url=/home", "method": "GET", "parameter": "url"},
+            {"url": TARGET_BASE + "/redirect/origin?path=/home", "method": "GET", "parameter": "path"},
+            {"url": TARGET_BASE + "/safe/redirect?url=/home", "method": "GET", "parameter": "url"},
+            {"url": TARGET_BASE + "/safe/redirect/origin?path=/home", "method": "GET", "parameter": "path"},
+        ],
+        "truth": [
+            {"url": TARGET_BASE + "/redirect", "parameter": "url", "class": "open-redirect"},
+            {"url": TARGET_BASE + "/redirect/origin", "parameter": "path", "class": "open-redirect"},
+        ],
+        "tool_args": _openredirex_args,
+        "tool_stdin": _openredirex_stdin,
+}
+
+    # j1mk.16, second reference: Oralyzer 2.0.0. Unlike OpenRedireX it does NOT follow redirects
+    # (allow_redirects=False): a header finding means the 3xx Location merely CONTAINS the payload
+    # string (re.escape substring, case-insensitive) - so the safe origin twin, whose Location is
+    # origin + "/" + value, is an EXPECTED FP for it. Stock payloads stay verbatim minus the four
+    # IPv6-literal lines (they crash the tool's urlsplit; see _oralyzer_args); no host rewrite is
+    # needed because the tool never follows a redirect. -o writes a per-run JSON array; a missing file is "nothing found".
+CLASSES["open-redirect-oralyzer"] = {
+        "name": "open-redirect",
+        "slug": "open-redirect-oralyzer",
+        "bead": "burpsy-react-ui-j1mk.16",
+        "ref_tool": "oralyzer",
+        "ref_name": "Oralyzer",
+        "adapter": "oralyzer",
+        "tool_output": "json-list-files",
+        "burpsy_rows": {"Open redirection (reflected)": "open-redirect"},
+        "burpsy_config": {"check_reflection_probes": True},
+        "targets": [
+            {"url": TARGET_BASE + "/redirect?url=/home", "method": "GET", "parameter": "url"},
+            {"url": TARGET_BASE + "/redirect/origin?path=/home", "method": "GET", "parameter": "path"},
+            {"url": TARGET_BASE + "/safe/redirect?url=/home", "method": "GET", "parameter": "url"},
+            {"url": TARGET_BASE + "/safe/redirect/origin?path=/home", "method": "GET", "parameter": "path"},
+        ],
+        "truth": [
+            {"url": TARGET_BASE + "/redirect", "parameter": "url", "class": "open-redirect"},
+            {"url": TARGET_BASE + "/redirect/origin", "parameter": "path", "class": "open-redirect"},
+        ],
+        "tool_args": _oralyzer_args,
+    }

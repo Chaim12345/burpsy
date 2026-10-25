@@ -232,11 +232,17 @@ func checkOpenRedirect(ctx context.Context, cc *CheckContext) ([]*Finding, error
 			if !ok || target != wantHost {
 				continue
 			}
-			return []*Finding{buildProbeFinding(cc, openRedirectIssue, "firm",
+			// Param carries the insertion point's name (burpsy-react-ui-j1mk.16): the row's
+			// detail already names it, and the parity harness matches burpsy's rows on
+			// (endpoint, parameter) - an unattributed redirect finding cannot be matched
+			// against ground truth even though the check fired.
+			finding := buildProbeFinding(cc, openRedirectIssue, "firm",
 				strconv.Itoa(res.Status)+" redirect Location "+strconv.Quote(location)+" resolves to host "+target+
 					", the external host named by the injected value "+payload,
 				fmt.Sprintf("%s %q controlled the target of a server-issued redirect to an attacker-chosen external origin",
-					point.Kind, point.Name))}, nil
+					point.Kind, point.Name))
+			finding.Param = point.Name
+			return []*Finding{finding}, nil
 		}
 	}
 	return nil, nil

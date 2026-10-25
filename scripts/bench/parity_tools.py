@@ -52,6 +52,29 @@ TOOLS = {
         "path_in_archive": "crlfuzz",
         "note": "release 2021-04-03; repo still pushed 2026-10 (checked 2026-10-25)",
     },
+    # OpenRedireX — open redirect (j1mk.16). Last commit 2023-08-09 (checked 2026-10-25:
+    # unmaintained, but it is the class's named reference). The harness feeds it the tool's own
+    # payloads.txt with the marker hosts rewritten to the loopback target, because the tool
+    # HEAD-follows every redirect and the stock payloads point off-box (google.com/example.com);
+    # the bypass SHAPES under test are byte-identical after the host swap.
+    "openredirex": {
+        "name": "openredirex", "version": "0.0.0-383aea0", "kind": "script-tarball",
+        "url": "https://codeload.github.com/devanshbatham/OpenRedireX/tar.gz/383aea012eed8f3dce2b285d6df73fe5512fde03",
+        "sha256": "228d7fea9de4b1d591a0217a9d5f071f20d524d1950785f044d1a3fa90714871",
+        "entry": "openredirex.py",
+        "pip_requires": ["aiohttp", "tqdm"],
+        "note": "UNMAINTAINED since 2023-08 (checked 2026-10-25); kept as the named reference",
+    },
+    # Oralyzer — open redirect, second reference for j1mk.16. v2.0.0, last push 2026-09-24
+    # (checked 2026-10-25: maintained). pip-installable; the pin is the codeload tarball of the
+    # pinned commit (the hash is for the full-sha URL - a short-ref URL nests a different root
+    # directory name and hashes differently, measured 2026-10-25).
+    "oralyzer": {
+        "name": "oralyzer", "version": "2.0.0", "kind": "pip-tarball",
+        "url": "https://codeload.github.com/r0075h3ll/Oralyzer/tar.gz/97b62464fac9f6aa58cc3d95f3d03b8d0b4ccf7d",
+        "sha256": "edebf5dfd92b78fbe1aac10bf38a863eeaae4c865c6f88f6b9a54a6e5479ee86",
+        "note": "maintained: v2.0.0, last push 2026-09-24 (checked 2026-10-25)",
+    },
     # x8 — hidden parameter discovery, second reference for j1mk.13. Release v4.3.0 (2023-05-22);
     # repo last pushed 2024-09, not archived, checked 2026-10-25. Single gzipped binary; the hash
     # is measured on the downloaded asset (x8's releases publish no checksums).

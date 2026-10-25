@@ -1,6 +1,20 @@
 package scanner
 
-import "testing"
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
+)
 
 // ---------------------------------------------------------------------------
 // existingQueryValues (Zr02's evidence source)
@@ -208,5 +222,45 @@ func TestRedirectTargetHostResolvesTheWayABrowserDoes(t *testing.T) {
 		if !ok || got != c.want {
 			t.Errorf("redirectTargetHost(%q) = %q, %v; want %q", c.location, got, ok, c.want)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// checkOpenRedirect finding attribution (burpsy-react-ui-j1mk.16)
+// ---------------------------------------------------------------------------
+
+// The parity harness matches burpsy's rows against ground truth on (endpoint, parameter): a
+// redirect finding without the insertion point's name is an unmatched row even though the check
+// fired. The check knows the point - the detail text already names it - so the finding must carry
+// it in Param the way the row's detail does.
+func TestOpenRedirectFindingNamesTheInsertionPoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u := r.URL.Query().Get("url"); u != "" && u != "/home" {
+			w.Header().Set("Location", u)
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, "home")
+	}))
+	t.Cleanup(srv.Close)
+	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	port, _ := strconv.Atoi(portStr)
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, host, uint16(port), "/redirect?url=/home", "home")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{MaxConcurrency: 1, Timeout: 30 * time.Second, CheckReflectionProbes: true})
+	_, findings := scan.AuditSession(context.Background(), []core.ExchangeID{id}, DefaultAuditConfig())
+	var f *Finding
+	for _, x := range findings {
+		if x.Name == openRedirectIssue {
+			f = x
+		}
+	}
+	if f == nil {
+		t.Fatal("an endpoint that redirects to the injected host was not reported")
+	}
+	if f.Param != "url" {
+		t.Fatalf("the redirect finding does not name its insertion point: got %q, want %q", f.Param, "url")
 	}
 }

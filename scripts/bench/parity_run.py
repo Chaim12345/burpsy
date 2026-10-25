@@ -69,6 +69,12 @@ def adapt(spec, raw):
             raw, spec["name"], [t["url"] for t in spec["targets"]])
     if kind == "katana":
         return parity_adapters.from_katana_jsonl(raw, spec["name"])
+    if kind == "openredirex":
+        return parity_adapters.from_openredirex_text(
+            raw, spec["name"], [t["url"] for t in spec["targets"]])
+    if kind == "oralyzer":
+        return parity_adapters.from_oralyzer_json(
+            raw, spec["name"], [t["url"] for t in spec["targets"]])
     raise ValueError(f"unknown adapter {kind!r}")
 
 
@@ -174,17 +180,22 @@ class LiveCtx:
         desc = parity_tools.ensure_tool(parity_tools.TOOLS[spec["ref_tool"]], self.tools_dir)
         chunks = []
         merged = {}
+        merged_list = []
         for i, t in enumerate(spec["targets"]):
             tdir = Path(out_dir) / f"tool-{i}"
             tdir.mkdir(exist_ok=True)
             argv = spec["tool_args"](t["url"], desc, str(tdir))
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=900)
+            # tool_stdin: some tools read the target list from stdin (OpenRedireX) instead of
+            # taking it on argv. The factory gets the same (url, desc, out_dir) as tool_args.
+            stdin_factory = spec.get("tool_stdin")
+            input_text = stdin_factory(t["url"], desc, str(tdir)) if stdin_factory else None
+            proc = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=900)
             (tdir / "stdout.txt").write_text(proc.stdout)
             (tdir / "stderr.txt").write_text(proc.stderr)
             # The exit code is an artifact too: a tool that died must not read as "found nothing"
             # (pre-review on j1mk.14, 2026-10-25).
             (tdir / "exit_code.txt").write_text(str(proc.returncode))
-            jsons = list(tdir.glob("*.json")) if spec.get("tool_output") == "merged-json-file" else []
+            jsons = list(tdir.glob("*.json")) if spec.get("tool_output") in ("merged-json-file", "json-list-files") else []
             if proc.returncode != 0 and not proc.stdout.strip() and not jsons:
                 raise RuntimeError(
                     f"{spec['ref_name']} exited {proc.returncode} with no output on {t['url']}; "
@@ -194,10 +205,17 @@ class LiveCtx:
                 # file is the tool saying "nothing found"; the per-target objects merge into one.
                 for f in jsons:
                     merged.update(json.loads(f.read_text()))
+            elif spec.get("tool_output") == "json-list-files":
+                # Same but the per-run file is a LIST (Oralyzer's -o): the per-target arrays
+                # concatenate. A missing file is the tool saying "nothing found".
+                for f in jsons:
+                    merged_list.extend(json.loads(f.read_text()))
             else:
                 chunks.append(proc.stdout)
         if spec.get("tool_output") == "merged-json-file":
             return json.dumps(merged) if merged else ""
+        if spec.get("tool_output") == "json-list-files":
+            return json.dumps(merged_list)
         return "\n".join(chunks)
 
 

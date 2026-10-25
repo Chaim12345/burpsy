@@ -238,7 +238,13 @@ class TestSpecs(unittest.TestCase):
             self.assertTrue(spec.get("burpsy_rows") or spec.get("burpsy_collect"), name)
             self.assertTrue(spec["targets"], name)
             self.assertTrue(callable(spec["tool_args"]), name)
-            argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/b/tool", "venv_bin": "/b", "script": "/b/tool.py"}, "/tmp")
+            # Builders that read the tool's own assets (openredirex rewrites payloads.txt) get a
+            # real temp script dir; the desc otherwise fakes the pinned layout.
+            with tempfile.TemporaryDirectory() as td:
+                Path(td, "tool.py").write_text("")
+                Path(td, "payloads.txt").write_text("//google.com/%2f..\n")
+                Path(td, "out").mkdir()
+                argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/b/tool", "venv_bin": "/b", "script": str(Path(td, "tool.py"))}, str(Path(td, "out")))
             # The argv names the pinned tool's executable (binary, or the venv python for scripts).
             self.assertTrue(argv[0].startswith("/b/"), (name, argv))
             for t in spec.get("truth", []):
@@ -532,6 +538,90 @@ class TestCrawlSpecOrchestration(unittest.TestCase):
 
 
 import os  # noqa: E402
+class TestOpenRedirectAdapters(unittest.TestCase):
+    SEEDS = ["http://127.0.0.1:19090/redirect?url=/home",
+             "http://127.0.0.1:19090/redirect/origin?path=/home",
+             "http://127.0.0.1:19090/safe/redirect?url=/home",
+             "http://127.0.0.1:19090/safe/redirect/origin?path=/home"]
+
+    def test_openredirex_found_and_info_lines_both_count(self):
+        raw = ("\x1b[32m[FOUND]\x1b[0m http://127.0.0.1:19090/redirect?url=//127.0.0.1:19090/x "
+               "redirects to http://127.0.0.1:19090/redirect?url=//127.0.0.1:19090/x --> http://127.0.0.1:19090/x\n"
+               "[INFO] http://127.0.0.1:19090/redirect/origin?path=@127.0.0.1:19090/x redirects to "
+               "http://127.0.0.1:19090/redirect/origin?path=@127.0.0.1:19090/x\n"
+               "[ERROR] Error fetching: http://127.0.0.1:19090/safe/redirect?url=//x\n")
+        got = parity_adapters.from_openredirex_text(raw, "open-redirect", self.SEEDS)
+        self.assertEqual(
+            {(g["url"], g["parameter"], g["class"]) for g in got},
+            {("http://127.0.0.1:19090/redirect", "url", "open-redirect"),
+             ("http://127.0.0.1:19090/redirect/origin", "path", "open-redirect")})
+        self.assertIn("-->", got[0]["technique"])
+
+    def test_openredirex_silence_is_no_findings(self):
+        self.assertEqual(parity_adapters.from_openredirex_text("", "open-redirect", self.SEEDS), [])
+        self.assertEqual(parity_adapters.from_openredirex_text(
+            "[INFO] Processing 1 URLs with 57 payloads.\n", "open-redirect", self.SEEDS), [])
+
+    def test_oralyzer_json(self):
+        raw = json.dumps([
+            {"type": "header", "request_url": "http://127.0.0.1:19090/safe/redirect/origin?path=//google.com",
+             "payload": "//google.com", "status_code": 302,
+             "destination": "http://127.0.0.1:19090//google.com"},
+            {"type": "header", "request_url": "http://127.0.0.1:19090/redirect?url=//google.com",
+             "payload": "//google.com", "status_code": 302, "destination": "//google.com"}])
+        got = parity_adapters.from_oralyzer_json(raw, "open-redirect", self.SEEDS)
+        self.assertEqual(
+            {(g["url"], g["parameter"]) for g in got},
+            {("http://127.0.0.1:19090/safe/redirect/origin", "path"),
+             ("http://127.0.0.1:19090/redirect", "url")})
+        self.assertIn("header:", got[0]["technique"])
+
+    def test_oralyzer_missing_file_is_empty(self):
+        self.assertEqual(parity_adapters.from_oralyzer_json("", "open-redirect", self.SEEDS), [])
+
+    def test_adapt_routes_the_new_adapters(self):
+        spec = {"adapter": "openredirex", "name": "open-redirect",
+                "targets": [{"url": self.SEEDS[0]}]}
+        got = parity_run.adapt(spec, "[INFO] http://127.0.0.1:19090/redirect?url=//x redirects to y\n")
+        self.assertEqual(len(got), 1)
+        spec = {"adapter": "oralyzer", "name": "open-redirect",
+                "targets": [{"url": self.SEEDS[0]}]}
+        got = parity_run.adapt(spec, json.dumps([
+            {"type": "header", "request_url": "http://127.0.0.1:19090/redirect?url=//x",
+             "payload": "//x", "status_code": 302}]))
+        self.assertEqual(len(got), 1)
+
+    def test_openredirex_args_rewrite_hosts_and_stdin_carries_the_url(self):
+        from parity_specs import _openredirex_args, _openredirex_stdin
+        with tempfile.TemporaryDirectory() as td:
+            Path(td, "openredirex.py").write_text("")
+            Path(td, "payloads.txt").write_text("//google.com/%2f..\n/%5cexample.com\n")
+            Path(td, "out").mkdir()
+            argv = _openredirex_args("http://127.0.0.1:19090/redirect?url=/home",
+                                     {"venv_bin": "/v", "script": str(Path(td, "openredirex.py"))},
+                                     str(Path(td, "out")))
+            self.assertEqual(argv[:2], ["/v/python", str(Path(td, "openredirex.py"))])
+            rewritten = Path(td, "out", "payloads.txt").read_text()
+            self.assertNotIn("google.com", rewritten)
+            self.assertNotIn("example.com", rewritten)
+            self.assertIn("//127.0.0.1:19090/%2f..", rewritten)
+            self.assertIn("/%5c127.0.0.1:19090", rewritten)
+        self.assertEqual(_openredirex_stdin("http://x/y?a=b", None, None), "http://x/y?a=b\n")
+
+    def test_oralyzer_args_drop_the_bracketed_ipv6_payloads(self):
+        # Oralyzer 2.0.0 lets urlsplit's ValueError on a bracketed netloc kill the whole target
+        # run; the harness filters those four stock lines and passes the rest with -p.
+        from parity_specs import _oralyzer_args
+        with tempfile.TemporaryDirectory() as td:
+            data = Path(td, "venv", "lib", "python3.10", "site-packages", "oralyzer", "data")
+            data.mkdir(parents=True)
+            Path(td, "venv", "bin").mkdir(parents=True)
+            Path(td, "out").mkdir()
+            (data / "payloads.txt").write_text("//google.com\nhttp://[::ffff:216.58.214.206]\nhttp:[::1]\n")
+            argv = _oralyzer_args("http://x/y?a=b", {"venv_bin": str(Path(td, "venv", "bin"))}, str(Path(td, "out")))
+            pfile = Path(td, "out", "payloads.txt")
+            self.assertIn("-p", argv)
+            self.assertEqual(pfile.read_text(), "//google.com\n")
 
 
 if __name__ == "__main__":
