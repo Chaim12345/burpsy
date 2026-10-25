@@ -18,3 +18,12 @@ the observed rebuilds, but treat that as luck, not contract: the repo is the onl
 
 ## go test defaults (2026-10-25)
 The 10-minute default timeout kills long packages mid-run; always pass an explicit -timeout.
+
+## A paused runner is not a wedge (2026-10-25, retracted quiet-AC report)
+A detached runner pauses with the sandbox. The signature: a "deterministic stall at the same point"
+with ZERO PASS lines and a goroutine dump whose client is blocked on a fixture that legitimately
+sleeps (e.g. /auth/slow/login) - the dump was the go-test -timeout firing mid-audit, not a mutual
+wait. Before attributing a desync: (1) confirm the runner had a continuous awake window; (2) a real
+wedge needs the server side to have NO in-flight handler AND the fixture to not be sleeping on
+purpose; (3) re-run with -parallel N and babysitting before filing cross-lane. The 4/4
+"deterministic" pattern was deterministic because the pause fired at the same wall-clock offset.
