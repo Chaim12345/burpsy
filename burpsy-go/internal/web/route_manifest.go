@@ -1110,6 +1110,17 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskCredential,
 		summary: "session handling rules: which hosts get re-authenticated, and how",
 	},
+	"/api/session/token-rules": {
+		// riskCredential, with the session rules: a rule governs where captured authentication
+		// material (bearer tokens, CSRF values) is written, and the list answer shows it.
+		methods: []string{"GET", "POST"}, risk: riskCredential,
+		summary: "project-level token rules (burpsy-react-ui-xe82): a value captured from any " +
+			"observed response, injected into later matching requests across tools",
+	},
+	"/api/session/token-rules/": {
+		methods: []string{"PUT", "DELETE"}, risk: riskCredential, subPath: "token-1",
+		summary: "one token rule by id: PUT replaces it (id and order kept), DELETE removes it",
+	},
 	"/api/session/rules/": {
 		// riskCredential stays for the whole subtree even though /test only sends: the macro steps
 		// carry the rule's login credentials and the run replays them at the target, and the 405

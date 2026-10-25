@@ -168,6 +168,52 @@ func (c *Coordinator) TokenRules() []*TokenRule {
 	return out
 }
 
+// ErrNoSuchTokenRule names an edit or delete addressed at a rule that is not registered.
+var ErrNoSuchTokenRule = errors.New("no such token rule")
+
+// TokenRule is one registered rule by ID, or nil.
+func (c *Coordinator) TokenRule(id string) *TokenRule {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.tokenRules[id]
+}
+
+// UpdateTokenRule replaces one registered rule, keeping its ID and its place in the order: an
+// edit is not a re-add, and the capture order the operator arranged must not shuffle under one.
+func (c *Coordinator) UpdateTokenRule(id string, rule *TokenRule) error {
+	if rule == nil {
+		return fmt.Errorf("no token rule")
+	}
+	if err := rule.validate(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.tokenRules[id]; !ok {
+		return ErrNoSuchTokenRule
+	}
+	rule.ID = id
+	c.tokenRules[id] = rule
+	return nil
+}
+
+// RemoveTokenRule deletes one registered rule, reporting whether it existed.
+func (c *Coordinator) RemoveTokenRule(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.tokenRules[id]; !ok {
+		return false
+	}
+	delete(c.tokenRules, id)
+	for i, rid := range c.tokenOrder {
+		if rid == id {
+			c.tokenOrder = append(c.tokenOrder[:i], c.tokenOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
 // TokenValue is the latest value captured under one extraction name.
 func (c *Coordinator) TokenValue(name string) (string, bool) {
 	c.tokenMu.Lock()

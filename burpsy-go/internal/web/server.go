@@ -768,6 +768,12 @@ func (s *Server) persistSessionRules() {
 	}
 }
 
+func (s *Server) persistTokenRules() {
+	if s.persist != nil {
+		s.persist.SaveTokenRules(s.sessionCoordinator.TokenRules())
+	}
+}
+
 func (s *Server) persistUpstreamProxy() {
 	if s.persist != nil && s.upstreamProxy != nil {
 		s.persist.SaveUpstreamProxy(s.upstreamProxy)
@@ -1240,6 +1246,8 @@ func (s *Server) setupRoutes() {
 
 	// Session
 	s.route("/api/session/rules", s.handleSessionRules)
+	s.route("/api/session/token-rules", s.handleSessionTokenRules)
+	s.route("/api/session/token-rules/", s.handleSessionTokenRuleDetail)
 	s.route("/api/session/rules/", s.handleSessionRuleDetail)
 	s.route("/api/session/cookies", s.handleSessionCookies)
 	// The session-handling tracer (burpsy-react-ui-n29): one subtree serving the entries and

@@ -13,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
+	"github.com/burpsy-go/burpsy/internal/session"
 )
 
 // routeSchemas declares, per "VERB /pattern", the request type each body-taking handler decodes into
@@ -293,6 +294,11 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/session/rules":       {body: typeOf[sessionRuleDto]()},
 	"PUT /api/session/rules/":       {body: typeOf[sessionRuleDto]()},
 	"DELETE /api/session/rules/":    noBody,
+
+	"GET /api/session/token-rules":     noBody,
+	"POST /api/session/token-rules":    {body: typeOf[session.TokenRule]()},
+	"PUT /api/session/token-rules/":    {body: typeOf[session.TokenRule]()},
+	"DELETE /api/session/token-rules/": noBody,
 	"POST /api/session/rules/": {variants: map[string]reflect.Type{
 		"1/update-macro":      nil,
 		"1/run":               nil,

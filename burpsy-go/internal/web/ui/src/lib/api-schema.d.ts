@@ -3278,6 +3278,54 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/session/token-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * project-level token rules (burpsy-react-ui-xe82): a value captured from any observed response, injected into later matching requests across tools
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        get: operations["getApiSessionTokenRules"];
+        put?: never;
+        /**
+         * project-level token rules (burpsy-react-ui-xe82): a value captured from any observed response, injected into later matching requests across tools
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        post: operations["postApiSessionTokenRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/session/token-rules/token-1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * one token rule by id: PUT replaces it (id and order kept), DELETE removes it
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        put: operations["putApiSessionTokenRulesToken1"];
+        post?: never;
+        /**
+         * one token rule by id: PUT replaces it (id and order kept), DELETE removes it
+         * @description Risk class credential: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        delete: operations["deleteApiSessionTokenRulesToken1"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/session/trace": {
         parameters: {
             query?: never;
@@ -12329,6 +12377,164 @@ export interface operations {
             path: {
                 id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getApiSessionTokenRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postApiSessionTokenRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled?: boolean;
+                    extract?: {
+                        from?: string;
+                        group?: number;
+                        header?: string;
+                        json_path?: string;
+                        name?: string;
+                        pattern?: string;
+                        prefix?: string;
+                        step?: number;
+                        suffix?: string;
+                        url_encoded?: boolean;
+                    };
+                    id?: string;
+                    inject_header?: string;
+                    inject_param?: string;
+                    inject_value?: string;
+                    name?: string;
+                    scope_hosts?: string[];
+                    scope_tools?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putApiSessionTokenRulesToken1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled?: boolean;
+                    extract?: {
+                        from?: string;
+                        group?: number;
+                        header?: string;
+                        json_path?: string;
+                        name?: string;
+                        pattern?: string;
+                        prefix?: string;
+                        step?: number;
+                        suffix?: string;
+                        url_encoded?: boolean;
+                    };
+                    id?: string;
+                    inject_header?: string;
+                    inject_param?: string;
+                    inject_value?: string;
+                    name?: string;
+                    scope_hosts?: string[];
+                    scope_tools?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteApiSessionTokenRulesToken1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

@@ -156,6 +156,8 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/session/prompts/": "riskCredential",
  "/api/session/rules": "riskCredential",
  "/api/session/rules/": "riskCredential",
+ "/api/session/token-rules": "riskCredential",
+ "/api/session/token-rules/": "riskCredential",
  "/api/session/trace": "riskRead",
  "/api/session/trace/enable": "riskLocal",
  "/api/settings/triage": "riskCredential",

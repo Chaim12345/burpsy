@@ -1013,6 +1013,33 @@ export interface SessionRules {
  hint?: string;
 }
 
+/** One project-level capture-and-inject pair (burpsy-react-ui-xe82): the extraction lifts a value
+ * from any observed response; the latest value is written into later matching requests as the
+ * header its template resolves to, the query parameter it names, or both. */
+export interface TokenRule {
+ id?: string;
+ name: string;
+ enabled: boolean;
+ scope_hosts?: string[];
+ scope_tools?: string[];
+ extract: {
+  name: string;
+  source: string;
+  pattern: string;
+  group: number;
+  [key: string]: unknown;
+ };
+ inject_header?: string;
+ inject_value?: string;
+ inject_param?: string;
+}
+
+export interface TokenRules {
+ wired: boolean;
+ rules: TokenRule[];
+ tools: string[];
+}
+
 export interface ToolOutput {
  text: string;
  [key: string]: unknown;

@@ -157,6 +157,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/session/prompts/": true,
  "/api/session/rules": true,
  "/api/session/rules/": true,
+ "/api/session/token-rules": true,
+ "/api/session/token-rules/": true,
  "/api/session/trace": false,
  "/api/session/trace/enable": false,
  "/api/settings/triage": true,

@@ -27,6 +27,8 @@ import type {
  WsConnection,
  WsHistory,
  WsMessage,
+ TokenRule,
+ TokenRules,
 } from "./types";
 
 export const queryClient = new QueryClient({
@@ -73,6 +75,7 @@ export const keys = {
  organizer: ["organizer"] as const,
  rules: ["rules"] as const,
  sessionRules: ["session", "rules"] as const,
+ sessionTokenRules: ["session", "token-rules"] as const,
  sessionCookies: ["session", "cookies"] as const,
  protocols: ["protocols"] as const,
  scannerConfigs: ["scanner", "configs"] as const,
@@ -365,6 +368,8 @@ export const useOrganizer = () =>
  useResource<{ items: OrganizerItem[]; collections: OrganizerCollection[] }>(keys.organizer, "/api/tools/organizer");
 export const useMatchReplace = () => useResource<MatchReplaceResponse>(keys.rules, "/api/tools/rules");
 export const useSessionRules = () => useResource<SessionRules>(keys.sessionRules, "/api/session/rules");
+export const useSessionTokenRules = () =>
+ useResource<TokenRules>(keys.sessionTokenRules, "/api/session/token-rules");
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
 
 /** The Search box's server-side modifiers (ngcj). Same names and truthy spellings as the
@@ -454,6 +459,27 @@ export function useSaveSessionRule() {
    rule.id === undefined
     ? api<{ rule: SessionRule }>("/api/session/rules", json("POST", rule))
     : api<{ rule: SessionRule }>(`/api/session/rules/${rule.id}`, json("PUT", rule)),
+  onSuccess: () => invalidate([["session"]]),
+ });
+}
+
+export function useSaveTokenRule() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  // riskCredential, same as the session rules above: a token rule steers captured authentication
+  // material, so its writes ride the same one /confirm the rules pair mints.
+  mutationFn: (rule: TokenRule) =>
+   rule.id === undefined
+    ? api<{ rule: TokenRule }>("/api/session/token-rules", json("POST", rule))
+    : api<{ rule: TokenRule }>(`/api/session/token-rules/${rule.id}`, json("PUT", rule)),
+  onSuccess: () => invalidate([["session"]]),
+ });
+}
+
+export function useDeleteTokenRule() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (id: string) => api(`/api/session/token-rules/${id}`, { method: "DELETE" }),
   onSuccess: () => invalidate([["session"]]),
  });
 }
