@@ -5,7 +5,7 @@ import { formatDuration } from "../lib/api";
 import { useRunAudit, useScannerConfigs, useScannerCoverage, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { useScannerConfig, useSaveScannerConfig } from "../lib/data";
 import { useSecretDetection, useSetSecretDetection } from "../lib/data.secrets";
-import type { ScannerConfig } from "../lib/types";
+import type { ScannerConfig, XssBrowserTarget } from "../lib/types";
 import { useApp } from "../lib/store";
 import type { AuditResult } from "../lib/types.attack";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
@@ -19,32 +19,161 @@ import { SimpleTable } from "../ui/table";
    readable next to the thing that launches one. Same wiring as before: draft-then-Save, PUT through
    /api/scanner/config, persisted for future starts too. */
 
-const AUDIT_CHECK_GROUPS: { title: string; detail: string; rows: { key: keyof ScannerConfig; label: string; hint?: string }[] }[] = [
+type AuditRow = { key: keyof ScannerConfig; label: string; hint?: string; defaultOn?: boolean };
+
+// Grouped by what a check does to the target, not by family: the operator is deciding how loud a
+// run is. `defaultOn` mirrors the server's own defaults (scanner.NewActiveScanner, j1mk.37); a
+// switch without it starts off and is its own opt-in.
+const AUDIT_CHECK_GROUPS: { title: string; detail: string; rows: AuditRow[] }[] = [
+ {
+  title: "Passive",
+  detail: "Response inspection that sends no request of its own.",
+  rows: [
+   { key: "check_headers", label: "Security headers & cookies", defaultOn: true },
+   { key: "check_passive_posture", label: "Security posture", defaultOn: true },
+   { key: "check_passive_analysis", label: "Advanced passive analysis", defaultOn: true },
+   { key: "check_host_discovery", label: "Host discovery notes", defaultOn: true },
+   { key: "check_cookie_attributes", label: "Cookie prefix & SameSite", hint: "Read from captured Set-Cookie headers" },
+   {
+    key: "check_subdomain_takeover",
+    label: "Subdomain takeover",
+    hint: "Sends nothing to the target, but resolves DNS for every audited hostname",
+   },
+  ],
+ },
  {
   title: "Active injection",
-  detail: "Families that send crafted requests at the target.",
+  detail:
+   "Inert probes: a marker, an arithmetic expression, a malformed fragment or a file read, each proven by evidence a reflection cannot fake.",
   rows: [
-   { key: "check_sqli", label: "SQL injection" },
-   { key: "check_xss", label: "Cross-site scripting" },
-   { key: "check_path_traversal", label: "File path traversal" },
-   { key: "check_ssrf", label: "Server-side request forgery" },
-   { key: "check_xxe", label: "XML external entity", hint: "Needs the target to accept XML input" },
+   { key: "check_sqli", label: "SQL injection", defaultOn: true },
+   { key: "check_xss", label: "Cross-site scripting", defaultOn: true },
+   { key: "check_path_traversal", label: "File path traversal", defaultOn: true },
+   {
+    key: "check_ssrf",
+    label: "Server-side request forgery",
+    defaultOn: true,
+    hint: "Its out-of-band row also needs Extended active checks and a collaborator; the in-band technique has its own switch below",
+   },
+   {
+    key: "check_xxe",
+    label: "XML external entity",
+    defaultOn: true,
+    hint: "File read through an external entity. Needs the target to accept XML. Entity expansion is under Extended active checks",
+   },
+   {
+    key: "check_active_injection",
+    label: "OS command, LDAP, XPath, template & code injection",
+    defaultOn: true,
+    hint:
+     "Twelve checks: OS command, LDAP, XPath, XML, file path manipulation, server-side template, expression language and five code-injection rows. Each is proven by a computed value, an error signature, a control differential or file content",
+   },
+   {
+    key: "check_reflection_probes",
+    label: "Reflection probing",
+    defaultOn: true,
+    hint:
+     "Input reflection, open redirect, link manipulation, response header injection, unidentified code injection and server-side includes (an #if expression, never #exec)",
+   },
    { key: "check_jwt_weak", label: "Weak JWT secrets" },
    { key: "check_js_vulns", label: "JavaScript vulnerabilities" },
    { key: "check_cache_poisoning", label: "Web cache poisoning" },
    { key: "check_response_dependence", label: "Response-dependence analysis" },
-   { key: "check_active_injection", label: "Generic active insertion probes" },
-   { key: "check_extended_active", label: "Extended active coverage", hint: "More insertion points per exchange — slower, deeper" },
   ],
  },
  {
-  title: "Passive",
-  detail: "Response inspection that never sends a request of its own. On by default.",
+  title: "Opt-in active probes",
+  detail: "Off until switched on. They send request shapes a monitoring system may flag, or replay captured requests in altered form.",
   rows: [
-   { key: "check_headers", label: "Security headers & cookies" },
-   { key: "check_passive_posture", label: "Security posture" },
-   { key: "check_passive_analysis", label: "Advanced passive analysis" },
-   { key: "check_host_discovery", label: "Host discovery notes" },
+   {
+    key: "check_sqli_heavy_query",
+    label: "SQL injection: heavy-query delays",
+    hint: "Time delays that cost the database CPU rather than a waiting connection",
+   },
+   {
+    key: "check_sqli_or_boolean",
+    label: "SQL injection: widening OR shapes",
+    hint: "An always-true OR can widen an UPDATE or DELETE to every row",
+   },
+   {
+    key: "check_sqli_stacked",
+    label: "SQL injection: stacked queries",
+    hint: "Annotates a proven finding; several multi-second sleeps per confirmation",
+   },
+   { key: "check_nosql_injection", label: "NoSQL injection", hint: "Reads only (GET, or a POST naming a read or a login)" },
+   { key: "check_server_side_parameter_pollution", label: "Server-side parameter pollution" },
+   {
+    key: "check_llm_prompt_injection",
+    label: "LLM prompt injection",
+    hint: "Appends a benign instruction to text values a model may answer",
+   },
+   { key: "check_weak_crypto", label: "Weak cryptography", hint: "Submits random markers; on a login form they are failed logins" },
+   {
+    key: "check_idor",
+    label: "Insecure direct object references",
+    hint: "Swaps an object id for a neighbour with read-only probes, confirmed against two controls",
+   },
+   {
+    key: "check_graphql_hardening",
+    label: "GraphQL hardening",
+    hint: "Query batching, depth and debug errors: shapes a gateway's abuse monitoring alerts on",
+   },
+   { key: "check_host_header", label: "Host header injection", hint: "Sends requests naming hosts the target does not serve" },
+   { key: "check_client_ip_spoofing", label: "Spoofable client-IP headers", hint: "Claims loopback to refused pages" },
+   {
+    key: "check_jwt_forgery",
+    label: "JWT forgery",
+    hint: "Replays the request with only the token changed: unverified signature, none algorithm, jwk, jku, x5u, expired",
+   },
+   { key: "check_jwt_exposure", label: "JWT credential exposure", hint: "Replays with the signature altered and with the token removed" },
+   {
+    key: "check_insecure_deserialization",
+    label: "Insecure deserialization",
+    hint: "Benign accepted/rejected value pairs; no gadget is sent",
+   },
+   {
+    key: "check_websocket_hijacking",
+    label: "Cross-site WebSocket hijacking",
+    hint: "Opens authenticated sockets as the captured session",
+   },
+   {
+    key: "check_request_smuggling",
+    label: "HTTP request smuggling",
+    hint: "Timing only; each confirmed attack holds a back-end connection open for its read window",
+   },
+   {
+    key: "check_extended_active",
+    label: "Extended active checks",
+    hint:
+     "Admits GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy files, XML entity expansion, request smuggling, file-upload and OpenAPI discovery, React2Shell fingerprinting, session comparisons and more. Slower, noisier",
+   },
+  ],
+ },
+ {
+  title: "Intrusive",
+  detail: "Leaves state on the target or acts on an account. Use a test account or a disposable environment.",
+  rows: [
+   {
+    key: "check_file_upload",
+    label: "File upload",
+    hint: "Re-sends an upload as HTML, SVG and server-script files and fetches the stored copies back: it leaves files on the target",
+   },
+   {
+    key: "check_login_rate_limit",
+    label: "Login rate limiting",
+    hint: "A burst of failed logins under an invented identity: what monitoring is built to alert on",
+   },
+   { key: "check_username_enumeration", label: "Username enumeration", hint: "Failed logins for the captured, real username" },
+   {
+    key: "check_password_reset",
+    label: "Password reset tokens",
+    hint: "Changes the test identity's password and triggers reset mail; does nothing without listed test identities",
+   },
+   {
+    key: "check_session_management",
+    label: "Session management",
+    hint: "Replays the captured login, with its credentials, for fresh sessions",
+   },
   ],
  },
  {
@@ -53,13 +182,151 @@ const AUDIT_CHECK_GROUPS: { title: string; detail: string; rows: { key: keyof Sc
   rows: [
    { key: "check_corpus", label: "BCheck corpus actives", hint: "The bundled PortSwigger corpus, or one loaded via --bchecks" },
    { key: "check_dom", label: "DOM-based checks", hint: "Needs -dom chrome (or ws://) at startup" },
+   {
+    key: "check_xss_browser_confirm",
+    label: "Browser confirmation of reflected XSS",
+    hint: "Needs -dom. A point on a route not listed under XSS browser routes is declined, not reported clean",
+   },
    { key: "check_out_of_band", label: "Out-of-band callbacks", hint: "interactsh confirmation for blind findings" },
+   {
+    key: "check_ssrf_in_band",
+    label: "In-band SSRF canary",
+    hint: "Plants a URL this scanner serves on a loopback listener and sees whether the application fetches it",
+   },
    { key: "check_stored", label: "Stored-input rendering" },
    { key: "check_extended_coverage", label: "Extended crawl coverage" },
-   { key: "check_reflection_probes", label: "Reflection probing" },
   ],
  },
 ];
+
+const XSS_SINKS = [
+ "Function",
+ "innerHTML",
+ "document.write",
+ "location",
+ "setTimeout(string)",
+ "script.src",
+ "jQuery.html",
+ "localStorage",
+ "sessionStorage",
+ "postMessage",
+ "WebSocket(url)",
+ "document.domain",
+ "XMLHttpRequest.open",
+ "document.cookie",
+ "SQLTransaction.executeSql",
+ "document.evaluate",
+ "JSON.parse",
+ "anchor.href",
+ "RegExp",
+ "FileReader.read*",
+ "Object.prototype",
+ "XMLHttpRequest.setRequestHeader",
+];
+
+const BLANK_ROUTE: XssBrowserTarget = {
+ match: "",
+ root_url: "",
+ master_selector: "",
+ master_text: "",
+ level_selector: "",
+ level_text: "",
+ level_from_path: false,
+ input_selector: "",
+ submit_selector: "",
+ click_trigger: false,
+ sink: "",
+};
+
+const ROUTE_TEXT_FIELDS: {
+ key: Exclude<keyof XssBrowserTarget, "level_from_path" | "click_trigger" | "sink">;
+ label: string;
+ required?: boolean;
+}[] = [
+ { key: "match", label: "match (URL substring, blank = any)" },
+ { key: "root_url", label: "root URL", required: true },
+ { key: "master_selector", label: "master selector", required: true },
+ { key: "master_text", label: "master text", required: true },
+ { key: "level_selector", label: "level selector" },
+ { key: "level_text", label: "level text" },
+ { key: "input_selector", label: "input selector", required: true },
+ { key: "submit_selector", label: "submit selector" },
+];
+
+/** The routes the browser XSS confirmation drives. The scanner ships none and cannot guess an
+ *  application's navigation, so a point on a route listed nowhere is declined rather than reported
+ *  clean. The list is saved whole, with the rest of the card. */
+function XssRoutes({ routes, onChange }: { routes: XssBrowserTarget[]; onChange: (routes: XssBrowserTarget[]) => void }): JSX.Element {
+ const patch = (i: number, change: Partial<XssBrowserTarget>) => onChange(routes.map((r, at) => (at === i ? { ...r, ...change } : r)));
+ return (
+  <section aria-label="XSS browser routes" style={{ marginTop: "var(--gap)" }}>
+   <h4>XSS browser routes</h4>
+   <p className="cell-dim" style={{ margin: 0 }}>
+    How the browser confirmation reaches an application's page: where to start, what to click to reach the form, and where to type. Without
+    a route, reflected points the server-side check cannot prove are declined. Marked fields are required.
+   </p>
+   {routes.map((route, i) => (
+    <div key={i} className="card" style={{ marginTop: "var(--gap)" }}>
+     <div className="metric-grid wide">
+      {ROUTE_TEXT_FIELDS.map((f) => (
+       <Field key={f.key} label={f.required ? `${f.label} *` : f.label}>
+        {(id) => (
+         <Input
+          id={id}
+          aria-label={`Route ${i + 1} ${f.label.replace(/ \(.*\)$/, "")}`}
+          value={route[f.key]}
+          onChange={(event) => patch(i, { [f.key]: event.target.value })}
+         />
+        )}
+       </Field>
+      ))}
+      <Field label="sink">
+       {(id) => (
+        <Select id={id} aria-label={`Route ${i + 1} sink`} value={route.sink} onChange={(event) => patch(i, { sink: event.target.value })}>
+         <option value="">innerHTML family (default)</option>
+         {XSS_SINKS.map((name) => (
+          <option key={name} value={name}>
+           {name}
+          </option>
+         ))}
+        </Select>
+       )}
+      </Field>
+     </div>
+     <label className="switch-row">
+      <span>Level text comes from the URL path</span>
+      <Switch
+       label={`Route ${i + 1} level from path`}
+       checked={route.level_from_path}
+       onCheckedChange={(on) => patch(i, { level_from_path: on })}
+      />
+     </label>
+     <label className="switch-row">
+      <span>Click the submit selector to trigger</span>
+      <Switch
+       label={`Route ${i + 1} click trigger`}
+       checked={route.click_trigger}
+       onCheckedChange={(on) => patch(i, { click_trigger: on })}
+      />
+     </label>
+     <Button
+      variant="outline"
+      size="small"
+      onClick={() => onChange(routes.filter((_, at) => at !== i))}
+      aria-label={`Remove route ${i + 1}`}
+     >
+      Remove route
+     </Button>
+    </div>
+   ))}
+   <div style={{ marginTop: "var(--gap)" }}>
+    <Button variant="outline" size="small" onClick={() => onChange([...routes, { ...BLANK_ROUTE }])} disabled={routes.length >= 32}>
+     Add route
+    </Button>
+   </div>
+  </section>
+ );
+}
 
 function AuditChecksSection(): JSX.Element {
  const config = useScannerConfig();
@@ -78,7 +345,7 @@ function AuditChecksSection(): JSX.Element {
  const persist = () => {
   if (!current || !confirmed) return;
   const patch: Partial<ScannerConfig> = {};
-  const writable = patch as Record<string, number | boolean>;
+  const writable = patch as Record<string, unknown>;
   for (const key of Object.keys(confirmed) as (keyof ScannerConfig)[]) {
    if (current[key] !== confirmed[key]) writable[key] = current[key];
   }
@@ -156,7 +423,7 @@ function AuditChecksSection(): JSX.Element {
      </div>
      <div className="stack">
       {AUDIT_CHECK_GROUPS.map((group) => (
-       <div key={group.title} style={{ marginTop: "var(--gap)" }}>
+       <section key={group.title} aria-label={group.title} style={{ marginTop: "var(--gap)" }}>
         <h4>{group.title}</h4>
         <p className="cell-dim" style={{ margin: 0 }}>
          {group.detail}
@@ -166,6 +433,12 @@ function AuditChecksSection(): JSX.Element {
           <label key={row.key} className="switch-row" htmlFor={`audit-${row.key}`}>
            <span>
             <span>{row.label}</span>
+            {row.defaultOn ? (
+             <>
+              {" "}
+              <Badge tone="info">on by default</Badge>
+             </>
+            ) : null}
             {row.hint ? (
              <span className="cell-dim" style={{ display: "block" }}>
               {row.hint}
@@ -176,8 +449,9 @@ function AuditChecksSection(): JSX.Element {
           </label>
          ))}
         </div>
-       </div>
+       </section>
       ))}
+      <XssRoutes routes={current.xss_browser_targets ?? []} onChange={(routes) => setDraft({ ...current, xss_browser_targets: routes })} />
      </div>
     </>
    ) : null}

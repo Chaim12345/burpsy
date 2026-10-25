@@ -66,6 +66,54 @@ export interface ScannerConfig {
  check_extended_active: boolean;
  check_out_of_band: boolean;
  check_stored: boolean;
+ check_ssrf_in_band: boolean;
+ check_xss_browser_confirm: boolean;
+ check_file_upload: boolean;
+ check_jwt_forgery: boolean;
+ check_jwt_exposure: boolean;
+ check_idor: boolean;
+ check_login_rate_limit: boolean;
+ check_username_enumeration: boolean;
+ check_sqli_heavy_query: boolean;
+ check_sqli_or_boolean: boolean;
+ check_sqli_stacked: boolean;
+ check_password_reset: boolean;
+ check_session_management: boolean;
+ check_request_smuggling: boolean;
+ check_host_header: boolean;
+ check_graphql_hardening: boolean;
+ check_insecure_deserialization: boolean;
+ check_nosql_injection: boolean;
+ check_websocket_hijacking: boolean;
+ check_client_ip_spoofing: boolean;
+ check_server_side_parameter_pollution: boolean;
+ check_llm_prompt_injection: boolean;
+ check_weak_crypto: boolean;
+ check_cookie_attributes: boolean;
+ check_subdomain_takeover: boolean;
+ login_rate_limit_attempts: number;
+ reset_test_identities: string[];
+ reset_mailbox_url: string;
+ /** The application routes the reflected-XSS browser confirmation drives; replaced whole on PUT. */
+ xss_browser_targets: XssBrowserTarget[];
+ /** The issue rows an audit is restricted to; empty runs every enabled check. */
+ only_rows: string[];
+}
+
+/** One xss_browser_targets route, mirroring xssBrowserTargetView in internal/web/api_scanner_config.go. */
+export interface XssBrowserTarget {
+ match: string;
+ root_url: string;
+ master_selector: string;
+ master_text: string;
+ level_selector: string;
+ level_text: string;
+ level_from_path: boolean;
+ input_selector: string;
+ submit_selector: string;
+ click_trigger: boolean;
+ /** A sink name as the server spells it; "" is the innerHTML family. */
+ sink: string;
 }
 
 export interface Stats {
