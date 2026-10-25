@@ -9,23 +9,23 @@ import { PageHeader } from "./layout";
 afterEach(cleanup);
 
 describe("PageHeader settings cog", () => {
-  test("opens the named Settings section", () => {
-    takePendingSettingsSection();
-    useApp.getState().setRoute("logger");
-    renderWithProviders(<PageHeader title="Tool log" settingsSection="logging" />);
-    fireEvent.click(screen.getByRole("button", { name: "Open Tool log settings" }));
-    expect(useApp.getState().route).toBe("settings");
-    expect(takePendingSettingsSection()).toBe("logging");
-  });
+ test("opens the named Settings section", () => {
+  takePendingSettingsSection();
+  useApp.getState().setRoute("logger");
+  renderWithProviders(<PageHeader title="Tool log" settingsSection="logging" />);
+  fireEvent.click(screen.getByRole("button", { name: "Open Tool log settings" }));
+  expect(useApp.getState().route).toBe("settings");
+  expect(takePendingSettingsSection()).toBe("logging");
+ });
 
-  test("a header without a section has no cog", () => {
-    renderWithProviders(<PageHeader title="Dashboard" />);
-    expect(screen.queryByRole("button", { name: /settings/i })).toBeNull();
-  });
+ test("a header without a section has no cog", () => {
+  renderWithProviders(<PageHeader title="Dashboard" />);
+  expect(screen.queryByRole("button", { name: /settings/i })).toBeNull();
+ });
 
-  test("the cog sits beside the page's own actions", () => {
-    renderWithProviders(<PageHeader title="Proxy" settingsSection="proxy" actions={<button type="button">Mine</button>} />);
-    expect(screen.getByRole("button", { name: "Mine" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open Proxy settings" })).toBeTruthy();
-  });
+ test("the cog sits beside the page's own actions", () => {
+  renderWithProviders(<PageHeader title="Proxy" settingsSection="proxy" actions={<button type="button">Mine</button>} />);
+  expect(screen.getByRole("button", { name: "Mine" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Open Proxy settings" })).toBeTruthy();
+ });
 });

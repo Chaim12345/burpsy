@@ -59,15 +59,7 @@ export function PageHeader({
  );
 }
 
-export function SectionHeading({
- title,
- detail,
- actions,
-}: {
- title: string;
- detail?: string;
- actions?: ReactNode;
-}): JSX.Element {
+export function SectionHeading({ title, detail, actions }: { title: string; detail?: string; actions?: ReactNode }): JSX.Element {
  return (
   <div className="section-heading">
    <div>
@@ -172,7 +164,10 @@ const LAYOUT_ICONS: Record<MessageLayout, ComponentType<{ size?: number }>> = {
  combined: Square,
 };
 
-export function useMessageLayout(storageId: string, fallback: Exclude<MessageLayout, "combined"> = "vertical"): [MessageLayout, (next: MessageLayout) => void] {
+export function useMessageLayout(
+ storageId: string,
+ fallback: Exclude<MessageLayout, "combined"> = "vertical",
+): [MessageLayout, (next: MessageLayout) => void] {
  const key = `burpsy.layout.${storageId}`;
  const [layout, setLayout] = useState<MessageLayout>(() => {
   const stored = localStorage.getItem(key);
@@ -198,13 +193,7 @@ export function MessageLayoutSwitch({ value, onChange }: { value: MessageLayout;
    {options.map((option) => {
     const Icon = LAYOUT_ICONS[option.id];
     return (
-     <IconButton
-      key={option.id}
-      label={option.label}
-      size="small"
-      aria-pressed={value === option.id}
-      onClick={() => onChange(option.id)}
-     >
+     <IconButton key={option.id} label={option.label} size="small" aria-pressed={value === option.id} onClick={() => onChange(option.id)}>
       <Icon size={13} />
      </IconButton>
     );

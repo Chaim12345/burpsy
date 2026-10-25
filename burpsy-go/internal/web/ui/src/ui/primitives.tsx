@@ -5,14 +5,14 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { X } from "lucide-react";
 import { useId } from "react";
 import type {
-  AnchorHTMLAttributes,
-  ButtonHTMLAttributes,
-  CSSProperties,
-  HTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
+ AnchorHTMLAttributes,
+ ButtonHTMLAttributes,
+ CSSProperties,
+ HTMLAttributes,
+ InputHTMLAttributes,
+ ReactNode,
+ SelectHTMLAttributes,
+ TextareaHTMLAttributes,
 } from "react";
 import { cn } from "../lib/cn";
 
@@ -61,22 +61,22 @@ export type LabelledId = string & { readonly [labelledByField]: true };
  * an `aria-label` quietly does the real work.
  */
 type Named =
-  | { id: LabelledId; "aria-label"?: never; "aria-labelledby"?: never }
-  | { id?: string; "aria-label": string; "aria-labelledby"?: never }
-  | { id?: string; "aria-label"?: never; "aria-labelledby": string };
+ | { id: LabelledId; "aria-label"?: never; "aria-labelledby"?: never }
+ | { id?: string; "aria-label": string; "aria-labelledby"?: never }
+ | { id?: string; "aria-label"?: never; "aria-labelledby": string };
 
 type NamedProps<T> = Omit<T, "id" | "aria-label" | "aria-labelledby"> & Named;
 
 export function Button({
-  className,
-  variant = "primary",
-  size = "medium",
-  ...props
+ className,
+ variant = "primary",
+ size = "medium",
+ ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "outline" | "danger" | "quiet" | "ghost";
-  size?: "medium" | "small";
+ variant?: "primary" | "outline" | "danger" | "quiet" | "ghost";
+ size?: "medium" | "small";
 }): JSX.Element {
-  return <button type="button" className={cn("button", `button-${variant}`, size === "small" && "button-sm", className)} {...props} />;
+ return <button type="button" className={cn("button", `button-${variant}`, size === "small" && "button-sm", className)} {...props} />;
 }
 
 /**
@@ -88,80 +88,76 @@ export function Button({
  * control explains itself before anyone presses it. `missing` is null when the button can act.
  */
 export function NeedsValueButton({
-  missing,
-  disabled,
-  children,
-  ...props
+ missing,
+ disabled,
+ children,
+ ...props
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-describedby"> & {
-  missing: string | null;
-  variant?: "primary" | "outline" | "danger" | "quiet" | "ghost";
-  size?: "medium" | "small";
+ missing: string | null;
+ variant?: "primary" | "outline" | "danger" | "quiet" | "ghost";
+ size?: "medium" | "small";
 }): JSX.Element {
-  const reasonId = useId();
-  return (
-    <span className="needs-value">
-      <Button {...props} disabled={disabled || missing !== null} aria-describedby={missing ? reasonId : undefined}>
-        {children}
-      </Button>
-      {missing ? (
-        <small className="field-hint" id={reasonId}>
-          {missing}
-        </small>
-      ) : null}
-    </span>
-  );
+ const reasonId = useId();
+ return (
+  <span className="needs-value">
+   <Button {...props} disabled={disabled || missing !== null} aria-describedby={missing ? reasonId : undefined}>
+    {children}
+   </Button>
+   {missing ? (
+    <small className="field-hint" id={reasonId}>
+     {missing}
+    </small>
+   ) : null}
+  </span>
+ );
 }
 
 export function LinkButton({
-  className,
-  variant = "outline",
-  ...props
+ className,
+ variant = "outline",
+ ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: "primary" | "outline" | "quiet" }): JSX.Element {
-  return <a className={cn("button", `button-${variant}`, className)} {...props} />;
+ return <a className={cn("button", `button-${variant}`, className)} {...props} />;
 }
 
 export function IconButton({
-  label,
-  children,
-  className,
-  size = "medium",
-  ...props
+ label,
+ children,
+ className,
+ size = "medium",
+ ...props
 }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-label"> & {
-  label: string;
-  children: ReactNode;
-  size?: "medium" | "small";
+ label: string;
+ children: ReactNode;
+ size?: "medium" | "small";
 }): JSX.Element {
-  return (
-    <Tooltip content={label}>
-      <button type="button" aria-label={label} className={cn("icon-button", size === "small" && "icon-button-sm", className)} {...props}>
-        {children}
-      </button>
-    </Tooltip>
-  );
+ return (
+  <Tooltip content={label}>
+   <button type="button" aria-label={label} className={cn("icon-button", size === "small" && "icon-button-sm", className)} {...props}>
+    {children}
+   </button>
+  </Tooltip>
+ );
 }
 
 export function Input({ className, ...props }: NamedProps<InputHTMLAttributes<HTMLInputElement>>): JSX.Element {
-  return <input className={cn("input", className)} {...props} />;
+ return <input className={cn("input", className)} {...props} />;
 }
 
 export function Textarea({ className, ...props }: NamedProps<TextareaHTMLAttributes<HTMLTextAreaElement>>): JSX.Element {
-  return <textarea className={cn("textarea", className)} spellCheck={false} {...props} />;
+ return <textarea className={cn("textarea", className)} spellCheck={false} {...props} />;
 }
 
 export function Select({ className, ...props }: NamedProps<SelectHTMLAttributes<HTMLSelectElement>>): JSX.Element {
-  return <select className={cn("input", "select", className)} {...props} />;
+ return <select className={cn("input", "select", className)} {...props} />;
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
-  return <div className={cn("card", className)} {...props} />;
+ return <div className={cn("card", className)} {...props} />;
 }
 
-export function Badge({
-  className,
-  tone = "neutral",
-  ...props
-}: HTMLAttributes<HTMLSpanElement> & { tone?: Tone }): JSX.Element {
-  return <span className={cn("badge", `badge-${tone}`, className)} {...props} />;
+export function Badge({ className, tone = "neutral", ...props }: HTMLAttributes<HTMLSpanElement> & { tone?: Tone }): JSX.Element {
+ return <span className={cn("badge", `badge-${tone}`, className)} {...props} />;
 }
 
 /**
@@ -179,58 +175,58 @@ export function Badge({
  * assigned by the caller.
  */
 export function Field({
-  label,
-  hint,
-  children,
-  className,
-  style,
-  htmlFor,
+ label,
+ hint,
+ children,
+ className,
+ style,
+ htmlFor,
 }: {
-  label: string;
-  hint?: string;
-  children: ReactNode | ((id: LabelledId) => ReactNode);
-  className?: string;
-  style?: CSSProperties;
-  htmlFor?: string;
+ label: string;
+ hint?: string;
+ children: ReactNode | ((id: LabelledId) => ReactNode);
+ className?: string;
+ style?: CSSProperties;
+ htmlFor?: string;
 }): JSX.Element {
-  // Called unconditionally: hooks cannot be skipped for the plain-children case.
-  // The cast is the single point where a LabelledId is minted, and it is sound
-  // here precisely because the branch below renders the matching <label>.
-  const generated = useId() as LabelledId;
+ // Called unconditionally: hooks cannot be skipped for the plain-children case.
+ // The cast is the single point where a LabelledId is minted, and it is sound
+ // here precisely because the branch below renders the matching <label>.
+ const generated = useId() as LabelledId;
 
-  if (typeof children === "function") {
-    return (
-      <div className={cn("field", className)} style={style}>
-        <label htmlFor={generated}>
-          <span>{label}</span>
-        </label>
-        {children(generated)}
-        {hint ? <small className="field-hint">{hint}</small> : null}
-      </div>
-    );
-  }
-
-  // A wrapping <label> associates implicitly; an explicit htmlFor is needed when the
-  // control is a Radix widget that renders its own focusable element.
-  return htmlFor ? (
-    <div className={cn("field", className)} style={style}>
-      <label htmlFor={htmlFor}>
-        <span>{label}</span>
-      </label>
-      {children}
-      {hint ? <small className="field-hint">{hint}</small> : null}
-    </div>
-  ) : (
-    <label className={cn("field", className)} style={style}>
-      <span>{label}</span>
-      {children}
-      {hint ? <small className="field-hint">{hint}</small> : null}
+ if (typeof children === "function") {
+  return (
+   <div className={cn("field", className)} style={style}>
+    <label htmlFor={generated}>
+     <span>{label}</span>
     </label>
+    {children(generated)}
+    {hint ? <small className="field-hint">{hint}</small> : null}
+   </div>
   );
+ }
+
+ // A wrapping <label> associates implicitly; an explicit htmlFor is needed when the
+ // control is a Radix widget that renders its own focusable element.
+ return htmlFor ? (
+  <div className={cn("field", className)} style={style}>
+   <label htmlFor={htmlFor}>
+    <span>{label}</span>
+   </label>
+   {children}
+   {hint ? <small className="field-hint">{hint}</small> : null}
+  </div>
+ ) : (
+  <label className={cn("field", className)} style={style}>
+   <span>{label}</span>
+   {children}
+   {hint ? <small className="field-hint">{hint}</small> : null}
+  </label>
+ );
 }
 
 export function Toolbar({ className, ...props }: HTMLAttributes<HTMLDivElement>): JSX.Element {
-  return <div className={cn("toolbar", className)} {...props} />;
+ return <div className={cn("toolbar", className)} {...props} />;
 }
 
 /**
@@ -242,211 +238,210 @@ export function Toolbar({ className, ...props }: HTMLAttributes<HTMLDivElement>)
  * rows inside it.
  */
 export function Empty({ title, detail, action }: { title: string; detail: string; action?: ReactNode }): JSX.Element {
-  return (
-    <div className="empty">
-      <span className="empty-icon" aria-hidden="true">
-        ∅
-      </span>
-      <strong>{title}</strong>
-      <p>{detail}</p>
-      {action}
-    </div>
-  );
+ return (
+  <div className="empty">
+   <span className="empty-icon" aria-hidden="true">
+    ∅
+   </span>
+   <strong>{title}</strong>
+   <p>{detail}</p>
+   {action}
+  </div>
+ );
 }
 
 export function ErrorNotice({
-  error,
-  title = "Request failed",
-  onRetry,
+ error,
+ title = "Request failed",
+ onRetry,
 }: {
-  error: unknown;
-  /** Optional per `design/jsx/error-notice-default.jsx`, which titles each notice by what failed
-   * (e.g. "Could not reach the target") rather than a generic label. Defaults to the generic label
-   * so existing callers that only pass `error`/`onRetry` keep their current behaviour. */
-  title?: string;
-  onRetry?: () => void;
+ error: unknown;
+ /** Optional per `design/jsx/error-notice-default.jsx`, which titles each notice by what failed
+  * (e.g. "Could not reach the target") rather than a generic label. Defaults to the generic label
+  * so existing callers that only pass `error`/`onRetry` keep their current behaviour. */
+ title?: string;
+ onRetry?: () => void;
 }): JSX.Element {
-  const message = error instanceof Error ? error.message : String(error);
-  return (
-    <div className="error-notice" role="alert">
-      <span className="error-notice-icon" aria-hidden="true">
-        ⚠
-      </span>
-      <div>
-        <strong>{title}</strong>
-        <span>{message}</span>
-      </div>
-      {onRetry ? (
-        <Button variant="outline" size="small" onClick={onRetry}>
-          Retry
-        </Button>
-      ) : null}
-    </div>
-  );
+ const message = error instanceof Error ? error.message : String(error);
+ return (
+  <div className="error-notice" role="alert">
+   <span className="error-notice-icon" aria-hidden="true">
+    ⚠
+   </span>
+   <div>
+    <strong>{title}</strong>
+    <span>{message}</span>
+   </div>
+   {onRetry ? (
+    <Button variant="outline" size="small" onClick={onRetry}>
+     Retry
+    </Button>
+   ) : null}
+  </div>
+ );
 }
 
 export function Metric({
-  label,
-  value,
-  detail,
-  accent,
-  tone,
+ label,
+ value,
+ detail,
+ accent,
+ tone,
 }: {
-  label: string;
-  value: ReactNode;
-  detail?: ReactNode;
-  accent?: boolean;
-  tone?: Tone;
+ label: string;
+ value: ReactNode;
+ detail?: ReactNode;
+ accent?: boolean;
+ tone?: Tone;
 }): JSX.Element {
-  return (
-    <div className={cn("card", "metric", accent && "metric-accent", tone && `metric-${tone}`)}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {detail ? <small>{detail}</small> : null}
-    </div>
-  );
+ return (
+  <div className={cn("card", "metric", accent && "metric-accent", tone && `metric-${tone}`)}>
+   <span>{label}</span>
+   <strong>{value}</strong>
+   {detail ? <small>{detail}</small> : null}
+  </div>
+ );
 }
 
 export function Kbd({ children }: { children: ReactNode }): JSX.Element {
-  return <kbd className="kbd">{children}</kbd>;
+ return <kbd className="kbd">{children}</kbd>;
 }
 
 export function Spinner({ label = "Loading" }: { label?: string }): JSX.Element {
-  return <span className="spinner" role="status" aria-label={label} />;
+ return <span className="spinner" role="status" aria-label={label} />;
 }
 
 export function Tooltip({ content, children }: { content: ReactNode; children: ReactNode }): JSX.Element {
-  if (!content) return <>{children}</>;
-  return (
-    <TooltipPrimitive.Root>
-      <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content className="tooltip" sideOffset={6} collisionPadding={8}>
-          {content}
-          <TooltipPrimitive.Arrow className="tooltip-arrow" />
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
-  );
+ if (!content) return <>{children}</>;
+ return (
+  <TooltipPrimitive.Root>
+   <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+   <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Content className="tooltip" sideOffset={6} collisionPadding={8}>
+     {content}
+     <TooltipPrimitive.Arrow className="tooltip-arrow" />
+    </TooltipPrimitive.Content>
+   </TooltipPrimitive.Portal>
+  </TooltipPrimitive.Root>
+ );
 }
 
 export function Switch({
-  checked,
-  onCheckedChange,
-  id,
-  label,
+ checked,
+ onCheckedChange,
+ id,
+ label,
 }: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  id?: string;
-  label: string;
+ checked: boolean;
+ onCheckedChange: (checked: boolean) => void;
+ id?: string;
+ label: string;
 }): JSX.Element {
-  return (
-    <SwitchPrimitive.Root id={id} aria-label={label} className="switch" checked={checked} onCheckedChange={onCheckedChange}>
-      <SwitchPrimitive.Thumb className="switch-thumb" />
-    </SwitchPrimitive.Root>
-  );
+ return (
+  <SwitchPrimitive.Root id={id} aria-label={label} className="switch" checked={checked} onCheckedChange={onCheckedChange}>
+   <SwitchPrimitive.Thumb className="switch-thumb" />
+  </SwitchPrimitive.Root>
+ );
 }
 
 export function Checkbox({
-  checked,
-  onCheckedChange,
-  label,
-  className,
-  disabled,
+ checked,
+ onCheckedChange,
+ label,
+ className,
+ disabled,
 }: {
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-  label: ReactNode;
-  className?: string;
-  /**
-   * Disabled, and visibly so. Added for the intercept page's in-scope-only toggle, which must be
-   * shown-but-inert when no scope is attached: hiding it would read as a missing feature, and leaving
-   * it live would let an operator flip a switch the engine deliberately ignores.
-   *
-   * No extra class is needed — styles.css already has `.check-row input:disabled + span`, which greys
-   * the label text as well as the box. A greyed box beside black text does not read as disabled, and
-   * the stylesheet had already solved that; a new class here would have been a second answer to a
-   * question already answered.
-   */
-  disabled?: boolean;
+ checked: boolean;
+ onCheckedChange: (checked: boolean) => void;
+ label: ReactNode;
+ className?: string;
+ /**
+  * Disabled, and visibly so. Added for the intercept page's in-scope-only toggle, which must be
+  * shown-but-inert when no scope is attached: hiding it would read as a missing feature, and leaving
+  * it live would let an operator flip a switch the engine deliberately ignores.
+  *
+  * No extra class is needed — styles.css already has `.check-row input:disabled + span`, which greys
+  * the label text as well as the box. A greyed box beside black text does not read as disabled, and
+  * the stylesheet had already solved that; a new class here would have been a second answer to a
+  * question already answered.
+  */
+ disabled?: boolean;
 }): JSX.Element {
-  return (
-    <label className={cn("check-row", className)}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onCheckedChange(event.target.checked)}
-      />
-      <span>{label}</span>
-    </label>
-  );
+ return (
+  <label className={cn("check-row", className)}>
+   <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onCheckedChange(event.target.checked)} />
+   <span>{label}</span>
+  </label>
+ );
 }
 
 export const Tabs = TabsPrimitive.Root;
 
 export function TabsList({ className, ...props }: TabsPrimitive.TabsListProps): JSX.Element {
-  return <TabsPrimitive.List className={cn("tabs-list", className)} {...props} />;
+ return <TabsPrimitive.List className={cn("tabs-list", className)} {...props} />;
 }
 
 export function TabsTrigger({ className, ...props }: TabsPrimitive.TabsTriggerProps): JSX.Element {
-  return <TabsPrimitive.Trigger className={cn("tabs-trigger", className)} {...props} />;
+ return <TabsPrimitive.Trigger className={cn("tabs-trigger", className)} {...props} />;
 }
 
 export function TabsContent({ className, ...props }: TabsPrimitive.TabsContentProps): JSX.Element {
-  return <TabsPrimitive.Content className={cn("tabs-content", className)} {...props} />;
+ return <TabsPrimitive.Content className={cn("tabs-content", className)} {...props} />;
 }
 
 export function Modal({
-  open,
-  onOpenChange,
-  title,
-  description,
-  children,
-  wide,
-  onCloseAutoFocus,
-  onOpenAutoFocus,
+ open,
+ onOpenChange,
+ title,
+ description,
+ children,
+ wide,
+ onCloseAutoFocus,
+ onOpenAutoFocus,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description?: string;
-  children: ReactNode;
-  wide?: boolean;
-  /**
-   * Where focus goes when the dialog closes. Radix's default is the element that was focused when
-   * it opened, which is right for a button-opened dialog and wrong for one opened from a context
-   * menu: by then that element is a menu item that no longer exists (ui/dialog-host.tsx).
-   */
-  onCloseAutoFocus?: (event: Event) => void;
-  /**
-   * Where focus goes when the dialog opens. Radix's default is the first tabbable element, which in
-   * this layout is the header's Close button. Use this — not `autoFocus` on a field — to start
-   * somewhere else: an `autoFocus` field is focused before Radix's focus trap starts listening, so
-   * the trap never learns it and cannot pull focus back if something outside steals it.
-   */
-  onOpenAutoFocus?: (event: Event) => void;
+ open: boolean;
+ onOpenChange: (open: boolean) => void;
+ title: string;
+ description?: string;
+ children: ReactNode;
+ wide?: boolean;
+ /**
+  * Where focus goes when the dialog closes. Radix's default is the element that was focused when
+  * it opened, which is right for a button-opened dialog and wrong for one opened from a context
+  * menu: by then that element is a menu item that no longer exists (ui/dialog-host.tsx).
+  */
+ onCloseAutoFocus?: (event: Event) => void;
+ /**
+  * Where focus goes when the dialog opens. Radix's default is the first tabbable element, which in
+  * this layout is the header's Close button. Use this — not `autoFocus` on a field — to start
+  * somewhere else: an `autoFocus` field is focused before Radix's focus trap starts listening, so
+  * the trap never learns it and cannot pull focus back if something outside steals it.
+  */
+ onOpenAutoFocus?: (event: Event) => void;
 }): JSX.Element {
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className={cn("dialog-content", wide && "dialog-wide")} onCloseAutoFocus={onCloseAutoFocus} onOpenAutoFocus={onOpenAutoFocus}>
-          <div className="dialog-head">
-            <div>
-              <Dialog.Title className="dialog-title">{title}</Dialog.Title>
-              {description ? <Dialog.Description className="dialog-description">{description}</Dialog.Description> : null}
-            </div>
-            <Dialog.Close asChild>
-              <IconButton label="Close">
-                <X size={17} />
-              </IconButton>
-            </Dialog.Close>
-          </div>
-          {children}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
+ return (
+  <Dialog.Root open={open} onOpenChange={onOpenChange}>
+   <Dialog.Portal>
+    <Dialog.Overlay className="dialog-overlay" />
+    <Dialog.Content
+     className={cn("dialog-content", wide && "dialog-wide")}
+     onCloseAutoFocus={onCloseAutoFocus}
+     onOpenAutoFocus={onOpenAutoFocus}
+    >
+     <div className="dialog-head">
+      <div>
+       <Dialog.Title className="dialog-title">{title}</Dialog.Title>
+       {description ? <Dialog.Description className="dialog-description">{description}</Dialog.Description> : null}
+      </div>
+      <Dialog.Close asChild>
+       <IconButton label="Close">
+        <X size={17} />
+       </IconButton>
+      </Dialog.Close>
+     </div>
+     {children}
+    </Dialog.Content>
+   </Dialog.Portal>
+  </Dialog.Root>
+ );
 }
