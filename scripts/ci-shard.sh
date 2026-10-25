@@ -82,7 +82,19 @@ detect=TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
 
 race=()
 timeout=(-timeout 1700s)
+# The scanner suite is wait-bound, not CPU-bound (W11 measurement on backlog-b9: three probe
+# tests at 77-91% idle wall time; the same 10 DOM audits ran in 15.6s at -parallel 8 vs 40.9s at
+# -parallel 1 with unchanged CPU). -parallel defaults to GOMAXPROCS (4 on CI), which throttles a
+# suite that is mostly waiting. 12, not 16: one conservative step, measured, then climb on
+# evidence. Subtests that must stay serial (the stored non-DOM rows of the budget test) never
+# call t.Parallel, so their ordering is unchanged at any -parallel. Flake-watch: timing-sensitive
+# checks (timing SQLi, rate-limit) - a contention flake reverts this.
+parallel=(-parallel 12)
 if [ "${CI_SHARD_RACE:-}" = 1 ]; then
+  # Scanner under -race at raised parallelism is unmeasured (the race evidence covered
+  # internal/web, internal/proxy, internal/dash and internal/pool only), so race-mode shards
+  # keep the default -parallel. Integrator guard for evmi; robust to future workflow edits.
+  parallel=()
   race=(-race)
   # Race-instrumented code runs several times slower; the nightly job's timeout-minutes is the
   # real bound.
@@ -248,7 +260,7 @@ gotest() { go test -count=1 "${race[@]}" "${extra[@]}" "$@"; }  # not exec: the 
 case "$shard" in
   scanner-budget)
     require_test "$budget"
-    gotest "${timeout[@]}" -run "^${budget}\$" "$scanner"
+    gotest "${timeout[@]}" "${parallel[@]}" -run "^${budget}\$" "$scanner"
     ;;
   scanner-detect|scanner-rest-0|scanner-rest-1)
     require_test "$budget"
@@ -257,7 +269,7 @@ case "$shard" in
     names=$(scanner_bin "$bin") || exit 1
     [ -n "$names" ] || { echo "ci-shard: $shard selected no tests" >&2; exit 1; }
     echo "ci-shard: $shard runs $(wc -l <<<"$names") of internal/scanner's tests${race[*]:+ under -race}"
-    gotest "${timeout[@]}" -run "^($(paste -sd'|' - <<<"$names"))\$" "$scanner"
+    gotest "${timeout[@]}" "${parallel[@]}" -run "^($(paste -sd'|' - <<<"$names"))\$" "$scanner"
     ;;
   rest)
     # shellcheck disable=SC2086 # one package path per word, by design
