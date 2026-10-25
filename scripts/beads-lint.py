@@ -18,6 +18,10 @@ Checks, each reported with the bead id it concerns:
      a changed close_reason) has a close_reason that either
        a. cites `PR #N (<sha>)` or `PR #N (merge <sha>)` — the form both the close script and the
           existing closures use — and every cited sha is a commit that is an ancestor of HEAD; or
+          starts with `MERGED via integrator` and names the landed commit(s) in its opening clause
+          ("(<sha>)", "at <sha>", "fast-track (<sha>+<sha>)"), each an ancestor of HEAD. This is for
+          merges the integrator made without a PR; no PR number is invented and a closure with no sha
+          is still rejected; or
        b. says it fixed nothing and names why: starts with "Duplicate of <id>" / "Superseded by
           <id>" (an id in this file), or with "WONTFIX", "Won't fix", "INVALID" or "Not a defect".
           Those land no code, so there is no commit to cite; they are not an escape hatch for work
@@ -42,6 +46,11 @@ import sys
 
 JSONL = ".beads/issues.jsonl"
 FIX_RX = re.compile(r"PR #(\d+) \((?:merge )?([0-9a-f]{7,40})\)")
+# "MERGED via integrator (<sha>)", "... at <sha>", "... fast-track (<sha>+<sha>)": the form closures use when a
+# change lands by the integrator's own merge and no PR number exists (none may be invented). Only the
+# opening clause is read for shas, and a sha needs a digit so an English word of hex letters is not one.
+MERGED_RX = re.compile(r"^MERGED via integrator\b[^.:;\n]{0,80}")
+SHA_RX = re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b")
 NOFIX_REF_RX = re.compile(r"^(?:duplicate of|superseded by)\s+([A-Za-z0-9][A-Za-z0-9._-]*)", re.I)
 NOFIX_RX = re.compile(r"^(?:wontfix|won't fix|invalid|not a defect)\b", re.I)
 
@@ -157,6 +166,21 @@ def main():
         cites = FIX_RX.findall(reason)
         if cites:
             bad = [f"{sha} {why}" for _, sha in cites if (why := is_landed(sha))]
+            if bad:
+                errors.append(f"{bid}: close_reason cites " + "; ".join(bad))
+            else:
+                fixed += 1
+            continue
+        mm = MERGED_RX.match(reason)
+        if mm:
+            shas = SHA_RX.findall(mm.group(0))
+            if not shas:
+                errors.append(
+                    f"{bid}: 'MERGED via integrator' must cite the landed commit, e.g. "
+                    f"'MERGED via integrator (<sha>)'; got {reason[:90]!r}"
+                )
+                continue
+            bad = [f"{sha} {why}" for sha in shas if (why := is_landed(sha))]
             if bad:
                 errors.append(f"{bid}: close_reason cites " + "; ".join(bad))
             else:
