@@ -1028,6 +1028,14 @@ type frontierItem struct {
 	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
 	// crawl would not have found at all.
 	renderedOrigin bool
+	// maskValues are the secrets this request carries on the wire whose values history must not
+	// keep: the stored exchange's request bytes replace each with a placeholder (credential
+	// login, burpsy-react-ui-uzil). Nil for every ordinary request.
+	maskValues []string
+	// loginCred is the username this item logs in as, and marks the item as a credential login
+	// submission: its response's Set-Cookie is harvested into the crawl's session jar. Empty for
+	// every ordinary request.
+	loginCred string
 	// tag is the element the item was discovered from — "a", "img", "script", "form", "sitemap",
 	// "api:openapi", and so on. Carried onto the item because the scope gate has to distinguish a
 	// SUBRESOURCE refusal from a navigational one (burpsy-react-ui-hgor), and the tag is the only
@@ -1212,6 +1220,10 @@ type Crawler struct {
 	relogins int
 	// login is the recorded login's jar and report, nil without Config.BrowserLogin.
 	login *loginState
+	// credLoginLocationBase is len(c.locations) at the moment the first credential login
+	// succeeded: locations the crawl already knew before it had a session, so the report's
+	// PagesFoundAfterLogin counts what the login actually unlocked rather than the whole map.
+	credLoginLocationBase int
 	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
 	// in New so a malformed pattern is a construction error, never a per-URL surprise.
 	loginPage *regexp.Regexp
@@ -1701,6 +1713,11 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		login := c.login.report
 		if login.Authenticated {
 			login.PagesFoundAfterLogin = rep.Locations
+			if login.Method == "credentials" {
+				// The crawl ran unauthenticated until it found the form; only what it
+				// reached after the first successful login is "found after login".
+				login.PagesFoundAfterLogin = rep.Locations - c.credLoginLocationBase
+			}
 		}
 		rep.Login = &login
 	}
@@ -2040,7 +2057,9 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		TLS:      strings.EqualFold(item.url.Scheme, "https"),
 		Method:   item.method,
 		Path:     item.url.RequestURI(),
-		Request:  raw,
+		// Masked, when this request carries credential values: the wire bytes were the real
+		// ones, history's are not (burpsy-react-ui-uzil; HeadersWithheld is the precedent).
+		Request:  maskStoredValues(raw, item.maskValues),
 		Response: res.Raw,
 		Started:  time.Now().Add(-res.Duration),
 		Duration: res.Duration,
@@ -2071,6 +2090,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 
 	// A session the application rotates is kept current from every response the crawl captured.
 	c.login.absorb(item.url, res.Raw)
+
+	// A credential login's response is where the session arrives (burpsy-react-ui-uzil).
+	if item.loginCred != "" {
+		c.completeCredentialLogin(item, res.Raw, rep, lim)
+	}
 
 	rep.Fetched++
 	if item.depth > lim.DeepestDepth {
@@ -3194,6 +3218,14 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		c.skips.record(SkipRecord{
 			Reason: SkipCredentialsInURL, URL: u.Redacted(), Method: f.method, Text: f.label, FoundAt: base.String(),
 		})
+		return
+	}
+
+	// A login form with credentials configured is not an ordinary submission: it is the crawl's
+	// way in. One submission per credential, values mapped from the credential rather than the
+	// placeholder fill, the credential values masked in the stored exchange (burpsy-react-ui-uzil).
+	if f.isLoginForm && len(c.cfg.LoginCredentials) > 0 {
+		c.admitCredentialLogins(f, base, u, depth, rep, lim)
 		return
 	}
 
