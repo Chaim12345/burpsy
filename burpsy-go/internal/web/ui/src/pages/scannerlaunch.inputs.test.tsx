@@ -26,6 +26,15 @@ beforeEach(() => {
  };
  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = new URL(String(input), "http://localhost").pathname;
+  if (path === "/api/scanner/issue-types")
+   return json({
+    count: 3,
+    issue_types: [
+     { type_index: 1, name: "SQL injection", typical_severity: "high", detection_methods: [], implemented_methods: [] },
+     { type_index: 2, name: "Cross-site scripting (reflected)", typical_severity: "high", detection_methods: [], implemented_methods: [] },
+     { type_index: 3, name: "SQL injection", typical_severity: "high", detection_methods: [], implemented_methods: [] },
+    ],
+   });
   if (path === "/api/scanner/config/confirm")
    return json({
     token: "t",
@@ -123,5 +132,50 @@ describe("scan config inputs", () => {
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(screen.getByText("unsaved")).toBeTruthy());
   expect((screen.getByLabelText("Login rate-limit burst") as HTMLInputElement).value).toBe("3");
+ });
+});
+
+describe("only_rows suggestions", () => {
+ const rowsBox = () => screen.getByLabelText("Restrict the audit to these issue rows") as HTMLTextAreaElement;
+ const add = (name: string) => {
+  fireEvent.change(screen.getByLabelText("Add an issue row"), { target: { value: name } });
+  fireEvent.click(screen.getByRole("button", { name: "Add row" }));
+ };
+
+ test("the catalogue's row names are offered, once each", async () => {
+  await page();
+  await waitFor(() => expect(document.querySelectorAll("#only-rows-suggestions option").length).toBe(2));
+  const names = Array.from(document.querySelectorAll("#only-rows-suggestions option")).map((o) => o.getAttribute("value"));
+  expect(names).toEqual(["Cross-site scripting (reflected)", "SQL injection"]);
+  expect(screen.getByLabelText("Add an issue row").getAttribute("list")).toBe("only-rows-suggestions");
+ });
+
+ test("adding a suggestion appends a line and saves it", async () => {
+  await page();
+  type("Restrict the audit to these issue rows", "Burpsy own row");
+  add("SQL injection");
+  expect(rowsBox().value).toBe("Burpsy own row\nSQL injection");
+  await save();
+  expect(puts[0]).toEqual({ only_rows: ["Burpsy own row", "SQL injection"] });
+ });
+
+ test("a row already listed is not added twice, and a blank adds nothing", async () => {
+  stored.only_rows = ["SQL injection"];
+  await page();
+  add("SQL injection");
+  add("   ");
+  expect(rowsBox().value).toBe("SQL injection");
+ });
+
+ test("a name outside the catalogue can still be added by hand", async () => {
+  await page();
+  add("Some burpsy row");
+  expect(rowsBox().value).toBe("Some burpsy row");
+ });
+
+ test("the add box empties after adding", async () => {
+  await page();
+  add("SQL injection");
+  expect((screen.getByLabelText("Add an issue row") as HTMLInputElement).value).toBe("");
  });
 });
