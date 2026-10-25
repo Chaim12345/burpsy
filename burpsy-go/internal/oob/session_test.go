@@ -118,3 +118,42 @@ func Test_state_dirs_are_per_server(t *testing.T) {
 		t.Errorf("state dirs %q %q", a, b)
 	}
 }
+
+// burpsy-react-ui-5jxr: os.Interrupt cannot be signalled on Windows, so the save-and-resume
+// restart that persists a fresh identity can only fail there. The platform must degrade to a
+// fresh identity for the process - what StateDir=="" always meant - instead of breaking
+// Collaborator outright whenever the persistence flag is on.
+func Test_an_uninterruptible_platform_degrades_to_a_fresh_identity(t *testing.T) {
+	old := interruptible
+	interruptible = false
+	defer func() { interruptible = old }()
+
+	dir := filepath.Join(t.TempDir(), "state")
+	bin := sessionFakeBinary(t, true)
+	c, err := NewClient(context.Background(), Options{BinaryPath: bin, StateDir: dir, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("an uninterruptible platform broke Collaborator outright: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	if c.Resumed() {
+		t.Error("a fresh identity must not report itself resumed")
+	}
+	// No save-and-restart dance: the registration run is the only run, because the restart's
+	// only purpose is writing a session file this platform can never produce.
+	runs, err := os.ReadFile(filepath.Join(dir, sessionFileName+".runs"))
+	if err != nil || strings.TrimSpace(string(runs)) != "1" {
+		t.Errorf("client runs = %q (%v), want exactly 1: no restart that could only fail", strings.TrimSpace(string(runs)), err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sessionFileName)); !os.IsNotExist(err) {
+		t.Errorf("a session file exists although nothing could have written it: %v", err)
+	}
+	// And the degraded client still does the work: a domain registered and interactions flow.
+	if c.Domain() == "" {
+		t.Error("the degraded client registered no payload domain")
+	}
+	got, err := c.Interactions()
+	if err != nil || len(got) != 1 {
+		t.Errorf("interactions = %d, %v; want the registration run's record", len(got), err)
+	}
+}

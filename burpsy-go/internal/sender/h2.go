@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"golang.org/x/net/http2"
 )
 
@@ -90,15 +91,21 @@ func sendOverH2(ctx context.Context, conn net.Conn, req h2Request) ([]byte, erro
 // h2RoundTrip runs one request on an h2 client connection. conn is the socket under it, which a
 // per-send streaming window (of0z) re-arms once the response head says the body is an event stream.
 func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Conn, req h2Request) ([]byte, error) {
-	var body io.Reader
-	if len(req.Body) > 0 {
-		body = bytes.NewReader(req.Body)
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, "https://"+req.Authority+req.Path, body)
+	target, err := httputil.RequestURL(req.Authority, req.Path)
 	if err != nil {
-		return nil, fmt.Errorf("h2 request: %w", err)
+		return nil, err
 	}
-	httpReq.Host = req.Authority
+	httpReq := &http.Request{
+		Method: req.Method,
+		URL:    target,
+		Host:   req.Authority,
+		Header: make(http.Header),
+	}
+	if len(req.Body) > 0 {
+		httpReq.Body = io.NopCloser(bytes.NewReader(req.Body))
+		httpReq.ContentLength = int64(len(req.Body))
+	}
+	httpReq = httpReq.WithContext(ctx)
 	for _, h := range req.Headers {
 		// Add, not Set: a request may carry two fields of the same name, and Set would silently keep the
 		// last one.
@@ -131,6 +138,15 @@ func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Con
 	return burpsyhttp2.RenderResponse(httpResp.StatusCode, headers, respBody), nil
 }
 
+// h2RequestURL builds the request URL for an h2 send without losing the request-target's bytes.
+//
+// The transport writes :path from URL.RequestURI and accepts any value starting with a single '/'
+// (httpcommon.validPseudoPath), so the question is only how to get the operator's exact target into
+// RequestURI. url.Parse is tried first because everything it accepts it also preserves byte-for-byte
+// — "//"-prefixed targets included, which nothing else here can carry. When it refuses, the cause is
+// the percent escapes a path-confusion probe is made of (%%32%65, %zz — CVE-2023-25690's shape), and
+// the answer is URL.Opaque: RequestURI returns a single-slash Opaque unexamined, so :path on the wire
+// is byte-for-byte what the operator wrote.
 // h2IsEventStream reports whether a Content-Type value is text/event-stream, ignoring parameters.
 func h2IsEventStream(contentType string) bool {
 	mt, _, _ := strings.Cut(contentType, ";")

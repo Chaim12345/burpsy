@@ -757,6 +757,14 @@ type ProxyConfig struct {
 	// leg of an intercepted connection. Nil — the default — means none is ever
 	// offered. See WithClientCerts.
 	clientCerts alpn.ClientCertSource
+	// tlsFingerprints selects the ClientHello the upstream leg presents per target host.
+	// Nil — the default — presents Go's own hello everywhere. See WithTLSFingerprints.
+	tlsFingerprints *sender.TLSFingerprints
+	// altSvc is the proxy's record of origin h3 advertisements (burpsy-react-ui-vln3), learned
+	// from responses burpsy itself forwarded. It lives here rather than on the Server because an
+	// origin's advertisement is a fact about the origin, not about which port burpsy listened on
+	// (integrator ruling D). Never nil after NewProxyConfig.
+	altSvc *altSvcTable
 	// options is the live, operator-editable option set: the response modification
 	// rules, the Accept-Encoding strip and the WebSocket handshake strip. Never nil
 	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
@@ -908,6 +916,7 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		scope:   core.NewScopeAllowEverything(),
 		options: NewOptions(),
 		logger:  zap.NewNop(), // Default to nop logger
+		altSvc:  newAltSvcTable(),
 		// Never nil, so the console can push a Network-panel edit without a nil check and the
 		// dial paths can read it unconditionally. The zero value is every previous behaviour:
 		// no override, dial the name as given, and forward interim bytes verbatim
@@ -1039,6 +1048,18 @@ func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 // answer to it.
 func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
 	c.clientCerts = source
+	return c
+}
+
+// WithTLSFingerprints binds host patterns to browser ClientHello fingerprints for the upstream
+// leg (63pf-followup). It is the intercepted-traffic half of the sender's 63pf setting: an
+// operator who bound a browser to a host gets that browser's hello from Repeater and from an
+// intercepted session alike, instead of Go's hello giving the proxy away on one leg and not the
+// other. Nil — the default — keeps Go's own hello on every dial, byte-identical to before the
+// option existed. There is deliberately no implicit sharing with SenderConfig.TLSFingerprints:
+// the two legs are wired explicitly, per the integrator ruling.
+func (c *ProxyConfig) WithTLSFingerprints(fingerprints *sender.TLSFingerprints) *ProxyConfig {
+	c.tlsFingerprints = fingerprints
 	return c
 }
 

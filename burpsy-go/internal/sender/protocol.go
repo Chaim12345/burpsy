@@ -135,6 +135,13 @@ const (
 	// not write. When the request IS carriable and the target declines h2 at ALPN, the send goes
 	// out as HTTP/1.1 and is reported as a downgrade like every other "h2 did not happen".
 	ProtocolPreferenceForceH2
+	// ProtocolPreferenceHTTP3 pins the send to HTTP/3 over QUIC (burpsy-react-ui-0hgx). It is
+	// never chosen by Auto — h3 needs a UDP round trip that nothing has negotiated for this
+	// target, so the caller asks for it explicitly. The pin is strict: a plaintext target, a
+	// request h3 has nowhere to put, or an endpoint that does not answer QUIC is an error naming
+	// the cause, never a silent downgrade to h1/h2 — silently changing the carrier under an
+	// explicit protocol choice would report as tested over h3 something that never went near it.
+	ProtocolPreferenceHTTP3
 )
 
 // DowngradeReason names why a send went out as HTTP/1.1 rather than HTTP/2.

@@ -187,6 +187,10 @@ type Dialer struct {
 	// dialled), and a client certificate is still chosen for serverName, because the override is a
 	// probe value aimed at the server's SNI handling, not a claim about who the peer is.
 	SNI string
+	// Fingerprint, when set, presents a browser-like ClientHello (utls) instead of Go's own —
+	// see fingerprint.go. Empty is Go's hello and the default. Every other field keeps its
+	// meaning under a fingerprint; the hello's bytes are the only thing that changes.
+	Fingerprint Fingerprint
 }
 
 // Dial connects to addr, offering exactly the protocols in offer, and returns the connection with the
@@ -198,7 +202,10 @@ type Dialer struct {
 // declined, which is the difference a downgrade report is made of.
 //
 // An empty offer sends no ALPN extension at all, rather than a default one — see Filter.
-func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []string) (*tls.Conn, string, error) {
+func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []string) (net.Conn, string, error) {
+	if d.Fingerprint != FingerprintGo {
+		return d.dialFingerprinted(ctx, serverName, addr, offer)
+	}
 	cfg := &tls.Config{
 		ServerName:         serverName,
 		InsecureSkipVerify: d.InsecureSkipVerify,

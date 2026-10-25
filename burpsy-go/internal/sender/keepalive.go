@@ -24,6 +24,8 @@ package sender
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -33,6 +35,27 @@ import (
 	"syscall"
 	"time"
 )
+
+// routeState fingerprints what a connection to this authority would be dialled under right
+// now: the upstream rule that routes it and the client certificate its handshake would
+// present. Both stores mutate in place (the network settings screens call Policy.Set and
+// ClientCerts.Add on the live objects, and nothing rebuilds the sender), so the pool cannot
+// wait for a flush event: it stamps every kept connection with this fingerprint and take
+// closes any entry whose stamp no longer matches (burpsy-react-ui-o388).
+func (s *Sender) routeState(host string, useTLS bool) string {
+	route := "direct"
+	if s.upstream != nil {
+		route = s.upstream.For(host).Raw()
+	}
+	if !useTLS || s.config == nil || s.config.ClientCerts == nil {
+		return route
+	}
+	if cert := s.config.ClientCerts.For(host); cert != nil && len(cert.Certificate) > 0 {
+		sum := sha256.Sum256(cert.Certificate[0])
+		return route + "\x00" + hex.EncodeToString(sum[:8])
+	}
+	return route + "\x00"
+}
 
 // http1IdleTimeout is Burp's five seconds of inactivity after which a kept connection is closed.
 var http1IdleTimeout = 5 * time.Second
@@ -46,7 +69,10 @@ type idleConn struct {
 	negotiated string
 	// offeredH2 is true when the connection's handshake offered h2 and the target chose otherwise.
 	offeredH2 bool
-	timer     *time.Timer
+	// route fingerprints what the connection was dialled under - see Sender.routeState. A pooled
+	// connection whose route no longer matches the live configuration is never reusable again.
+	route string
+	timer *time.Timer
 }
 
 type http1Pool struct {
@@ -64,12 +90,22 @@ func poolKey(host string, port uint16, useTLS bool) string {
 
 // take returns the most recently kept connection for key, or nil. With needOfferedH2, only a
 // connection whose handshake already offered h2 qualifies.
-func (p *http1Pool) take(key string, needOfferedH2 bool) *idleConn {
+func (p *http1Pool) take(key string, needOfferedH2 bool, route string) *idleConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := p.idle[key]
 	for i := len(list) - 1; i >= 0; i-- {
 		ic := list[i]
+		if ic.route != route {
+			// Dialled under a different upstream rule or client identity than the live
+			// configuration asks for now. Keeping it would resurrect it the moment the
+			// route flipped back, so it is closed, not skipped.
+			p.idle[key] = append(list[:i:i], list[i+1:]...)
+			list = p.idle[key]
+			ic.timer.Stop()
+			go ic.conn.Close()
+			continue
+		}
 		if needOfferedH2 && !ic.offeredH2 {
 			continue
 		}

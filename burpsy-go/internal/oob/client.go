@@ -49,6 +49,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -108,11 +109,22 @@ type Options struct {
 	// kept beside it, and Interactions reads all of them, because interactsh-client truncates its
 	// -o file and the previous run's log is the only record of what that run saw. Empty keeps the
 	// old behaviour: a fresh identity per process and a temporary log removed on Close.
+	//
+	// Persistence needs the client to exit on SIGINT, which is what writes the session file.
+	// On Windows that signal cannot be sent, so there StateDir degrades to a fresh identity
+	// per process (burpsy-react-ui-5jxr) rather than failing: Collaborator keeps working, the
+	// logs still land here, and Resumed stays false.
 	StateDir string
 }
 
 // sessionFileName is the interactsh-client -sf file inside a StateDir.
 const sessionFileName = "session.yaml"
+
+// interruptible reports whether this platform can deliver the signal that makes
+// interactsh-client write its -sf session file. os.Process.Signal(os.Interrupt) is not
+// supported on Windows, so there the save-and-resume restart in NewClient could only fail.
+// A var so the degradation is exercisable off-Windows.
+var interruptible = runtime.GOOS != "windows"
 
 // logPrefix names each run's interaction log inside a StateDir.
 const logPrefix = "interactions-"
@@ -198,6 +210,14 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		return nil, err
 	}
 	if c.resumed {
+		return c, nil
+	}
+	if !interruptible {
+		// Degrade, don't break (burpsy-react-ui-5jxr): with no way to make the client save
+		// its session, the identity cannot outlive this process - but a fresh identity per
+		// process is exactly what StateDir == "" means, and Collaborator keeps working. The
+		// running client is kept (the save-and-restart below could only fail), Resumed
+		// stays false, and this run's log still lands in the state directory.
 		return c, nil
 	}
 	// interactsh-client writes the session file only when it exits cleanly. A burpsy that is killed

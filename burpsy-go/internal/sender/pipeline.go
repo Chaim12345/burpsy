@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/textproto"
 	"strings"
 	"time"
 
@@ -87,9 +86,9 @@ type PipelinedExchange struct {
 //
 // It duplicates the small decision ReadResponseBody makes internally — not the chunked/Content-Length
 // reading loop that decision protects with size caps, only the branch that picks between them — using
-// the identical inputs (the same status-line byte offsets, the same net/textproto header parse, the
-// same case-insensitive "chunked" comparison) so the two can never disagree about what a given head
-// means. A second implementation of this predicate that could ever drift from the reader it describes
+// the identical inputs (the same status-line byte offsets, the same tolerant httputil.ResponseFraming
+// scan, the same case-insensitive "chunked" comparison) so the two can never disagree about what a
+// given head means. A second implementation of this predicate that could ever drift from the reader it describes
 // would misreport which rule produced the exact bytes in PipelinedExchange.Response — the silent
 // disagreement this whole package exists to catch, just relocated into burpsy instead of the target.
 func classifyFraming(head []byte) string {
@@ -101,20 +100,14 @@ func classifyFraming(head []byte) string {
 		return framingNone
 	}
 
-	headerBlock := head
-	if idx := bytes.Index(headerBlock, []byte("\r\n")); idx != -1 {
-		headerBlock = headerBlock[idx+2:]
-	}
-	mimeHead, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock))).ReadMIMEHeader()
-	if err != nil {
-		// ReadResponseBody will fail identically parsing the same headers; there is no successful
-		// body read here to name a framing for.
-		return framingNone
-	}
-	if te := mimeHead.Get("Transfer-Encoding"); strings.EqualFold(te, "chunked") {
+	// httputil.ResponseFraming, the same tolerant scan ReadResponseBody reads the body with: a
+	// head carrying a malformed line (a CRLF-split field) frames by whatever its well-formed
+	// framing fields say, and the name must agree with the read (burpsy-react-ui-0vzb.24).
+	te, cl := httputil.ResponseFraming(head)
+	if strings.EqualFold(te, "chunked") {
 		return framingChunked
 	}
-	if cl := mimeHead.Get("Content-Length"); cl != "" {
+	if cl != "" {
 		return framingContentLength
 	}
 	return framingEOF

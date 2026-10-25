@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"strconv"
 
@@ -122,11 +121,16 @@ func (s *Server) dialUpstreamAddr(ctx context.Context, addr string) (net.Conn, e
 // A method rather than a free function because the upstream proxy policy lives on the Server: both
 // legs of this dial — which proxy carries it, and which certificate it presents — are per-server
 // state, and threading either as a parameter would let one call site forget it.
-func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*tls.Conn, string, error) {
+func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (net.Conn, string, error) {
 	policy := s.config.TLS()
 	dialer := alpn.Dialer{
 		InsecureSkipVerify: !policy.Verify(),
 		ClientCerts:        s.clientCertSource(),
+		// The upstream hello impersonates the browser the operator bound to this host (63pf
+		// followup). For is nil-receiver-safe and returns FingerprintGo when nothing matches, so
+		// an unconfigured proxy dials exactly as it always has. The lookup key is serverName —
+		// the origin's TLS name — the same key the sender's 63pf leg uses.
+		Fingerprint: s.config.tlsFingerprints.For(serverName),
 	}
 	// The pool and the protocol floor come from the same policy as the verify switch, so an operator
 	// who turned verification off and then on again has not silently lost the custom CA they added.
@@ -138,7 +142,7 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*
 	if err == nil && s.config.serverCerts != nil {
 		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
 			if port, cerr := strconv.Atoi(portText); cerr == nil {
-				s.config.serverCerts.Record(serverName, uint16(port), conn.ConnectionState().PeerCertificates)
+				s.config.serverCerts.Record(serverName, uint16(port), alpn.PeerCertificates(conn))
 			}
 		}
 	}

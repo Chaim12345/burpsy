@@ -125,6 +125,9 @@ type SenderConfig struct {
 	// credential store. Held here rather than on Sender because both dial paths need it and both read
 	// their knobs from the config.
 	ClientCerts alpn.ClientCertSource
+	// TLSFingerprints binds host patterns to browser ClientHello fingerprints (63pf). Nil
+	// means every dial presents Go's own hello, the behaviour before the setting existed.
+	TLSFingerprints *TLSFingerprints
 	// UpstreamCarrier is the global SOCKS layer this sender's egress legs are opened through.
 	// Nil means no carrier, which is the behaviour every send had before the layer existed.
 	//
@@ -550,7 +553,7 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // the TLS session is still end-to-end with the origin, so the certificate verified and the protocol
 // negotiated are the origin's own. A proxy that terminated TLS here would be reporting its own ALPN as
 // the target's.
-func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
+func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (net.Conn, string, error) {
 	if s.upstreamErr != nil {
 		return nil, "", s.upstreamErr
 	}
@@ -583,6 +586,8 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		// Repeater's Override SNI (k011), when this send carries one. Every raw TLS path dials here,
 		// so the override reaches h2 and HTTP/1 sends alike.
 		SNI: sniOverride(ctx),
+		// The per-target browser fingerprint (63pf); empty keeps Go's own hello.
+		Fingerprint: s.config.TLSFingerprints.For(host),
 	}
 	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
 	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
@@ -600,7 +605,7 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	}
 	conn, negotiated, err := dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
 	if err == nil && s.config.ServerCerts != nil {
-		s.config.ServerCerts.Record(host, port, conn.ConnectionState().PeerCertificates)
+		s.config.ServerCerts.Record(host, port, alpn.PeerCertificates(conn))
 	}
 	return conn, negotiated, err
 }
@@ -1033,6 +1038,11 @@ func (s *Sender) SendRawOutcome(
 	pref ProtocolPreference,
 ) ([]byte, SendOutcome, error) {
 	settings := s.Network()
+	if pref == ProtocolPreferenceHTTP3 {
+		// h3 shares neither the socket nor the framing with the h1/h2 path below; it has its own
+		// send leg in h3.go.
+		return s.sendH3(ctx, host, port, useTLS, rawRequest)
+	}
 	projectHTTP1 := pref == ProtocolPreferenceAuto && !settings.DefaultToHTTP2() && !burpsyhttp2.IsHTTP2Request(rawRequest)
 	if projectHTTP1 {
 		// Burp's "Default to HTTP/2" off (ry5n): a send that named no protocol is planned as pinned,
@@ -1055,7 +1065,8 @@ func (s *Sender) SendRawOutcome(
 		keep = false
 	}
 	if keep {
-		if ic := s.pool.take(key, plan.wantH2); ic != nil {
+		route := s.routeState(host, useTLS)
+		if ic := s.pool.take(key, plan.wantH2, route); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
@@ -1174,7 +1185,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: s.routeState(host, useTLS)})
 		}
 		return resp, out, err
 	}
@@ -1369,7 +1380,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: s.routeState(host, false)})
 	} else {
 		conn.Close()
 	}

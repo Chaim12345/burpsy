@@ -29,7 +29,7 @@ package sender
 // because the request may already have reached the server.
 
 import (
-	"crypto/tls"
+	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -50,7 +50,7 @@ type H2Sessions struct {
 
 type h2Session struct {
 	cc       *http2.ClientConn
-	conn     *tls.Conn
+	conn     net.Conn
 	ip       string
 	lastUsed time.Time
 }
@@ -141,8 +141,10 @@ func (p *H2Sessions) evictLocked(now time.Time) {
 	}
 }
 
-// newClientConn wraps a negotiated h2 connection for pooling.
-func (p *H2Sessions) newClientConn(conn *tls.Conn) (*http2.ClientConn, error) {
+// newClientConn wraps a negotiated h2 connection for pooling. The connection is net.Conn
+// rather than *tls.Conn because a fingerprinted dial (63pf) is a utls conn: http2 speaks
+// frames over the record layer either way.
+func (p *H2Sessions) newClientConn(conn net.Conn) (*http2.ClientConn, error) {
 	tr := &http2.Transport{IdleConnTimeout: p.ttl}
 	return tr.NewClientConn(conn)
 }
