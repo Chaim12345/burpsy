@@ -83,6 +83,10 @@ const (
 	// ruleNoChunkExt reads chunked bodies but refuses a chunk-size line carrying an extension:
 	// the strict half of the TE.0/chunk-extension disagreement.
 	ruleNoChunkExt
+	// ruleExpectSkipBody answers a request carrying an Expect header without reading its
+	// declared body (the body bytes are then parsed as the next request): the 0.CL/Expect
+	// half of the disagreement. Without an Expect header it reads by Content-Length.
+	ruleExpectSkipBody
 )
 
 // h2Downgrade is how a TLS listener's HTTP/2 side rewrites a request for its HTTP/1.1 back end.
@@ -125,6 +129,16 @@ var desyncSpecs = map[string]desyncSpec{
 	// Safe twins.
 	"desync-cl0-safe": {front: ruleCompliant, back: ruleCompliant},
 	"desync-csd-safe": {front: ruleCompliant, back: ruleCompliant},
+	// 0vzb.40 remainder: TE.0/0.CL-Expect differential fixtures. desync-clcl is the safe
+	// twin: both hops read by Content-Length, so no framing leaves anything to re-parse.
+	"desync-clcl": {front: ruleCLOnly, back: ruleCLOnly},
+	// desync-expect: both hops answer an Expect-bearing request without reading its declared
+	// body (the 0.CL/Expect condition), so the body bytes re-parse as the next request - the
+	// same both-hops construction as the CL.0 fixture, gated on the Expect header.
+	"desync-expect": {front: ruleExpectSkipBody, back: ruleExpectSkipBody},
+	// desync-chunkext-refused: the back end refuses an extension-terminated chunk (400,
+	// connection closed); the plain zero-chunk terminator still lands.
+	"desync-chunkext-refused": {front: ruleCLOnly, back: ruleNoChunkExt},
 }
 
 // ListenerNames lists every listener StartListener can start.
@@ -416,6 +430,13 @@ func decideFraming(rule framingRule, headers []rawHeader) framing {
 		return contentLength(headers)
 	case ruleIgnoreBody:
 		return framing{length: 0}
+	case ruleExpectSkipBody:
+		for _, h := range headers {
+			if strings.EqualFold(strings.TrimSpace(h.name), "expect") {
+				return framing{length: 0}
+			}
+		}
+		return contentLength(headers)
 	case ruleNoChunkExt:
 		for _, h := range headers {
 			if strings.EqualFold(h.name, "transfer-encoding") &&
@@ -579,9 +600,32 @@ type backLink struct {
 	br   *bufio.Reader
 }
 
+// The link is a real loopback TCP pair, not net.Pipe: a back end that answers a request
+// without reading its body and then answers the re-parsed "body" writes TWO responses for
+// the front end's one read so far, and an unbuffered pipe deadlocks that against the front
+// end's next write (the 0vzb.40 TE.0/Expect differentials). Kernel buffers are also the
+// faithful shape: a real front end talks TCP to its back end. If loopback is unavailable the
+// link degrades to the synchronous pipe (the pre-remainder shape) rather than failing.
 func newBackLink(rule framingRule) *backLink {
-	front, back := net.Pipe()
-	go serveBack(back, rule)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		front, back := net.Pipe()
+		go serveBack(back, rule)
+		return &backLink{conn: front, br: bufio.NewReader(front)}
+	}
+	go func() {
+		c, err := ln.Accept()
+		ln.Close()
+		if err == nil {
+			serveBack(c, rule)
+		}
+	}()
+	front, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		pf, pb := net.Pipe()
+		go serveBack(pb, rule)
+		return &backLink{conn: pf, br: bufio.NewReader(pf)}
+	}
 	return &backLink{conn: front, br: bufio.NewReader(front)}
 }
 

@@ -307,7 +307,11 @@ func checkRequestSmuggling(ctx context.Context, cc *CheckContext) ([]*Finding, e
 				return nil, fmt.Errorf("%s: %w", smugglingRow, err)
 			}
 			if c != nil {
-				return []*Finding{r.finding(c)}, nil
+				f := r.finding(c)
+				// The differential can only strengthen a confirmed hit (0vzb.40): "" on a
+				// miss, and the timing finding stands unchanged.
+				f.Evidence += r.confirmWithCanary(ctx, v)
+				return []*Finding{f}, nil
 			}
 			if unconfirmed++; unconfirmed >= maxUnconfirmed {
 				return nil, fmt.Errorf("%s: %d attack probes timed out but none confirmed against its control: %w",
@@ -333,7 +337,9 @@ func checkRequestSmuggling(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			return nil, fmt.Errorf("%s: %w", smugglingRow, err)
 		}
 		if c != nil {
-			return []*Finding{r.finding(c)}, nil
+			f := r.finding(c)
+			f.Evidence += r.confirmWithCanary(ctx, v)
+			return []*Finding{f}, nil
 		}
 		if unconfirmed++; unconfirmed >= maxUnconfirmed {
 			return nil, fmt.Errorf("%s: %d attack probes timed out but none confirmed against its control: %w",
@@ -353,6 +359,22 @@ func checkRequestSmuggling(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			"user's connection, and no timing was involved."
 		f := buildHeaderFinding(cc, smugglingRow, "high", "firm", evidence, detail)
 		f.Param = "CL.0"
+		return []*Finding{f}, nil
+	}
+
+	// 0.CL/Expect: a back end that answers an Expect-bearing POST without reading its
+	// declared body re-parses the body as its next request (checks_smuggling_te0.go). Same
+	// own-connection, same 404 canary, same unmeasurable-on-dirty-batch discipline.
+	if hit, evidence, ok := r.expectSkipBodyProbe(ctx); ok && hit {
+		detail := "The endpoint answered an Expect: 100-continue POST without reading its declared " +
+			"Content-Length body and then parsed the body bytes as a separate request on the same " +
+			"connection (0.CL/Expect): a smuggled request for a canary path was executed and its 404 " +
+			"answer arrived in the response slot of the scanner's own follow-up request, while a " +
+			"consistently framed control pair showed no such answer. Detection was by response " +
+			"differential only: nothing was queued for any other user's connection, and no timing " +
+			"was involved."
+		f := buildHeaderFinding(cc, smugglingRow, "high", "firm", evidence, detail)
+		f.Param = "0.CL Expect"
 		return []*Finding{f}, nil
 	}
 
