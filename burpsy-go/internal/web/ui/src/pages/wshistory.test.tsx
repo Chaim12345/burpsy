@@ -6,8 +6,8 @@ import { WebSocketPage } from "./wshistory";
 afterEach(cleanup);
 
 describe("WebSocketPage", () => {
-  test("renders against a failing API without throwing, and settles", async () => {
-    const view = renderWithProviders(<WebSocketPage />);
-    await waitFor(() => expect(view.container.textContent?.length ?? 0).toBeGreaterThan(0));
-  });
+ test("renders against a failing API without throwing, and settles", async () => {
+  const view = renderWithProviders(<WebSocketPage />);
+  await waitFor(() => expect(view.container.textContent?.length ?? 0).toBeGreaterThan(0));
+ });
 });

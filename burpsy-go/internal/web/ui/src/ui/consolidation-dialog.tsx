@@ -39,7 +39,11 @@ export function ConsolidationDialog({
  useEffect(() => {
   if (!open || !query.data) return;
   setDef(query.data.default);
-  setRows(Object.entries(query.data.per_row).map(([name, action]) => ({ name, action })).sort((a, b) => a.name.localeCompare(b.name)));
+  setRows(
+   Object.entries(query.data.per_row)
+    .map(([name, action]) => ({ name, action }))
+    .sort((a, b) => a.name.localeCompare(b.name)),
+  );
   setNewName("");
  }, [open, query.data]);
 
@@ -116,7 +120,11 @@ export function ConsolidationDialog({
            </Select>
           </td>
           <td>
-           <IconButton label={`Remove the exception for ${row.name}`} size="small" onClick={() => setRows((current) => current.filter((_, i) => i !== index))}>
+           <IconButton
+            label={`Remove the exception for ${row.name}`}
+            size="small"
+            onClick={() => setRows((current) => current.filter((_, i) => i !== index))}
+           >
             <X size={13} />
            </IconButton>
           </td>
@@ -139,9 +147,11 @@ export function ConsolidationDialog({
            }}
           />
           <datalist id="consolidation-issue-names">
-           {issueNames.filter((name) => !neverMerge.has(name)).map((name) => (
-            <option key={name} value={name} />
-           ))}
+           {issueNames
+            .filter((name) => !neverMerge.has(name))
+            .map((name) => (
+             <option key={name} value={name} />
+            ))}
           </datalist>
          </>
         )}
@@ -158,17 +168,25 @@ export function ConsolidationDialog({
       {tally && tally.collisions > 0 ? (
        <>
         <p className="cell-dim">
-         {formatCount(tally.collisions)} duplicate report(s) this session: {formatCount(tally.merged)} merged, {formatCount(tally.kept_both)} kept as
-         separate issues, {formatCount(tally.replaced)} replaced the issue they duplicated.
+         {formatCount(tally.collisions)} duplicate report(s) this session: {formatCount(tally.merged)} merged,{" "}
+         {formatCount(tally.kept_both)} kept as separate issues, {formatCount(tally.replaced)} replaced the issue they duplicated.
         </p>
         <SimpleTable headers={["Run", "Duplicates", "Merged", "Kept both", "Replaced"]}>
          {query.data.by_task.map((task) => (
           <tr key={task.task_id}>
            <td>{task.task_id === 0 ? "untracked (proxy, imports)" : `task ${task.task_id}`}</td>
-           <td><span className="cell-num">{formatCount(task.collisions)}</span></td>
-           <td><span className="cell-num">{formatCount(task.merged)}</span></td>
-           <td><span className="cell-num">{formatCount(task.kept_both)}</span></td>
-           <td><span className="cell-num">{formatCount(task.replaced)}</span></td>
+           <td>
+            <span className="cell-num">{formatCount(task.collisions)}</span>
+           </td>
+           <td>
+            <span className="cell-num">{formatCount(task.merged)}</span>
+           </td>
+           <td>
+            <span className="cell-num">{formatCount(task.kept_both)}</span>
+           </td>
+           <td>
+            <span className="cell-num">{formatCount(task.replaced)}</span>
+           </td>
           </tr>
          ))}
         </SimpleTable>
@@ -176,9 +194,7 @@ export function ConsolidationDialog({
       ) : (
        <p className="cell-dim">No duplicate has been reported this session, so nothing has been consolidated yet.</p>
       )}
-      {neverMerge.size > 0 ? (
-       <p className="cell-dim">Never merged, whatever the action: {[...neverMerge].join(", ")}.</p>
-      ) : null}
+      {neverMerge.size > 0 ? <p className="cell-dim">Never merged, whatever the action: {[...neverMerge].join(", ")}.</p> : null}
      </div>
 
      <Toolbar>

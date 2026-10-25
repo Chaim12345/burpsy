@@ -196,8 +196,8 @@ export function ScannerChecksPage(): JSX.Element {
 
    {data && !data.enabled ? (
     <div className="notice notice-warn">
-     No BCheck corpus is loaded. Write or import a check here, or start burpsy with <code>--bchecks DIR</code>;
-     until then the scanner audits with the built-in checks alone.
+     No BCheck corpus is loaded. Write or import a check here, or start burpsy with <code>--bchecks DIR</code>; until then the scanner
+     audits with the built-in checks alone.
     </div>
    ) : null}
 

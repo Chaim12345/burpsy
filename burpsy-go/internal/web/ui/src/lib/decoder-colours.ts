@@ -16,16 +16,7 @@
 import { DECODE_LAYERS, ENCODE_ENCODINGS, HASH_ALGORITHMS } from "./data.workbench";
 import type { TransformKind } from "./types.workbench";
 
-export type EncodingFamily =
-  | "url"
-  | "html"
-  | "base64"
-  | "radix"
-  | "compress"
-  | "jwt"
-  | "ascii"
-  | "rot13"
-  | "hash";
+export type EncodingFamily = "url" | "html" | "base64" | "radix" | "compress" | "jwt" | "ascii" | "rot13" | "hash";
 
 /**
  * Every encoding name the three handlers accept (the DECODE_LAYERS /
@@ -41,26 +32,26 @@ export type EncodingFamily =
  * identically, so the family, not the raw name, is what a colour can mean.
  */
 const VALUE_FAMILY: Record<string, EncodingFamily> = {
-  url: "url",
-  html: "html",
-  base64: "base64",
-  base64url: "base64",
-  hex: "radix",
-  octal: "radix",
-  binary: "radix",
-  gzip: "compress",
-  deflate: "compress",
-  jwt: "jwt",
-  ascii: "ascii",
-  rot13: "rot13",
-  // Every digest and HMAC the hash step can send is one hash family, taken from the shared list so a
-  // newly offered algorithm can never be left untinted (burpsy-react-ui-7tgt widened it from 4 to 31).
-  ...Object.fromEntries(HASH_ALGORITHMS.map((name) => [name, "hash" as const])),
+ url: "url",
+ html: "html",
+ base64: "base64",
+ base64url: "base64",
+ hex: "radix",
+ octal: "radix",
+ binary: "radix",
+ gzip: "compress",
+ deflate: "compress",
+ jwt: "jwt",
+ ascii: "ascii",
+ rot13: "rot13",
+ // Every digest and HMAC the hash step can send is one hash family, taken from the shared list so a
+ // newly offered algorithm can never be left untinted (burpsy-react-ui-7tgt widened it from 4 to 31).
+ ...Object.fromEntries(HASH_ALGORITHMS.map((name) => [name, "hash" as const])),
 };
 
 /** The family a single encoding name belongs to, or null if it is unknown. */
 export function familyForValue(value: string): EncodingFamily | null {
-  return VALUE_FAMILY[value] ?? null;
+ return VALUE_FAMILY[value] ?? null;
 }
 
 /**
@@ -73,21 +64,13 @@ export function familyForValue(value: string): EncodingFamily | null {
  * An empty or null `layers` means nothing decoded, so there is no encoding to
  * colour and this returns null.
  */
-export function encodingFamily(
-  kind: TransformKind,
-  value: string,
-  layers: readonly string[] | null,
-): EncodingFamily | null {
-  if (kind === "decode" && value === "auto") {
-    if (!layers || layers.length === 0) return null;
-    return familyForValue(layers[layers.length - 1]!);
-  }
-  return familyForValue(value);
+export function encodingFamily(kind: TransformKind, value: string, layers: readonly string[] | null): EncodingFamily | null {
+ if (kind === "decode" && value === "auto") {
+  if (!layers || layers.length === 0) return null;
+  return familyForValue(layers[layers.length - 1]!);
+ }
+ return familyForValue(value);
 }
 
 /** Every encoding name the console can send, for exhaustiveness tests. */
-export const ALL_ENCODING_VALUES: readonly string[] = [
-  ...DECODE_LAYERS,
-  ...ENCODE_ENCODINGS,
-  ...HASH_ALGORITHMS,
-];
+export const ALL_ENCODING_VALUES: readonly string[] = [...DECODE_LAYERS, ...ENCODE_ENCODINGS, ...HASH_ALGORITHMS];

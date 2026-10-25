@@ -17,7 +17,10 @@ describe("probeCaCert", () => {
  });
 
  test("no CA and no hint still says why", async () => {
-  const state = await probeCaCert(async () => ({ configured: false }), async () => ({ ok: true, status: 200 }));
+  const state = await probeCaCert(
+   async () => ({ configured: false }),
+   async () => ({ ok: true, status: 200 }),
+  );
   expect(state.available).toBe(false);
   expect(state.detail).toContain("-intercept-tls");
  });
@@ -36,7 +39,10 @@ describe("probeCaCert", () => {
  });
 
  test("configured CA but the route disagrees: reported, not offered", async () => {
-  const state = await probeCaCert(async () => ({ configured: true }), async () => ({ ok: false, status: 500 }));
+  const state = await probeCaCert(
+   async () => ({ configured: true }),
+   async () => ({ ok: false, status: 500 }),
+  );
   expect(state.available).toBe(false);
   expect(state.detail).toContain("500");
  });

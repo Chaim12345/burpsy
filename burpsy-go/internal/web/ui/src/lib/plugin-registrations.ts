@@ -19,16 +19,16 @@ import type { MenuGroup } from "../ui/menu";
 
 /** One registration together with the allowlist key of the plugin that declared it. */
 export interface PluginInvocation {
-  plugin: string;
-  registration: Registration;
+ plugin: string;
+ registration: Registration;
 }
 
 /** What an invocation is about. Both ids are optional and are sent as given: 0 is a real id here. */
 export interface PluginTarget {
-  exchange?: number;
-  message?: number;
-  /** The bytes the plugin's handler is called for. Sent only when the caller already holds them. */
-  raw?: string;
+ exchange?: number;
+ message?: number;
+ /** The bytes the plugin's handler is called for. Sent only when the caller already holds them. */
+ raw?: string;
 }
 
 /**
@@ -38,14 +38,14 @@ export interface PluginTarget {
  * reshuffled itself between two right-clicks would be a menu an operator cannot learn.
  */
 export function pluginInvocations(list: ExtensionList | undefined, kind: RegistrationKind): PluginInvocation[] {
-  const found: PluginInvocation[] = [];
-  for (const plugin of list?.extensions ?? []) {
-    if (plugin.state !== "loaded") continue;
-    for (const registration of plugin.registrations) {
-      if (registration.kind === kind) found.push({ plugin: plugin.name, registration });
-    }
+ const found: PluginInvocation[] = [];
+ for (const plugin of list?.extensions ?? []) {
+  if (plugin.state !== "loaded") continue;
+  for (const registration of plugin.registrations) {
+   if (registration.kind === kind) found.push({ plugin: plugin.name, registration });
   }
-  return found;
+ }
+ return found;
 }
 
 /**
@@ -56,7 +56,7 @@ export function pluginInvocations(list: ExtensionList | undefined, kind: Registr
  * stale render when the operator selects another row.
  */
 export function pluginTabKey(messageId: number, invocation: PluginInvocation): string {
-  return `${messageId}\u0000${invocation.plugin}\u0000${invocation.registration.id}`;
+ return `${messageId}\u0000${invocation.plugin}\u0000${invocation.registration.id}`;
 }
 
 /** The id of the context-menu group this module contributes. Stable so a caller can find it. */
@@ -69,12 +69,12 @@ export const PLUGIN_MENU_ID = "plugin-context-menu";
  * heading is a row that opens onto nothing.
  */
 export function pluginMenuItems(
-  list: ExtensionList | undefined,
-  exchangeId: number,
-  invoke: (call: PluginInvocation, target: PluginTarget) => void,
+ list: ExtensionList | undefined,
+ exchangeId: number,
+ invoke: (call: PluginInvocation, target: PluginTarget) => void,
 ): MenuGroup[] {
-  const group = pluginMenuGroup(list, exchangeId, invoke);
-  return group ? [group] : [];
+ const group = pluginMenuGroup(list, exchangeId, invoke);
+ return group ? [group] : [];
 }
 
 /**
@@ -88,38 +88,38 @@ export function pluginMenuItems(
  * effects — and it takes the exchange id, which is what the route dispatches on.
  */
 export function pluginMenuGroup(
-  list: ExtensionList | undefined,
-  exchangeId: number,
-  invoke: (call: PluginInvocation, target: PluginTarget) => void,
+ list: ExtensionList | undefined,
+ exchangeId: number,
+ invoke: (call: PluginInvocation, target: PluginTarget) => void,
 ): MenuGroup | null {
-  const byPlugin = new Map<string, PluginInvocation[]>();
-  for (const invocation of pluginInvocations(list, "context-menu")) {
-    const existing = byPlugin.get(invocation.plugin);
-    if (existing) existing.push(invocation);
-    else byPlugin.set(invocation.plugin, [invocation]);
-  }
-  if (byPlugin.size === 0) return null;
+ const byPlugin = new Map<string, PluginInvocation[]>();
+ for (const invocation of pluginInvocations(list, "context-menu")) {
+  const existing = byPlugin.get(invocation.plugin);
+  if (existing) existing.push(invocation);
+  else byPlugin.set(invocation.plugin, [invocation]);
+ }
+ if (byPlugin.size === 0) return null;
 
-  return {
-    id: PLUGIN_MENU_ID,
-    title: "Extensions",
-    actions: [...byPlugin].map(([plugin, invocations]) => ({
-      id: `${PLUGIN_MENU_ID}:${plugin}`,
-      label: plugin,
-      icon: Plug,
-      // A submenu trigger's own onSelect is never called (see ui/menu.tsx renderItems) — the item
-      // is a way into the registrations below it, and there is nothing to run for the parent.
-      onSelect: () => {},
-      submenu: [
-        {
-          id: `${PLUGIN_MENU_ID}:${plugin}:items`,
-          actions: invocations.map((invocation) => ({
-            id: `${PLUGIN_MENU_ID}:${plugin}:${invocation.registration.id}`,
-            label: invocation.registration.label,
-            onSelect: () => invoke(invocation, { exchange: exchangeId }),
-          })),
-        },
-      ],
-    })),
-  };
+ return {
+  id: PLUGIN_MENU_ID,
+  title: "Extensions",
+  actions: [...byPlugin].map(([plugin, invocations]) => ({
+   id: `${PLUGIN_MENU_ID}:${plugin}`,
+   label: plugin,
+   icon: Plug,
+   // A submenu trigger's own onSelect is never called (see ui/menu.tsx renderItems) — the item
+   // is a way into the registrations below it, and there is nothing to run for the parent.
+   onSelect: () => {},
+   submenu: [
+    {
+     id: `${PLUGIN_MENU_ID}:${plugin}:items`,
+     actions: invocations.map((invocation) => ({
+      id: `${PLUGIN_MENU_ID}:${plugin}:${invocation.registration.id}`,
+      label: invocation.registration.label,
+      onSelect: () => invoke(invocation, { exchange: exchangeId }),
+     })),
+    },
+   ],
+  })),
+ };
 }

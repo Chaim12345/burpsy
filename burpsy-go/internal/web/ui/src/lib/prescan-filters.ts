@@ -14,9 +14,7 @@
 // the server removes cannot drift, because it is the same string.
 
 /** Burp's shipped default list, verbatim from the wizard. */
-export const BURP_DEFAULT_HIDDEN_EXTENSIONS = [
- "js", "gif", "jpg", "png", "ico", "css", "woff", "woff2", "ttf", "svg",
-] as const;
+export const BURP_DEFAULT_HIDDEN_EXTENSIONS = ["js", "gif", "jpg", "png", "ico", "css", "woff", "woff2", "ttf", "svg"] as const;
 
 /** The four filters the wizard offers, in its order. */
 export interface PrescanFilters {
@@ -62,7 +60,7 @@ export function parseExtensions(raw: string): string[] {
  */
 export function prescanExclude(filters: PrescanFilters): string {
  const clauses: string[] = [];
- if (filters.removeNoParameters) clauses.push('params = 0');
+ if (filters.removeNoParameters) clauses.push("params = 0");
  const extensions = filters.hiddenExtensions.map(normaliseExtension).filter((e) => e !== "");
  if (extensions.length > 0) {
   const one = extensions.map((ext) => `extension = "${ext}"`).join(" or ");
@@ -84,7 +82,10 @@ export function prescanExclude(filters: PrescanFilters): string {
  * a dialog, never a wrong sweep — but it is derived from the same two rules the grammar uses
  * (extension from the path, params = the query string's count) so the two agree.
  */
-export function countFiltered(items: { path: string }[], filters: PrescanFilters): {
+export function countFiltered(
+ items: { path: string }[],
+ filters: PrescanFilters,
+): {
  extensions: number;
  noParameters: number;
  total: number;

@@ -493,15 +493,15 @@ export interface RepeaterResult {
   *  Save entire history (pznm) exports by these, never by the lossy `response` string. */
  request_msg_id?: number;
  response_msg_id?: number;
- exchange_id: number;  /**
-   * The redirect chain this send produced, present only when the response was a 30x.
-   *
-   * `response` above stays the response to the request the operator wrote, so this
-   * reports the chain rather than substituting it — the Location and Set-Cookie on a
-   * 30x are usually the thing being looked at. Absent means "not a redirect"; present
-   * with every hop unfollowed means the policy or the scope stopped it, and `reason`
-   * says which.
-   */
+ exchange_id: number /**
+  * The redirect chain this send produced, present only when the response was a 30x.
+  *
+  * `response` above stays the response to the request the operator wrote, so this
+  * reports the chain rather than substituting it — the Location and Set-Cookie on a
+  * 30x are usually the thing being looked at. Absent means "not a redirect"; present
+  * with every hop unfollowed means the policy or the scope stopped it, and `reason`
+  * says which.
+  */;
  redirects?: RepeaterRedirects;
  /** The response with its compressed body decoded, for display (of0z). `response` stays the bytes
   *  that arrived, which is also what is stored. */
@@ -611,8 +611,8 @@ export interface RepeaterGroupItemResult {
  /** False when `result.duration_ms` is not a measurement. See RepeaterHistoryEntry.duration_measured. */
  duration_measured: boolean;
  /** Parallel mode only: 1 for the response whose first byte was read first, next for the next.
- * Absent for the sequence modes and for items that never got a response — an item with no
- * arrival has no ordinal, and a missing field must not be read as "arrived first". */
+  * Absent for the sequence modes and for items that never got a response — an item with no
+  * arrival has no ordinal, and a missing field must not be read as "arrived first". */
  arrival?: number;
 }
 
@@ -673,7 +673,7 @@ export interface SequencerReport {
  verdict: string;
  warnings: string[];
  encoding: string;
- bits?: { bit_entropy?: number;[key: string]: unknown };
+ bits?: { bit_entropy?: number; [key: string]: unknown };
  chars?: Record<string, unknown>;
 }
 

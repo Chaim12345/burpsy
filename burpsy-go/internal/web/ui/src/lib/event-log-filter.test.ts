@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { EVENT_LOG_FILTER_DEFAULTS, EVENT_SEVERITY_OPTIONS, eventSource, filterEvents, isFiltered, severityCounts } from "./event-log-filter";
+import {
+ EVENT_LOG_FILTER_DEFAULTS,
+ EVENT_SEVERITY_OPTIONS,
+ eventSource,
+ filterEvents,
+ isFiltered,
+ severityCounts,
+} from "./event-log-filter";
 import type { ToolEvent } from "./types";
 
 const tasks = [

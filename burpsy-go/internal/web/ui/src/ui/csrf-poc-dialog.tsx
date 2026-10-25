@@ -49,8 +49,7 @@ export function CsrfPocDialog(): JSX.Element {
  const query = useQuery({
   queryKey: ["csrf-poc", exchange?.id ?? 0, technique, autoSubmit],
   enabled: open && exchange !== null,
-  queryFn: () =>
-   api<CsrfView>(`/api/exchange/${exchange!.id}/csrf?technique=${technique}&auto_submit=${autoSubmit}`),
+  queryFn: () => api<CsrfView>(`/api/exchange/${exchange!.id}/csrf?technique=${technique}&auto_submit=${autoSubmit}`),
  });
 
  const view = query.data;

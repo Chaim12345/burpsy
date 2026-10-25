@@ -26,7 +26,7 @@ const seeds = new Map<SeedKey, string>();
 
 /** Leave a seed for the next mount of the page that reads `key`. */
 export function putSeed(key: SeedKey, value: string): void {
-  seeds.set(key, value);
+ seeds.set(key, value);
 }
 
 /**
@@ -36,13 +36,13 @@ export function putSeed(key: SeedKey, value: string): void {
  * caller uses it as a `useState` initial value, where null simply means the form starts blank.
  */
 export function takeSeed(key: SeedKey): string | null {
-  const value = seeds.get(key);
-  if (value === undefined) return null;
-  seeds.delete(key);
-  return value;
+ const value = seeds.get(key);
+ if (value === undefined) return null;
+ seeds.delete(key);
+ return value;
 }
 
 /** Test and teardown helper: drop anything left unconsumed. */
 export function clearSeeds(): void {
-  seeds.clear();
+ seeds.clear();
 }

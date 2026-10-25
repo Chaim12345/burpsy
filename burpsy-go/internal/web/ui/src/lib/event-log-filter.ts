@@ -40,7 +40,11 @@ export function eventSource(event: Pick<ToolEvent, "task_id">, tasks: Pick<TaskR
  return task ? `Task ${id} · ${task.kind} (${task.target})` : `Task ${id}`;
 }
 
-export function filterEvents<E extends ToolEvent>(events: E[], filter: EventLogFilter, tasks: Pick<TaskRow, "id" | "kind" | "target">[]): E[] {
+export function filterEvents<E extends ToolEvent>(
+ events: E[],
+ filter: EventLogFilter,
+ tasks: Pick<TaskRow, "id" | "kind" | "target">[],
+): E[] {
  const needle = filter.search.trim().toLowerCase();
  return events.filter((event) => {
   if (filter.severity !== "all" && event.severity !== filter.severity) return false;

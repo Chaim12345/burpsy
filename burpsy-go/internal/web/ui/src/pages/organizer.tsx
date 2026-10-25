@@ -20,7 +20,26 @@ import {
  type WorkflowStatus,
 } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, NeedsValueButton, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import {
+ Badge,
+ Button,
+ Card,
+ Checkbox,
+ Empty,
+ ErrorNotice,
+ Field,
+ IconButton,
+ Input,
+ Modal,
+ NeedsValueButton,
+ Select,
+ Tabs,
+ TabsContent,
+ TabsList,
+ TabsTrigger,
+ Textarea,
+ Toolbar,
+} from "../ui/primitives";
 import { HttpEditor } from "../ui/editor";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
@@ -333,7 +352,22 @@ export function OrganizerPage(): JSX.Element {
    kept.push(item);
   }
   return { visible: kept, unjudged: exempt };
- }, [items, filtering, inScopeOnly, statusClass, mimeFilter, toolFilter, workflowFilter, collectionView, debouncedTerm, termRegex, termCase, termNegative, extensionFilter, annotatedOnly]);
+ }, [
+  items,
+  filtering,
+  inScopeOnly,
+  statusClass,
+  mimeFilter,
+  toolFilter,
+  workflowFilter,
+  collectionView,
+  debouncedTerm,
+  termRegex,
+  termCase,
+  termNegative,
+  extensionFilter,
+  annotatedOnly,
+ ]);
 
  // A MIME option can disappear when the rows behind it are removed, which would leave the filter
  // pinned to a value nothing can match — an empty table with no visible reason. Fall back to "all".
@@ -562,7 +596,7 @@ export function OrganizerPage(): JSX.Element {
        })),
       },
      ],
-     onSelect: () => { },
+     onSelect: () => {},
     },
     {
      id: "highlight",
@@ -580,12 +614,13 @@ export function OrganizerPage(): JSX.Element {
          label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
          icon: HIGHLIGHT_ICONS[name],
          disabled: highlightName(item.highlight) === wire,
-         onSelect: () => patchItem(item, { highlight: wire }, wire === "" ? `Highlight cleared on ${item.id}` : `Item ${item.id} highlighted ${wire}`),
+         onSelect: () =>
+          patchItem(item, { highlight: wire }, wire === "" ? `Highlight cleared on ${item.id}` : `Item ${item.id} highlighted ${wire}`),
         };
        }),
       },
      ],
-     onSelect: () => { },
+     onSelect: () => {},
     },
    ],
   },
@@ -642,7 +677,7 @@ export function OrganizerPage(): JSX.Element {
        ],
       },
      ],
-     onSelect: () => { },
+     onSelect: () => {},
     },
     {
      id: "copy-to",
@@ -658,7 +693,7 @@ export function OrganizerPage(): JSX.Element {
        })),
       },
      ],
-     onSelect: () => { },
+     onSelect: () => {},
     },
    ],
   },
@@ -731,10 +766,7 @@ export function OrganizerPage(): JSX.Element {
    />
 
    <Card>
-    <SectionHeading
-     title="Saved exchanges"
-     detail="Usually added from HTTP history's save action; an exchange id works too."
-    />
+    <SectionHeading title="Saved exchanges" detail="Usually added from HTTP history's save action; an exchange id works too." />
     <Toolbar>
      <div className="inline-add">
       <Input
@@ -763,11 +795,7 @@ export function OrganizerPage(): JSX.Element {
     </Toolbar>
 
     <Toolbar>
-     <Checkbox
-      label="In scope only"
-      checked={inScopeOnly}
-      onCheckedChange={(next) => setInScopeOnly(next === true)}
-     />
+     <Checkbox label="In scope only" checked={inScopeOnly} onCheckedChange={(next) => setInScopeOnly(next === true)} />
      <Field label="Status" className="field-inline">
       {(id) => (
        <Select id={id} value={statusClass} onChange={(event) => setStatusClass(event.target.value as StatusClass)}>
@@ -818,15 +846,31 @@ export function OrganizerPage(): JSX.Element {
        </Select>
       )}
      </Field>
-     <Field label="Search term" hint={termRegex ? "Regular expression over title, note, host, path and method" : "Text over title, note, host, path and method"}>
-      {(id) => <Input id={id} value={term} onChange={(event) => setTerm(event.target.value)} placeholder="search saved exchanges…" style={{ maxWidth: "var(--w-md)" }} />}
+     <Field
+      label="Search term"
+      hint={termRegex ? "Regular expression over title, note, host, path and method" : "Text over title, note, host, path and method"}
+     >
+      {(id) => (
+       <Input
+        id={id}
+        value={term}
+        onChange={(event) => setTerm(event.target.value)}
+        placeholder="search saved exchanges…"
+        style={{ maxWidth: "var(--w-md)" }}
+       />
+      )}
      </Field>
      <Checkbox label="Regex" checked={termRegex} onCheckedChange={setTermRegex} />
      <Checkbox label="Case sensitive" checked={termCase} onCheckedChange={setTermCase} />
      <Checkbox label="Negative" checked={termNegative} onCheckedChange={setTermNegative} />
      <Field label="Extension">
       {(id) => (
-       <Select id={id} value={extensionFilter} onChange={(event) => setExtensionFilter(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+       <Select
+        id={id}
+        value={extensionFilter}
+        onChange={(event) => setExtensionFilter(event.target.value)}
+        style={{ maxWidth: "var(--w-xs)" }}
+       >
         <option value="all">Any</option>
         {extensionOptions(items).map((ext) => (
          <option key={ext} value={ext}>
@@ -840,11 +884,7 @@ export function OrganizerPage(): JSX.Element {
      <FilterPresetsMenu table="organizer" current={filterSnapshot} apply={applyFilterSettings} allowed={ORGANIZER_FILTER_ALLOWED} />
      {filtering ? (
       <>
-       <Button
-        variant="outline"
-        size="small"
-        onClick={() => applyFilterSettings(structuredClone(FILTER_DEFAULTS.organizer))}
-       >
+       <Button variant="outline" size="small" onClick={() => applyFilterSettings(structuredClone(FILTER_DEFAULTS.organizer))}>
         <RotateCcw size={13} />
         Clear filters
        </Button>
@@ -870,10 +910,7 @@ export function OrganizerPage(): JSX.Element {
      * surfaces the server's message rather than pre-validating a second opinion.
      */}
     <Card>
-     <SectionHeading
-      title="Collections"
-      detail="Groups of saved exchanges. New items land in the inbox; move them from a row's menu."
-     />
+     <SectionHeading title="Collections" detail="Groups of saved exchanges. New items land in the inbox; move them from a row's menu." />
      <Toolbar>
       <div className="inline-add">
        <Input
@@ -901,7 +938,11 @@ export function OrganizerPage(): JSX.Element {
           reads as "this group is empty", not as "data is missing". */}
       <Field label="View" className="field-inline">
        {(id) => (
-        <Select id={id} value={String(collectionView)} onChange={(event) => setCollectionView(event.target.value === "all" ? "all" : Number(event.target.value))}>
+        <Select
+         id={id}
+         value={String(collectionView)}
+         onChange={(event) => setCollectionView(event.target.value === "all" ? "all" : Number(event.target.value))}
+        >
          <option value="all">All saved exchanges</option>
          <option value="0">{`Inbox (${items.filter((item) => (item.collection ?? 0) === 0).length})`}</option>
          {collections.map((collection) => (
@@ -918,7 +959,11 @@ export function OrganizerPage(): JSX.Element {
        {collections.map((collection) => (
         <tr key={collection.id} className={collectionView === collection.id ? "data-row selected-row" : "data-row"}>
          <td>
-          <button type="button" className="text-button" onClick={() => setCollectionView(collectionView === collection.id ? "all" : collection.id)}>
+          <button
+           type="button"
+           className="text-button"
+           onClick={() => setCollectionView(collectionView === collection.id ? "all" : collection.id)}
+          >
            {collection.name}
           </button>
          </td>
@@ -989,11 +1034,7 @@ export function OrganizerPage(): JSX.Element {
            >
             <Copy size={13} />
            </IconButton>
-           <IconButton
-            label={`Delete ${collection.name}`}
-            size="small"
-            onClick={() => setConfirmDeleteCollection(collection)}
-           >
+           <IconButton label={`Delete ${collection.name}`} size="small" onClick={() => setConfirmDeleteCollection(collection)}>
             <Trash2 size={13} />
            </IconButton>
           </div>
@@ -1002,10 +1043,7 @@ export function OrganizerPage(): JSX.Element {
        ))}
       </SimpleTable>
      ) : (
-      <Empty
-       title="No collections yet"
-       detail="Create one above, then move saved exchanges into it from a row's Move to… menu."
-      />
+      <Empty title="No collections yet" detail="Create one above, then move saved exchanges into it from a row's Move to… menu." />
      )}
     </Card>
 
@@ -1206,8 +1244,7 @@ export function OrganizerPage(): JSX.Element {
        */}
       {!selected.resolved ? (
        <div className="notice notice-warn">
-        This exchange is no longer in the traffic store, so its request and response cannot be
-        shown — only the note below survives it.
+        This exchange is no longer in the traffic store, so its request and response cannot be shown — only the note below survives it.
        </div>
       ) : (
        <Tabs defaultValue="request" className="editor-combined">

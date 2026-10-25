@@ -32,14 +32,14 @@
 
 /** One card on the Settings page. `title` must be the exact `<h2>` its card renders. */
 export interface SettingsSection {
-  /** Stable, URL-safe, and the suffix of the card's DOM id. Renaming one breaks a bookmark, not a build. */
-  readonly id: string;
-  /** The card's `<h2>`. The nav, the palette entry and the card heading are all this string. */
-  readonly title: string;
-  /** One line for the palette hint and the search haystack — the card's own `detail`, trimmed. */
-  readonly summary: string;
-  /** Search terms the card does not print: Burp's name for it, and the operator's word for it. */
-  readonly keywords: string;
+ /** Stable, URL-safe, and the suffix of the card's DOM id. Renaming one breaks a bookmark, not a build. */
+ readonly id: string;
+ /** The card's `<h2>`. The nav, the palette entry and the card heading are all this string. */
+ readonly title: string;
+ /** One line for the palette hint and the search haystack — the card's own `detail`, trimmed. */
+ readonly summary: string;
+ /** Search terms the card does not print: Burp's name for it, and the operator's word for it. */
+ readonly keywords: string;
 }
 
 /**
@@ -50,156 +50,159 @@ export interface SettingsSection {
  * the render order rather than a description of it.
  */
 export const SETTINGS_SECTIONS = [
-  {
-    id: "proxy",
-    title: "Proxy",
-    summary: "What the server has captured so far, and where its listeners are bound.",
-    keywords: "listener bind port capture interception startup",
-  },
-  {
-    id: "suite",
-    title: "Suite",
-    summary: "Startup behaviour, where burpsy keeps its state on disk, and the suite-level settings Burp exposes.",
-    keywords: "suite performance startup shutdown temporary files updates early adopter close confirm interception at startup ca directory",
-  },
-  {
-    id: "rest-api",
-    title: "REST API",
-    summary: "Every HTTP route this console exposes, classified by what it can do, and where the console is bound. Read-only.",
-    keywords: "api routes endpoints surface exposure risk gated classification bind address network json",
-  },
-  {
-    id: "resource-pools",
-    title: "Resource pools",
-    summary: "Saved limits every tool can reference by name, instead of each run re-specifying its own.",
-    keywords: "concurrency throttle rate limit configResourcePools",
-  },
-  {
-    id: "scheduled-tasks",
-    title: "Scheduled tasks",
-    summary: "Start a crawl or an audit at a wall-clock time, or on an interval. The schedule survives a restart.",
-    keywords: "cron timer recurring automation",
-  },
-  {
-    id: "protocols",
-    title: "Protocols",
-    summary: "How this tool's own senders reached their targets, and a probe that asks an authority directly.",
-    keywords: "http2 h2 alpn negotiation probe",
-  },
-  {
-    id: "network",
-    title: "Network",
-    summary: "Hostname resolution, DNS lookup, timeouts, redirections and open-ended responses.",
-    keywords: "dns timeout redirect streaming connections",
-  },
-  {
-    id: "scanner",
-    title: "Scanner",
-    summary: "Shipped audit configurations and their concrete settings. Read-only.",
-    keywords: "audit crawl configuration library preset",
-  },
-  {
-    id: "llm-triage",
-    title: "LLM triage",
-    summary: "The post-scan second look: an operator-supplied OpenAI-compatible endpoint that advises on gated findings. Advice only — a triage note never moves a finding's severity or confidence.",
-    keywords: "llm ai triage second look endpoint model openai",
-  },
-  {
-    id: "skills",
-    title: "Skills",
-    summary: "The skill library loaded with -skills DIR: packaged prompt techniques an MCP client invokes, the tools each one calls, and which this project turns off.",
-    keywords: "skills prompts mcp agent techniques library disable",
-  },
-  {
-    id: "browser-engine",
-    title: "Browser engine",
-    summary: "Which headless browser runs the DOM-based checks. Changing it takes a restart.",
-    keywords: "chromium headless dom embedded browser",
-  },
-  {
-    id: "browser",
-    title: "Browser",
-    summary: "The browser Open browser launches: its data folder, sandbox and GPU, and clearing its data.",
-    keywords: "open browser chromium profile data folder sandbox gpu clear cookies proxy",
-  },
-  {
-    id: "upstream-proxy",
-    title: "Upstream proxy and SOCKS",
-    summary: "Where this tool's traffic goes on its way out. Ordered rules, first match wins.",
-    keywords: "socks5 chain corporate pac",
-  },
-  {
-    id: "platform-auth",
-    title: "Platform authentication",
-    summary: "Credentials burpsy presents to a host that demands them, first host match wins.",
-    keywords: "basic digest ntlm kerberos negotiate 401 credentials",
-  },
-  {
-    id: "client-certificates",
-    title: "Client TLS certificates",
-    summary: "PKCS#12 identities presented when a host asks for a client certificate.",
-    keywords: "p12 pfx mutual mtls smartcard",
-  },
-  {
-    id: "server-certificates",
-    title: "Server TLS certificates",
-    summary: "Information only: every X.509 certificate a target server presented to this tool.",
-    keywords: "x509 tls ssl certificate chain fingerprint sha256 issuer subject san",
-  },
-  {
-    id: "logging",
-    title: "Logging",
-    summary: "Per-tool request and response log files, written as traffic happens.",
-    keywords: "log file disk requests responses proxy scanner repeater intruder all tools",
-  },
-  {
-    id: "appearance",
-    title: "Appearance",
-    summary: "Stored in this browser; it does not travel with the capture.",
-    keywords: "theme dark light font size density user interface display",
-  },
-  {
-    id: "hotkeys",
-    title: "Hotkeys",
-    summary: "mod is ⌘ on macOS and Ctrl elsewhere. Stored in this browser.",
-    keywords: "keyboard shortcut chord rebind",
-  },
-  {
-    id: "certificate",
-    title: "Certificate",
-    summary: "A client that does not trust this CA cannot be intercepted on HTTPS at all.",
-    keywords: "ca root download install trust https",
-  },
-  {
-    id: "ca-import",
-    title: "Use your own CA",
-    summary: "Sign with a CA you already have, instead of the one this server generated.",
-    keywords: "import pem key signing certificate authority",
-  },
-  {
-    id: "message-editor",
-    title: "Message editor",
-    summary: "Which headers the eye button hides in Pretty, and which reading (Original / Edited / Auto-modified) a history row opens on. Stored in this browser.",
-    keywords: "hide headers eye pretty uninteresting request response default display message reading original edited auto-modified",
-  },
-  {
-    id: "uninteresting-headers",
-    title: "Comparer: uninteresting headers",
-    summary: "Headers whose differences are dimmed when comparing messages. Nothing is hidden here.",
-    keywords: "comparer diff ignore noise date dimmed",
-  },
-  {
-    id: "project-backup",
-    title: "Project backup",
-    summary: "A consistent snapshot of the project database, taken with SQLite's own VACUUM INTO.",
-    keywords: "save copy snapshot retention sqlite restore",
-  },
-  {
-    id: "diagnostics",
-    title: "Diagnostics",
-    summary: "What the store holds, and whether the live event stream is actually delivering.",
-    keywords: "event stream health store size troubleshooting",
-  },
+ {
+  id: "proxy",
+  title: "Proxy",
+  summary: "What the server has captured so far, and where its listeners are bound.",
+  keywords: "listener bind port capture interception startup",
+ },
+ {
+  id: "suite",
+  title: "Suite",
+  summary: "Startup behaviour, where burpsy keeps its state on disk, and the suite-level settings Burp exposes.",
+  keywords: "suite performance startup shutdown temporary files updates early adopter close confirm interception at startup ca directory",
+ },
+ {
+  id: "rest-api",
+  title: "REST API",
+  summary: "Every HTTP route this console exposes, classified by what it can do, and where the console is bound. Read-only.",
+  keywords: "api routes endpoints surface exposure risk gated classification bind address network json",
+ },
+ {
+  id: "resource-pools",
+  title: "Resource pools",
+  summary: "Saved limits every tool can reference by name, instead of each run re-specifying its own.",
+  keywords: "concurrency throttle rate limit configResourcePools",
+ },
+ {
+  id: "scheduled-tasks",
+  title: "Scheduled tasks",
+  summary: "Start a crawl or an audit at a wall-clock time, or on an interval. The schedule survives a restart.",
+  keywords: "cron timer recurring automation",
+ },
+ {
+  id: "protocols",
+  title: "Protocols",
+  summary: "How this tool's own senders reached their targets, and a probe that asks an authority directly.",
+  keywords: "http2 h2 alpn negotiation probe",
+ },
+ {
+  id: "network",
+  title: "Network",
+  summary: "Hostname resolution, DNS lookup, timeouts, redirections and open-ended responses.",
+  keywords: "dns timeout redirect streaming connections",
+ },
+ {
+  id: "scanner",
+  title: "Scanner",
+  summary: "Shipped audit configurations and their concrete settings. Read-only.",
+  keywords: "audit crawl configuration library preset",
+ },
+ {
+  id: "llm-triage",
+  title: "LLM triage",
+  summary:
+   "The post-scan second look: an operator-supplied OpenAI-compatible endpoint that advises on gated findings. Advice only — a triage note never moves a finding's severity or confidence.",
+  keywords: "llm ai triage second look endpoint model openai",
+ },
+ {
+  id: "skills",
+  title: "Skills",
+  summary:
+   "The skill library loaded with -skills DIR: packaged prompt techniques an MCP client invokes, the tools each one calls, and which this project turns off.",
+  keywords: "skills prompts mcp agent techniques library disable",
+ },
+ {
+  id: "browser-engine",
+  title: "Browser engine",
+  summary: "Which headless browser runs the DOM-based checks. Changing it takes a restart.",
+  keywords: "chromium headless dom embedded browser",
+ },
+ {
+  id: "browser",
+  title: "Browser",
+  summary: "The browser Open browser launches: its data folder, sandbox and GPU, and clearing its data.",
+  keywords: "open browser chromium profile data folder sandbox gpu clear cookies proxy",
+ },
+ {
+  id: "upstream-proxy",
+  title: "Upstream proxy and SOCKS",
+  summary: "Where this tool's traffic goes on its way out. Ordered rules, first match wins.",
+  keywords: "socks5 chain corporate pac",
+ },
+ {
+  id: "platform-auth",
+  title: "Platform authentication",
+  summary: "Credentials burpsy presents to a host that demands them, first host match wins.",
+  keywords: "basic digest ntlm kerberos negotiate 401 credentials",
+ },
+ {
+  id: "client-certificates",
+  title: "Client TLS certificates",
+  summary: "PKCS#12 identities presented when a host asks for a client certificate.",
+  keywords: "p12 pfx mutual mtls smartcard",
+ },
+ {
+  id: "server-certificates",
+  title: "Server TLS certificates",
+  summary: "Information only: every X.509 certificate a target server presented to this tool.",
+  keywords: "x509 tls ssl certificate chain fingerprint sha256 issuer subject san",
+ },
+ {
+  id: "logging",
+  title: "Logging",
+  summary: "Per-tool request and response log files, written as traffic happens.",
+  keywords: "log file disk requests responses proxy scanner repeater intruder all tools",
+ },
+ {
+  id: "appearance",
+  title: "Appearance",
+  summary: "Stored in this browser; it does not travel with the capture.",
+  keywords: "theme dark light font size density user interface display",
+ },
+ {
+  id: "hotkeys",
+  title: "Hotkeys",
+  summary: "mod is ⌘ on macOS and Ctrl elsewhere. Stored in this browser.",
+  keywords: "keyboard shortcut chord rebind",
+ },
+ {
+  id: "certificate",
+  title: "Certificate",
+  summary: "A client that does not trust this CA cannot be intercepted on HTTPS at all.",
+  keywords: "ca root download install trust https",
+ },
+ {
+  id: "ca-import",
+  title: "Use your own CA",
+  summary: "Sign with a CA you already have, instead of the one this server generated.",
+  keywords: "import pem key signing certificate authority",
+ },
+ {
+  id: "message-editor",
+  title: "Message editor",
+  summary:
+   "Which headers the eye button hides in Pretty, and which reading (Original / Edited / Auto-modified) a history row opens on. Stored in this browser.",
+  keywords: "hide headers eye pretty uninteresting request response default display message reading original edited auto-modified",
+ },
+ {
+  id: "uninteresting-headers",
+  title: "Comparer: uninteresting headers",
+  summary: "Headers whose differences are dimmed when comparing messages. Nothing is hidden here.",
+  keywords: "comparer diff ignore noise date dimmed",
+ },
+ {
+  id: "project-backup",
+  title: "Project backup",
+  summary: "A consistent snapshot of the project database, taken with SQLite's own VACUUM INTO.",
+  keywords: "save copy snapshot retention sqlite restore",
+ },
+ {
+  id: "diagnostics",
+  title: "Diagnostics",
+  summary: "What the store holds, and whether the live event stream is actually delivering.",
+  keywords: "event stream health store size troubleshooting",
+ },
 ] as const satisfies readonly SettingsSection[];
 
 /**
@@ -212,7 +215,7 @@ export type SettingsSectionId = (typeof SETTINGS_SECTIONS)[number]["id"];
 
 /** The DOM id of a section's card. Prefixed, because `network` alone is not this page's to own. */
 export function settingsSectionAnchor(id: string): string {
-  return `settings-${id}`;
+ return `settings-${id}`;
 }
 
 /**
@@ -230,7 +233,7 @@ export function settingsSectionAnchor(id: string): string {
  * contains that phrase literally.
  */
 export function settingsSectionMatches(section: SettingsSection, body: string, term: string): boolean {
-  return matchesAllWords(`${section.title} ${section.summary} ${section.keywords} ${body}`, term);
+ return matchesAllWords(`${section.title} ${section.summary} ${section.keywords} ${body}`, term);
 }
 
 /**
@@ -243,10 +246,10 @@ export function settingsSectionMatches(section: SettingsSection, body: string, t
  * something the filter did not keep.
  */
 export function matchesAllWords(text: string, term: string): boolean {
-  const words = term.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return true;
-  const haystack = text.toLowerCase();
-  return words.every((word) => haystack.includes(word));
+ const words = term.trim().toLowerCase().split(/\s+/).filter(Boolean);
+ if (words.length === 0) return true;
+ const haystack = text.toLowerCase();
+ return words.every((word) => haystack.includes(word));
 }
 
 /**
@@ -256,12 +259,12 @@ export function matchesAllWords(text: string, term: string): boolean {
  * live DOM lazily — an empty term skips reading it entirely, which is the common case.
  */
 export function filterSettingsSections(
-  term: string,
-  body: (section: SettingsSection) => string,
-  sections: readonly SettingsSection[] = SETTINGS_SECTIONS,
+ term: string,
+ body: (section: SettingsSection) => string,
+ sections: readonly SettingsSection[] = SETTINGS_SECTIONS,
 ): SettingsSection[] {
-  if (!term.trim()) return [...sections];
-  return sections.filter((section) => settingsSectionMatches(section, body(section), term));
+ if (!term.trim()) return [...sections];
+ return sections.filter((section) => settingsSectionMatches(section, body(section), term));
 }
 
 /**
@@ -288,43 +291,43 @@ let pendingSection: string | null = null;
  * without one still gets the part that works.
  */
 function canPostEvents(): boolean {
-  return typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof CustomEvent === "function";
+ return typeof window !== "undefined" && typeof window.dispatchEvent === "function" && typeof CustomEvent === "function";
 }
 
 /** Ask the Settings page to show a section. Navigate first; this only says where to land. */
 export function requestSettingsSection(id: SettingsSectionId): void {
-  pendingSection = id;
-  if (canPostEvents()) {
-    window.dispatchEvent(new CustomEvent(SECTION_REQUEST, { detail: id }));
-  }
+ pendingSection = id;
+ if (canPostEvents()) {
+  window.dispatchEvent(new CustomEvent(SECTION_REQUEST, { detail: id }));
+ }
 }
 
 /** Read and clear the pending request. Clearing is the point: it must fire once, not on every render. */
 export function takePendingSettingsSection(): string | null {
-  const id = pendingSection;
-  pendingSection = null;
-  return id;
+ const id = pendingSection;
+ pendingSection = null;
+ return id;
 }
 
 /** Subscribe to requests made while the page is already mounted. Returns the unsubscribe. */
 export function onSettingsSectionRequest(handler: (id: string) => void): () => void {
-  if (!canPostEvents() || typeof window.addEventListener !== "function") return () => undefined;
-  const listener = (event: Event) => {
-    const id = (event as CustomEvent<string>).detail;
-    if (typeof id === "string") handler(id);
-  };
-  window.addEventListener(SECTION_REQUEST, listener);
-  return () => window.removeEventListener(SECTION_REQUEST, listener);
+ if (!canPostEvents() || typeof window.addEventListener !== "function") return () => undefined;
+ const listener = (event: Event) => {
+  const id = (event as CustomEvent<string>).detail;
+  if (typeof id === "string") handler(id);
+ };
+ window.addEventListener(SECTION_REQUEST, listener);
+ return () => window.removeEventListener(SECTION_REQUEST, listener);
 }
 
 /** What `ui/palette.tsx` consumes: the shape of a `PaletteAction`, built here so the list cannot drift. */
 export interface SettingsPaletteAction {
-  id: string;
-  label: string;
-  group: string;
-  hint: string;
-  keywords: string;
-  run: () => void;
+ id: string;
+ label: string;
+ group: string;
+ hint: string;
+ keywords: string;
+ run: () => void;
 }
 
 /**
@@ -336,15 +339,15 @@ export interface SettingsPaletteAction {
  * panel. `navigate` is injected rather than imported so this stays testable without a store.
  */
 export function settingsPaletteActions(navigate: (route: string) => void): SettingsPaletteAction[] {
-  return SETTINGS_SECTIONS.map((section) => ({
-    id: `settings:${section.id}`,
-    label: `Settings › ${section.title}`,
-    group: "Settings",
-    hint: section.summary,
-    keywords: `settings ${section.keywords}`,
-    run: () => {
-      navigate("settings");
-      requestSettingsSection(section.id);
-    },
-  }));
+ return SETTINGS_SECTIONS.map((section) => ({
+  id: `settings:${section.id}`,
+  label: `Settings › ${section.title}`,
+  group: "Settings",
+  hint: section.summary,
+  keywords: `settings ${section.keywords}`,
+  run: () => {
+   navigate("settings");
+   requestSettingsSection(section.id);
+  },
+ }));
 }

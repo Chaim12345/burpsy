@@ -21,11 +21,11 @@ import { useEffect, useRef } from "react";
 type Handler = () => void;
 
 interface Entry {
-  token: number;
-  /** Absent when the registering component is mounted but cannot run the action right now. */
-  handler?: Handler;
-  /** Why it cannot run right now, when `handler` is absent. */
-  reason?: string;
+ token: number;
+ /** Absent when the registering component is mounted but cannot run the action right now. */
+ handler?: Handler;
+ /** Why it cannot run right now, when `handler` is absent. */
+ reason?: string;
 }
 
 const stacks = new Map<string, Entry[]>();
@@ -34,13 +34,13 @@ let nextToken = 0;
 let version = 0;
 
 function announce(): void {
-  version += 1;
-  for (const listener of listeners) listener();
+ version += 1;
+ for (const listener of listeners) listener();
 }
 
 /** Register `handler` for `id`. Returns the unregister function. Registering moves it to the top. */
 export function registerCommand(id: string, handler: Handler): () => void {
-  return register(id, { handler });
+ return register(id, { handler });
 }
 
 /**
@@ -49,61 +49,60 @@ export function registerCommand(id: string, handler: Handler): () => void {
  * operator is already there (Go back, on a tab's first send).
  */
 export function registerUnavailable(id: string, reason: string): () => void {
-  return register(id, { reason });
+ return register(id, { reason });
 }
 
 function register(id: string, body: Omit<Entry, "token">): () => void {
-  const token = ++nextToken;
-  const stack = stacks.get(id) ?? [];
-  stack.push({ token, ...body });
-  stacks.set(id, stack);
+ const token = ++nextToken;
+ const stack = stacks.get(id) ?? [];
+ stack.push({ token, ...body });
+ stacks.set(id, stack);
+ announce();
+ return () => {
+  const current = stacks.get(id);
+  if (!current) return;
+  const at = current.findIndex((entry) => entry.token === token);
+  if (at < 0) return;
+  current.splice(at, 1);
+  if (current.length === 0) stacks.delete(id);
   announce();
-  return () => {
-    const current = stacks.get(id);
-    if (!current) return;
-    const at = current.findIndex((entry) => entry.token === token);
-    if (at < 0) return;
-    current.splice(at, 1);
-    if (current.length === 0) stacks.delete(id);
-    announce();
-  };
+ };
 }
 
 /** Whether some mounted component can run `id` right now. */
 export function hasCommand(id: string): boolean {
-  const stack = stacks.get(id);
-  return Boolean(stack?.[stack.length - 1]?.handler);
+ const stack = stacks.get(id);
+ return Boolean(stack?.[stack.length - 1]?.handler);
 }
 
 /** Why `id` cannot run, when its owner said so; undefined when it can, or when nothing owns it. */
 export function unavailableReason(id: string): string | undefined {
-  const stack = stacks.get(id);
-  const top = stack?.[stack.length - 1];
-  return top && !top.handler ? top.reason : undefined;
+ const stack = stacks.get(id);
+ const top = stack?.[stack.length - 1];
+ return top && !top.handler ? top.reason : undefined;
 }
 
 /** Run the most recently registered handler for `id`. False when there is none. */
 export function runCommand(id: string): boolean {
-  const stack = stacks.get(id);
-  const top = stack?.[stack.length - 1];
-  if (!top?.handler) return false;
-  top.handler();
-  return true;
+ const stack = stacks.get(id);
+ const top = stack?.[stack.length - 1];
+ if (!top?.handler) return false;
+ top.handler();
+ return true;
 }
 
 /** Subscribe to registration changes (for the palette's enabled state). */
 export function subscribeCommands(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+ listeners.add(listener);
+ return () => {
+  listeners.delete(listener);
+ };
 }
 
 /** A number that changes whenever the registered set does. useSyncExternalStore's snapshot. */
 export function commandsVersion(): number {
-  return version;
+ return version;
 }
-
 
 /**
  * Register a handler for `id` while the calling component is mounted. Pass a string instead when
@@ -112,14 +111,14 @@ export function commandsVersion(): number {
  * swallowed.
  */
 export function useCommandHandler(id: string, handler: Handler | string): void {
-  const ref = useRef(handler);
-  ref.current = handler;
-  const reason = typeof handler === "string" ? handler : null;
-  useEffect(() => {
-    if (reason !== null) return registerUnavailable(id, reason);
-    return registerCommand(id, () => {
-      const current = ref.current;
-      if (typeof current === "function") current();
-    });
-  }, [id, reason]);
+ const ref = useRef(handler);
+ ref.current = handler;
+ const reason = typeof handler === "string" ? handler : null;
+ useEffect(() => {
+  if (reason !== null) return registerUnavailable(id, reason);
+  return registerCommand(id, () => {
+   const current = ref.current;
+   if (typeof current === "function") current();
+  });
+ }, [id, reason]);
 }

@@ -13,8 +13,8 @@
  * start sending a flat attack while the form says otherwise.
  */
 export interface DelayVariationFields {
-  delay_jitter_percent?: number;
-  delay_increment_ms?: number;
+ delay_jitter_percent?: number;
+ delay_increment_ms?: number;
 }
 
 /**
@@ -29,18 +29,18 @@ export interface DelayVariationFields {
  * would turn that reason into a form that quietly ran a different attack.
  */
 export function delayVariationFields(jitterPercent: string, incrementMS: string): DelayVariationFields {
-  const fields: DelayVariationFields = {};
-  const jitter = numberOrNull(jitterPercent);
-  if (jitter !== null && jitter !== 0) fields.delay_jitter_percent = jitter;
-  const increment = numberOrNull(incrementMS);
-  if (increment !== null && increment !== 0) fields.delay_increment_ms = increment;
-  return fields;
+ const fields: DelayVariationFields = {};
+ const jitter = numberOrNull(jitterPercent);
+ if (jitter !== null && jitter !== 0) fields.delay_jitter_percent = jitter;
+ const increment = numberOrNull(incrementMS);
+ if (increment !== null && increment !== 0) fields.delay_increment_ms = increment;
+ return fields;
 }
 
 /** A typed number, or null for blank and for anything that is not a finite number. */
 function numberOrNull(raw: string): number | null {
-  const text = raw.trim();
-  if (text === "") return null;
-  const value = Number(text);
-  return Number.isFinite(value) ? value : null;
+ const text = raw.trim();
+ if (text === "") return null;
+ const value = Number(text);
+ return Number.isFinite(value) ? value : null;
 }

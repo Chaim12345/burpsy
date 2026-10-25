@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseListenerPorts } from "./listener-filter";
 
-
 describe("the listener filter's port list", () => {
  test("is empty for an empty field, which means show every row", () => {
   expect(parseListenerPorts("").size).toBe(0);

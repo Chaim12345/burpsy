@@ -27,22 +27,22 @@ import type { Column } from "../ui/table";
 const MAX_DEPTH = 4;
 
 export function flattenRowText(value: unknown, depth = 0): string[] {
-  if (value === null || value === undefined) return [];
-  if (typeof value === "string") return value === "" ? [] : [value];
-  if (typeof value === "number") return Number.isFinite(value) ? [String(value)] : [];
-  if (typeof value === "boolean") return [String(value), value ? "yes" : "no"];
-  if (depth >= MAX_DEPTH) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => flattenRowText(item, depth + 1));
-  if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).flatMap((item) => flattenRowText(item, depth + 1));
-  }
-  return [];
+ if (value === null || value === undefined) return [];
+ if (typeof value === "string") return value === "" ? [] : [value];
+ if (typeof value === "number") return Number.isFinite(value) ? [String(value)] : [];
+ if (typeof value === "boolean") return [String(value), value ? "yes" : "no"];
+ if (depth >= MAX_DEPTH) return [];
+ if (Array.isArray(value)) return value.flatMap((item) => flattenRowText(item, depth + 1));
+ if (typeof value === "object") {
+  return Object.values(value as Record<string, unknown>).flatMap((item) => flattenRowText(item, depth + 1));
+ }
+ return [];
 }
 
 export function tableRowMatches(value: unknown, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (needle === "") return true;
-  return flattenRowText(value).some((text) => text.toLowerCase().includes(needle));
+ const needle = query.trim().toLowerCase();
+ if (needle === "") return true;
+ return flattenRowText(value).some((text) => text.toLowerCase().includes(needle));
 }
 
 /**
@@ -59,20 +59,19 @@ export function tableRowMatches(value: unknown, query: string): boolean {
  * to compile.
  */
 export function filterTableRows<T>(rows: T[], columns: Column<T>[], query: string): T[] {
-  if (query.trim() === "") return rows;
-  return rows.filter((row, index) =>
-    columns.some((column) => {
-      // The column union hides which accessor a def carries; `in` narrows to
-      // the members that actually declare one, matching TanStack's own
-      // accessor resolution.
-      const value =
-        "accessorFn" in column
-          ? column.accessorFn(row, index)
-          : "accessorKey" in column
-            ? (row as Record<string, unknown>)[column.accessorKey as string]
-            : undefined;
-      return tableRowMatches(value, query);
-    }),
-  );
+ if (query.trim() === "") return rows;
+ return rows.filter((row, index) =>
+  columns.some((column) => {
+   // The column union hides which accessor a def carries; `in` narrows to
+   // the members that actually declare one, matching TanStack's own
+   // accessor resolution.
+   const value =
+    "accessorFn" in column
+     ? column.accessorFn(row, index)
+     : "accessorKey" in column
+       ? (row as Record<string, unknown>)[column.accessorKey as string]
+       : undefined;
+   return tableRowMatches(value, query);
+  }),
+ );
 }
-

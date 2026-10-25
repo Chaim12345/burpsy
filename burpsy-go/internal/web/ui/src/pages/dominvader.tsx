@@ -155,7 +155,10 @@ function DomInvaderRow({ hit }: { hit: DomInvaderHit }): JSX.Element {
    </td>
    <td>{hit.sources.length > 0 ? hit.sources.join(", ") : <span className="cell-dim">—</span>}</td>
    <td>
-    <code title={hit.excerpt} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "inline-block", maxWidth: "var(--w-lg)" }}>
+    <code
+     title={hit.excerpt}
+     style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "inline-block", maxWidth: "var(--w-lg)" }}
+    >
      {hit.excerpt}
     </code>
    </td>

@@ -16,27 +16,27 @@ import { BookOpen, Command, Keyboard, Stethoscope } from "lucide-react";
 import type { MenuGroup } from "../ui/menu";
 
 export interface HelpMenuHandlers {
-  openShortcuts: () => void;
-  openPalette: () => void;
-  openDocumentation: () => void;
-  openDiagnostics: () => void;
+ openShortcuts: () => void;
+ openPalette: () => void;
+ openDocumentation: () => void;
+ openDiagnostics: () => void;
 }
 
 export function helpMenuGroups(handlers: HelpMenuHandlers): MenuGroup[] {
-  return [
-    {
-      id: "reference",
-      actions: [
-        { id: "documentation", label: "Documentation", icon: BookOpen, onSelect: handlers.openDocumentation },
-        { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, onSelect: handlers.openDiagnostics },
-      ],
-    },
-    {
-      id: "help",
-      actions: [
-        { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: handlers.openShortcuts },
-        { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: handlers.openPalette },
-      ],
-    },
-  ];
+ return [
+  {
+   id: "reference",
+   actions: [
+    { id: "documentation", label: "Documentation", icon: BookOpen, onSelect: handlers.openDocumentation },
+    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, onSelect: handlers.openDiagnostics },
+   ],
+  },
+  {
+   id: "help",
+   actions: [
+    { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: handlers.openShortcuts },
+    { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: handlers.openPalette },
+   ],
+  },
+ ];
 }

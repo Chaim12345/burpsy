@@ -21,22 +21,22 @@ export const CRLF_GLYPHS = CR_GLYPH + LF_GLYPH;
 
 /** The text with every CR and LF shown as its glyph. */
 export function showLineBreaks(text: string): string {
-  return text.replace(/\r/g, CR_GLYPH).replace(/\n/g, LF_GLYPH);
+ return text.replace(/\r/g, CR_GLYPH).replace(/\n/g, LF_GLYPH);
 }
 
 /** The inverse of showLineBreaks: each glyph back to the octet it stands for. */
 export function readLineBreaks(shown: string): string {
-  return shown.replaceAll(CR_GLYPH, "\r").replaceAll(LF_GLYPH, "\n");
+ return shown.replaceAll(CR_GLYPH, "\r").replaceAll(LF_GLYPH, "\n");
 }
 
 /** Whether the text already holds one of the two glyphs, which would make the mapping lossy. */
 export function hasLineBreakGlyphs(text: string): boolean {
-  return text.includes(CR_GLYPH) || text.includes(LF_GLYPH);
+ return text.includes(CR_GLYPH) || text.includes(LF_GLYPH);
 }
 
 /** Whether the text holds a CR or an LF. */
 export function hasLineBreak(text: string): boolean {
-  return /[\r\n]/.test(text);
+ return /[\r\n]/.test(text);
 }
 
 /**
@@ -44,7 +44,7 @@ export function hasLineBreak(text: string): boolean {
  * goes — just after what was inserted, as typing would leave it.
  */
 export function insertAt(text: string, start: number, end: number, insert: string): { text: string; caret: number } {
-  const from = Math.max(0, Math.min(start, text.length));
-  const to = Math.max(from, Math.min(end, text.length));
-  return { text: text.slice(0, from) + insert + text.slice(to), caret: from + insert.length };
+ const from = Math.max(0, Math.min(start, text.length));
+ const to = Math.max(from, Math.min(end, text.length));
+ return { text: text.slice(0, from) + insert + text.slice(to), caret: from + insert.length };
 }

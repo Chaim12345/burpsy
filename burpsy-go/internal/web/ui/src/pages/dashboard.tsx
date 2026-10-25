@@ -10,14 +10,50 @@ import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSe
 import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import type { CrawlLoginReport } from "../lib/types.observe";
-import { useAPIScanCheck, useAPIScanReviewCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
+import {
+ useAPIScanCheck,
+ useAPIScanReviewCheck,
+ useAuditSelected,
+ useCrawlRun,
+ useCrawls,
+ useStartAPIScan,
+ useStartCrawl,
+} from "../lib/data.observe";
 import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, NeedsValueButton, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import {
+ Badge,
+ Button,
+ Card,
+ Empty,
+ ErrorNotice,
+ Field,
+ IconButton,
+ Input,
+ Metric,
+ Modal,
+ NeedsValueButton,
+ Select,
+ Switch,
+ Tabs,
+ TabsContent,
+ TabsList,
+ TabsTrigger,
+ Textarea,
+ Toolbar,
+} from "../ui/primitives";
 import { APIScanFetchFromURL, APIScanReview } from "../ui/apiscan-review";
-import { buildReview, discardStale, emptyReview, fetchedCaption, fetchedWarning, reviewChangesRequest, type ReviewState } from "../lib/apiscan-review";
+import {
+ buildReview,
+ discardStale,
+ emptyReview,
+ fetchedCaption,
+ fetchedWarning,
+ reviewChangesRequest,
+ type ReviewState,
+} from "../lib/apiscan-review";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -25,7 +61,15 @@ import { RecordedLoginPicker } from "../ui/recorded-logins";
 import { CrawlLiveView } from "../ui/crawl-live";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 import { severityTone } from "../lib/severity";
-import { EVENT_SEVERITY_OPTIONS, eventSource, filterEvents, isFiltered, severityCounts, type EventLogFilter, type EventSeverityFilter } from "../lib/event-log-filter";
+import {
+ EVENT_SEVERITY_OPTIONS,
+ eventSource,
+ filterEvents,
+ isFiltered,
+ severityCounts,
+ type EventLogFilter,
+ type EventSeverityFilter,
+} from "../lib/event-log-filter";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
  const value = state.toLowerCase();
@@ -149,22 +193,23 @@ function foundCount(summary?: string): string {
  */
 function withStandingLiveTask(tasks: TaskRow[], liveEnabled: boolean): TaskRow[] {
  const batchRunning = tasks.some((task) => task.kind === "live audit" && task.state === "running");
- const standing: TaskRow | null = liveEnabled && !batchRunning
-  ? {
-   id: -1,
-   kind: "live audit",
-   target: "proxied traffic",
-   state: "running",
-   done: 0,
-   total: 0,
-   fraction: 0,
-   fraction_known: false,
-   cancellable: true,
-   progress: "waiting for in-scope traffic",
-   elapsed_ms: 0,
-   result: { summary: "" },
-  }
-  : null;
+ const standing: TaskRow | null =
+  liveEnabled && !batchRunning
+   ? {
+      id: -1,
+      kind: "live audit",
+      target: "proxied traffic",
+      state: "running",
+      done: 0,
+      total: 0,
+      fraction: 0,
+      fraction_known: false,
+      cancellable: true,
+      progress: "waiting for in-scope traffic",
+      elapsed_ms: 0,
+      result: { summary: "" },
+     }
+   : null;
  return standing ? [standing, ...tasks] : tasks;
 }
 
@@ -201,32 +246,35 @@ function TaskTile({
  // pieces that are their own tracked issues (pause/resume is 8gw; settings live on the detail
  // pane). Scan again re-runs a crawl at its target; Delete removes a finished row — the server
  // refuses a running one with 409, and the toast passes that reason through.
- const menu: MenuGroup[] = task.id === -1 ? [] : [
-  {
-   id: "task-options",
-   actions: [
-    {
-     id: "scan-again",
-     label: "Scan again",
-     onSelect: () =>
-      again.mutate(task.id, {
-       onSuccess: () => toast.success(`Scan started again on ${task.target}`),
-       onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
-      }),
-    },
-    {
-     id: "delete-task",
-     label: "Delete task",
-     danger: true,
-     onSelect: () =>
-      remove.mutate(task.id, {
-       onSuccess: () => toast.success(`Task ${task.id} removed from the list`),
-       onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
-      }),
-    },
-   ],
-  },
- ];
+ const menu: MenuGroup[] =
+  task.id === -1
+   ? []
+   : [
+      {
+       id: "task-options",
+       actions: [
+        {
+         id: "scan-again",
+         label: "Scan again",
+         onSelect: () =>
+          again.mutate(task.id, {
+           onSuccess: () => toast.success(`Scan started again on ${task.target}`),
+           onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
+          }),
+        },
+        {
+         id: "delete-task",
+         label: "Delete task",
+         danger: true,
+         onSelect: () =>
+          remove.mutate(task.id, {
+           onSuccess: () => toast.success(`Task ${task.id} removed from the list`),
+           onError: (cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)),
+          }),
+        },
+       ],
+      },
+     ];
  // The tile is a div, not a button: it owns an IconButton and a Switch, and a button wrapping
  // either is invalid HTML, fails the axe nested-interactive rule, and selects the tile when the
  // operator only meant to flip the switch. Only the title selects.
@@ -282,8 +330,7 @@ function TaskTile({
         { enabled: next },
         {
          onSuccess: () => toast.success(next ? "Live audit started" : "Live audit stopped"),
-         onError: (failure: unknown) =>
-          toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
+         onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
         },
        );
       }}
@@ -380,12 +427,7 @@ function TaskSidebar({
     </div>
    </div>
    <div className="task-sidebar-filter">
-    <Input
-     aria-label="Filter tasks"
-     placeholder="Filter tasks"
-     value={filter}
-     onChange={(event) => setFilter(event.target.value)}
-    />
+    <Input aria-label="Filter tasks" placeholder="Filter tasks" value={filter} onChange={(event) => setFilter(event.target.value)} />
     <Search size={13} className="task-sidebar-filter-icon" />
    </div>
    {shown.length ? (
@@ -436,16 +478,16 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
    actions: [
     ...(row.host
      ? [
-      {
-       id: "host",
-       label: `Show ${row.host} in HTTP history`,
-       icon: FolderTree,
-       onSelect: () => {
-        setHistoryQuery(`host = ${row.host}`);
-        setRoute("history");
-       },
-      },
-     ]
+        {
+         id: "host",
+         label: `Show ${row.host} in HTTP history`,
+         icon: FolderTree,
+         onSelect: () => {
+          setHistoryQuery(`host = ${row.host}`);
+          setRoute("history");
+         },
+        },
+       ]
      : []),
     {
      id: "path",
@@ -472,20 +514,20 @@ function ActivityTable({ rows }: { rows: ActivityRow[] }): JSX.Element {
     },
     ...(row.host
      ? [
-      {
-       id: "url",
-       label: "Copy URL (as logged)",
-       icon: Copy,
-       onSelect: () => {
-        // The log carries no TLS flag, so the scheme is inferred from the port — the same
-        // honest guess logger.tsx makes, and the same reason this says "as logged".
-        const scheme = row.port === 443 ? "https" : "http";
-        const authority = row.port === undefined || row.port === 80 || row.port === 443 ? row.host : `${row.host}:${row.port}`;
-        void copyToClipboard(`${scheme}://${authority ?? ""}${row.path}`);
-        toast.success("URL copied");
-       },
-      },
-     ]
+        {
+         id: "url",
+         label: "Copy URL (as logged)",
+         icon: Copy,
+         onSelect: () => {
+          // The log carries no TLS flag, so the scheme is inferred from the port — the same
+          // honest guess logger.tsx makes, and the same reason this says "as logged".
+          const scheme = row.port === 443 ? "https" : "http";
+          const authority = row.port === undefined || row.port === 80 || row.port === 443 ? row.host : `${row.host}:${row.port}`;
+          void copyToClipboard(`${scheme}://${authority ?? ""}${row.path}`);
+          toast.success("URL copied");
+         },
+        },
+       ]
      : []),
    ],
   },
@@ -593,22 +635,31 @@ function CrawlLoginCard({ login }: { login: CrawlLoginReport }): JSX.Element {
      !login.authenticated
       ? `The recorded login “${login.label}” failed`
       : login.verified
-       ? `Logged in with “${login.label}”`
-       : `“${login.label}” ran — the login was not verified`
+        ? `Logged in with “${login.label}”`
+        : `“${login.label}” ran — the login was not verified`
     }
     detail={
      !login.authenticated
       ? "The replay before the first request did not log in, so this crawl ran logged out."
       : login.verified
-       ? "The recorded login was replayed in an isolated browser before the first request, confirmed by its status check, and its session was carried on every request."
-       : "Every step ran, but the sequence has no status check, so nothing confirmed the session was real. A rejected password looks the same."
+        ? "The recorded login was replayed in an isolated browser before the first request, confirmed by its status check, and its session was carried on every request."
+        : "Every step ran, but the sequence has no status check, so nothing confirmed the session was real. A rejected password looks the same."
     }
    />
    <div className="metric-grid wide">
-    <Metric label="Replays" value={login.attempts} detail={`${login.succeeded} logged in, ${login.failed} failed`} tone={login.failed > 0 ? "warn" : undefined} />
+    <Metric
+     label="Replays"
+     value={login.attempts}
+     detail={`${login.succeeded} logged in, ${login.failed} failed`}
+     tone={login.failed > 0 ? "warn" : undefined}
+    />
     <Metric label="Re-logins" value={login.relogins} detail="replays run because the session was detected as lost" />
     <Metric label="Requests with the session" value={login.requests_with_session} />
-    <Metric label="Pages found after login" value={login.pages_found_after_login} tone={login.authenticated && login.pages_found_after_login === 0 ? "warn" : undefined} />
+    <Metric
+     label="Pages found after login"
+     value={login.pages_found_after_login}
+     tone={login.authenticated && login.pages_found_after_login === 0 ? "warn" : undefined}
+    />
    </div>
    <DetailList
     rows={[
@@ -716,24 +767,25 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   builtReview.fields,
   scanCheck.data !== undefined && reviewChanges && builtReview.missing === null,
  );
- const reviewedPaths = reviewChanges && reviewCheck.check.data ? new Map(reviewCheck.check.data.definition.operations.map((op) => [op.key, op.path])) : null;
+ const reviewedPaths =
+  reviewChanges && reviewCheck.check.data ? new Map(reviewCheck.check.data.definition.operations.map((op) => [op.key, op.path])) : null;
  const reviewedCount = operations.length - (builtReview.fields.exclude_endpoints?.length ?? 0);
  // Why the API launch cannot go yet, in the operator's terms; null when it can.
  const apiMissing =
   definition.trim() === ""
    ? "Paste or load an API definition first."
    : scanCheck.data === undefined
-    ? scanCheck.error
+     ? scanCheck.error
       ? "The definition was refused; see the message above."
       : "Reading the definition…"
-    : builtReview.missing ??
-      (reviewChanges && reviewCheck.check.error
-       ? "The review was refused; see the message above."
-       : reviewChanges && (!reviewCheck.settled || reviewCheck.check.data === undefined)
-        ? "Checking the review…"
-        : startAPIScan.isPending
-         ? "Starting…"
-         : null);
+     : (builtReview.missing ??
+       (reviewChanges && reviewCheck.check.error
+        ? "The review was refused; see the message above."
+        : reviewChanges && (!reviewCheck.settled || reviewCheck.check.data === undefined)
+          ? "Checking the review…"
+          : startAPIScan.isPending
+            ? "Starting…"
+            : null));
 
  const chosen = selectedScanType(kind);
  const close = () => onOpenChange(false);
@@ -742,8 +794,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const canSubmit = auditing
   ? checked.length > 0 && !auditSelected.isPending
   : apiScan
-   ? apiMissing === null
-   : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
+    ? apiMissing === null
+    : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
  const submit = () => {
   if (apiScan) {
    // The check already passed on this exact text and this exact review, so the launch cannot be
@@ -821,7 +873,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
      // were left out and why, instead of the run silently being smaller than what was typed.
      const refused = started.out_of_scope_seeds ?? [];
      if (refused.length) {
-      toast.warning(`${verb} started without ${refused.length} out-of-scope URL(s): ${refused.map((r) => `${r.url} — ${r.reason}`).join("; ")}`);
+      toast.warning(
+       `${verb} started without ${refused.length} out-of-scope URL(s): ${refused.map((r) => `${r.url} — ${r.reason}`).join("; ")}`,
+      );
      } else {
       toast.success(`${verb} started on ${seed.trim()}`);
      }
@@ -833,7 +887,13 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  };
 
  return (
-  <Modal open={open} onOpenChange={onOpenChange} title="New scan" wide description="Select the type of scan to run. It registers as a task below, with progress and a cancel button.">
+  <Modal
+   open={open}
+   onOpenChange={onOpenChange}
+   title="New scan"
+   wide
+   description="Select the type of scan to run. It registers as a task below, with progress and a cancel button."
+  >
    <div className="stack">
     <h3 className="subheading">Scan type</h3>
     <div className="scan-type-grid">
@@ -854,8 +914,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     {auditing ? (
      <>
       <p className="cell-dim" style={{ margin: 0 }}>
-       Scans the items ticked in HTTP history, as one task. Burp takes its selection from the table you are looking at, and so
-       does this — the ticks are the selection, and the scan is over exactly those rows.
+       Scans the items ticked in HTTP history, as one task. Burp takes its selection from the table you are looking at, and so does this —
+       the ticks are the selection, and the scan is over exactly those rows.
       </p>
       <div className="metric-grid wide">
        <Metric
@@ -887,9 +947,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     ) : apiScan ? (
      <>
       <p className="cell-dim" style={{ margin: 0 }}>
-       Sends the endpoints an API definition describes, instead of discovering them by crawling. The document's own examples,
-       defaults and enums become the parameter values where it supplies them; where it does not, this build invents visible
-       placeholders and says how many below.
+       Sends the endpoints an API definition describes, instead of discovering them by crawling. The document's own examples, defaults and
+       enums become the parameter values where it supplies them; where it does not, this build invents visible placeholders and says how
+       many below.
       </p>
       <Field
        label="API definition"
@@ -907,7 +967,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
           setFetchedNote(null);
          }}
          rows={7}
-         placeholder={'openapi: "3.0.3"\ninfo: {title: Petstore, version: "1.0.2"}\nservers: [{url: https://api.example.com/v1}]\npaths:\n  /pets:\n    get:\n      responses: {"200": {description: ok}}'}
+         placeholder={
+          'openapi: "3.0.3"\ninfo: {title: Petstore, version: "1.0.2"}\nservers: [{url: https://api.example.com/v1}]\npaths:\n  /pets:\n    get:\n      responses: {"200": {description: ok}}'
+         }
          aria-label="API definition"
         />
        )}
@@ -975,18 +1037,13 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        hint="Overrides the document's own servers[0]. Required when the document declares no server, or a relative one — a pasted document has no host of its own to be relative to."
       >
        {(id) => (
-        <Input
-         id={id}
-         value={baseUrl}
-         onChange={(event) => setBaseUrl(event.target.value)}
-         placeholder="https://api.example.com/v1"
-        />
+        <Input id={id} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
        )}
       </Field>
       {definition.trim() === "" ? (
        <p className="cell-dim" style={{ margin: 0 }}>
-        Nothing to scan yet. As soon as the document is in the box above, it is read here — endpoint count, the host the paths
-        resolve against, and how many of its values this build would have to invent.
+        Nothing to scan yet. As soon as the document is in the box above, it is read here — endpoint count, the host the paths resolve
+        against, and how many of its values this build would have to invent.
        </p>
       ) : scanCheck.error ? (
        // Rendered as advice rather than as a query failure: while someone is editing a document, a
@@ -1012,8 +1069,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
          />
         </div>
         <p className="cell-dim" style={{ margin: 0 }}>
-         Base URL <code>{scanCheck.data.definition.base_url}</code>. Every request is re-authorised against the current scope
-         before it is sent, exactly as a crawl's is.
+         Base URL <code>{scanCheck.data.definition.base_url}</code>. Every request is re-authorised against the current scope before it is
+         sent, exactly as a crawl's is.
         </p>
         <APIScanReview
          operations={operations}
@@ -1033,7 +1090,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
           </Button>
          </div>
         ) : null}
-        {reviewChanges && reviewCheck.check.error ? <ErrorNotice error={reviewCheck.check.error} title="The server refused this review" /> : null}
+        {reviewChanges && reviewCheck.check.error ? (
+         <ErrorNotice error={reviewCheck.check.error} title="The server refused this review" />
+        ) : null}
        </>
       ) : (
        <p className="cell-dim" style={{ margin: 0 }}>
@@ -1041,8 +1100,20 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        </p>
       )}
       <div className="metric-grid wide">
-       <Field label="Max requests (empty = one per endpoint)" hint="A cap below the document's endpoint count sends a prefix of the list, and the report says how many were never sent.">
-        {(id) => <Input id={id} type="number" min={1} value={apiMaxRequests} onChange={(event) => setApiMaxRequests(event.target.value)} placeholder={scanCheck.data ? String(reviewedCount) : ""} />}
+       <Field
+        label="Max requests (empty = one per endpoint)"
+        hint="A cap below the document's endpoint count sends a prefix of the list, and the report says how many were never sent."
+       >
+        {(id) => (
+         <Input
+          id={id}
+          type="number"
+          min={1}
+          value={apiMaxRequests}
+          onChange={(event) => setApiMaxRequests(event.target.value)}
+          placeholder={scanCheck.data ? String(reviewedCount) : ""}
+         />
+        )}
        </Field>
       </div>
       <div className="task-tile-row">
@@ -1057,10 +1128,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
      </>
     ) : chosen.ready ? (
      <>
-      <Field
-       label="URLs to scan"
-       hint="One per line, or comma separated — Burp's own field is many URLs in one box."
-      >
+      <Field label="URLs to scan" hint="One per line, or comma separated — Burp's own field is many URLs in one box.">
        {(id) => (
         <Input
          id={id}
@@ -1088,18 +1156,33 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </div>
       {scopeMode === "prefixes" ? (
        <Field label="Include URL prefixes" hint="One per line; the crawl stays under these.">
-        {(id) => <Input id={id} value={scopeInclude} onChange={(event) => setScopeInclude(event.target.value)} placeholder="https://demo.local/app/" />}
+        {(id) => (
+         <Input
+          id={id}
+          value={scopeInclude}
+          onChange={(event) => setScopeInclude(event.target.value)}
+          placeholder="https://demo.local/app/"
+         />
+        )}
        </Field>
       ) : null}
       {scopeMode !== "engagement" ? (
        <Field label="Exclude URL prefixes" hint="Optional; never requested even when included.">
-        {(id) => <Input id={id} value={scopeExclude} onChange={(event) => setScopeExclude(event.target.value)} placeholder="https://demo.local/app/logout" />}
+        {(id) => (
+         <Input
+          id={id}
+          value={scopeExclude}
+          onChange={(event) => setScopeExclude(event.target.value)}
+          placeholder="https://demo.local/app/logout"
+         />
+        )}
        </Field>
       ) : null}
       <label style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
        <input type="checkbox" checked={isolated} onChange={(event) => setIsolated(event.target.checked)} />
        <span>
-        Run isolated scan <span className="field-hint">— its locations and issues stay out of the site map and All issues; the task still shows them</span>
+        Run isolated scan{" "}
+        <span className="field-hint">— its locations and issues stay out of the site map and All issues; the task still shows them</span>
        </span>
       </label>
       <div role="radiogroup" aria-label="Protocol settings">
@@ -1119,8 +1202,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </div>
       {chosen.id === "crawl-audit" ? (
        <p className="cell-dim" style={{ margin: 0 }}>
-        Two tasks appear below: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the
-        crawl finishes, and its own row reports the checks it could not run — a bounded sweep is never shown as a clean one.
+        Two tasks appear below: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the crawl finishes, and
+        its own row reports the checks it could not run — a bounded sweep is never shown as a clean one.
        </p>
       ) : null}
       <div className="metric-grid wide">
@@ -1131,7 +1214,16 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         {(id) => <Input id={id} type="number" min={1} value={maxDepth} onChange={(event) => setMaxDepth(event.target.value)} />}
        </Field>
        <Field label="Max duration (seconds)">
-        {(id) => <Input id={id} type="number" min={1} value={maxDuration} onChange={(event) => setMaxDuration(event.target.value)} placeholder="uncapped" />}
+        {(id) => (
+         <Input
+          id={id}
+          type="number"
+          min={1}
+          value={maxDuration}
+          onChange={(event) => setMaxDuration(event.target.value)}
+          placeholder="uncapped"
+         />
+        )}
        </Field>
       </div>
       <RecordedLoginPicker value={recordedLogin} onChange={setRecordedLogin} />
@@ -1172,7 +1264,12 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
  const close = () => onOpenChange(false);
 
  return (
-  <Modal open={open} onOpenChange={onOpenChange} title="New live task" description="Audit proxied traffic as it arrives. The sweep registers as a task below.">
+  <Modal
+   open={open}
+   onOpenChange={onOpenChange}
+   title="New live task"
+   description="Audit proxied traffic as it arrives. The sweep registers as a task below."
+  >
    <div className="stack">
     <Field label="Scope filter query (optional)">
      {(id) => <Input id={id} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='host == "demo.local"' />}
@@ -1226,7 +1323,6 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
   </Modal>
  );
 }
-
 
 export function DashboardPage(): JSX.Element {
  const { data, error, isFetching, refetch } = useDashboard();
@@ -1351,13 +1447,13 @@ function EventLogPanel({
  return (
   <>
    {/*
-     * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
-     * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
-     * to answer "what happened". Every row the server sends is now rendered, and the window is
-     * stated from the server's own counters rather than re-derived here. The real bound is the
-     * EventLog's, which already counts what it discarded — a second, silent cap in the browser
-     * could only disagree with it. The filters below narrow what is shown, and say so.
-     */}
+    * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
+    * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
+    * to answer "what happened". Every row the server sends is now rendered, and the window is
+    * stated from the server's own counters rather than re-derived here. The real bound is the
+    * EventLog's, which already counts what it discarded — a second, silent cap in the browser
+    * could only disagree with it. The filters below narrow what is shown, and say so.
+    */}
    <SectionHeading
     title="Event log"
     detail={
@@ -1394,7 +1490,14 @@ function EventLogPanel({
      </Field>
      <Field label="Search" className="field-inline">
       {(id) => (
-       <Input id={id} type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="kind, detail or source…" style={{ maxWidth: "var(--w-md)" }} />
+       <Input
+        id={id}
+        type="search"
+        value={search}
+        onChange={(event) => setSearch(event.target.value)}
+        placeholder="kind, detail or source…"
+        style={{ maxWidth: "var(--w-md)" }}
+       />
       )}
      </Field>
      {isFiltered(filter) ? (
@@ -1495,10 +1598,7 @@ function TaskDetail({
  // find?"; it was the project-wide feed sorted and capped, which fails in two directions at once —
  // a task that found nothing showing other runs' findings under its own name, and a busy task
  // dropping its own older findings to the 20-cap while showing newer ones it never raised.
- const { shown: activityFindings, hidden: activityHidden } = taskActivityFindings(
-  issuesDetailed.data?.findings ?? [],
-  task.id,
- );
+ const { shown: activityFindings, hidden: activityHidden } = taskActivityFindings(issuesDetailed.data?.findings ?? [], task.id);
  const openAdvisory = (finding: FindingDetail) => {
   // The Issues page is where an advisory opens; landing there with the finding selected is the
   // "way in" this feed exists to provide — the same focus mechanism History's focusExchange uses.
@@ -1574,9 +1674,7 @@ function TaskDetail({
           </td>
           <td title={finding.detail ?? undefined}>
            {finding.issue_name ?? finding.check_name ?? "Unnamed finding"}
-           {finding.times_seen > 1 ? (
-            <span className="cell-dim"> ×{finding.times_seen}</span>
-           ) : null}
+           {finding.times_seen > 1 ? <span className="cell-dim"> ×{finding.times_seen}</span> : null}
           </td>
           <td>{finding.host}</td>
           <td className="cell-dim">#{finding.id}</td>
@@ -1605,8 +1703,8 @@ function TaskDetail({
       {/* A cap that reads as a total is the same defect one level up, so the pane says which it is. */}
       {activityHidden > 0 ? (
        <p className="field-hint">
-        Showing the {activityFindings.length} newest of {activityFindings.length + activityHidden} this task
-        raised. The rest are on the Issues page.
+        Showing the {activityFindings.length} newest of {activityFindings.length + activityHidden} this task raised. The rest are on the
+        Issues page.
        </p>
       ) : null}
      </Card>
@@ -1615,12 +1713,23 @@ function TaskDetail({
     <TabsContent value="summary">
      <div className="task-detail-grid">
       <Card>
-       <SectionHeading title="Findings" detail={issuesEnabled ? "What this task and the live sweep have reported so far." : "The scanner is disabled; findings below are historical."} />
+       <SectionHeading
+        title="Findings"
+        detail={
+         issuesEnabled
+          ? "What this task and the live sweep have reported so far."
+          : "The scanner is disabled; findings below are historical."
+        }
+       />
        <div className="metric-grid wide">
         <Metric
          accent
          label="Findings"
-         value={task.kind === "live audit" ? (liveFindings ?? 0) : Number(/([\d,]+)/.exec(task.result?.summary ?? "")?.[1]?.replace(/,/g, "") ?? 0) || 0}
+         value={
+          task.kind === "live audit"
+           ? (liveFindings ?? 0)
+           : Number(/([\d,]+)/.exec(task.result?.summary ?? "")?.[1]?.replace(/,/g, "") ?? 0) || 0
+         }
          detail={task.kind === "live audit" ? "live audit sweep" : "recorded by this task"}
         />
         {/* burpsy-react-ui-uxi, the derivable half: requests done and the average rate are both
@@ -1629,18 +1738,10 @@ function TaskDetail({
             an instantaneous measurement. Byte transfer is deliberately absent: nothing on any egress
             path accounts bytes per task, and a metric nobody measures is a number somebody made up. */}
         <Metric label="Requests" value={task.done.toLocaleString()} detail="sent by this task" />
-        <Metric
-         label="Elapsed"
-         value={formatDuration(task.elapsed_ms)}
-         detail={task.state === "running" ? "still running" : undefined}
-        />
+        <Metric label="Elapsed" value={formatDuration(task.elapsed_ms)} detail={task.state === "running" ? "still running" : undefined} />
         <Metric
          label="Avg throughput"
-         value={
-          task.elapsed_ms > 0
-           ? `${(task.done / (task.elapsed_ms / 1000)).toFixed(1)} req/s`
-           : "—"
-         }
+         value={task.elapsed_ms > 0 ? `${(task.done / (task.elapsed_ms / 1000)).toFixed(1)} req/s` : "—"}
          detail="whole-task average"
         />
        </div>
@@ -1649,7 +1750,11 @@ function TaskDetail({
                   the summary line plus the link, not a table of invented rows. */}
        <div className="task-detail-note">
         <p className="cell-dim">{task.result?.summary || "No issues recorded for this task."}</p>
-        <Button size="small" variant="outline" onClick={() => onFilterHistory(`host ~ "${task.target.replace(/^https?:\/\//, "").split("/")[0] ?? task.target}"`)}>
+        <Button
+         size="small"
+         variant="outline"
+         onClick={() => onFilterHistory(`host ~ "${task.target.replace(/^https?:\/\//, "").split("/")[0] ?? task.target}"`)}
+        >
          <FolderTree size={13} />
          Show in HTTP history
         </Button>
@@ -1659,7 +1764,9 @@ function TaskDetail({
       {crawlStops(run.data).length ? (
        <Card>
         <SectionHeading
-         title={crawlStops(run.data).some(isPolicyPause) ? "Paused by policy — the crawl stopped itself" : "Incomplete — the crawl hit a bound"}
+         title={
+          crawlStops(run.data).some(isPolicyPause) ? "Paused by policy — the crawl stopped itself" : "Incomplete — the crawl hit a bound"
+         }
          detail="This crawl did not cover the application. Everything counted here is what it reached before it stopped."
         />
         <ul className="crawl-stops">
@@ -1753,8 +1860,7 @@ function TaskDetail({
                { enabled: next },
                {
                 onSuccess: () => toast.success(next ? "Live audit started" : "Live audit stopped"),
-                onError: (failure: unknown) =>
-                 toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
+                onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Toggling the live sweep failed"),
                },
               );
              }}
@@ -1776,10 +1882,10 @@ function TaskDetail({
           this roll-up cannot be attributed to the selected run, and a card reading "audit: 412
           loaded" beside one task's name reads as that task's number. The honest half of the original
           detail is kept: findings are a floor, not a total. */}
-      <SectionHeading
-       title="Coverage"
-       detail="Project-wide: every run's accounting, not this task's. Findings are a floor, not a total — skipped, errored and gated work is counted separately."
-      />
+       <SectionHeading
+        title="Coverage"
+        detail="Project-wide: every run's accounting, not this task's. Findings are a floor, not a total — skipped, errored and gated work is counted separately."
+       />
        {summaries.length ? (
         <div className="summary-grid">
          {summaries.map((summary) => (
@@ -1796,10 +1902,7 @@ function TaskDetail({
           a dashboard-level roll-up with no task dimension at all (api_dashboard.go's Sources), so
           it cannot be scoped to this task without the server building a per-task histogram it does
           not keep. Labelling it is the honest option the bead names, and it costs a heading. */}
-      <SectionHeading
-       title="Traffic sources"
-       detail="Project-wide: where every captured exchange came from, not only this task's."
-      />
+       <SectionHeading title="Traffic sources" detail="Project-wide: where every captured exchange came from, not only this task's." />
        {sources.length ? (
         <div className="metric-grid wide">
          {sources.map(([name, count]) => (
@@ -1807,10 +1910,7 @@ function TaskDetail({
          ))}
         </div>
        ) : (
-        <Empty
-         title="No traffic yet"
-         detail="Configure a client to use the proxy, then install the CA certificate to capture HTTPS."
-        />
+        <Empty title="No traffic yet" detail="Configure a client to use the proxy, then install the CA certificate to capture HTTPS." />
        )}
       </Card>
      </div>
@@ -1819,13 +1919,13 @@ function TaskDetail({
     <TabsContent value="events">
      <Card>
       {/*
-        * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
-        * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
-        * to answer "what happened". Every row the server sends is now rendered, and the window is
-        * stated from the server's own counters rather than re-derived here. The real bound is the
-        * EventLog's, which already counts what it discarded — a second, silent cap in the browser
-        * could only disagree with it.
-        */}
+       * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
+       * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
+       * to answer "what happened". Every row the server sends is now rendered, and the window is
+       * stated from the server's own counters rather than re-derived here. The real bound is the
+       * EventLog's, which already counts what it discarded — a second, silent cap in the browser
+       * could only disagree with it.
+       */}
       <EventLogPanel events={events} tasks={tasks} task={task} eventWindow={eventWindow} />
      </Card>
     </TabsContent>
@@ -1843,6 +1943,6 @@ function TaskDetail({
      </Card>
     </TabsContent>
    </Tabs>
-  </div >
+  </div>
  );
 }

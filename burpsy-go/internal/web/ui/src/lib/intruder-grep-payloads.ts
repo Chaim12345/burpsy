@@ -8,8 +8,8 @@ import type { AttackReport, GrepPayloadsSettings } from "./types.tools";
  */
 
 export type GrepPayloadsConfig = Pick<
-  IntruderConfig,
-  "grepPayloadsEnabled" | "grepPayloadsCaseSensitive" | "grepPayloadsExcludeHeaders" | "grepPayloadsMatchPreEncoded"
+ IntruderConfig,
+ "grepPayloadsEnabled" | "grepPayloadsCaseSensitive" | "grepPayloadsExcludeHeaders" | "grepPayloadsMatchPreEncoded"
 >;
 
 /**
@@ -19,14 +19,14 @@ export type GrepPayloadsConfig = Pick<
  * leaving it out would launch an attack the settings on screen do not describe.
  */
 export function grepPayloadsField(config: GrepPayloadsConfig): { grep_payloads: GrepPayloadsSettings } {
-  return {
-    grep_payloads: {
-      enabled: config.grepPayloadsEnabled !== false,
-      case_sensitive: config.grepPayloadsCaseSensitive === true,
-      exclude_headers: config.grepPayloadsExcludeHeaders === true,
-      match_pre_url_encoded: config.grepPayloadsMatchPreEncoded !== false,
-    },
-  };
+ return {
+  grep_payloads: {
+   enabled: config.grepPayloadsEnabled !== false,
+   case_sensitive: config.grepPayloadsCaseSensitive === true,
+   exclude_headers: config.grepPayloadsExcludeHeaders === true,
+   match_pre_url_encoded: config.grepPayloadsMatchPreEncoded !== false,
+  },
+ };
 }
 
 /**
@@ -35,7 +35,7 @@ export function grepPayloadsField(config: GrepPayloadsConfig): { grep_payloads: 
  * otherwise — Burp: "If more than one payload set is used, a separate column is added for each".
  */
 export function reflectionColumnLabels(report: Pick<AttackReport, "grep_payloads">, setCount: number): string[] {
-  if (!report.grep_payloads?.enabled || setCount < 1) return [];
-  if (setCount === 1) return ["Payload reflections"];
-  return Array.from({ length: setCount }, (_, i) => `Set ${i + 1} reflections`);
+ if (!report.grep_payloads?.enabled || setCount < 1) return [];
+ if (setCount === 1) return ["Payload reflections"];
+ return Array.from({ length: setCount }, (_, i) => `Set ${i + 1} reflections`);
 }

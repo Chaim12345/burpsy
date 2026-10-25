@@ -42,9 +42,7 @@ describe("prescanExclude", () => {
  });
 
  test("an empty extension list is no extension clause, so remove-no-parameters still works alone", () => {
-  expect(prescanExclude({ removeNoParameters: true, hiddenExtensions: [""], removeDuplicates: false })).toBe(
-   "not params = 0",
-  );
+  expect(prescanExclude({ removeNoParameters: true, hiddenExtensions: [""], removeDuplicates: false })).toBe("not params = 0");
  });
 });
 
@@ -68,9 +66,7 @@ describe("parseExtensions", () => {
 
 describe("the shipped defaults", () => {
  test("are Burp's list verbatim", () => {
-  expect([...BURP_DEFAULT_HIDDEN_EXTENSIONS]).toEqual([
-   "js", "gif", "jpg", "png", "ico", "css", "woff", "woff2", "ttf", "svg",
-  ]);
+  expect([...BURP_DEFAULT_HIDDEN_EXTENSIONS]).toEqual(["js", "gif", "jpg", "png", "ico", "css", "woff", "woff2", "ttf", "svg"]);
  });
 });
 
@@ -101,12 +97,7 @@ describe("queryParamCountOf", () => {
 });
 
 describe("countFiltered", () => {
- const items = [
-  { path: "/app/page" },
-  { path: "/app/search?q=burp" },
-  { path: "/static/app.js" },
-  { path: "/static/logo.png" },
- ];
+ const items = [{ path: "/app/page" }, { path: "/app/search?q=burp" }, { path: "/static/app.js" }, { path: "/static/logo.png" }];
 
  test("counts each filter separately, so the dialog can say what each one removes", () => {
   const counts = countFiltered(items, { ...DEFAULT_PRESCAN_FILTERS, removeNoParameters: true });
@@ -114,13 +105,16 @@ describe("countFiltered", () => {
   expect(counts.noParameters, "the paths with no query string").toBe(3);
  });
 
- test("an exchange removed by both filters is counted under each, because the dialog answers two "
-  + "questions, and the total is the sum of the two lists rather than the size of their union", () => {
+ test(
+  "an exchange removed by both filters is counted under each, because the dialog answers two " +
+   "questions, and the total is the sum of the two lists rather than the size of their union",
+  () => {
    const counts = countFiltered([{ path: "/static/app.js" }], { ...DEFAULT_PRESCAN_FILTERS, removeNoParameters: true });
    expect(counts.extensions).toBe(1);
    expect(counts.noParameters).toBe(1);
    expect(counts.total).toBe(2);
-  });
+  },
+ );
 
  test("a filter that is off counts nothing, so the dialog never states a number for a filter nobody asked for", () => {
   const off = countFiltered(items, DEFAULT_PRESCAN_FILTERS);

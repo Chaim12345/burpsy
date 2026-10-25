@@ -23,73 +23,71 @@ import { keys } from "./data";
  * invisible-proxying switch", which is what the boot listener is, and is what lets the panel
  * tell "inherit" apart from an explicit off. */
 export interface ProxyListenerRow {
-  id: string;
-  bind: string;
-  bound_addr: string;
-  redirect_host: string;
-  redirect_port: number;
-  force_tls: boolean;
-  invisible: boolean | null;
-  /** "Support HTTP/2" (34rd): null and true offer h2 to the client, false holds it to HTTP/1.1. */
-  support_http2?: boolean | null;
-  removable: boolean;
+ id: string;
+ bind: string;
+ bound_addr: string;
+ redirect_host: string;
+ redirect_port: number;
+ force_tls: boolean;
+ invisible: boolean | null;
+ /** "Support HTTP/2" (34rd): null and true offer h2 to the client, false holds it to HTTP/1.1. */
+ support_http2?: boolean | null;
+ removable: boolean;
 }
 
 export interface ProxyListenerState {
-  bind: string;
-  previous_bind?: string;
-  listeners: ProxyListenerRow[];
+ bind: string;
+ previous_bind?: string;
+ listeners: ProxyListenerRow[];
 }
 
 /** The fields a POST or an id-addressed PUT carries. */
 export interface ProxyListenerBody {
-  bind: string;
-  redirect_host: string;
-  redirect_port: number;
-  force_tls: boolean;
-  invisible: boolean | null;
-  /** Sent only as false; absent keeps the listener's HTTP/2 support on. */
-  support_http2?: boolean;
+ bind: string;
+ redirect_host: string;
+ redirect_port: number;
+ force_tls: boolean;
+ invisible: boolean | null;
+ /** Sent only as false; absent keeps the listener's HTTP/2 support on. */
+ support_http2?: boolean;
 }
 
 export function useProxyListener(): ReturnType<typeof useQuery<ProxyListenerState>> {
-  return useQuery({
-    queryKey: keys.proxyListener,
-    queryFn: ({ signal }) => api<ProxyListenerState>("/api/proxy/listener", { signal }),
-    refetchInterval: 4_000,
-  });
+ return useQuery({
+  queryKey: keys.proxyListener,
+  queryFn: ({ signal }) => api<ProxyListenerState>("/api/proxy/listener", { signal }),
+  refetchInterval: 4_000,
+ });
 }
 
 export function useRebindProxyListener() {
-  const client = useQueryClient();
-  return useMutation<ProxyListenerState, Error, string>({
-    mutationFn: (bind) => api<ProxyListenerState>("/api/proxy/listener", json("PUT", { bind })),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
-  });
+ const client = useQueryClient();
+ return useMutation<ProxyListenerState, Error, string>({
+  mutationFn: (bind) => api<ProxyListenerState>("/api/proxy/listener", json("PUT", { bind })),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
+ });
 }
 
 export function useAddProxyListener() {
-  const client = useQueryClient();
-  return useMutation<ProxyListenerRow, Error, ProxyListenerBody>({
-    mutationFn: (body) => api<ProxyListenerRow>("/api/proxy/listener", json("POST", body)),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
-  });
+ const client = useQueryClient();
+ return useMutation<ProxyListenerRow, Error, ProxyListenerBody>({
+  mutationFn: (body) => api<ProxyListenerRow>("/api/proxy/listener", json("POST", body)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
+ });
 }
 
 export function useUpdateProxyListener() {
-  const client = useQueryClient();
-  return useMutation<ProxyListenerRow, Error, { id: string; body: ProxyListenerBody }>({
-    mutationFn: ({ id, body }) =>
-      api<ProxyListenerRow>(`/api/proxy/listener?id=${encodeURIComponent(id)}`, json("PUT", body)),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
-  });
+ const client = useQueryClient();
+ return useMutation<ProxyListenerRow, Error, { id: string; body: ProxyListenerBody }>({
+  mutationFn: ({ id, body }) => api<ProxyListenerRow>(`/api/proxy/listener?id=${encodeURIComponent(id)}`, json("PUT", body)),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
+ });
 }
 
 export function useRemoveProxyListener() {
-  const client = useQueryClient();
-  return useMutation<ProxyListenerState, Error, string>({
-    mutationFn: (id) =>
-      api<ProxyListenerState>(`/api/proxy/listener?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
-    onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
-  });
+ const client = useQueryClient();
+ return useMutation<ProxyListenerState, Error, string>({
+  mutationFn: (id) => api<ProxyListenerState>(`/api/proxy/listener?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  onSuccess: () => void client.invalidateQueries({ queryKey: keys.proxyListener }),
+ });
 }

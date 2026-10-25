@@ -17,15 +17,15 @@
  */
 
 export interface InterceptTarget {
-  host: string;
-  /** 1..65535. Never 0: a retarget to port 0 dials nothing and reads as an engine failure. */
-  port: number;
-  /**
-   * Whether this request goes out over TLS — a property of the destination, not of the connection it
-   * arrived on. A request delivered by a client over plain HTTP can be retargeted to an https origin
-   * and the proxy will dial TLS for it.
-   */
-  tls: boolean;
+ host: string;
+ /** 1..65535. Never 0: a retarget to port 0 dials nothing and reads as an engine failure. */
+ port: number;
+ /**
+  * Whether this request goes out over TLS — a property of the destination, not of the connection it
+  * arrived on. A request delivered by a client over plain HTTP can be retargeted to an https origin
+  * and the proxy will dial TLS for it.
+  */
+ tls: boolean;
 }
 
 /**
@@ -34,12 +34,12 @@ export interface InterceptTarget {
  * like it moved something it did not.
  */
 export function describeTarget(target: InterceptTarget): string {
-  return `${target.host}:${target.port}${target.tls ? " (tls)" : ""}`;
+ return `${target.host}:${target.port}${target.tls ? " (tls)" : ""}`;
 }
 
 /** The scheme a retarget would use, for the tooltip that spells out what "(tls)" means. */
 export function targetScheme(target: InterceptTarget): string {
-  return target.tls ? "https" : "http";
+ return target.tls ? "https" : "http";
 }
 
 /**
@@ -50,12 +50,10 @@ export function targetScheme(target: InterceptTarget): string {
  * target itself, so an editor merely opened and closed costs nothing on the wire.
  */
 export function sameTarget(a: InterceptTarget, b: InterceptTarget): boolean {
-  return a.host === b.host && a.port === b.port && a.tls === b.tls;
+ return a.host === b.host && a.port === b.port && a.tls === b.tls;
 }
 
-export type TargetDraftResult =
-  | { ok: true; target: InterceptTarget }
-  | { ok: false; error: string };
+export type TargetDraftResult = { ok: true; target: InterceptTarget } | { ok: false; error: string };
 
 /**
  * Read the editor's three fields into a target, or say what is wrong with them.
@@ -66,25 +64,25 @@ export type TargetDraftResult =
  * is instead of one accepting what the other rejects.
  */
 export function targetFromDraft(hostRaw: string, portRaw: string, tls: boolean): TargetDraftResult {
-  const host = hostRaw.trim();
-  if (host === "") {
-    return { ok: false, error: "A target needs a host — a blank one would dial the local machine." };
-  }
-  // A host with a slash or whitespace inside it is a URL pasted into the wrong field; passing it
-  // through would send the request line's path as part of the Host header, which resolves to a name
-  // nobody owns and is answered as a DNS failure rather than as the mistake it is.
-  if (/\s/.test(host) || host.includes("/")) {
-    return { ok: false, error: "A host cannot contain spaces or a path — put the path in the request line." };
-  }
-  const portText = portRaw.trim();
-  if (portText === "") {
-    return { ok: false, error: "A target needs a port: 443 for https, 80 for http." };
-  }
-  const port = Number(portText);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return { ok: false, error: "The port must be a whole number in 1..65535." };
-  }
-  return { ok: true, target: { host, port, tls } };
+ const host = hostRaw.trim();
+ if (host === "") {
+  return { ok: false, error: "A target needs a host — a blank one would dial the local machine." };
+ }
+ // A host with a slash or whitespace inside it is a URL pasted into the wrong field; passing it
+ // through would send the request line's path as part of the Host header, which resolves to a name
+ // nobody owns and is answered as a DNS failure rather than as the mistake it is.
+ if (/\s/.test(host) || host.includes("/")) {
+  return { ok: false, error: "A host cannot contain spaces or a path — put the path in the request line." };
+ }
+ const portText = portRaw.trim();
+ if (portText === "") {
+  return { ok: false, error: "A target needs a port: 443 for https, 80 for http." };
+ }
+ const port = Number(portText);
+ if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  return { ok: false, error: "The port must be a whole number in 1..65535." };
+ }
+ return { ok: true, target: { host, port, tls } };
 }
 
 /**
@@ -94,5 +92,5 @@ export function targetFromDraft(hostRaw: string, portRaw: string, tls: boolean):
  * retarget an https request to plain HTTP by opening the editor and pressing Forward.
  */
 export function targetOf(row: { host: string; port: number; tls: boolean }): InterceptTarget {
-  return { host: row.host, port: row.port, tls: row.tls };
+ return { host: row.host, port: row.port, tls: row.tls };
 }
