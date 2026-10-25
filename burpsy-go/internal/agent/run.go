@@ -26,6 +26,8 @@ type Task struct {
 	Goal      string
 	Scope     []string
 	Resources []Resource
+	// Context is untrusted background text (a finding's evidence, say). Planners fence it as data.
+	Context string
 }
 
 // Call is one proposed or issued tool call. Tool is the manifest key the Classifier knows, such as
