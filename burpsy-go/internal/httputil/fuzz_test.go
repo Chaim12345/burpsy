@@ -147,6 +147,14 @@ func FuzzHeaderValue(f *testing.F) {
 	f.Fuzz(func(t *testing.T, head []byte, name string) {
 		value, ok := HeaderValue(head, name)
 		if !ok {
+			// False-negative direction: a miss must mean NO line's trimmed field name folds
+			// equal - the lenient read may not skip a header it would have recognized.
+			for _, line := range HeadLines(head) {
+				k, _, found := bytes.Cut(line, []byte(":"))
+				if found && strings.EqualFold(strings.TrimSpace(string(k)), name) {
+					t.Fatalf("missed %q though a line carries it: %q", name, head)
+				}
+			}
 			return
 		}
 		// First-match binding: the returned value must come from the FIRST line whose

@@ -116,3 +116,17 @@ func TestHeaderValueExactKeepsTheStrictShape(t *testing.T) {
 		t.Errorf("first-match = %q %v, want one true", v, ok)
 	}
 }
+
+// The start-line drop is the contract the header reads rely on: every call site passes a head
+// whose line 0 is the request or status line (audited at burpsy-react-ui-6858 P3: unpack and
+// applyResponseRules pass SplitHeadBody heads of full messages; the invisible Host read passes
+// requestHead of the full request; headerInt/headerHasToken take the buffered request head;
+// the alt-svc read takes resp[:headEnd] of the upstream response; headIsEventStream and
+// sender's keepalive take response heads whose status line keepalive validates first). If this
+// drop ever changed, a first-line header would silently become visible to every read.
+func TestHeadLinesAlwaysDropsTheFirstLine(t *testing.T) {
+	lines := HeadLines([]byte("Host: x\r\nAccept: y"))
+	if len(lines) != 1 || string(lines[0]) != "Accept: y" {
+		t.Errorf("HeadLines = %q, want just [Accept: y] - the first line is never a header", lines)
+	}
+}
