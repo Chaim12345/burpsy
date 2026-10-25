@@ -87,7 +87,12 @@ func checkPathRelativeStyleSheetImport(ctx context.Context, cc *CheckContext) ([
 // DOMExtraCheckDescriptors returns the three rows above.
 func DOMExtraCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
-		nativeDescriptor("Client-side prototype pollution", DispatchScopePerUrl, domChecksEnabled, checkClientSidePrototypePollution),
+		// The server-side prototype-pollution check (checks_sppj.go, 0vzb.3) rides this row behind
+		// its own switch: its finding is burpsy's own row (CWE-1321), and the registry admits one
+		// descriptor per Burp catalogue type.
+		nativeDescriptor("Client-side prototype pollution", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return domChecksEnabled(c) || sppjEnabled(c) },
+			withServerSidePrototypePollution(checkClientSidePrototypePollution)),
 		nativeDescriptor("Client-side template injection", DispatchScopePerUrl, domChecksEnabled, checkClientSideTemplateInjection),
 		nativeDescriptor("Path-relative style sheet import", DispatchScopePerUrl, passiveAnalysisEnabled, checkPathRelativeStyleSheetImport),
 	}

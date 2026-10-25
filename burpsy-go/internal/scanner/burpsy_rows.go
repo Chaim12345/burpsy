@@ -264,6 +264,14 @@ func BurpsyNativeRows() []BurpsyRow {
 		Rides:     "Client-side HTTP parameter pollution (reflected)",
 		Why:       ssppRowWhy("a value that adds a member to an internal JSON document"),
 	}, {
+		Name:      IssueServerSidePrototypePollution,
+		TypeIndex: 0xb5002c30,
+		CWE:       1321,
+		Rides:     "Client-side prototype pollution",
+		Why: "Burp's catalogue has no server-side prototype-pollution row: Burp tests the class by hand " +
+			"or with the server-side prototype pollution BApp, filed under the generic extension-generated " +
+			"type. It rides the client-side row whose server-side counterpart it is (CWE-1321 covers both).",
+	}, {
 		Name:      IssueLLMPromptInjection,
 		TypeIndex: 0xb5003000,
 		CWE:       1427,
