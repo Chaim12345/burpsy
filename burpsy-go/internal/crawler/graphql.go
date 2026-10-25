@@ -133,6 +133,14 @@ func ParseGraphQLOperations(body []byte) (ops []APIDocEndpoint, failure string) 
 		if len(res.Errors) > 0 {
 			return nil, "the GraphQL endpoint answered with errors rather than a schema: " + firstGraphQLError(res.Errors)
 		}
+		// No types and no errors is not "zero operations at a working API" WHEN the body
+		// announced a schema: a real introspection result always carries types, so the
+		// shape only looked like one. Named, like every other refusal here - a silent
+		// zero would read as an empty API (burpsy-react-ui-4xqt.1). A body that never
+		// announced a schema is the ordinary not-a-GraphQL-answer case and stays silent.
+		if LooksLikeGraphQLAnswer(body) {
+			return nil, "the answer announced a schema (__schema) but declared no types and reported no errors: a real introspection result always carries types"
+		}
 		return nil, ""
 	}
 
@@ -183,6 +191,15 @@ func ParseGraphQLOperations(body []byte) (ops []APIDocEndpoint, failure string) 
 				return ops, ""
 			}
 		}
+	}
+	// The gqlparser structural load (graphql_introspect.go). Its teeth are placed where
+	// they cannot cost coverage: an answer the load rejects but the reader above tolerated
+	// keeps its operations, because a proxy or an older server can produce a shape the
+	// grammar refuses while the fields are still requestable. Rejection decides only when
+	// there is nothing to lose - no operations AND no loadable schema is a named failure,
+	// not a silent zero.
+	if err := validateIntrospectionStructure(&res); err != nil && len(ops) == 0 {
+		return nil, "the answer announced a schema, no operations could be read from it, and gqlparser will not load it: " + err.Error()
 	}
 	return ops, ""
 }

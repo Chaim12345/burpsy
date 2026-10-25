@@ -2954,6 +2954,14 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 	if format == APIDocNone {
 		return false
 	}
+	if format == APIDocGraphQLIntrospection && c.graphqlAnswer != nil {
+		// One admission owner per body (burpsy-react-ui-4xqt.1 pre-review): an armed live
+		// introspection reader already judges EVERY response that carries a __schema result,
+		// this one included, so reading it here too would admit and count every operation
+		// twice - and the count increments before enqueue dedup, which cannot hide it. The
+		// document path owns a GraphQL result only when no live reader is armed to claim it.
+		return false
+	}
 	rep.APIDocumentsRead++
 	if format == APIDocWSDL {
 		// Burp names WSDL failures apart from API-definition failures (ai64), and a WSDL that broke
@@ -2986,6 +2994,15 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 
 	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	if format == APIDocGraphQLIntrospection {
+		// A GraphQL operation has no path of its own, so the document's own URL is re-fed to
+		// the ordinary GET admission once per operation - the crawl will GET the endpoint the
+		// document came from as each operation's location (admitGraphQLOperations), tagged
+		// and counted as GraphQL endpoints, exactly as a live introspection answer's
+		// operations are.
+		c.admitGraphQLOperations(item.url, eps, rep, lim)
+		return true
+	}
 	for _, ep := range eps {
 		rep.APIEndpointsFound++
 		c.admit(discoveredLink{raw: apiEndpointPath(ep), text: ep.OperationID, tag: "api:" + string(format)},

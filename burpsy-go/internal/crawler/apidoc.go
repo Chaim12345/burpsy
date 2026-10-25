@@ -76,6 +76,10 @@ const (
 	APIDocSwagger APIDocFormat = "swagger"
 	// APIDocWSDL means a SOAP WSDL.
 	APIDocWSDL APIDocFormat = "wsdl"
+	// APIDocGraphQLIntrospection means a saved GraphQL introspection result (burpsy-react-ui-4xqt.1):
+	// the document form of the answer the crawl's introspection reader consumes live. Its operations
+	// are read by the same loader (graphql.go), so a saved result and a live answer get one judgment.
+	APIDocGraphQLIntrospection APIDocFormat = "graphql-introspection"
 )
 
 // APIDocEndpoint is one operation a document declares.
@@ -133,6 +137,17 @@ func ParseAPIDocument(contentType string, body []byte) (format APIDocFormat, eps
 		eps, failure = parseWSDL(body)
 		return APIDocWSDL, eps, failure
 	}
+	if format == APIDocGraphQLIntrospection {
+		if !LooksLikeGraphQLAnswer(body) {
+			// The marker without a result - `"__schema": null` and friends. The sniff is a
+			// hint, not a gate, and the live answer reader's judgment applies to a document
+			// the same way: a null schema is not an introspection result, so this is not an
+			// API document either.
+			return APIDocNone, nil, ""
+		}
+		eps, failure = ParseGraphQLOperations(body)
+		return format, eps, failure
+	}
 	eps, failure = parseOpenAPI(body)
 	return format, eps, failure
 }
@@ -168,6 +183,12 @@ func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
 	case strings.Contains(text, `"swagger"`), strings.Contains(text, "'swagger'"),
 		strings.Contains(text, "swagger:"):
 		return APIDocSwagger
+	case strings.Contains(text, `"__schema"`):
+		// A saved introspection result. `"__schema"` is the marker the answer reader sniffs
+		// by too (LooksLikeGraphQLAnswer): specific enough that JSON merely mentioning a
+		// schema does not match, and the loader's named failure, not the sniffer, sorts the
+		// body that carries the marker without being a result.
+		return APIDocGraphQLIntrospection
 	default:
 		return APIDocNone
 	}
