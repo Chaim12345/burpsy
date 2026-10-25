@@ -454,6 +454,11 @@ code {
   font-weight: var(--weight-bold);
 }
 
+/* Where a dragged tool tab will land (sk29): a bar on the side it drops against. */
+.tool-tab-dragover {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .toolbar-right {
   flex: none;
   display: flex;
