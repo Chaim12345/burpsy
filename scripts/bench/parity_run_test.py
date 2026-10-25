@@ -207,7 +207,7 @@ class TestSpecs(unittest.TestCase):
             self.assertTrue(spec["burpsy_rows"], name)
             self.assertTrue(spec["targets"], name)
             self.assertTrue(callable(spec["tool_args"]), name)
-            argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/bin/true"}, "/tmp")
+            argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/bin/true", "venv_bin": "/bin", "script": "/bin/true"}, "/tmp")
             self.assertEqual("/bin/true", argv[0])
             for t in spec.get("truth", []):
                 self.assertEqual(name, t["class"])

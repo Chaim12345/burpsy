@@ -141,12 +141,23 @@ class LiveCtx:
     def run_reference(self, spec, out_dir):
         desc = parity_tools.ensure_tool(parity_tools.TOOLS[spec["ref_tool"]], self.tools_dir)
         chunks = []
-        for t in spec["targets"]:
-            argv = spec["tool_args"](t["url"], desc, out_dir)
+        merged = {}
+        for i, t in enumerate(spec["targets"]):
+            tdir = Path(out_dir) / f"tool-{i}"
+            tdir.mkdir(exist_ok=True)
+            argv = spec["tool_args"](t["url"], desc, str(tdir))
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=900)
-            chunks.append(proc.stdout)
-            stderr_note = cdir_note = Path(out_dir) / f"reference.{len(chunks)}.stderr.txt"
-            stderr_note.write_text(proc.stderr)
+            (tdir / "stdout.txt").write_text(proc.stdout)
+            (tdir / "stderr.txt").write_text(proc.stderr)
+            if spec.get("tool_output") == "merged-json-file":
+                # The tool writes a per-run JSON file instead of printing (Corsy). A missing
+                # file is the tool saying "nothing found"; the per-target objects merge into one.
+                for f in tdir.glob("*.json"):
+                    merged.update(json.loads(f.read_text()))
+            else:
+                chunks.append(proc.stdout)
+        if spec.get("tool_output") == "merged-json-file":
+            return json.dumps(merged) if merged else ""
         return "\n".join(chunks)
 
 
