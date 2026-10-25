@@ -28,7 +28,12 @@ class Lint(unittest.TestCase):
         sh(self.d, "git", "config", "user.name", "t")
         os.makedirs(os.path.join(self.d, ".beads"))
         self.write(jl({"id": "x-a", "status": "open"}, {"id": "x-b", "status": "open"}))
-        self.landed = self.commit("work")
+        # The first 8 hex digits must contain a letter: the uppercase-sha test upper()s them, and an
+        # all-digit prefix is unchanged by upper(), which made that test depend on the commit hash.
+        for i in range(200):
+            self.landed = self.commit(f"work {i}")
+            if any(c in "abcdef" for c in self.landed[:8]):
+                break
         self.base = self.landed
 
     def write(self, text):
