@@ -61,6 +61,13 @@ func parseProtoDescriptorsFile(src, filePath string) (*Schema, error) {
 	if err != nil {
 		return nil, err
 	}
+	return schemaFromFile(fd)
+}
+
+// schemaFromFile builds the Schema of one linked file descriptor: the file's own messages, enums
+// and services. Factored out of parseProtoDescriptorsFile so the file-set compile (rsu2) builds
+// its entry file's Schema through exactly the same code.
+func schemaFromFile(fd protoreflect.FileDescriptor) (*Schema, error) {
 	s := &Schema{
 		pkg:   string(fd.Package()),
 		msgs:  map[string]*messageDesc{},
