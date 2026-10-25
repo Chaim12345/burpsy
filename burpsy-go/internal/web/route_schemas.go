@@ -64,7 +64,7 @@ var routeSchemas = map[string]opSchema{
 		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
 	}},
 	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
-	"GET /api/message/": {query: []queryParam{
+	"GET /api/message/{id}": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},
 		{name: "pattern", kind: "string", desc: "an RE2 regular expression: anchor the window at its first match; matches lists up to 100 match offsets"},
@@ -135,7 +135,7 @@ var routeSchemas = map[string]opSchema{
 		"1/forward": typeOf[interceptForwardReq](),
 		"1/drop":    typeOf[interceptDropReq](),
 	}, optional: true},
-	"POST /api/intercept/annotate/":         {body: typeOf[interceptAnnotateReq]()},
+	"POST /api/intercept/annotate/{id}":     {body: typeOf[interceptAnnotateReq]()},
 	"POST /api/intercept/drop-all":          {body: typeOf[interceptDropAllReq](), optional: true},
 	"POST /api/intercept/enable":            {body: typeOf[interceptEnableReq]()},
 	"POST /api/intercept/forward-all":       noBody,

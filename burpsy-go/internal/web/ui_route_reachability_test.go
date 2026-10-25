@@ -260,10 +260,15 @@ func TestEveryOperatorFacingRouteIsReferencedFromTheConsole(t *testing.T) {
 		if _, known := uiRouteMissingSurface[pattern]; known {
 			continue
 		}
-		// A subtree pattern ends in "/" and the console builds the full URL by appending an id, so
-		// the literal that appears in the source is the prefix without its trailing slash — e.g.
-		// `/api/exchange/${id}`. Match on the trimmed form for those.
-		needle := strings.TrimSuffix(pattern, "/")
+		// The console builds a full URL by appending or interpolating an id, so the literal
+		// that appears in the source is the prefix — e.g. `/api/exchange/${id}`. A subtree
+		// pattern ends in "/"; a {param} pattern starts its template at the brace. Match on
+		// the trimmed prefix for both.
+		needle := pattern
+		if brace := strings.Index(needle, "{"); brace >= 0 {
+			needle = needle[:brace]
+		}
+		needle = strings.TrimSuffix(needle, "/")
 		if !strings.Contains(corpus, needle) {
 			unreferenced = append(unreferenced, pattern)
 		}

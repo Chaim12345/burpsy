@@ -1,5 +1,7 @@
 package web
 
+import "strings"
+
 // This file holds the route manifest and the risk taxonomy every consumer reads.
 //
 // It was extracted from route_manifest_test.go because the risk class is not a
@@ -82,6 +84,16 @@ type route struct {
 	// no such direction" is a truer answer than "wrong verb" — but it means the 405 test has to send a
 	// valid segment, which is what subPath supplies.
 	pathValidatedFirst bool
+}
+
+// concretePath builds the requestable URL a manifest entry's subPath names: appended
+// under a subtree pattern, substituted for the wildcard in a "{id}" pattern
+// (burpsy-react-ui-fxxm).
+func concretePath(pattern, subPath string) string {
+	if i := strings.Index(pattern, "{"); i >= 0 {
+		return pattern[:i] + subPath + pattern[strings.Index(pattern, "}")+1:]
+	}
+	return pattern + subPath
 }
 
 // manifest is every route this server registers. Keep it sorted by pattern; the test enforces that,
@@ -195,7 +207,7 @@ var manifest = map[string]route{
 		summary: "Burp's Collaborator health check: eight connection items against a fresh address on " +
 			"the registered domain, then whether each protocol's interaction came back through polling",
 	},
-	"/api/collaborator/interaction/": {
+	"/api/collaborator/interaction/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
 	},
@@ -335,7 +347,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PATCH"}, risk: riskLocal, subPath: "0",
 		summary: "one exchange row by id; PATCH sets its notes and/or highlight (UX-15)",
 	},
-	"/api/exchange/in-browser/": {
+	"/api/exchange/in-browser/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "one exchange's stored response replayed verbatim for Show response in browser",
 	},
@@ -462,7 +474,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
 		summary: "resolve one held message: forward, drop, or forward edited bytes",
 	},
-	"/api/intercept/annotate/": {
+	"/api/intercept/annotate/{id}": {
 		// POST {comment, highlight} onto one held message (burpsy-react-ui-5q8u). Writes only the
 		// operator's own annotation on the queue — no traffic is sent, resolved or changed, so the
 		// risk is the same class as the queue view itself.
@@ -582,7 +594,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "the LLM post-scan second look over gated findings (Standard profile: High any-confidence, Medium tentative-or-better) — advice attached to findings, never a promotion",
 	},
-	"/api/message/": {
+	"/api/message/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
@@ -1261,7 +1273,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "WebSocket frames, per connection",
 	},
-	"/api/ws/message/": {
+	"/api/ws/message/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "one WebSocket frame's payload, as text or hex",
 	},

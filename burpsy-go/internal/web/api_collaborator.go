@@ -985,8 +985,7 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 // this route does not need because of that ordering.
 func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Request) {
 
-	raw := strings.TrimPrefix(r.URL.Path, "/api/collaborator/interaction/")
-	id, err := strconv.Atoi(strings.TrimSuffix(raw, "/"))
+	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id < 0 {
 		http.Error(w, "Invalid interaction id", http.StatusBadRequest)
 		return

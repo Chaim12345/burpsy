@@ -525,9 +525,7 @@ func (s *Server) handleInterceptAnnotate(w http.ResponseWriter, r *http.Request)
 	// The route is /api/intercept/annotate/{id}; the held queue's own sub-paths
 	// (/api/intercept/{id}/forward|drop) keep their shape, and "annotate" as the first
 	// segment cannot be an id, so the two surfaces cannot collide.
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/intercept/annotate/")
-	idStr = strings.Trim(idStr, "/")
-	id, err := strconv.ParseUint(idStr, 10, 64)
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid held message id", http.StatusBadRequest)
 		return

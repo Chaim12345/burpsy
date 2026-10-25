@@ -115,13 +115,15 @@ func exampleFrom(s map[string]any) any {
 
 // probePath is the concrete path the probe requests for a declaration key and optional action.
 func probePath(pattern, action string) string {
-	if action != "" {
-		return pattern + action
+	// An explicit action wins (schema keys name "1/forward"-style subPaths); otherwise the
+	// manifest's example subPath stands in, matching how the console builds these URLs.
+	subPath := action
+	if subPath == "" {
+		if r, ok := manifest[pattern]; ok {
+			subPath = r.subPath
+		}
 	}
-	if r, ok := manifest[pattern]; ok && r.subPath != "" {
-		return pattern + r.subPath
-	}
-	return pattern
+	return concretePath(pattern, subPath)
 }
 
 func probe(t *testing.T, s *Server, method, path string, body []byte) (*decodeProbe, *httptest.ResponseRecorder) {

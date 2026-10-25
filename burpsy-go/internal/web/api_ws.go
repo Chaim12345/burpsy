@@ -300,7 +300,7 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 // both as lossy text and as lowercase hex. A close frame's status code is decoded as a number —
 // showing its two bytes as characters would render mojibake instead of 1000.
 func (s *Server) handleWSMessage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/ws/message/"), 10, 64)
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid message ID", http.StatusBadRequest)
 		return

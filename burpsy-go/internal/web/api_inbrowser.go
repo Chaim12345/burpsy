@@ -57,11 +57,11 @@ import (
 // neither is hidden.
 //
 // handleExchangeInBrowserByID parses the id out of /api/exchange/in-browser/{id} and hands
-// off. Registered as its own prefix rather than sniffed inside handleExchange's numeric path
-// dispatch: "in-browser" would never parse as an id, but an explicit subtree keeps the
+// off. Registered as its own {id} pattern rather than sniffed inside handleExchange's numeric
+// path dispatch: "in-browser" would never parse as an id, but an explicit pattern keeps the
 // manifest entry and the handler's own 405 honest instead of relying on a fallthrough.
 func (s *Server) handleExchangeInBrowserByID(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/exchange/in-browser/"), 10, 64)
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
 		return

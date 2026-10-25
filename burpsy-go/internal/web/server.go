@@ -1047,7 +1047,7 @@ func (s *Server) setupRoutes() {
 	// page of rows.
 	s.route("/api/history/extractors", s.handleHistoryExtractors)
 	s.route("/api/history/extract", s.handleHistoryExtract)
-	s.route("/api/message/", s.handleMessage)
+	s.route("/api/message/{id}", s.handleMessage)
 	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
 	// store because the history rows the console holds carry no bytes to search. See api_search.go.
 	s.route("/api/search", s.handleSearch)
@@ -1125,7 +1125,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
 	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
-	s.route("/api/exchange/in-browser/", s.handleExchangeInBrowserByID)
+	s.route("/api/exchange/in-browser/{id}", s.handleExchangeInBrowserByID)
 
 	// Tools
 	s.route("/api/repeater/send", s.handleRepeaterSend)
@@ -1215,7 +1215,7 @@ func (s *Server) setupRoutes() {
 	// fetched per row. `status` and `poll` are the same shape deliberately: the difference between them
 	// is only whether the operator asked for the read now, and a caller should not have to reconcile
 	// two views of one channel. See api_collaborator.go on why none of the GETs can register a channel.
-	s.route("/api/collaborator/interaction/", s.handleCollaboratorInteraction)
+	s.route("/api/collaborator/interaction/{id}", s.handleCollaboratorInteraction)
 	// The intruder payload upload (016): an operator's wordlist arrives as the body and lands
 	// in burpsy's upload directory; the response names the path the ordinary file payload
 	// source resolves. A POST because it stores state.
@@ -1295,7 +1295,7 @@ func (s *Server) setupRoutes() {
 	// The held queue's annotate write: /api/intercept/annotate/{id}, its own exact-subtree
 	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
 	// /api/intercept/{id} resolution paths below.
-	s.route("/api/intercept/annotate/", s.handleInterceptAnnotate)
+	s.route("/api/intercept/annotate/{id}", s.handleInterceptAnnotate)
 	// The startup preference (burpsy-react-ui-7vy): what the intercept switch reads at server
 	// start. GET answers it; POST writes it. Its own route rather than a field on /enable for
 	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
@@ -1386,7 +1386,7 @@ func (s *Server) setupRoutes() {
 	// What is still partial is interception and edit-and-resend of frames (WS-02), which is Phase 6.
 	s.route("/api/ws/connections", s.handleWSConnections)
 	s.route("/api/ws/history", s.handleWSHistory)
-	s.route("/api/ws/message/", s.handleWSMessage)
+	s.route("/api/ws/message/{id}", s.handleWSMessage)
 
 	// Extender: the plugin host. Six exact patterns rather than one subtree — see api_extensions.go for
 	// why, and for why there is no BApp Store route.

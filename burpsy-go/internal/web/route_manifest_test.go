@@ -227,11 +227,10 @@ func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
 	//
 	// What makes that safe, stated accurately: the subtests here are sequential - none calls
 	// t.Parallel() - and every 405 in this package comes from a hand-written verb guard inside the
-	// handler, which in each case precedes any state mutation. It is NOT true that ServeMux rejects a
-	// wrong verb before the handler runs; this package does not use Go 1.22 method patterns
-	// ("POST /api/..."), as the note above about that migration being future work says. An earlier
-	// version of this comment claimed the structural guarantee, which would have been the better
-	// reason had it existed - and will be, once those patterns land.
+	// handler, which in each case precedes any state mutation. Since vnlh phase 1 every route is
+	// registered through s.route with Go 1.22 method patterns plus a 405 fallback, so the mux itself
+	// refuses the wrong verb before the handler runs; the sweep now pins that structural guarantee
+	// rather than per-handler guards (the guards are gone - phase 3).
 	s := newTestServer()
 	for pattern, spec := range manifest {
 		// The UI catch-all deliberately serves the SPA for anything it does not recognise, so it has no
@@ -252,7 +251,7 @@ func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
 
 		path := pattern
 		if spec.subPath != "" {
-			path = pattern + spec.subPath
+			path = concretePath(pattern, spec.subPath)
 		}
 		// Each action sub-path is swept with its own allowed set, so a verb guard missing from one
 		// branch of a subtree cannot hide behind a sibling branch that has one.
@@ -326,6 +325,10 @@ func Test_every_route_declares_a_risk_class_and_a_summary(t *testing.T) {
 		// sends. Without a concrete segment the 405 test would exercise a branch no operator reaches.
 		if strings.HasSuffix(pattern, "/") && pattern != "/" && spec.subPath == "" {
 			t.Errorf("route %q is a subtree pattern with no subPath, so it is tested at a URL nobody requests",
+				pattern)
+		}
+		if strings.Contains(pattern, "{") && spec.subPath == "" {
+			t.Errorf("route %q is a wildcard pattern with no subPath, so it is tested at a URL nobody requests",
 				pattern)
 		}
 	}

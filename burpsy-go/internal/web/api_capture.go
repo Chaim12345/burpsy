@@ -167,7 +167,7 @@ func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 
 // handleMessage serves GET /api/message/{id} -> MessageView{id,len,text}.
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/api/message/"), 10, 64)
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid message ID", http.StatusBadRequest)
 		return
