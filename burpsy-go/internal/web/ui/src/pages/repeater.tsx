@@ -2318,6 +2318,7 @@ function WsAttachedFrame({ row }: { row: WsRow }): JSX.Element {
  * tab to the captured or synthetic head.
  */
 function WsHandshakeEditor({ tab, mode }: { tab: RepeaterTab; mode: WsConnectionMode }) {
+ const updateRepeaterTab = useApp((state) => state.updateRepeaterTab);
  const edited = tab.wsHandshake;
  const [preview, setPreview] = useState<string | null>(null);
  const [error, setError] = useState<string | null>(null);
