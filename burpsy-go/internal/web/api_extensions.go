@@ -301,6 +301,8 @@ func extensionStatus(err error, fallback int) int {
 		return http.StatusNotFound
 	case errors.Is(err, extension.ErrUnknownRegistration):
 		return http.StatusNotFound
+	case errors.Is(err, extension.ErrSelectionTooLarge), errors.Is(err, extension.ErrInvalidSelection):
+		return http.StatusBadRequest
 	case errors.Is(err, extension.ErrAlreadyLoaded), errors.Is(err, extension.ErrNotLoaded):
 		return http.StatusConflict
 	default:

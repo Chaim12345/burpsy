@@ -65,6 +65,10 @@ var (
 	ErrUnknownRegistration = errors.New("plugin registered no such id")
 	// ErrSelectionTooLarge is a hotkey invocation carrying more than MaxHotkeySelection rows.
 	ErrSelectionTooLarge = errors.New("hotkey selection too large")
+	// ErrInvalidSelection is a hotkey context the plugin could not act on: a selected row with no
+	// exchange id (it would serialise as null where the protocol says int), a negative id, or an
+	// editor carrying neither a message id nor text.
+	ErrInvalidSelection = errors.New("invalid hotkey context")
 )
 
 // Config is the operator's allowlist and every bound this host imposes.
@@ -702,6 +706,9 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 			return InvokeResult{}, fmt.Errorf("%q registration %q: %d rows, limit %d: %w",
 				name, params.Registration, len(params.Selected), MaxHotkeySelection, ErrSelectionTooLarge)
 		}
+		if err := validateHotkeyContext(params); err != nil {
+			return InvokeResult{}, fmt.Errorf("%q registration %q: %w", name, params.Registration, err)
+		}
 	} else {
 		// Only hotkey.invoke documents these; do not widen another method's params.
 		params.Selected, params.Editor = nil, nil
@@ -939,4 +946,27 @@ func cleanGrants(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// validateHotkeyContext refuses a context that would reach the plugin malformed. Ids are
+// non-negative (0 is real); a nil id is refused rather than sent as null. An Editor must carry a
+// message id or text: {} says nothing and is not the same as absent.
+func validateHotkeyContext(p InvokeParams) error {
+	for i, row := range p.Selected {
+		if row.Exchange == nil {
+			return fmt.Errorf("selected[%d] has no exchange id: %w", i, ErrInvalidSelection)
+		}
+		if *row.Exchange < 0 {
+			return fmt.Errorf("selected[%d] exchange id %d is negative: %w", i, *row.Exchange, ErrInvalidSelection)
+		}
+	}
+	if e := p.Editor; e != nil {
+		if e.Message == nil && e.Raw == "" {
+			return fmt.Errorf("editor carries neither a message id nor text: %w", ErrInvalidSelection)
+		}
+		if e.Message != nil && *e.Message < 0 {
+			return fmt.Errorf("editor message id %d is negative: %w", *e.Message, ErrInvalidSelection)
+		}
+	}
+	return nil
 }
