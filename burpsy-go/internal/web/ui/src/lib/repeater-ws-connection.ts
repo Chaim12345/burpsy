@@ -26,6 +26,11 @@ export interface WsTabLike {
  /** The connection's path, sent with a new-connection send so it reaches the same endpoint. */
  wsPath?: string;
  wsMode?: WsConnectionMode;
+ /**
+  * The operator's edited negotiation request (burpsy-react-ui-ws3e). Set, Send dials from these
+  * bytes instead of the captured (clone) or synthetic (new) head; attach ignores it.
+  */
+ wsHandshake?: string;
 }
 
 /**
@@ -98,11 +103,23 @@ export function planWsSend(tab: WsTabLike): WsSendPlan {
   return { route: "/api/repeater/ws-attach", body: { socket: tab.wsSocket, opcode, payload, ...toClient } };
  }
  if (mode === "clone" && tab.wsSocket !== undefined) {
+  // An edited handshake replaces the captured head rather than riding with it: the server
+  // refuses clone + handshake, and a silently dropped edit is how features lie (ws3e).
+  if (tab.wsHandshake !== undefined) {
+   return { route: "/api/repeater/ws-send", body: { socket: tab.wsSocket, handshake: tab.wsHandshake, opcode, payload, ...toClient } };
+  }
   return { route: "/api/repeater/ws-send", body: { clone: true, socket: tab.wsSocket, opcode, payload, ...toClient } };
  }
  return {
   route: "/api/repeater/ws-send",
-  body: { target: tab.target, ...(tab.wsPath ? { path: tab.wsPath } : {}), opcode, payload, ...toClient },
+  body: {
+   target: tab.target,
+   ...(tab.wsPath ? { path: tab.wsPath } : {}),
+   ...(tab.wsHandshake !== undefined ? { handshake: tab.wsHandshake } : {}),
+   opcode,
+   payload,
+   ...toClient,
+  },
  };
 }
 

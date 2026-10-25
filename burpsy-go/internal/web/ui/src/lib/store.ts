@@ -214,6 +214,12 @@ export interface RepeaterTab {
  wsPath?: string;
  /** Which connection Send uses — lib/repeater-ws-connection.ts. Absent = "new". */
  wsMode?: "new" | "clone" | "attach";
+ /**
+  * The operator's edited negotiation request (burpsy-react-ui-ws3e). Set, Send dials from these
+  * bytes instead of the captured (clone) or synthetic (new) head; absent, the wuwf behavior
+  * stands. Attach ignores it — an attached frame needs no handshake.
+  */
+ wsHandshake?: string;
  /** The exchange this tab was opened from, sent back as the resend's parent so lineage survives.
   *  Undefined for a tab the operator started by hand — there is no antecedent to record. */
  fromExchange?: number;
@@ -872,6 +878,7 @@ interface AppState {
   wsSocket?: number;
   wsPath?: string;
   wsMode?: "new" | "clone" | "attach";
+  wsHandshake?: string;
   note?: string;
  }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;

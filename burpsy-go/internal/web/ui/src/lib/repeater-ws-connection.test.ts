@@ -91,3 +91,23 @@ describe("Send to Repeater from a WebSockets-history frame", () => {
   expect(seed.wsPayload).toBe("");
  });
 });
+
+test("an edited handshake replaces the captured head on clone, never rides with it (ws3e)", () => {
+ const tab = { target: "ws://a:80", wsSocket: 7, wsMode: "clone" as const, wsHandshake: "GET /x HTTP/1.1\r\n\r\n" };
+ const plan = planWsSend(tab);
+ expect(plan.route).toBe("/api/repeater/ws-send");
+ expect(plan.body).toMatchObject({ socket: 7, handshake: "GET /x HTTP/1.1\r\n\r\n" });
+ expect(plan.body.clone).toBeUndefined();
+});
+
+test("an edited handshake rides a new-connection send with the target as its authority (ws3e)", () => {
+ const plan = planWsSend({ target: "ws://a:80", wsPath: "/room", wsHandshake: "GET /y HTTP/1.1\r\n\r\n" });
+ expect(plan.route).toBe("/api/repeater/ws-send");
+ expect(plan.body).toMatchObject({ target: "ws://a:80", path: "/room", handshake: "GET /y HTTP/1.1\r\n\r\n" });
+});
+
+test("attach ignores an edited handshake: an attached frame needs no negotiation request (ws3e)", () => {
+ const plan = planWsSend({ target: "ws://a:80", wsSocket: 7, wsMode: "attach", wsHandshake: "GET /z HTTP/1.1\r\n\r\n" });
+ expect(plan.route).toBe("/api/repeater/ws-attach");
+ expect(plan.body.handshake).toBeUndefined();
+});

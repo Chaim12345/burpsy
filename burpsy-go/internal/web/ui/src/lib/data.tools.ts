@@ -154,6 +154,31 @@ export interface RepeaterWsSendBody {
  clone?: boolean;
  /** The WebSocket ID to clone. */
  socket?: number;
+ /**
+  * The operator's edited negotiation request (ws3e). Replaces the captured (clone) or synthetic
+  * (new) head entirely; the dial authority still comes from `socket` or `target`, never from the
+  * edited Host line. The server refuses clone + handshake, and planWsSend never sends both.
+  */
+ handshake?: string;
+}
+
+/** The negotiation request a Repeater WS send would dial with (ws3e). */
+export interface WsHandshakePreview {
+ handshake: string;
+ source: "clone" | "new";
+}
+
+/**
+ * The head the editor opens on: the refreshed clone of a captured connection's handshake
+ * (`socket`), or the synthetic head a new connection would dial (`target`, `path`). The server
+ * builds it, so what-you-edit-is-what-is-sent has one source of truth.
+ */
+export function fetchWsHandshakePreview(params: { socket?: number; target?: string; path?: string }) {
+ const q = new URLSearchParams();
+ if (params.socket !== undefined) q.set("socket", String(params.socket));
+ if (params.target !== undefined) q.set("target", params.target);
+ if (params.path !== undefined) q.set("path", params.path);
+ return api<WsHandshakePreview>(`/api/repeater/ws-handshake-preview?${q.toString()}`);
 }
 
 /**
