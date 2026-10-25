@@ -27,7 +27,7 @@ class TestToolPins(unittest.TestCase):
             self.assertTrue(pin["url"].startswith("https://"), name)
             self.assertEqual(64, len(pin["sha256"]), name)
             int(pin["sha256"], 16)  # hex
-            self.assertIn(pin["kind"], ("pip-tarball", "script-tarball", "tarball-binary"), name)
+            self.assertIn(pin["kind"], ("pip-tarball", "script-tarball", "tarball-binary", "gzip-binary"), name)
             self.assertTrue(pin["note"], name)  # maintenance status, checked when pinned
 
     def test_ensure_downloads_verifies_and_stamps(self):
@@ -158,6 +158,33 @@ CRLF_SPEC = {
 }
 
 
+class TestReferenceFailureIsLoud(unittest.TestCase):
+    def test_reference_tool_dying_silently_fails_the_class(self):
+        # A reference tool that exits non-zero with no output must fail the run, not report
+        # "found nothing" (pre-review on j1mk.14).
+        class DeadToolCtx(FakeCtx):
+            def run_reference(self, spec, out_dir):
+                raise RuntimeError("crlfuzz exited 1 with no output on http://x")
+        with tempfile.TemporaryDirectory() as d:
+            rc = parity_run.run_classes([dict(CRLF_SPEC)], d, DeadToolCtx([], ""))
+            self.assertEqual(1, rc)
+            self.assertFalse((Path(d) / "crlf-injection" / "parity.json").exists())
+
+
+class TestSlugDirs(unittest.TestCase):
+    def test_two_specs_sharing_a_class_label_do_not_overwrite(self):
+        a = dict(CRLF_SPEC, slug="crlf-vs-a")
+        b = dict(CRLF_SPEC, slug="crlf-vs-b")
+        with tempfile.TemporaryDirectory() as d:
+            rc = parity_run.run_classes([a, b], d, FakeCtx([], ""))
+            self.assertEqual(0, rc)
+            self.assertTrue((Path(d) / "crlf-vs-a" / "parity.json").exists())
+            self.assertTrue((Path(d) / "crlf-vs-b" / "parity.json").exists())
+            hist = (Path(d) / "history.jsonl").read_text()
+            self.assertIn('"spec": "crlf-vs-a"', hist)
+            self.assertIn('"spec": "crlf-vs-b"', hist)
+
+
 class TestRunner(unittest.TestCase):
     def test_run_class_writes_report_and_history(self):
         burpsy = [{"url": "http://127.0.0.1:19090/crlf/r/home", "parameter": "",
@@ -201,17 +228,20 @@ class TestSpecs(unittest.TestCase):
         from parity_specs import CLASSES
         import parity_tools as pt
         for name, spec in CLASSES.items():
-            self.assertEqual(name, spec["name"])
+            # spec["name"] is the parity class label (two tools can share it); the registry key
+            # is what --class selects.
+            self.assertTrue(spec["name"], name)
             self.assertIn(spec["ref_tool"], pt.TOOLS)
             self.assertTrue(spec["bead"].startswith("burpsy-react-ui-j1mk."))
-            self.assertTrue(spec["burpsy_rows"], name)
+            # audit-collected specs name their rows; the hidden-inputs collector names its mode.
+            self.assertTrue(spec.get("burpsy_rows") or spec.get("burpsy_collect"), name)
             self.assertTrue(spec["targets"], name)
             self.assertTrue(callable(spec["tool_args"]), name)
             argv = spec["tool_args"](spec["targets"][0]["url"], {"binary": "/b/tool", "venv_bin": "/b", "script": "/b/tool.py"}, "/tmp")
             # The argv names the pinned tool's executable (binary, or the venv python for scripts).
             self.assertTrue(argv[0].startswith("/b/"), (name, argv))
             for t in spec.get("truth", []):
-                self.assertEqual(name, t["class"])
+                self.assertEqual(spec["name"], t["class"])
 
     def test_crlf_truth_endpoints_are_seeded_targets(self):
         from parity_specs import CLASSES

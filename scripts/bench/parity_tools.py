@@ -52,6 +52,16 @@ TOOLS = {
         "path_in_archive": "crlfuzz",
         "note": "release 2021-04-03; repo still pushed 2026-10 (checked 2026-10-25)",
     },
+    # x8 — hidden parameter discovery, second reference for j1mk.13. Release v4.3.0 (2023-05-22);
+    # repo last pushed 2024-09, not archived, checked 2026-10-25. Single gzipped binary; the hash
+    # is measured on the downloaded asset (x8's releases publish no checksums).
+    "x8": {
+        "name": "x8", "version": "v4.3.0", "kind": "gzip-binary",
+        "url": "https://github.com/Sh1Yo/x8/releases/download/v4.3.0/x86_64-linux-x8.gz",
+        "sha256": "b3e54da4c0cc62163a3485addea6671368ee69342ea5740e56d6d6112196bd0e",
+        "path_in_archive": "x8",
+        "note": "maintained: last release 2023-05-22, last push 2024-09 (checked 2026-10-25)",
+    },
 }
 
 
@@ -110,7 +120,7 @@ def _installed_files(pin, tdir):
 
 def _describe(pin, tdir, stamp):
     out = {"name": pin["name"], "version": pin["version"], "stamp": str(stamp), "dir": str(tdir)}
-    if pin["kind"] == "tarball-binary":
+    if pin["kind"] in ("tarball-binary", "gzip-binary"):
         out["binary"] = str(tdir / pin["path_in_archive"])
     elif pin["kind"] == "script-tarball":
         out["script"] = str(tdir / "src" / pin["entry"])
@@ -121,7 +131,14 @@ def _describe(pin, tdir, stamp):
 
 
 def _install(pin, archive, tdir):
-    if pin["kind"] == "tarball-binary":
+    if pin["kind"] == "gzip-binary":
+        import gzip
+        dest = Path(tdir) / pin["path_in_archive"]
+        with gzip.open(archive) as src, open(dest, "wb") as out:
+            import shutil as _sh
+            _sh.copyfileobj(src, out)
+        os.chmod(dest, 0o755)
+    elif pin["kind"] == "tarball-binary":
         with tarfile.open(archive) as tf:
             tf.extractall(tdir, filter="data")
         os.chmod(Path(tdir) / pin["path_in_archive"], 0o755)

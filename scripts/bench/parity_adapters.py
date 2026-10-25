@@ -136,3 +136,31 @@ def from_burpsy_findings(findings, url, row_to_class):
         for p in params:
             out.append(_finding(url, p, class_name))
     return out
+
+
+def from_x8_json(text, class_name):
+    """x8 -O json: progress/log lines, then one JSON array of
+    {"method","url","status","size","found_params":[...],"injection_place"}. found_params entries
+    are objects carrying a "name" (a bare string is tolerated). When x8 echoes the array more than
+    once (progress redraw), the LAST parseable array is the final result."""
+    if not text:
+        return []
+    best = None
+    for line in text.splitlines():
+        line = _ANSI.sub("", line).strip()
+        if not line.startswith("["):
+            continue
+        try:
+            arr = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(arr, list):
+            best = arr
+    out = []
+    for entry in best or []:
+        url = entry.get("url", "")
+        for p in entry.get("found_params") or []:
+            name = p.get("name") if isinstance(p, dict) else str(p)
+            if name:
+                out.append(_finding(url, name, class_name))
+    return out
