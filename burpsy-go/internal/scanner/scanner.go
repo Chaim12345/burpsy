@@ -138,6 +138,20 @@ type ActiveScanner struct {
 // work may be admitted before the engine stops. The two share no field, so they cannot disagree.
 // Timeout is the one that could have: it is read by ActiveScanner.AuditConfig as the source of the
 // audit's wall-clock budget rather than being duplicated there.
+// SecondIdentity is the credential set of a second, low-privilege account on the audited
+// application (burpsy-react-ui-0vzb.46). Every field is json:"-" so the credentials can never
+// be marshaled into a persisted document; see ScanConfig.SecondIdentity.
+type SecondIdentity struct {
+	// CookieHeader is the full Cookie header value for identity B (replaces the audited
+	// request's Cookie header on two-identity replays).
+	CookieHeader string `json:"-"`
+	// AuthorizationHeader is the full Authorization header value for identity B.
+	AuthorizationHeader string `json:"-"`
+	// APIKeyHeader and APIKeyValue carry an API-key credential as a header name/value pair.
+	APIKeyHeader string `json:"-"`
+	APIKeyValue  string `json:"-"`
+}
+
 type ScanConfig struct {
 	MaxConcurrency int
 	Timeout        time.Duration
@@ -320,6 +334,40 @@ type ScanConfig struct {
 	// and a credential-less control both refuse what the swapped id returned. Read-only probes (GET,
 	// or a POST naming a read operation). Off by default.
 	CheckIDOR bool
+	// CheckIDORTwoIdentity admits the two-identity cross-read upgrade of the IDOR check
+	// (checks_idor.go, burpsy-react-ui-0vzb.46): the original request - identity A's own object -
+	// is replayed under the configured SecondIdentity's credentials (identity B). B being served
+	// A's object, while the anonymous control is refused, proves broken object-level authorization
+	// without the one-account ambiguity, upgrading the finding to firm. Read-only probes under the
+	// same request-shape rules as CheckIDOR. Off by default; inert until SecondIdentity is set.
+	CheckIDORTwoIdentity bool
+	// CheckBFLA admits the broken function-level authorization pass (burpsy-react-ui-0vzb.46):
+	// the SecondIdentity (the low-privilege account) issues a privileged operation the audit's own
+	// traffic names - an admin-typed path, or a method the audited request did not use - and a 2xx
+	// the anonymous control is refused is reported under "Broken access control". Read-only
+	// escalation only unless CheckAPIWrites also admits write probes. Off by default; inert until
+	// SecondIdentity is set.
+	CheckBFLA bool
+	// CheckMassAssignment admits the mass-assignment pass (burpsy-react-ui-0vzb.46): a privileged
+	// field the object's own read response or the API's OpenAPI schema names but the request never
+	// carried (role, isAdmin, ...) is added to a replayed write, reported only when a re-read shows
+	// the field persisted with the injected value. Off by default, and inert until CheckAPIWrites
+	// also admits write probes.
+	CheckMassAssignment bool
+	// CheckAPIWrites is the explicit opt-in for ACTIVE WRITE probes against the audited
+	// application (burpsy-react-ui-0vzb.46): without it every technique that would mutate server
+	// state - mass assignment's write-and-reread, BFLA's state-changing method escalation -
+	// declines rather than probe. Off by default.
+	CheckAPIWrites bool
+	// SecondIdentity carries the credentials of a SECOND account on the audited application: the
+	// low-privilege counterpart of the audited exchange's identity for the two-identity
+	// authorization techniques above. Set only the channels the audited requests actually use.
+	//
+	// These credentials are NEVER persisted: every field is tagged json:"-", so marshaling this
+	// config - including the scan configuration library's document save - cannot write them out,
+	// and unmarshaling cannot read them back. They reach the scanner threaded in memory at scan
+	// start only.
+	SecondIdentity SecondIdentity `json:"-"`
 	// CheckLoginRateLimit admits the login rate-limiting check (checks_auth_logic.go): on a POST
 	// that carries an identity and a password or one-time-code parameter, a burst of failed attempts
 	// under an INVENTED identity, reporting "Authentication attempts not rate limited" only when every
