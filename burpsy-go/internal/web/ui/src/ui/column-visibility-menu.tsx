@@ -110,7 +110,14 @@ export function BucketMenu({
       />
      ))}
      <div className="column-menu-divider" role="separator" />
-     <button type="button" className="column-menu-reset" onClick={() => { onReset(); setOpen(false); }}>
+     <button
+      type="button"
+      className="column-menu-reset"
+      onClick={() => {
+       onReset();
+       setOpen(false);
+      }}
+     >
       Reset {label.toLowerCase()}
      </button>
     </div>
@@ -118,4 +125,3 @@ export function BucketMenu({
   </div>
  );
 }
-
