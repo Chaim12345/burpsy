@@ -2312,7 +2312,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// keeps the control from being a no-op — invisible_proxy is seeded ON, so a plain
 		// "listener OR global" would have made a listener ticked OFF still answer
 		// origin-form requests.
-		if h, _ := httputil.HeaderValue(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
+		if h, _ := httputil.HeaderValueExact(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
 			host, port = parseHostPort(h)
 		}
 	}
@@ -3304,7 +3304,7 @@ func rewriteChunkedToLength(head string, bodyLen int) string {
 // headerInt reads a numeric header, case-insensitively. ok is false when the field is absent or
 // unparseable, so a caller cannot mistake "no length" for "length zero".
 func headerInt(head, name string) (int, bool) {
-	value, ok := headerValueFold(head, name)
+	value, ok := httputil.HeaderValue([]byte(head), name)
 	if !ok {
 		return 0, false
 	}
@@ -3318,7 +3318,7 @@ func headerInt(head, name string) (int, bool) {
 // headerHasToken reports whether a comma-separated header carries token, case-insensitively. Used
 // for Transfer-Encoding, where "chunked" may be one of several codings and may carry parameters.
 func headerHasToken(head, name, token string) bool {
-	value, ok := headerValueFold(head, name)
+	value, ok := httputil.HeaderValue([]byte(head), name)
 	if !ok {
 		return false
 	}
@@ -3328,20 +3328,6 @@ func headerHasToken(head, name, token string) bool {
 		}
 	}
 	return false
-}
-
-// headerValueFold returns the first value of a named header, whatever case it was written in.
-func headerValueFold(head, name string) (string, bool) {
-	for _, line := range strings.Split(head, "\n") {
-		field, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(field), name) {
-			return value, true
-		}
-	}
-	return "", false
 }
 
 // serverIPOf is the destination's resolved IP as this socket actually reached it, for history's IP
@@ -3653,7 +3639,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 			// Alt-Svc discovery (vln3): only responses burpsy itself received teach the table, and
 			// only while the operator's kill switch leaves the leg live.
 			if tls && s.config.network.HTTP3AltSvcEnabled() {
-				if value, ok := headerValueFold(string(resp[:headEnd]), "alt-svc"); ok {
+				if value, ok := httputil.HeaderValue(resp[:headEnd], "alt-svc"); ok {
 					s.config.altSvc.learn(host, port, value, time.Now())
 				}
 			}

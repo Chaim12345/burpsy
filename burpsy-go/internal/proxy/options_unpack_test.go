@@ -350,3 +350,61 @@ func TestTheTwoUnpackSwitchesAreIndependent(t *testing.T) {
 		t.Errorf("unpacked_requests = %d", c.UnpackedRequests)
 	}
 }
+
+func gzippedBytes(t *testing.T, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	zw.Write([]byte(body))
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// A field name padded with whitespace before its colon is not a Content-Encoding this proxy
+// recognizes (burpsy-react-ui-6858 fix round): recognition of Content-Encoding is
+// smuggling-adjacent, so the strict read the retired headerValue used is pinned per path — a
+// padded line leaves the compressed body exactly as it arrived, the way a strict origin parser
+// would leave it.
+func TestAPaddedContentEncodingIsNotUnpackedOnEitherPath(t *testing.T) {
+	body := gzippedBytes(t, "hello")
+
+	resp := append([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding : gzip\r\n\r\n"), body...)
+	o := NewOptions()
+	if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := o.ApplyResponse(resp); !bytes.Equal(out, resp) {
+		t.Errorf("a padded Content-Encoding got the response unpacked:\n%q", out)
+	}
+
+	req := append([]byte("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Encoding : gzip\r\n\r\n"), body...)
+	r := NewOptions()
+	if err := r.Set(OptUnpackCompressedRequests, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := r.ApplyRequest(req); !bytes.Equal(out, req) {
+		t.Errorf("a padded Content-Encoding got the request unpacked:\n%q", out)
+	}
+}
+
+// Same strictness for Transfer-Encoding: with the padded line unread, the body is not declared
+// chunked, the chunk framing is not valid gzip payload, and the message passes through wholly
+// untouched — where the lenient read would dechunk, unpack, and rewrite it.
+func TestAPaddedTransferEncodingDoesNotTriggerDechunking(t *testing.T) {
+	packed := gzippedBytes(t, "hello")
+	var framed bytes.Buffer
+	framed.WriteString(strconv.FormatInt(int64(len(packed)), 16) + "\r\n")
+	framed.Write(packed)
+	framed.WriteString("\r\n0\r\n\r\n")
+	raw := append([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nTransfer-Encoding : chunked\r\n\r\n"), framed.Bytes()...)
+
+	o := NewOptions()
+	if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := o.ApplyResponse(raw); !bytes.Equal(out, raw) {
+		t.Errorf("a padded Transfer-Encoding got the body dechunked and unpacked:\n%q", out)
+	}
+}

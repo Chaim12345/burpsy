@@ -758,3 +758,30 @@ func Test_invisible_proxying_forwards_the_headers_the_client_sent(t *testing.T) 
 		t.Errorf("history recorded a request without the client's headers: %q", stored.Raw())
 	}
 }
+
+// burpsy-react-ui-6858 fix round: the HTML check reads Content-Type with the strict shape the
+// retired headerValue used, so a padded field name does not route a response into the markup
+// rules.
+func Test_isHTMLResponse_ignores_a_padded_content_type(t *testing.T) {
+	if isHTMLResponse([]byte("HTTP/1.1 200 OK\r\nContent-Type : text/html\r\n")) {
+		t.Error("a Content-Type padded before its colon was read as HTML")
+	}
+	if !isHTMLResponse([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n")) {
+		t.Error("a plain Content-Type stopped reading as HTML")
+	}
+}
+
+// The invisible-routing branch in proxy.go's serve loop reads Host as
+// HeaderValueExact(requestHead(requestData), "Host") — this pins the strict shape of that exact
+// read, so the branch cannot quietly go lenient (a padded Host line a strict parser ignores must
+// not pick the origin; the live listener test binds the same contract end to end).
+func Test_the_invisible_routing_host_read_keeps_the_strict_shape(t *testing.T) {
+	req := []byte("GET / HTTP/1.1\r\nHost : example.com\r\n\r\n")
+	if h, _ := httputil.HeaderValueExact(requestHead(req), "Host"); h != "" {
+		t.Errorf("a padded Host line read as %q", h)
+	}
+	req = []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if h, _ := httputil.HeaderValueExact(requestHead(req), "Host"); h != "example.com" {
+		t.Errorf("a plain Host line read as %q", h)
+	}
+}

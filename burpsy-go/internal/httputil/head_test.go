@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// The one head API (burpsy-react-ui-6858 slice A): every "find the blank line" and "read one
-// header" in the tree funnels here, so the edge cases live in exactly one place.
+// The head API (burpsy-react-ui-6858 slice A): the head searches and header reads of the
+// proxy, sender and intruder packages funnel here, so their edge cases live in exactly one
+// place; the rest of the tree's searches are slice B.
 
 func TestSplitHeadBodyKeepsTheSeparatorItFound(t *testing.T) {
 	head, body, sep, ok := SplitHeadBody([]byte("HTTP/1.1 200 OK\r\nA: b\r\n\r\nBODY"))
@@ -83,5 +84,35 @@ func TestHeaderValueFindsTheFirstMatchCaseInsensitively(t *testing.T) {
 	// A field name with whitespace before its colon still matches; a different name does not.
 	if v, ok := HeaderValue([]byte("HTTP/1.1 200 OK\r\nA : b\r\n\r\n"), "a"); !ok || v != "b" {
 		t.Errorf("spaced colon = %q %v", v, ok)
+	}
+}
+
+func TestSplitHeadBodyPrefersCRLFOverAnEarlierBareLF(t *testing.T) {
+	head, body, sep, ok := SplitHeadBody([]byte("HTTP/1.1 200 OK\n\nA: b\r\n\r\nBODY"))
+	if !ok || string(head) != "HTTP/1.1 200 OK\n\nA: b" || string(body) != "BODY" || string(sep) != "\r\n\r\n" {
+		t.Errorf("mixed terminators = %q %q %q %v, want the split at the CRLF terminator", head, body, sep, ok)
+	}
+}
+
+func TestHeaderValueExactKeepsTheStrictShape(t *testing.T) {
+	head := []byte("HTTP/1.1 200 OK\r\nContent-Encoding : gzip\r\n  Content-Encoding: br\r\nContent-Encoding : identity\r\nX: y")
+	if _, ok := HeaderValueExact(head, "Content-Encoding"); ok {
+		t.Error("a field name padded with a space before its colon was recognized")
+	}
+	if _, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\n  Content-Encoding: gzip\r\n"), "Content-Encoding"); ok {
+		t.Error("a field name indented with leading whitespace was recognized")
+	}
+	if _, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\nContent-Encoding : gzip\r\n"), "Content-Encoding"); ok {
+		t.Error("a field name padded with a Unicode space (NBSP) was recognized")
+	}
+	// Case still does not matter, and the value keeps its TrimSpace.
+	v, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\ncOnTeNt-eNcOdInG:  gzip \r\n"), "content-encoding")
+	if !ok || v != "gzip" {
+		t.Errorf("plain mixed-case read = %q %v, want gzip true", v, ok)
+	}
+	// First match wins, as the retired copy's line scan did.
+	v, ok = HeaderValueExact([]byte("HTTP/1.1 200 OK\r\nX: one\r\nX: two\r\n"), "X")
+	if !ok || v != "one" {
+		t.Errorf("first-match = %q %v, want one true", v, ok)
 	}
 }

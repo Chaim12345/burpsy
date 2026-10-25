@@ -535,7 +535,7 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		o.skippedUnframed.Add(1)
 		return raw, false
 	}
-	encoding, _ := httputil.HeaderValue(head, "Content-Encoding")
+	encoding, _ := httputil.HeaderValueExact(head, "Content-Encoding")
 	if encoding == "" || strings.EqualFold(encoding, "identity") {
 		// Nothing to unpack. Not counted at all: an uncompressed message is not a skip, it is a
 		// message the switch has no business touching, and counting it would make the skip ratios
@@ -551,7 +551,7 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		return raw, false
 	}
 
-	te, _ := httputil.HeaderValue(head, "Transfer-Encoding")
+	te, _ := httputil.HeaderValueExact(head, "Transfer-Encoding")
 	chunked := strings.EqualFold(te, "chunked")
 	compressed := body
 	if chunked {
@@ -689,7 +689,7 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		o.skippedUnframed.Add(1)
 		return raw
 	}
-	if encoding, _ := httputil.HeaderValue(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
+	if encoding, _ := httputil.HeaderValueExact(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		// Unpack when the operator asked for it, then carry on with the decompressed message — this is
 		// the whole point of the switch: "the rule found nothing to rewrite" and "the rule was never
 		// allowed to look" were the two states this package was built to distinguish, and a
@@ -761,7 +761,7 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		return raw
 	}
 
-	te, _ := httputil.HeaderValue(head, "Transfer-Encoding")
+	te, _ := httputil.HeaderValueExact(head, "Transfer-Encoding")
 	chunked := strings.EqualFold(te, "chunked")
 	plain := body
 	if chunked {
@@ -1049,7 +1049,7 @@ func requestHead(raw []byte) []byte {
 // Content-Type at all is treated as not-HTML: guessing from the body would mean
 // these rules rewriting something whose type nobody declared.
 func isHTMLResponse(head []byte) bool {
-	ct0, _ := httputil.HeaderValue(head, "Content-Type")
+	ct0, _ := httputil.HeaderValueExact(head, "Content-Type")
 	ct := strings.ToLower(ct0)
 	return strings.Contains(ct, "text/html") || strings.Contains(ct, "application/xhtml+xml")
 }
