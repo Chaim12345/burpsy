@@ -2395,6 +2395,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/repeater/ws-handshake-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** preview the negotiation request a Repeater WS send would dial with - a captured connection's refreshed head (socket) or a new connection's synthetic one (target) - for the edit-before-connect editor (ws3e) */
+        get: operations["getApiRepeaterWsHandshakePreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/repeater/ws-send": {
         parameters: {
             query?: never;
@@ -9973,6 +9990,40 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getApiRepeaterWsHandshakePreview: {
+        parameters: {
+            query?: {
+                /** @description the request path for a target preview; omitted means / */
+                path?: string;
+                /** @description preview the refreshed clone of this WebSocket ID's captured handshake (an integer) */
+                socket?: string;
+                /** @description preview a new connection's synthetic head for this ws:// or host:port target */
+                target?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
