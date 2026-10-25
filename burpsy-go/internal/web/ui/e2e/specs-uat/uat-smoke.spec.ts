@@ -39,11 +39,14 @@ test("UAT: load the console, send from Repeater, see the exchange in history", a
     await page.getByLabel("Target", { exact: true }).fill(origin);
     const requestEditor = page.locator(".editor-grid-inspected > *").first();
     await expect(requestEditor).toContainText("GET /");
-    // Edit the request line in the Raw editor itself: select all and type a whole new message.
-    const raw = `GET ${UAT_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
+    // Edit the request in the Raw editor itself: select all and type a whole new message. Each "\n" is a
+    // real Enter key press: the editor keeps the message's own line endings (elam), so Enter writes the
+    // template's CRLF. insertText of "\n" would write bare LF characters, which the origin rejects with
+    // 400 Bad Request (the failure in CI run 40202947610).
+    const raw = `GET ${UAT_PATH} HTTP/1.1\nHost: 127.0.0.1:${targetPort}\nConnection: close\n\n`;
     await requestEditor.locator(".cm-content").click();
     await page.keyboard.press("ControlOrMeta+a");
-    await page.keyboard.insertText(raw.replace(/\r\n/g, "\n"));
+    await page.keyboard.type(raw);
     await expect(requestEditor).toContainText(`GET ${UAT_PATH} HTTP/1.1`);
     await page.getByRole("button", { name: "Send", exact: true }).click();
     // The origin echoes method and path, so this proves the bytes the operator typed are what arrived.
