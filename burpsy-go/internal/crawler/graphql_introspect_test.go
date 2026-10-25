@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -137,5 +138,64 @@ func TestABrokenIntrospectionDocumentIsCountedAsItsOwnSkip(t *testing.T) {
 	}
 	if rep.GraphQLEndpointsFound != 0 {
 		t.Errorf("GraphQLEndpointsFound = %d for a document that could not be read", rep.GraphQLEndpointsFound)
+	}
+}
+
+// The structural load must actually SUCCEED on real answers - with ops kept by the advisory
+// fallback everywhere else, only a direct assertion proves the load is not silently failing
+// and lending the slice a false sense of validation (pre-review, burpsy-react-ui-4xqt.1).
+func TestValidateIntrospectionStructureAcceptsRealAnswers(t *testing.T) {
+	for name, body := range map[string]string{"document": introspectionDocument, "parity": introspectionParityAnswer} {
+		var res graphqlResult
+		if err := json.Unmarshal([]byte(body), &res); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateIntrospectionStructure(&res); err != nil {
+			t.Errorf("%s: a well-formed answer failed the structural load: %v", name, err)
+		}
+	}
+}
+
+// And it must CLOSE: a shape no server could declare, with no operations to lose, is the
+// named failure rather than a silent zero.
+func TestValidateIntrospectionStructureRejectsWhatNoServerDeclares(t *testing.T) {
+	broken := `{"data":{"__schema":{"queryType":{"name":"Query"},"types":[
+{"name":"9type","kind":"SCALAR","fields":null}
+]}}}`
+	var res graphqlResult
+	if err := json.Unmarshal([]byte(broken), &res); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateIntrospectionStructure(&res); err == nil {
+		t.Fatal("a type name no GraphQL grammar accepts passed the structural load")
+	}
+	ops, failure := ParseGraphQLOperations([]byte(broken))
+	if len(ops) != 0 || failure == "" {
+		t.Fatalf("invalid zero-operation answer: ops=%v failure=%q, want no ops and a named failure", ops, failure)
+	}
+}
+
+// The dual-reader pin (pre-review, burpsy-react-ui-4xqt.1): with BOTH parse_api_definitions
+// and perform_graphql_introspection on - Burp's own shipped posture - a body carrying an
+// introspection result has ONE admission owner: the armed live reader. The document reader
+// declines it, or every operation is admitted and counted twice (the count increments before
+// enqueue dedup, so dedup cannot hide it).
+func TestADualSwitchCrawlAdmitsAnIntrospectionResultOnce(t *testing.T) {
+	srv := sitemapTarget(t, map[string]servedPage{
+		"/":            {"<html><body><a href=\"/schema.json\">schema</a></body></html>", "text/html"},
+		"/schema.json": {introspectionDocument, "application/json"},
+	})
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.ParseAPIDefinitions = true
+	cfg.PerformGraphQLIntrospection = true
+	rep := run(t, cfg)
+
+	if rep.GraphQLEndpointsFound != 2 {
+		t.Errorf("GraphQLEndpointsFound = %d, want exactly the 2 operations (one admission owner per body); fetches: %v",
+			rep.GraphQLEndpointsFound, fetchLog(rep))
+	}
+	if rep.APIDocumentsRead != 0 {
+		t.Errorf("APIDocumentsRead = %d, want 0: with the live reader armed the document reader owns no GraphQL body", rep.APIDocumentsRead)
 	}
 }

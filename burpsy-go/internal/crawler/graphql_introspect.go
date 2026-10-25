@@ -27,8 +27,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/vektah/gqlparser/v2/validator"
 )
 
 // validateIntrospectionStructure renders the user types of a reduced introspection answer as
@@ -88,7 +88,12 @@ func validateIntrospectionStructure(res *graphqlResult) error {
 	if root := res.Data.Schema.QueryType.Name; root != "" {
 		fmt.Fprintf(&sdl, "schema { query: %s }\n", root)
 	}
-	_, err := validator.LoadSchema(&ast.Source{Input: sdl.String()})
+	// The TOP-LEVEL LoadSchema, which prepends the prelude: the built-in scalars the
+	// placeholders reference, the directives, the introspection meta-fields. Calling
+	// validator.LoadSchema directly leaves every placeholder String unresolved - the load
+	// fails on every real answer and only the advisory fallback keeps the operations, which
+	// is a validation that validates nothing (pre-review, burpsy-react-ui-4xqt.1).
+	_, err := gqlparser.LoadSchema(&ast.Source{Input: sdl.String()})
 	return err
 }
 
