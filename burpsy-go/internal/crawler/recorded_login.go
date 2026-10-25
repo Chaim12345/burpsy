@@ -236,6 +236,12 @@ func (c *Crawler) loginBeforeCrawl(ctx context.Context, rep *Report, lim *LimitR
 // reloginWithBrowser is recoverSession's recorded-login branch: one replay within the budget, and the
 // item's request rebuilt from the refreshed jar.
 func (c *Crawler) reloginWithBrowser(ctx context.Context, item frontierItem, lim *LimitReport) ([]byte, recoverResult, string) {
+	if c.login.login == nil {
+		// The re-login closure belongs to the phase whose login built it (burpsy-react-ui-crediso):
+		// a phase that has not completed a login has nothing to re-run, and invoking an earlier
+		// phase's closure would send THAT credential's login from inside this phase.
+		return nil, reloginFailed, "the current crawl phase has not completed a login to re-run"
+	}
 	if c.relogins >= c.limits.MaxRelogins {
 		lim.record(StopReloginBudget)
 		return nil, reloginBudgetSpent, "the re-login budget is spent; this request cannot be retried with a fresh session"

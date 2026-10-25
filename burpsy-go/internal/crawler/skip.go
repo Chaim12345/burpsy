@@ -303,11 +303,17 @@ const (
 	// a failed interaction loses the routes behind a CLICK, and an operator deciding whether to re-run
 	// needs to know which. See Config.Interact (burpsy-react-ui-spa1).
 	SkipInteractionUnavailable
+
+	// SkipPhaseAbandoned means a follow-up retry was still owed when its crawl phase ended
+	// (burpsy-react-ui-crediso). A retry is the same request sent again under the same session;
+	// the phase boundary retires that session, so the owed retry is abandoned and counted, never
+	// sent under the next phase's.
+	SkipPhaseAbandoned
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [46]Skip{
+var SkipAll = [47]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -354,6 +360,7 @@ var SkipAll = [46]Skip{
 	SkipWSDLNoOperations,
 	SkipSeedRedirectedOutOfScope,
 	SkipInteractionUnavailable,
+	SkipPhaseAbandoned,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -453,6 +460,8 @@ func (s Skip) slot() int {
 		return 44
 	case SkipInteractionUnavailable:
 		return 45
+	case SkipPhaseAbandoned:
+		return 46
 	}
 	panic("unknown Skip")
 }
@@ -552,6 +561,8 @@ func (s Skip) String() string {
 		return "seed-redirected-out-of-scope"
 	case SkipInteractionUnavailable:
 		return "interaction-unavailable"
+	case SkipPhaseAbandoned:
+		return "phase-abandoned"
 	}
 	return "unknown"
 }
@@ -654,6 +665,8 @@ func (s Skip) Explanation() string {
 		return "a seed URL redirected outside the engagement scope, so the crawl's starting point contributed nothing"
 	case SkipInteractionUnavailable:
 		return "the page was to be driven in a browser (clicks, form fills) and the interaction pass could not run for it, so any route reachable only by a click is missing rather than absent"
+	case SkipPhaseAbandoned:
+		return "a retry the crawl still owed when its credential phase ended; re-issuing it under the next phase's session would be a different request, so it was abandoned and counted"
 	}
 	return "unknown skip"
 }
@@ -735,7 +748,7 @@ func (s Skip) Category() SkipCategory {
 	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed, SkipWSDLInvalid, SkipWSDLNoOperations,
 		SkipGraphQLUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
-		SkipRenderUnavailable, SkipInteractionUnavailable:
+		SkipRenderUnavailable, SkipInteractionUnavailable, SkipPhaseAbandoned:
 		return CategoryResponse
 	}
 	panic("unknown Skip")

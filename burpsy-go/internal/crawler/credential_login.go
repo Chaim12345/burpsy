@@ -24,13 +24,20 @@ package crawler
 //
 // With several credentials the crawl runs in PHASES, Burp's model: the unauthenticated phase
 // first (it discovers the login form and bounces off the pages that want a session), then one
-// phase per credential. A phase begins when the previous phase's frontier drains: the previous
-// session's jar is dropped, the form is submitted with this credential as the phase's first
-// act, and the pages the unauthenticated phase bounced off are re-fetched WITH the session.
-// Frontier dedup, the template quota, expiry detection and the link-walk decision are all
-// namespaced or reset per phase, so each credential re-crawls the application behind its own
-// login — per-phase state, no cross-credential leakage. What stays global is the location
-// COUNT: identical content is one location however many phases fetched it.
+// phase per credential. A phase begins when the previous phase's frontier drains: the whole
+// per-credential session state is rebuilt — jar, re-login closure, and the report's
+// current-session fields — and the form is submitted with this credential as the phase's first
+// act, ADMITTED TO THE FRONTIER so cancellation, the suite pause and the request/duration
+// budgets gate it like every other send. The pages the unauthenticated phase bounced off
+// (401/403, GET-only, bounded) are re-fetched WITH the session, and the phase's transport-failure
+// retries run before the boundary retires its session — a retry an ended phase still owes is
+// abandoned and counted, never sent under the next phase's session. Frontier dedup, the template
+// quota, expiry detection and the link-walk decision are all namespaced or reset per phase, so
+// each credential re-crawls the application behind its own login — per-phase state, no
+// cross-credential leakage. What stays global is the location COUNT: identical content is one
+// location however many phases fetched it. One login form per crawl: the FIRST identified login
+// form is the one every phase answers, the same "one auth method" reading as New's BrowserLogin
+// refusal; later login forms are noted and ignored.
 //
 // # What session loss does
 //
@@ -201,14 +208,21 @@ func (c *Crawler) buildCredentialLoginItem(cred LoginCredential) (frontierItem, 
 
 // startNextCredentialPhase begins the next credential's crawl phase, Burp's phased model
 // (burpsy-react-ui-crediso): the unauthenticated phase runs first; then each credential in turn
-// gets its own crawl behind its own login. The phase's first act is the login submission, sent
-// through the ordinary perform path — scope-authorised, rate-limited, captured, masked. The
-// previous phase's session ends with its phase (the jar is dropped, never carried into the next
-// login), expiry detection restarts, and the pages the unauthenticated phase bounced off are
-// re-fetched WITH the session. Frontier dedup and template quotas are namespaced by phase (see
-// enqueue), so the phase re-crawls the application behind its login rather than inheriting the
-// unauthenticated phase's seen-set — that re-crawl is the point: an authenticated view is
-// different content.
+// gets its own crawl behind its own login.
+//
+// A phase boundary is a WHOLE-session boundary. It rebuilds every piece of per-credential state:
+// the jar (dropped, never carried into the next login), the re-login closure (it re-sends the
+// login of the phase that built it, so a phase that has not logged in has NONE — the expiry path
+// refuses rather than invoke another phase's), the report's current-session fields (the crawl
+// ends described by the phase it ended in: a failed phase is unauthenticated, whatever an earlier
+// phase earned), the expiry detector's template memory, and the walk decision's location set.
+// What accumulates across phases is only the report's COUNTERS (Attempts, Succeeded, Failed) and
+// the global location count.
+//
+// The phase's first act is the login submission, ADMITTED TO THE FRONTIER like every other
+// request — so the run loop's own gates decide whether it is sent: cancellation, the suite pause,
+// and the request/duration budgets apply to a phase login exactly as to any other send, and an
+// exhausted budget refuses the next phase's login outright with the named stop.
 //
 // A failed login does not stop the crawl (Burp's rule): the attempt is recorded, the challenged
 // URLs are NOT seeded (there is no session to re-fetch them with), and the next credential's
@@ -218,33 +232,45 @@ func (c *Crawler) startNextCredentialPhase(ctx context.Context, rep *Report, lim
 		return false
 	}
 	for c.credPhase < len(c.cfg.LoginCredentials) {
+		// The error-handling policy senior to a new phase: a target that has started timing out
+		// is not one the next credential's login should be sent to. The loop's own check then
+		// ends the crawl with the policy's stop.
+		if c.checkPauseThresholds(rep, lim) {
+			return false
+		}
+		// The draining phase's owed retries run now, under ITS session, before the boundary
+		// retires it (burpsy-react-ui-crediso): a follow-up retry is the same request under the
+		// same session, and after the boundary that session is gone.
+		c.runFollowUpPasses(ctx, rep, lim)
 		cred := c.cfg.LoginCredentials[c.credPhase]
 		c.credPhase++ // phases are 1-indexed by the counter: phase N answers credentials[N-1]
 		if c.login != nil {
-			// The previous phase's session ends here. The report accumulates across phases on
-			// the same loginState; only the jar is the phase's own.
+			// The previous phase's session ends here — all of it. The report accumulates across
+			// phases on the same loginState; everything that IS the session is the phase's own.
 			c.login.jar = nil
+			c.login.login = nil
+			c.login.report.Authenticated = false
+			c.login.report.Label = ""
+			c.login.report.Verified = false
+			c.login.report.CookieNames = []string{}
+			c.login.report.FinalURL = ""
 		}
 		c.templateOK = map[string]bool{}
 		// Traversal restarts too: pages an earlier phase walked are walked again behind this
 		// phase's session. The global location count is untouched — only the walk decision resets.
 		c.phaseLocations = map[string]locationEntry{}
 		c.phaseLocationShapes = map[string][]string{}
+		c.challengedSeeded = false
 		item, refusal := c.buildCredentialLoginItem(cred)
 		if refusal != nil {
 			c.skips.record(*refusal)
 			continue
 		}
-		rep.FormsSubmitted++
-		c.perform(ctx, item, c.buildRequest(item), rep, lim)
-		if c.login != nil && c.login.report.Authenticated {
-			for _, u := range c.authChallenged {
-				parsed, err := url.Parse(u)
-				if err != nil {
-					continue
-				}
-				c.enqueue(frontierItem{url: parsed, method: "GET", depth: item.depth, foundAt: item.url.String(), text: "re-fetch with session"}, item.url.String(), lim)
-			}
+		item.phase = c.credPhase
+		// Admitted through the same tail as every other request — scope, dedup, template quota,
+		// capacity — so a refusal is recorded by the same machinery with the same honesty.
+		if c.enqueue(item, item.foundAt, lim) {
+			rep.FormsSubmitted++
 		}
 		return true
 	}
@@ -299,6 +325,19 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 	st.jar = jar
 	st.report.CookieNames = names
 	st.report.FinalURL = item.url.String()
+	// The phase's first successful login re-fetches the pages the unauthenticated phase bounced
+	// off, WITH the session (burpsy-react-ui-crediso). A failed phase never reaches here: its
+	// report's Authenticated stays false and nothing is seeded for a session that does not exist.
+	if c.credPhase > 0 && !c.challengedSeeded {
+		c.challengedSeeded = true
+		for _, u := range c.authChallenged {
+			parsed, err := url.Parse(u)
+			if err != nil {
+				continue
+			}
+			c.enqueue(frontierItem{url: parsed, method: "GET", depth: item.depth, foundAt: item.url.String(), text: "re-fetch with session"}, item.url.String(), lim)
+		}
+	}
 	// Session loss after a credential login re-sends this same submission: the formLogin is the
 	// BrowserLogin the session gate's re-login path already knows how to run.
 	st.login = &formLogin{

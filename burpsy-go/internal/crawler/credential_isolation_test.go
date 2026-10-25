@@ -151,3 +151,338 @@ func TestEachCredentialCrawlsBehindItsOwnLogin(t *testing.T) {
 		t.Errorf("login block = %+v, want one successful login per credential", rep.Login)
 	}
 }
+
+// ---- Pre-review round: a phase boundary is a WHOLE-session boundary ---------------------------------
+
+// A failed credential phase is UNAUTHENTICATED. Nothing from the previous phase's session may
+// leak into it: not the jar, not the report's Authenticated flag, and not the re-login closure,
+// which belongs to the phase whose login built it.
+func TestAFailedCredentialPhaseStaysUnauthenticated(t *testing.T) {
+	var mu sync.Mutex
+	var fetches []string
+	var loginPosts []string
+	record := func(r *http.Request) string {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		mu.Lock()
+		fetches = append(fetches, r.URL.Path+" cookie="+cv)
+		mu.Unlock()
+		return cv
+	}
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		page(w, `<a href="/login">sign in</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			mu.Lock()
+			loginPosts = append(loginPosts, string(body))
+			mu.Unlock()
+			if vals, _ := url.ParseQuery(string(body)); vals.Get("user") == "alice" && vals.Get("pass") == "s3cret" {
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+				page(w, `<a href="/account">my account</a>`)
+				return
+			}
+			// The failure page: no session, and the text the operator's login-page pattern names.
+			page(w, `<p>bad credentials</p><a href="/recover">recover</a>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form><a href="/account">account</a>`)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		if cv := record(r); cv != "aaa" {
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+			return
+		}
+		page(w, `<p>alice</p>`)
+	})
+	// Every page the failed phase reaches carries the failure text: the expiry detector fires on
+	// it, and the re-login path must not answer with the previous phase's login.
+	mux.HandleFunc("/recover", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		page(w, `<p>bad credentials</p>`)
+	})
+	mux.HandleFunc("/private", func(w http.ResponseWriter, r *http.Request) {
+		if cv := record(r); cv != "aaa" {
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+			return
+		}
+		page(w, `<p>secret</p>`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	// /private is reached only as a seed: the unauthenticated phase bounces off it (403), and the
+	// challenged re-fetch is the only way a credential phase reaches it.
+	cfg := h.config(srv.URL+"/", srv.URL+"/private")
+	cfg.SubmitForms = true
+	cfg.LoginPagePattern = "bad credentials"
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "wrong"},
+	}
+	rep := run(t, cfg)
+
+	count := func(want string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, f := range fetches {
+			if f == want {
+				n++
+			}
+		}
+		return n
+	}
+	// The unauthenticated phase bounced off both pages; alice's phase re-fetched both WITH her
+	// session. Bob's phase failed its login, so nothing was re-fetched for it: a failed phase is
+	// unauthenticated, not "the previous phase's session, continued".
+	if n := count("/account cookie="); n != 1 {
+		t.Errorf("/account unauthenticated fetches = %d, want 1 (phase 0 only)", n)
+	}
+	if n := count("/account cookie=aaa"); n != 1 {
+		t.Errorf("/account fetches with alice's session = %d, want 1", n)
+	}
+	if n := count("/private cookie="); n != 1 {
+		t.Errorf("/private unauthenticated fetches = %d, want 1 (phase 0 only)", n)
+	}
+	if n := count("/private cookie=aaa"); n != 1 {
+		t.Errorf("/private fetches with alice's session = %d, want 1", n)
+	}
+	// The report describes the phase the crawl ENDED in: bob's, which never authenticated.
+	if rep.Login == nil || rep.Login.Authenticated {
+		t.Errorf("login block = %+v, want the crawl ending unauthenticated: the last phase's login failed", rep.Login)
+	}
+	// Phase 2's expiry-looking page must not re-run phase 1's login: alice's credentials are sent
+	// exactly once, in her own phase.
+	mu.Lock()
+	alicePosts := 0
+	for _, p := range loginPosts {
+		if vals, _ := url.ParseQuery(p); vals.Get("user") == "alice" {
+			alicePosts++
+		}
+	}
+	mu.Unlock()
+	if alicePosts != 1 {
+		t.Errorf("login submissions carrying alice's credentials = %d, want 1 — a later phase must never invoke an earlier phase's re-login", alicePosts)
+	}
+	// The refusal is recorded, not silent: the expiry signal inside an unauthenticated phase is a
+	// re-login that cannot run, named as one.
+	if rep.Skips.Count(SkipReloginFailed) == 0 {
+		t.Errorf("no SkipReloginFailed recorded for the expiry signal inside the failed phase")
+	}
+}
+
+// A phase's first act goes through the same gates as every other send: an exhausted request
+// budget refuses the next phase's login outright, and the refusal is the named stop.
+func TestAnExhaustedRequestBudgetRefusesTheNextPhaseLogin(t *testing.T) {
+	var mu sync.Mutex
+	posts := map[string]int{}
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<a href="/login">sign in</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			vals, _ := url.ParseQuery(string(body))
+			mu.Lock()
+			posts[vals.Get("user")]++
+			mu.Unlock()
+			switch vals.Get("user") + "/" + vals.Get("pass") {
+			case "alice/s3cret":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+			case "bob/hunter2":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "bbb", Path: "/"})
+			}
+			page(w, `<a href="/account">my account</a>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form><a href="/account">account</a>`)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		switch cv {
+		case "aaa":
+			page(w, `<p>alice</p><a href="/alice-only">alice only</a>`)
+		case "bbb":
+			page(w, `<p>bob</p><a href="/bob-only">bob only</a>`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+		}
+	})
+	mux.HandleFunc("/alice-only", func(w http.ResponseWriter, r *http.Request) { page(w, `<p>a</p>`) })
+	mux.HandleFunc("/bob-only", func(w http.ResponseWriter, r *http.Request) { page(w, `<p>b</p>`) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "hunter2"},
+	}
+	// The unauthenticated phase spends 4 requests (/, /robots.txt, /login, /account) and alice's
+	// phase 3 (the login, the challenged /account re-fetch, /alice-only): the budget runs out
+	// exactly as alice's phase drains, so bob's phase begins with nothing left.
+	cfg.Limits = Limits{MaxRequests: 7}
+	rep := run(t, cfg)
+
+	mu.Lock()
+	alicePosts, bobPosts := posts["alice"], posts["bob"]
+	mu.Unlock()
+	if alicePosts != 1 {
+		t.Errorf("alice's login submissions = %d, want 1", alicePosts)
+	}
+	if bobPosts != 0 {
+		t.Errorf("bob's login was sent %d times with the request budget spent — the phase-start login must pass the same budget gate as every other send", bobPosts)
+	}
+	if !rep.Limits.Hit(StopRequestBudget) {
+		t.Errorf("stops = %v, want StopRequestBudget: an exhausted budget refusing the next phase's login is the named stop, not a silent skip", rep.Limits.Stops)
+	}
+}
+
+// A follow-up retry is the same request sent again under the SAME session. The phase boundary
+// retires that session, so a retry its phase never recovered is abandoned with a recorded count —
+// never sent under the next phase's.
+func TestAFollowUpRetryNeverFiresUnderAnotherPhaseSession(t *testing.T) {
+	var mu sync.Mutex
+	var fetches []string
+	record := func(r *http.Request) string {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		mu.Lock()
+		fetches = append(fetches, r.URL.Path+" cookie="+cv)
+		mu.Unlock()
+		return cv
+	}
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		page(w, `<a href="/login">sign in</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			vals, _ := url.ParseQuery(string(body))
+			switch vals.Get("user") + "/" + vals.Get("pass") {
+			case "alice/s3cret":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+			case "bob/hunter2":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "bbb", Path: "/"})
+			}
+			page(w, `<a href="/account">my account</a>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form><a href="/account">account</a>`)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		switch cv := record(r); cv {
+		case "aaa", "bbb":
+			page(w, `<p>account</p><a href="/flaky">flaky</a>`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+		}
+	})
+	mux.HandleFunc("/flaky", func(w http.ResponseWriter, r *http.Request) {
+		switch cv := record(r); cv {
+		case "aaa":
+			// A transport failure, not an HTTP error: the connection is dropped mid-request.
+			// Alice's /flaky never recovers, so the retry is still owed when the phase ends.
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+		case "bbb":
+			page(w, `<p>ok</p>`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.ErrorHandling = ErrorHandling{FollowUpPasses: intp(1)}
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "hunter2"},
+	}
+	rep := run(t, cfg)
+
+	count := func(want string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, f := range fetches {
+			if f == want {
+				n++
+			}
+		}
+		return n
+	}
+	// Alice's phase fetched /flaky and retried it once — both under HER session.
+	if n := count("/flaky cookie=aaa"); n != 2 {
+		t.Errorf("/flaky fetches with alice's session = %d, want 2 (the original + one retry inside her phase)", n)
+	}
+	// Bob's phase fetched /flaky once, successfully. Alice's owed retry must never carry his
+	// session: re-issuing her request under his session is a different request.
+	if n := count("/flaky cookie=bbb"); n != 1 {
+		t.Errorf("/flaky fetches with bob's session = %d, want 1 — alice's owed retry must never fire under bob's session", n)
+	}
+	// Abandoned, and the abandonment is counted: the retry alice's phase never recovered did not
+	// vanish from the report.
+	if rep.Limits.PhaseDropped != 1 {
+		t.Errorf("PhaseDropped = %d, want 1 (alice's unrecovered retry abandoned at the phase boundary)", rep.Limits.PhaseDropped)
+	}
+	if rep.Skips.Count(SkipPhaseAbandoned) != 1 {
+		t.Errorf("SkipPhaseAbandoned count = %d, want 1", rep.Skips.Count(SkipPhaseAbandoned))
+	}
+}
