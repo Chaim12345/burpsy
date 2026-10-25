@@ -134,7 +134,7 @@ describe("the run request names the chosen plugin", () => {
   await waitFor(() => expect(runButton().disabled).toBe(false));
   fireEvent.click(runButton());
   await waitFor(() => expect(runs).toHaveLength(1));
-  expect((runs[0]?.payload_rules as Record<string, unknown>[])[0]).toMatchObject({
+  expect(((runs[0]?.payload_rules ?? []) as Record<string, unknown>[])[0]).toMatchObject({
    rule: "plugin",
    plugin: { plugin: "gen-plugin", registration: "rewrite" },
   });

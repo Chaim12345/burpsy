@@ -1124,7 +1124,7 @@ export function SimpleTable({
  return (
   // SimpleTable renders every row with no padding rows, so :nth-child parity is stable here and
   // the page's own <tr>s need no class (styles.css, .simple-stripes).
-  <div className={cn("table-frame", "density-" + density, stripes && "table-stripes simple-stripes", className)}>
+  <div className={cn("table-frame", `density-${density}`, stripes && "table-stripes simple-stripes", className)}>
    <div className="table-scroll">
     <table>
      <thead>
