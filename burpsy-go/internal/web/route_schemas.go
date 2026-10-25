@@ -290,9 +290,14 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/session/login":       {body: typeOf[sessionLoginReq]()},
 	"POST /api/session/macro-steps": {body: typeOf[sessionMacroStepsReq]()},
 	"POST /api/session/prompts/":    {body: typeOf[sessionPromptResolveReq]()},
-	"POST /api/session/rules":       {body: typeOf[sessionRuleDto]()},
-	"PUT /api/session/rules/":       {body: typeOf[sessionRuleDto]()},
-	"DELETE /api/session/rules/":    noBody,
+	"PUT /api/repeater/tabs/":       {body: typeOf[repeaterTabAction]()},
+	"DELETE /api/repeater/tabs/":    noBody,
+	"POST /api/repeater/tabs/": {variants: map[string]reflect.Type{
+		"1/action/run": nil,
+	}},
+	"POST /api/session/rules":    {body: typeOf[sessionRuleDto]()},
+	"PUT /api/session/rules/":    {body: typeOf[sessionRuleDto]()},
+	"DELETE /api/session/rules/": noBody,
 	"POST /api/session/rules/": {variants: map[string]reflect.Type{
 		"1/update-macro":      nil,
 		"1/run":               nil,

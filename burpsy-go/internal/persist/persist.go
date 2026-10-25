@@ -3155,3 +3155,57 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// migrateRepeaterActions is schema version 2: the Repeater tabs' custom actions (1944). One row
+// per tab: the script and whether it auto-runs on each response. Run logs are NOT here - a run
+// describes traffic from a live session and is memory by design.
+func (s *Store) migrateRepeaterActions() error {
+	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS repeater_actions (
+		tab_id TEXT PRIMARY KEY,
+		script TEXT NOT NULL,
+		auto_run INTEGER NOT NULL DEFAULT 0
+	)`)
+	return err
+}
+
+// SaveRepeaterAction installs or replaces one tab's custom action. The error travels: the caller
+// fails the request rather than let an unsaved config run.
+func (s *Store) SaveRepeaterAction(tabID, script string, autoRun bool) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO repeater_actions (tab_id, script, auto_run) VALUES (?, ?, ?)`,
+		tabID, script, boolInt(autoRun))
+	return err
+}
+
+// DeleteRepeaterAction removes one tab's action; removing what was never there is not an error.
+func (s *Store) DeleteRepeaterAction(tabID string) error {
+	_, err := s.db.Exec(`DELETE FROM repeater_actions WHERE tab_id = ?`, tabID)
+	return err
+}
+
+// RepeaterActionRow is one saved tab action.
+type RepeaterActionRow struct {
+	TabID   string
+	Script  string
+	AutoRun bool
+}
+
+// LoadRepeaterActions is every saved tab action, for project open.
+func (s *Store) LoadRepeaterActions() ([]RepeaterActionRow, error) {
+	rows, err := s.db.Query(`SELECT tab_id, script, auto_run FROM repeater_actions ORDER BY tab_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RepeaterActionRow
+	for rows.Next() {
+		var r RepeaterActionRow
+		var auto int
+		if err := rows.Scan(&r.TabID, &r.Script, &auto); err != nil {
+			return nil, err
+		}
+		r.AutoRun = auto != 0
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

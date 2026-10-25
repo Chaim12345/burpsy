@@ -110,8 +110,12 @@ type Server struct {
 	sitemap    *sitemap.SiteMap
 	// repeaterH2 is Repeater's HTTP/2 connection reuse pool (adkx), made on first use by
 	// repeaterH2Sessions; repeaterH2Once guards that.
-	repeaterH2         *sender.H2Sessions
-	repeaterH2Once     sync.Once
+	repeaterH2     *sender.H2Sessions
+	repeaterH2Once sync.Once
+	// repeaterActions is each Repeater tab's custom action (1944): the script, its store, its
+	// last run, and the tab's latest exchange for on-demand runs.
+	repeaterActionsMu  sync.Mutex
+	repeaterActions    map[string]*repeaterTabActionState
 	sessionCoordinator *session.Coordinator
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
@@ -333,6 +337,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		toolLog:            toollog.New(),
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
+		repeaterActions:    map[string]*repeaterTabActionState{},
 		prompts:            newSessionPrompts(),
 		intercept:          intercept.NewEngine(),
 		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
@@ -643,6 +648,7 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		}
 		s.toolLog.SetPersistenceSink(p.SaveToolLog)
 		s.restorePools(p)
+		s.restoreRepeaterActions(p)
 		// Sequencer analysis settings are project-level, so they are (re)loaded here — on startup and
 		// on every in-console project switch, which re-runs WithPersist. A project that never saved any
 		// reads as Burp's defaults rather than keeping the outgoing project's switches.
@@ -1133,6 +1139,7 @@ func (s *Server) setupRoutes() {
 
 	// Tools
 	s.route("/api/repeater/send", s.handleRepeaterSend)
+	s.route("/api/repeater/tabs/", s.handleRepeaterTabAction)
 	s.route("/api/repeater/ws-send", s.handleRepeaterWsSend)
 	s.route("/api/repeater/ws-handshake-preview", s.handleRepeaterWsHandshakePreview)
 	s.route("/api/repeater/ws-attach", s.handleRepeaterWsAttach)

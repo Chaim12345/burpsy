@@ -297,6 +297,14 @@ var groupedTools = []groupSpec{
 		},
 	},
 	{
+		name: "repeater_actions", group: groupConfig,
+		short: "Reads, installs, removes or runs one Repeater tab's custom action: a sandboxed script that runs on demand or as each response arrives for the tab.",
+		ops: []string{
+			"GET /api/repeater/tabs/", "PUT /api/repeater/tabs/",
+			"DELETE /api/repeater/tabs/", "POST /api/repeater/tabs/",
+		},
+	},
+	{
 		name: "session", group: groupConfig,
 		short: "Reads the cookie jar, session rules and login, replays a login, resolves a recovery prompt, and reads, saves, removes or replays recorded login sequences.",
 		ops: []string{

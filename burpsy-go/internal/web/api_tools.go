@@ -364,6 +364,10 @@ func (s *Server) recordRepeaterExchange(
 		s.sessionCoordinator.AbsorbResponseCookies(session.SourceRepeater, spec.Host, spec.Port, spec.TLS, rawResp)
 	}
 
+	// The tab's custom action (1944): the exchange becomes the tab's latest for on-demand runs,
+	// and an auto-running action fires against the response that just arrived.
+	s.noteRepeaterTabExchange(spec, rawResp)
+
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
 	// Linked to the exchange just written, so Logger's message viewer can resolve this row's bytes

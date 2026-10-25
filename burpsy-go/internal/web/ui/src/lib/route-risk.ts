@@ -119,6 +119,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/repeater/history-export": "riskRead",
  "/api/repeater/send": "riskEgress",
  "/api/repeater/send-group": "riskEgress",
+ "/api/repeater/tabs/": "riskLocal",
  "/api/repeater/ws-attach": "riskEgress",
  "/api/repeater/ws-handshake-preview": "riskRead",
  "/api/repeater/ws-send": "riskEgress",

@@ -811,6 +811,19 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",
 	},
+	"/api/repeater/tabs/": {
+		// riskLocal: the script runs in the ydmj sandbox - no network, no filesystem, no process -
+		// so installing or running one writes burpsy-local state only (the config, the store, the
+		// inspectable rewritten draft). The auto-run fires on responses to sends the send routes
+		// already authorised; it originates nothing. NOTE: wiwh.1's pending riskScript decision
+		// may reclassify script-carrying surfaces; revisit when it lands.
+		methods: []string{"GET", "PUT", "DELETE", "POST"}, risk: riskLocal, subPath: "1/action",
+		actionPaths: map[string][]string{"1/action": {"GET", "PUT", "DELETE"}, "1/action/run": {"POST"}},
+		summary: "one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script " +
+			"(auto_run fires it as each response arrives), GET reads the config and the last run's log " +
+			"and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the " +
+			"tab's latest exchange",
+	},
 	"/api/repeater/send-group": {
 		// riskEgress, not riskAttack: the group is tabs an operator authored by hand and the endpoint
 		// caps one call at 64 of them, so this is "a handful", the same class as the single send. The

@@ -1013,6 +1013,25 @@ export interface SessionRules {
  hint?: string;
 }
 
+/** A Repeater tab's custom action (1944): the sandboxed script and whether it fires on each
+ * response. The run's rewritten request is a draft for inspection - never applied on its own. */
+export interface RepeaterTabAction {
+ script: string;
+ auto_run: boolean;
+}
+
+export interface RepeaterTabActionRun {
+ log: string[];
+ request: string;
+ error?: string;
+ ran_at_ms: number;
+}
+
+export interface RepeaterTabActionState {
+ action: RepeaterTabAction;
+ last_run?: RepeaterTabActionRun;
+}
+
 export interface ToolOutput {
  text: string;
  [key: string]: unknown;

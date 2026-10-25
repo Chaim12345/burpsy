@@ -20,6 +20,9 @@ import type {
  Scope,
  ScannerConfig,
  SessionRule,
+ RepeaterTabAction,
+ RepeaterTabActionRun,
+ RepeaterTabActionState,
  SessionRules,
  SiteMap,
  Stats,
@@ -73,6 +76,7 @@ export const keys = {
  organizer: ["organizer"] as const,
  rules: ["rules"] as const,
  sessionRules: ["session", "rules"] as const,
+ repeaterTabAction: (tabId: string) => ["repeater", "tabs", tabId, "action"] as const,
  sessionCookies: ["session", "cookies"] as const,
  protocols: ["protocols"] as const,
  scannerConfigs: ["scanner", "configs"] as const,
@@ -365,6 +369,35 @@ export const useOrganizer = () =>
  useResource<{ items: OrganizerItem[]; collections: OrganizerCollection[] }>(keys.organizer, "/api/tools/organizer");
 export const useMatchReplace = () => useResource<MatchReplaceResponse>(keys.rules, "/api/tools/rules");
 export const useSessionRules = () => useResource<SessionRules>(keys.sessionRules, "/api/session/rules");
+
+/** One Repeater tab's custom action (1944). */
+export const useRepeaterTabAction = (tabId: string) =>
+ useResource<RepeaterTabActionState>(keys.repeaterTabAction(tabId), `/api/repeater/tabs/${encodeURIComponent(tabId)}/action`);
+
+export function useSaveRepeaterTabAction(tabId: string) {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (action: RepeaterTabAction) =>
+   api<RepeaterTabActionState>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action`, json("PUT", action)),
+  onSuccess: () => invalidate([keys.repeaterTabAction(tabId)]),
+ });
+}
+
+export function useDeleteRepeaterTabAction(tabId: string) {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: () => api<{ deleted: string }>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action`, { method: "DELETE" }),
+  onSuccess: () => invalidate([keys.repeaterTabAction(tabId)]),
+ });
+}
+
+export function useRunRepeaterTabAction(tabId: string) {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: () => api<RepeaterTabActionRun>(`/api/repeater/tabs/${encodeURIComponent(tabId)}/action/run`, json("POST", {})),
+  onSuccess: () => invalidate([keys.repeaterTabAction(tabId)]),
+ });
+}
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
 
 /** The Search box's server-side modifiers (ngcj). Same names and truthy spellings as the

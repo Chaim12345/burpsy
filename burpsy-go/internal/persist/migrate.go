@@ -18,6 +18,7 @@ type migration struct {
 // reorder a released one.
 var migrations = []migration{
 	{version: 1, name: "additive schema (tables and columns)", up: (*Store).migrateAdditive},
+	{version: 2, name: "repeater tab custom actions (1944)", up: (*Store).migrateRepeaterActions},
 }
 
 func latestSchemaVersion() int { return migrations[len(migrations)-1].version }

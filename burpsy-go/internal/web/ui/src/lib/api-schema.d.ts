@@ -2375,6 +2375,54 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/repeater/tabs/{id}/action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        get: operations["getApiRepeaterTabsByIdAction"];
+        /**
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        put: operations["putApiRepeaterTabsByIdAction"];
+        post?: never;
+        /**
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        delete: operations["deleteApiRepeaterTabsByIdAction"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/repeater/tabs/{id}/action/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script (auto_run fires it as each response arrives), GET reads the config and the last run's log and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the tab's latest exchange
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        post: operations["postApiRepeaterTabsByIdActionRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/repeater/ws-attach": {
         parameters: {
             query?: never;
@@ -9954,6 +10002,129 @@ export interface operations {
                 };
             };
         };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getApiRepeaterTabsByIdAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putApiRepeaterTabsByIdAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    auto_run?: boolean;
+                    script?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteApiRepeaterTabsByIdAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postApiRepeaterTabsByIdActionRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
