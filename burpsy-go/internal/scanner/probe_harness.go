@@ -36,6 +36,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 )
 
 // DefaultProbeInsertionKinds is the point set an injection evaluator walks when it does not
@@ -164,6 +165,15 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	raw := []byte(requestRaw(s, exchange))
 	if len(raw) == 0 {
 		return nil, errors.New("probe harness: the exchange carries no request bytes")
+	}
+	// The project-level injection half (xe82): a value a token rule captured is spliced into the
+	// template once, so every probe the harness derives from these bytes - the baseline included,
+	// which keeps the baseline the same request the probes mutate - carries the current value.
+	// Spliced once at build rather than per probe: a value that rotates mid-exchange refreshes at
+	// the next exchange's harness, not mid-comparison. A scan without a session coordinator
+	// changes nothing.
+	if coord, cerr := cc.SessionCoordinator(); cerr == nil {
+		raw = coord.ApplyTokenRulesToRawRequest(toollog.ToolScanner.String(), raw, exchange.Host, exchange.Port, exchange.TLS)
 	}
 	if len(kinds) == 0 {
 		kinds = DefaultProbeInsertionKinds
