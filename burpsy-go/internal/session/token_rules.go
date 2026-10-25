@@ -141,6 +141,16 @@ func (c *Coordinator) TokenValue(name string) (string, bool) {
 	return v, ok
 }
 
+// ObserveTokenResponse runs ONLY the token-rule half of response observation: the extractions of
+// every enabled, in-scope rule over one response. It is the capture point for tools whose responses
+// are observed traffic but whose cookie handling is not the proxy's - the repeater absorbs cookies
+// through its own monitored-source toggle, and funnelling its responses through HandleResponseFor
+// would absorb Set-Cookie into the jar whether or not the operator monitors the repeater. The jar
+// and the session-rule validity check stay on HandleResponseFor, which the proxy path keeps calling.
+func (c *Coordinator) ObserveTokenResponse(req RequestIdentity, hdrs map[string]string, body []byte) {
+	c.observeTokenRules(req, hdrs, body)
+}
+
 // observeTokenRules runs every enabled, in-scope rule's extraction over one observed response and
 // keeps the values it resolves. Called from handleResponseFor, after the jar and the validity
 // check - the response is observed once, and everything that reads it reads the same bytes.

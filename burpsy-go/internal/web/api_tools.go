@@ -1,13 +1,24 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/pool"
+	"github.com/burpsy-go/burpsy/internal/query"
+	"github.com/burpsy-go/burpsy/internal/reqedit"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
+	"go.uber.org/zap"
 	"math"
 	"net/http"
 	"net/url"
@@ -16,17 +27,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/burpsy-go/burpsy/internal/core"
-	"github.com/burpsy-go/burpsy/internal/dash"
-	"github.com/burpsy-go/burpsy/internal/intruder"
-	"github.com/burpsy-go/burpsy/internal/pool"
-	"github.com/burpsy-go/burpsy/internal/query"
-	"github.com/burpsy-go/burpsy/internal/reqedit"
-	"github.com/burpsy-go/burpsy/internal/sender"
-	"github.com/burpsy-go/burpsy/internal/sequencer"
-	"github.com/burpsy-go/burpsy/internal/toollog"
-	"go.uber.org/zap"
 )
 
 // ---- Repeater ----------------------------------------------------------------------------------
@@ -362,6 +362,16 @@ func (s *Server) recordRepeaterExchange(
 	// proxy's in Observation.
 	if s.sessionCoordinator != nil {
 		s.sessionCoordinator.AbsorbResponseCookies(session.SourceRepeater, spec.Host, spec.Port, spec.TLS, rawResp)
+
+		// The project-level capture half (xe82): a Repeater response is observed traffic like
+		// any other, tool-attributed so a rule scoped to the repeater reads it - and a rule
+		// scoped away from it never has its value overwritten by a hand-driven send. The
+		// observation-only entry point, never HandleResponseFor: the jar above is governed by
+		// the operator's monitored-source toggle, and the full funnel would absorb around it.
+		head, body := splitResponseHeadBody(rawResp)
+		s.sessionCoordinator.ObserveTokenResponse(
+			session.RequestIdentity{Tool: toollog.ToolRepeater.String(), Host: spec.Host, Port: spec.Port, TLS: spec.TLS, Path: ex.Path},
+			headerMapOf(head), body)
 	}
 
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
@@ -394,6 +404,19 @@ func (s *Server) recordRepeaterExchange(
 		}
 	}
 	return resp, ex
+}
+
+// splitResponseHeadBody splits a raw response at the blank line, accepting the bare-LF framing
+// an origin can send; no terminator means the whole message is head - the same reading the
+// session package's request splitter gives a request.
+func splitResponseHeadBody(raw []byte) (head, body []byte) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		return raw[:i], raw[i+4:]
+	}
+	if i := bytes.Index(raw, []byte("\n\n")); i >= 0 {
+		return raw[:i], raw[i+2:]
+	}
+	return raw, nil
 }
 
 // sendOneRepeaterRequest is one send on its own fresh connection, end to end: the wire, the stored
