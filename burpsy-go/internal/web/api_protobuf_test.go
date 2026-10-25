@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/grpcproto"
@@ -155,5 +156,24 @@ service S { rpc Call (A) returns (B); }`
 		if got := resp.Frames[0].Fields[0].Name; got != want {
 			t.Errorf("%s: field 1 named %q, want %q (message %q)", dir, got, want, resp.Message)
 		}
+	}
+}
+
+func TestProtobufDecodeAnUnresolvedImportNamesItselfAndTheFallback(t *testing.T) {
+	s := newTestServer()
+	body := map[string]any{
+		"body_base64": base64.StdEncoding.EncodeToString(protoSample(t)),
+		"proto":       "syntax = \"proto3\";\nimport \"acme/missing.proto\";\nmessage M { int32 a = 1; }",
+	}
+	r := postJSON(t, s, "/api/protobuf/decode", body)
+	if r.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", r.Code)
+	}
+	text := r.Body.String()
+	if !strings.Contains(text, "acme/missing.proto") {
+		t.Fatalf("the error must name the unresolved import: %q", text)
+	}
+	if !strings.Contains(text, "omit the proto") {
+		t.Fatalf("the error must point at the schemaless fallback: %q", text)
 	}
 }

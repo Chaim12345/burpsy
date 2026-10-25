@@ -27,10 +27,17 @@ import (
 // parseProtoDescriptors compiles src as a single in-memory .proto and returns the
 // Schema built from its linked descriptor.
 func parseProtoDescriptors(src string) (*Schema, error) {
+	return parseProtoDescriptorsFile(src, "input.proto")
+}
+
+// compileProto compiles a single in-memory .proto into its linked descriptor,
+// resolving imports against the well-known types. The reflection test registers
+// the result into a protoregistry; ParseProto builds a Schema from it.
+func compileProto(src, filePath string) (protoreflect.FileDescriptor, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
 			Accessor: func(path string) (io.ReadCloser, error) {
-				if path == "input.proto" {
+				if path == filePath {
 					return io.NopCloser(strings.NewReader(src)), nil
 				}
 				return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
@@ -39,11 +46,20 @@ func parseProtoDescriptors(src string) (*Schema, error) {
 		SourceInfoMode: protocompile.SourceInfoNone,
 		MaxParallelism: 1,
 	}
-	files, err := compiler.Compile(context.Background(), "input.proto")
+	files, err := compiler.Compile(context.Background(), filePath)
 	if err != nil {
 		return nil, fmt.Errorf("proto: %w", err)
 	}
-	fd := files[0]
+	return files[0], nil
+}
+
+// parseProtoDescriptorsFile is parseProtoDescriptors with the file's own path
+// named, so registries key it correctly.
+func parseProtoDescriptorsFile(src, filePath string) (*Schema, error) {
+	fd, err := compileProto(src, filePath)
+	if err != nil {
+		return nil, err
+	}
 	s := &Schema{
 		pkg:   string(fd.Package()),
 		msgs:  map[string]*messageDesc{},
@@ -191,4 +207,92 @@ func displayName(pkg string, d protoreflect.Descriptor) string {
 // fallback when no schema is available at all.
 func ParseProto(src string) (*Schema, error) {
 	return parseProtoDescriptors(src)
+}
+
+// compileProtoSources compiles an import graph held in memory: sources maps
+// file path to .proto text, entryPath is the file to compile. protocompile
+// follows the imports through the same map (plus the well-known types).
+func compileProtoSources(sources map[string]string, entryPath string) ([]protoreflect.FileDescriptor, error) {
+	compiler := protocompile.Compiler{
+		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
+			Accessor: func(path string) (io.ReadCloser, error) {
+				if src, ok := sources[path]; ok {
+					return io.NopCloser(strings.NewReader(src)), nil
+				}
+				return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrNotExist}
+			},
+		}),
+		SourceInfoMode: protocompile.SourceInfoNone,
+		MaxParallelism: 1,
+	}
+	files, err := compiler.Compile(context.Background(), entryPath)
+	if err != nil {
+		return nil, fmt.Errorf("proto: %w", err)
+	}
+	// Compile returns the entry file linked against its dependencies; the graph
+	// itself is collected by walking imports, entry first, so SchemaFromFiles
+	// sees every declaration and can take the entry's package from index 0.
+	var out []protoreflect.FileDescriptor
+	seen := map[string]bool{}
+	var walk func(fd protoreflect.FileDescriptor)
+	walk = func(fd protoreflect.FileDescriptor) {
+		if seen[fd.Path()] {
+			return
+		}
+		seen[fd.Path()] = true
+		out = append(out, fd)
+		for i := 0; i < fd.Imports().Len(); i++ {
+			walk(fd.Imports().Get(i).FileDescriptor)
+		}
+	}
+	walk(files[0])
+	return out, nil
+}
+
+// SchemaFromFiles builds the Schema from every file of a fetched or compiled
+// import graph (0rrb slice 4): unlike ParseProto, which describes one pasted
+// file and leaves imported types named-but-unexpanded, a graph carries the
+// declarations, so an imported message annotates recursively exactly like a
+// local one. The entry file's package is the schema's.
+func SchemaFromFiles(files []protoreflect.FileDescriptor) (*Schema, error) {
+	if len(files) == 0 {
+		return nil, fmt.Errorf("proto: no files in the graph")
+	}
+	s := &Schema{
+		pkg:   string(files[0].Package()),
+		msgs:  map[string]*messageDesc{},
+		enums: map[string]*enumDesc{},
+		rpcs:  map[string]rpcDesc{},
+	}
+	for _, fd := range files {
+		for i := 0; i < fd.Messages().Len(); i++ {
+			buildMessageShells(s, fd.Messages().Get(i))
+		}
+		for i := 0; i < fd.Enums().Len(); i++ {
+			buildEnum(s, fd.Enums().Get(i))
+		}
+	}
+	for _, fd := range files {
+		for i := 0; i < fd.Messages().Len(); i++ {
+			buildMessageFields(s, fd.Messages().Get(i))
+		}
+		for i := 0; i < fd.Services().Len(); i++ {
+			svc := fd.Services().Get(i)
+			for j := 0; j < svc.Methods().Len(); j++ {
+				m := svc.Methods().Get(j)
+				rpc := rpcDesc{}
+				if _, ok := s.msgs[string(m.Input().FullName())]; ok {
+					rpc.in = string(m.Input().FullName())
+				}
+				if _, ok := s.msgs[string(m.Output().FullName())]; ok {
+					rpc.out = string(m.Output().FullName())
+				}
+				s.rpcs["/"+string(svc.FullName())+"/"+string(m.Name())] = rpc
+			}
+		}
+	}
+	if len(s.order) == 0 {
+		return nil, fmt.Errorf("proto: no message declared")
+	}
+	return s, nil
 }
