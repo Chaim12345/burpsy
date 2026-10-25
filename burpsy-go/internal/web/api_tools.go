@@ -412,6 +412,12 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 	// The tab's response timeout (mmca) rides the context, so it bounds this send and every redirect
 	// hop below without touching the network settings the next send reads.
 	ctx = spec.sendContext(ctx)
+	// The project-level injection half (xe82): values captured from observed responses are
+	// spliced into the operator's bytes at this one point, which every raw repeater send passes
+	// through - the group send's separate-connection modes fan out over this same function, so
+	// they inherit it. Redirect hops below keep these already-injected bytes, as they keep the
+	// rest of the send.
+	spec.Raw = s.sessionCoordinator.ApplyTokenRulesToRawRequest(toollog.ToolRepeater.String(), spec.Raw, spec.Host, spec.Port, spec.TLS)
 	sendStarted := time.Now()
 	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
 	elapsed := time.Since(sendStarted)

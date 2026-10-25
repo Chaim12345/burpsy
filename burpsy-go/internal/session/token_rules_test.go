@@ -126,3 +126,80 @@ func TestTokenRuleScopeAndSilence(t *testing.T) {
 		t.Errorf("a header was injected with no captured value behind it")
 	}
 }
+
+func TestApplyTokenRulesToRawRequestSplicesIntoTheOriginalBytes(t *testing.T) {
+	c := NewCoordinator(zap.NewNop())
+	if _, err := c.AddTokenRule(tokenRuleForTest(t)); err != nil {
+		t.Fatalf("add token rule: %v", err)
+	}
+	c.HandleResponseFor(RequestIdentity{Host: "app.test", Tool: "proxy"}, 200,
+		map[string]string{}, []byte(`<form><input name="csrf" value="tok-777"></form>`), nil)
+
+	// An existing header line is replaced; every other byte - order, the version, the body -
+	// is the operator's own.
+	raw := []byte("POST /transfer HTTP/1.1\r\nHost: app.test\r\nX-CSRF-Token: stale\r\nX-Custom: keep me\r\nContent-Length: 9\r\n\r\namount=10")
+	out := c.ApplyTokenRulesToRawRequest("repeater", raw, "app.test", 80, false)
+	want := "POST /transfer HTTP/1.1\r\nHost: app.test\r\nX-CSRF-Token: tok-777\r\nX-Custom: keep me\r\nContent-Length: 9\r\n\r\namount=10"
+	if string(out) != want {
+		t.Errorf("the splice did not preserve the operator's bytes:\ngot  %q\nwant %q", out, want)
+	}
+
+	// A header the request did not carry is appended, not invented into the middle.
+	raw2 := []byte("GET /balance HTTP/1.1\r\nHost: app.test\r\n\r\n")
+	out2 := c.ApplyTokenRulesToRawRequest("repeater", raw2, "app.test", 80, false)
+	want2 := "GET /balance HTTP/1.1\r\nHost: app.test\r\nX-CSRF-Token: tok-777\r\n\r\n"
+	if string(out2) != want2 {
+		t.Errorf("the appended header did not land at the end of the head:\ngot  %q\nwant %q", out2, want2)
+	}
+}
+
+func TestApplyTokenRulesToRawRequestSetsAQueryParam(t *testing.T) {
+	c := NewCoordinator(zap.NewNop())
+	rule := tokenRuleForTest(t)
+	rule.InjectHeader, rule.InjectValue, rule.InjectParam = "", "", "csrf"
+	if _, err := c.AddTokenRule(rule); err != nil {
+		t.Fatalf("add token rule: %v", err)
+	}
+	c.HandleResponseFor(RequestIdentity{Host: "app.test", Tool: "proxy"}, 200,
+		map[string]string{}, []byte(`<form><input name="csrf" value="tok-888"></form>`), nil)
+
+	raw := []byte("GET /transfer?amount=10&csrf=stale HTTP/1.1\r\nHost: app.test\r\n\r\n")
+	out := c.ApplyTokenRulesToRawRequest("scanner", raw, "app.test", 80, false)
+	want := "GET /transfer?amount=10&csrf=tok-888 HTTP/1.1\r\nHost: app.test\r\n\r\n"
+	if string(out) != want {
+		t.Errorf("the query injection did not land in the request-target:\ngot  %q\nwant %q", out, want)
+	}
+}
+
+func TestApplyTokenRulesToRawRequestStaysSilentWithoutAValueOrScope(t *testing.T) {
+	c := NewCoordinator(zap.NewNop())
+	if _, err := c.AddTokenRule(tokenRuleForTest(t)); err != nil {
+		t.Fatalf("add token rule: %v", err)
+	}
+	raw := []byte("POST /transfer HTTP/1.1\r\nHost: app.test\r\n\r\namount=10")
+
+	// Nothing captured yet: the request goes out untouched, not under an empty header.
+	if out := c.ApplyTokenRulesToRawRequest("repeater", raw, "app.test", 80, false); string(out) != string(raw) {
+		t.Errorf("a request was rewritten with no value captured: %q", out)
+	}
+
+	// A captured value does not reach a tool the rule does not cover.
+	rule := tokenRuleForTest(t)
+	rule.ScopeTools = []string{"scanner"}
+	c2 := NewCoordinator(zap.NewNop())
+	if _, err := c2.AddTokenRule(rule); err != nil {
+		t.Fatalf("add scoped rule: %v", err)
+	}
+	// The tools scope gates capture as it gates injection, so the value here is lifted from a
+	// scanner-attributed response; a proxy response would not have overwritten it.
+	c2.HandleResponseFor(RequestIdentity{Host: "app.test", Tool: "scanner"}, 200,
+		map[string]string{}, []byte(`<form><input name="csrf" value="tok-999"></form>`), nil)
+	if out := c2.ApplyTokenRulesToRawRequest("repeater", raw, "app.test", 80, false); string(out) != string(raw) {
+		t.Errorf("a rule reached a tool outside its scope: %q", out)
+	}
+	// ... and the covered tool gets it.
+	out := c2.ApplyTokenRulesToRawRequest("scanner", raw, "app.test", 80, false)
+	if !strings.Contains(string(out), "X-CSRF-Token: tok-999") {
+		t.Errorf("the covered tool did not receive the injection: %q", out)
+	}
+}

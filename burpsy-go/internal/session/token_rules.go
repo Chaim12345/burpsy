@@ -19,6 +19,7 @@ package session
 // cover never overwrites the value, and a tool outside the rule's tools scope never receives it.
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"strings"
@@ -188,6 +189,106 @@ func (c *Coordinator) ApplyTokenRules(tool string, step MacroStep) MacroStep {
 		}
 	}
 	return step
+}
+
+// ApplyTokenRulesToRawRequest is ApplyTokenRules for a tool whose requests leave as raw bytes
+// (the repeater's wire half): the bytes are parsed as a macro step, the same rules run, and what
+// they resolved is spliced back into the ORIGINAL bytes - an injected header's line replaced (or
+// appended when the operator's request did not carry the header), an injected parameter set on the
+// request-target's query. Every byte the rules did not change - header order and duplicates, the
+// HTTP version, the body - is exactly what the operator typed, because no re-render gets the
+// chance to drift it. A request that does not parse, or that no rule with a captured value
+// covers, goes out unchanged: the no-value silence is the same rule as on the step path.
+func (c *Coordinator) ApplyTokenRulesToRawRequest(tool string, raw []byte, host string, port uint16, tls bool) []byte {
+	step, err := MacroStepFromRequest(raw, host, port, tls)
+	if err != nil {
+		return raw
+	}
+	// ApplyTokenRules rewrites the step's header map IN PLACE, so the before-picture has to be
+	// a copy: a struct copy alone would share the map and every edit would look already-made.
+	beforeURL := step.URL
+	beforeHeaders := make(map[string]string, len(step.Headers))
+	for name, val := range step.Headers {
+		beforeHeaders[name] = val
+	}
+	step = c.ApplyTokenRules(tool, step)
+	var headerEdits map[string]string
+	for name, val := range step.Headers {
+		if beforeHeaders[name] != val {
+			if headerEdits == nil {
+				headerEdits = map[string]string{}
+			}
+			headerEdits[name] = val
+		}
+	}
+	queryChanged := beforeURL != step.URL
+	if len(headerEdits) == 0 && !queryChanged {
+		return raw
+	}
+
+	// Split at the message's own separator so the reassembly is byte-true outside the edits.
+	sepSep := []byte("\r\n\r\n")
+	idx := bytes.Index(raw, sepSep)
+	if idx < 0 {
+		sepSep = []byte("\n\n")
+		idx = bytes.Index(raw, sepSep)
+	}
+	var head, body []byte
+	if idx < 0 {
+		head = raw
+	} else {
+		head, body = raw[:idx], raw[idx+len(sepSep):]
+	}
+	lineSep := "\n"
+	if bytes.Contains(head, []byte("\r\n")) {
+		lineSep = "\r\n"
+	}
+	lines := strings.Split(string(head), lineSep)
+
+	// The request line: a parameter injection rewrites the target's query, keeping the form the
+	// operator used - origin-form stays origin-form, absolute stays absolute. Any other form
+	// (authority, asterisk) is left as sent rather than guessed at.
+	if queryChanged && len(lines) > 0 {
+		if parts := strings.SplitN(lines[0], " ", 3); len(parts) == 3 {
+			if u, uerr := url.Parse(step.URL); uerr == nil {
+				switch {
+				case strings.HasPrefix(parts[1], "http://") || strings.HasPrefix(parts[1], "https://"):
+					parts[1] = step.URL
+				case strings.HasPrefix(parts[1], "/"):
+					parts[1] = u.RequestURI()
+				}
+				lines[0] = strings.Join(parts, " ")
+			}
+		}
+	}
+
+	// The header lines: replace the line naming the injected header (the operator's casing of
+	// the name is kept), or append the header the request did not carry.
+	for i := 1; i < len(lines); i++ {
+		name, _, found := strings.Cut(lines[i], ":")
+		if !found {
+			continue
+		}
+		for edit, val := range headerEdits {
+			if _, done := headerEdits[edit]; !done {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(name), edit) {
+				lines[i] = strings.TrimSpace(name) + ": " + val
+				delete(headerEdits, edit)
+			}
+		}
+	}
+	for edit, val := range headerEdits {
+		lines = append(lines, edit+": "+val)
+	}
+
+	out := []byte(strings.Join(lines, lineSep))
+	if idx >= 0 {
+		out = append(out, sepSep...)
+		out = append(out, body...)
+	}
+	return out
 }
 
 // replaceQueryParam sets one query parameter on a URL, replacing it when present.
