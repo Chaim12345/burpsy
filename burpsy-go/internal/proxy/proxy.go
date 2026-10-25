@@ -2437,7 +2437,6 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 			action, raw, retarget, heldEdited := held.Wait()
 			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
-				clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
 				return
 			}
 			requestData = raw
