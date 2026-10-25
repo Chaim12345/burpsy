@@ -92,14 +92,14 @@ func TestPassiveFindingsSurviveWhenTheActiveUnitsTrip(t *testing.T) {
 	scan := NewActiveScanner(store, zap.NewNop()).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 		WithConfig(&ScanConfig{
-		MaxConcurrency:       1,
-		Timeout:              5 * time.Second,
-		CheckSqli:            true,
-		CheckXss:             true,
-		CheckPathTraversal:   true,
-		CheckPassiveAnalysis: true,
-		CheckPassivePosture:  true,
-	})
+			MaxConcurrency:       1,
+			Timeout:              5 * time.Second,
+			CheckSqli:            true,
+			CheckXss:             true,
+			CheckPathTraversal:   true,
+			CheckPassiveAnalysis: true,
+			CheckPassivePosture:  true,
+		})
 
 	outcome, _ := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
 

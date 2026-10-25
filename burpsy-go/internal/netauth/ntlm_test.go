@@ -257,8 +257,8 @@ func TestParseChallengeRejectsAnythingThatIsNotAnNTLMSSPChallenge(t *testing.T) 
 	binary.LittleEndian.PutUint32(long[8:12], ntlmMsgNegotiate)
 
 	for name, input := range map[string][]byte{
-		"a short buffer":                  []byte("NTLMSSP\x00"),
-		"a buffer with no NTLMSSP prefix": bytes.Repeat([]byte{0x41}, 64),
+		"a short buffer":                                            []byte("NTLMSSP\x00"),
+		"a buffer with no NTLMSSP prefix":                           bytes.Repeat([]byte{0x41}, 64),
 		"a NEGOTIATE message reflected back instead of a CHALLENGE": long,
 	} {
 		if _, err := parseChallenge(input); err == nil {
