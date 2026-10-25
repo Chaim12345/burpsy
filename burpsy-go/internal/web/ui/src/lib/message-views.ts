@@ -436,6 +436,9 @@ const GRAPHQL_BODY_LIMIT = 512 * 1024;
  * is written to avoid.
  */
 export function looksLikeGraphQLDocument(text: string): boolean {
+ // One predicate, two spellings: this one, and httputil.LooksLikeGraphQLDocument in Go. The
+ // console lists the operations it will edit by this test and the edit-apply route indexes
+ // by it - the two lists must be the same list, so any change here is a change there.
  // Leading `#` comments are legal GraphQL and would otherwise hide the operation.
  const trimmed = text.replace(/^(?:\s*#[^\n]*\n)+/, "").trimStart();
  if (!trimmed) return false;
@@ -477,7 +480,89 @@ function operationFrom(record: Record<string, unknown>): GraphQLOperation | null
 }
 
 /**
+ * The server's percent decode (httputil.GraphQLPercentDecode), spelled in TS and pinned
+ * against Go with probes: literal segments go through TextEncoder as RUNS (a surrogate pair
+ * is one rune's four bytes, never two replacement chars), escapes decode by the Sscanf
+ * window rule, and the assembled bytes materialize with Go's UTF-8 reading - a valid
+ * sequence is its rune, an invalid byte is one U+FFFD, PER BYTE (Go ranges that way: a
+ * truncated prefix like E2 82 is two U+FFFD, where one WHATWG TextDecoder pass collapses
+ * them to one, so the materialization is per-candidate, not one pass). A BOM decodes to
+ * U+FEFF, kept, as Go keeps it (ignoreBOM: true).
+ */
+export function graphQLPercentDecode(text: string): string {
+ const bytes: number[] = [];
+ let literal = "";
+ const flushLiteral = () => {
+  if (literal !== "") {
+   for (const b of new TextEncoder().encode(literal)) bytes.push(b);
+   literal = "";
+  }
+ };
+ for (let i = 0; i < text.length; i++) {
+  if (text[i] === "%" && i + 2 < text.length) {
+   const b = sscanfHex2(text.slice(i + 1, i + 3));
+   if (b !== null) {
+    flushLiteral();
+    bytes.push(b);
+    i += 2;
+    continue;
+   }
+  }
+  literal += text[i];
+ }
+ flushLiteral();
+ let out = "";
+ for (let i = 0; i < bytes.length; ) {
+  const b = bytes[i]!;
+  if (b < 0x80) {
+   out += String.fromCharCode(b);
+   i++;
+   continue;
+  }
+  const len = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+  if (len > 1 && i + len <= bytes.length) {
+   try {
+    out += utf8Fatal.decode(new Uint8Array(bytes.slice(i, i + len)));
+    i += len;
+    continue;
+   } catch {
+    // Not a valid sequence: the byte is one U+FFFD, Go's per-byte granularity.
+   }
+  }
+  out += "\uFFFD";
+  i++;
+ }
+ return out;
+}
+
+// One decoder for the materialization: fatal per candidate sequence, BOM kept as U+FEFF.
+const utf8Fatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+// fmt.Sscanf(window, "%02X"), exactly: the scan skips space, tab, CR, VT and FF - and stops
+// for newline, NBSP and NEL, which stay literal - then reads one or two hex digits greedily.
+// Probed against Go: "% 2" "%\t2" "%\r2" "%\v2" "%\f2" parse, "%\n2" "% 2" "%2" do not.
+function sscanfHex2(window: string): number | null {
+ let i = 0;
+ while (i < window.length && (window[i] === " " || window[i] === "\t" || window[i] === "\r" || window[i] === "\v" || window[i] === "\f")) i++;
+ let value = 0;
+ let digits = 0;
+ for (; i < window.length && digits < 2; i++) {
+  const d = parseInt(window[i]!, 16);
+  if (Number.isNaN(d)) break;
+  value = value * 16 + d;
+  digits++;
+ }
+ return digits === 0 ? null : value;
+}
+
+/**
  * The GraphQL document a request carries, or null when it carries none.
+ *
+ * The precedence is the server's edit precedence (burpsy-react-ui-4xqt.3): the URL query
+ * parameter first, then the JSON body - the carrier this view offers to edit is the carrier
+ * the edit-apply route would rewrite, never a different one it happens to show first. The
+ * url-encoded form and application/graphql bodies follow, read-only: the route names them
+ * as carriers it will not rewrite.
  *
  * Responses are excluded on purpose: a GraphQL response is a JSON envelope and the
  * Pretty view already renders it better than a query/variables split would.
@@ -488,13 +573,34 @@ export function detectGraphQL(raw: string): GraphQLDocument | null {
  const contentType = (headerValue(parsed.headers, "content-type") ?? "").toLowerCase();
  const body = parsed.body;
 
- // application/graphql: the body IS the document, no envelope.
- if (contentType.includes("application/graphql") && !contentType.includes("json")) {
-  if (!looksLikeGraphQLDocument(body)) return null;
-  return {
-   source: "application/graphql body",
-   operations: [{ operationName: null, query: body, variables: null, extensions: null }],
-  };
+ // GET /graphql?query={__typename} — the server's first carrier, whatever the body holds.
+ // The pair walk is the server's own (graphQLParamSpans): the name matches the raw bytes
+ // ("query=" only - an encoded name like %71uery is not the carrier), the FIRST matching
+ // pair wins, and the value is read with the server's percent decode ('+' stays data).
+ const target = parsed.startLine.split(/\s+/)[1] ?? "";
+ const question = target.indexOf("?");
+ if (question >= 0) {
+  for (const pair of target.slice(question + 1).split("&")) {
+   if (!pair.startsWith("query=")) continue;
+   const queryParam = graphQLPercentDecode(pair.slice("query=".length));
+   if (looksLikeGraphQLDocument(queryParam)) {
+    const inQuery = queryOf(target);
+    const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
+    const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
+    return {
+     source: "query string",
+     operations: [
+      {
+       operationName: nameRaw ?? null,
+       query: queryParam,
+       variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
+       extensions: null,
+      },
+     ],
+    };
+   }
+   break;
+  }
  }
 
  if (body.length <= GRAPHQL_BODY_LIMIT && body.includes("query")) {
@@ -539,23 +645,12 @@ export function detectGraphQL(raw: string): GraphQLDocument | null {
   }
  }
 
- // GET /graphql?query={__typename} — the third encoding graphqlmap can emit.
- const target = parsed.startLine.split(/\s+/)[1] ?? "";
- const inQuery = queryOf(target);
- const query = inQuery.find(([name]) => name === "query")?.[1];
- if (query !== undefined && looksLikeGraphQLDocument(query)) {
-  const variablesRaw = inQuery.find(([name]) => name === "variables")?.[1];
-  const nameRaw = inQuery.find(([name]) => name === "operationName")?.[1];
+ // application/graphql: the body IS the document, no envelope.
+ if (contentType.includes("application/graphql") && !contentType.includes("json")) {
+  if (!looksLikeGraphQLDocument(body)) return null;
   return {
-   source: "query string",
-   operations: [
-    {
-     operationName: nameRaw ?? null,
-     query,
-     variables: variablesRaw === undefined ? null : asText(variablesRaw, "variables"),
-     extensions: null,
-    },
-   ],
+   source: "application/graphql body",
+   operations: [{ operationName: null, query: body, variables: null, extensions: null }],
   };
  }
 

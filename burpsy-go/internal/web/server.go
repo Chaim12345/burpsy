@@ -1132,6 +1132,8 @@ func (s *Server) setupRoutes() {
 	s.route("/api/exchange/in-browser/{id}", s.handleExchangeInBrowserByID)
 
 	// Tools
+	s.route("/api/repeater/graphql-query", s.handleRepeaterGraphQLQuery)
+	s.route("/api/repeater/graphql-validate", s.handleRepeaterGraphQLValidate)
 	s.route("/api/repeater/send", s.handleRepeaterSend)
 	s.route("/api/repeater/ws-send", s.handleRepeaterWsSend)
 	s.route("/api/repeater/ws-handshake-preview", s.handleRepeaterWsHandshakePreview)

@@ -93,6 +93,15 @@ var groupedTools = []groupSpec{
 		},
 	},
 	{
+		// Its own tool, not an op of `send`: the send ops are riskEgress and these are riskRead
+		// (text surgery on the operator's own draft), and one tool never spans two classes.
+		name: "repeater-graphql", group: groupRequests,
+		short: "Parses a GraphQL document with the pinned gqlparser, and rewrites one operation's query inside a Repeater draft's carrier (JSON body or URL parameter).",
+		ops: []string{
+			"POST /api/repeater/graphql-query", "POST /api/repeater/graphql-validate",
+		},
+	},
+	{
 		name: "websockets", group: groupRequests,
 		short: "Reads captured WebSocket connections, their message history, and one message.",
 		ops:   []string{"GET /api/ws/connections", "GET /api/ws/history", "GET /api/ws/message/{id}"},

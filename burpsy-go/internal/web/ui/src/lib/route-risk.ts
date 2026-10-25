@@ -116,6 +116,8 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/proxy/options": "riskLocal",
  "/api/proxy/passthrough": "riskLocal",
  "/api/repeater/browser-reissue": "riskEgress",
+ "/api/repeater/graphql-query": "riskRead",
+ "/api/repeater/graphql-validate": "riskRead",
  "/api/repeater/history-export": "riskRead",
  "/api/repeater/send": "riskEgress",
  "/api/repeater/send-group": "riskEgress",

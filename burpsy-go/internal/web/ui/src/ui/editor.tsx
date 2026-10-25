@@ -1922,7 +1922,11 @@ export function HttpEditor({
        }
       />
      ) : active === "graphql" && graphql ? (
-      <GraphQLView document={graphql} />
+      <GraphQLView
+       document={graphql}
+       raw={value}
+       onChange={editable && !isResponse(value) ? onChange : undefined}
+      />
      ) : active === "jwt" && jwt ? (
       <JwtView report={jwt} />
      ) : active === "params" && params ? (

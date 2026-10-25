@@ -117,6 +117,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/proxy/options": false,
  "/api/proxy/passthrough": false,
  "/api/repeater/browser-reissue": false,
+ "/api/repeater/graphql-query": false,
+ "/api/repeater/graphql-validate": false,
  "/api/repeater/history-export": false,
  "/api/repeater/send": false,
  "/api/repeater/send-group": false,
