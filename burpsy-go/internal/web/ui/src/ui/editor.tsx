@@ -1,16 +1,58 @@
-import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import {
+ EditorView,
+ Decoration,
+ ViewPlugin,
+ WidgetType,
+ hoverTooltip,
+ highlightSpecialChars,
+ type DecorationSet,
+ type ViewUpdate,
+} from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { EditorState, Prec, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
 import { documentText, lineSeparatorFor, selectionText, selectionTransformSpec } from "../lib/editor-eol";
 import CodeMirror, { ExternalChange } from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
+import {
+ ClipboardPaste,
+ Copy,
+ Download,
+ MoreHorizontal,
+ Pilcrow,
+ Radar,
+ RadioTower,
+ Search,
+ WrapText,
+ Percent,
+ EyeOff,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
 import {
- breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
- type BodyToken, type TokenClass
+ bodyOf,
+ compactMessage,
+ contentTypeOf,
+ hexDumpBytes,
+ hideHeadersIn,
+ isResponse,
+ parseMessage,
+ prettyMessage,
+ withContentLength,
+ requestTargetPath,
+ cookieHeaderTokens,
+} from "../lib/message";
+import {
+ breakGlyphs,
+ bodyTokens,
+ byteOffsetToCharIndex,
+ charIndexToByteOffset,
+ decodeHoverToken,
+ detectGraphQL,
+ docPosToValuePos,
+ findJwts,
+ paramsOf,
+ type BodyToken,
+ type TokenClass,
 } from "../lib/message-views";
 import { pairSpans } from "../lib/message";
 import {
@@ -100,11 +142,7 @@ const TOKEN_DECORATIONS: Record<TokenClass, Decoration> = {
  * grows no popup that restates itself. Bounded to the body region: hovering a header is not
  * a decode, and the tooltip exists only where the colouring does.
  */
-function hoverDecodeTooltip(
- messageIsResponse: boolean,
- boundary: () => number,
- queryRange: () => { from: number; to: number } | null,
-) {
+function hoverDecodeTooltip(messageIsResponse: boolean, boundary: () => number, queryRange: () => { from: number; to: number } | null) {
  return hoverTooltip((view, pos) => {
   // The body region, or the request line's query: both are decode targets. A header value is
   // neither — Burp decodes parameters and HTML entities, not header bytes — so the gate is a
@@ -123,12 +161,13 @@ function hoverDecodeTooltip(
   const decoded = decodeHoverToken(line.text, token.from - line.from, token.to - line.from, messageIsResponse, contentType);
   if (!decoded) return null;
   return {
-   pos: token.from, create: () => {
+   pos: token.from,
+   create: () => {
     const dom = document.createElement("div");
     dom.className = "cm-hover-decode";
     dom.textContent = decoded;
     return { dom };
-   }
+   },
   };
  });
 }
@@ -396,37 +435,40 @@ function nonPrintingEOLPlugin() {
  * Colours come from CSS custom properties so a single stylesheet drives both
  * themes; CodeMirror's generated rules resolve them at paint time.
  */
-const editorTheme = EditorView.theme({
- "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
- // The editor font family (burpsy-react-ui-mqrn): --editor-font-family when the operator picked a
- // family, else the stylesheet's --font-mono. The content and the gutter read the same property so
- // the line numbers and the bytes stay in one face.
- ".cm-content": { fontFamily: "var(--editor-font-family, var(--font-mono))", padding: "8px 0", caretColor: "var(--accent)" },
- ".cm-gutters": {
-  backgroundColor: "var(--editor-gutter-bg)",
-  color: "var(--editor-gutter-fg)",
-  border: "0",
-  borderRight: "1px solid var(--editor-line)",
-  fontFamily: "var(--editor-font-family, var(--font-mono))",
-  fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
+const editorTheme = EditorView.theme(
+ {
+  "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
+  // The editor font family (burpsy-react-ui-mqrn): --editor-font-family when the operator picked a
+  // family, else the stylesheet's --font-mono. The content and the gutter read the same property so
+  // the line numbers and the bytes stay in one face.
+  ".cm-content": { fontFamily: "var(--editor-font-family, var(--font-mono))", padding: "8px 0", caretColor: "var(--accent)" },
+  ".cm-gutters": {
+   backgroundColor: "var(--editor-gutter-bg)",
+   color: "var(--editor-gutter-fg)",
+   border: "0",
+   borderRight: "1px solid var(--editor-line)",
+   fontFamily: "var(--editor-font-family, var(--font-mono))",
+   fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
+  },
+  ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
+   backgroundColor: "var(--editor-selection)",
+  },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
+  ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
+  ".cm-http-header-name": { color: "var(--editor-header-name)" },
+  ".cm-http-header-value": { color: "var(--editor-header-value)" },
+  ".cm-http-body": { color: "var(--editor-body)" },
+  ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
+  ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
+  ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
+  ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
  },
- ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
- ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
- ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
-  backgroundColor: "var(--editor-selection)",
- },
- ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
- ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
- ".cm-http-header-name": { color: "var(--editor-header-name)" },
- ".cm-http-header-value": { color: "var(--editor-header-value)" },
- ".cm-http-body": { color: "var(--editor-body)" },
- ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
- ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
- ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
- ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
- ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
- ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
-}, { dark: false });
+ { dark: false },
+);
 
 /**
  * Burp's editor hotkeys, applied to the selection. Bound at high precedence so
@@ -475,9 +517,15 @@ function deleteLine(view: EditorView): boolean {
  const last = state.doc.lineAt(sel.to);
  let from = first.from;
  let to = last.to;
- if (to < state.doc.length) to += 1; // take the line break after
+ if (to < state.doc.length)
+  to += 1; // take the line break after
  else if (from > 0) from -= 1; // last line: take the break before instead
- view.dispatch({ changes: { from, to }, selection: { anchor: Math.min(from, state.doc.length - (to - from)) }, scrollIntoView: true, userEvent: "delete.line" });
+ view.dispatch({
+  changes: { from, to },
+  selection: { anchor: Math.min(from, state.doc.length - (to - from)) },
+  scrollIntoView: true,
+  userEvent: "delete.line",
+ });
  return true;
 }
 
@@ -818,7 +866,7 @@ export function HttpEditor({
     // replace is what "paste the file into this message" means when the message is a draft.
     onChange?.(text);
    };
-   reader.onerror = () => { };
+   reader.onerror = () => {};
   },
   [onChange],
  );
@@ -917,8 +965,7 @@ export function HttpEditor({
    base.push(urlEncodeAsYouTypeExtension());
   }
   return base;
- },
-  [wrap, showNonPrinting, label, urlEncodeAsYouType]);
+ }, [wrap, showNonPrinting, label, urlEncodeAsYouType]);
 
  const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
  const response = useMemo(() => isResponse(value), [value]);
@@ -996,13 +1043,13 @@ export function HttpEditor({
   charsetMode === "utf-8"
    ? "utf-8"
    : charsetMode === "raw-bytes"
-    ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
-    // maps every one of the 256 byte values to its own code point with no loss and no
-    // substitution, which is what "one glyph per byte" actually requires.
-    "iso-8859-1"
-    : charsetMode === "auto"
-     ? headerCharset || "utf-8"
-     : customCharset.trim().toLowerCase();
+     ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
+       // maps every one of the 256 byte values to its own code point with no loss and no
+       // substitution, which is what "one glyph per byte" actually requires.
+       "iso-8859-1"
+     : charsetMode === "auto"
+       ? headerCharset || "utf-8"
+       : customCharset.trim().toLowerCase();
 
  const charsetError =
   charsetMode === "custom" && customCharset.trim() !== "" && !supportsCharset(charsetLabel)
@@ -1115,18 +1162,13 @@ export function HttpEditor({
  const available: MessageView[] = !views
   ? []
   : charsetActive
-   ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
-   // them unchanged while the operator has deliberately asked to view the body under a different
-   // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
-   // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
-   // the same `value`, so they sit this out too.
-   (["raw", "hex"] as MessageView[])
-   : ([
-    ...(canPretty ? ["pretty"] : []),
-    "raw",
-    "hex",
-    ...orderedOptional,
-   ] as MessageView[]);
+    ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
+      // them unchanged while the operator has deliberately asked to view the body under a different
+      // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
+      // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
+      // the same `value`, so they sit this out too.
+      (["raw", "hex"] as MessageView[])
+    : ([...(canPretty ? ["pretty"] : []), "raw", "hex", ...orderedOptional] as MessageView[]);
 
  // Resolve the active view. The "raw" initial state means "the operator has not
  // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
@@ -1141,11 +1183,7 @@ export function HttpEditor({
   pickedRef.current = true;
   setView(candidate);
  }, []);
- const active: MessageView = available.includes(view)
-  ? view
-  : !pickedRef.current && canPretty
-   ? "pretty"
-   : "raw";
+ const active: MessageView = available.includes(view) ? view : !pickedRef.current && canPretty ? "pretty" : "raw";
  // Raw is the one view the charset override actually changes — Hex always shows the true bytes
  // (the override never reaches this variable when active is "hex"), and Pretty/Render/GraphQL/
  // JWT/Params are simply not offered while charsetActive (see `available` above).
@@ -1153,7 +1191,11 @@ export function HttpEditor({
  // button is not offered at all (see the toolbar) and `hiding` stays false either way.
  const hiding = active === "pretty" && hideList.length > 0 && (hidePicked ?? hideHeadersByDefault);
  const shown =
-  active === "pretty" && hiding ? hideHeadersIn(prettied, hideList) : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
+  active === "pretty" && hiding
+   ? hideHeadersIn(prettied, hideList)
+   : active === "raw" && charsetActive
+     ? (charsetOverride ?? value)
+     : value;
  // The line separator CodeMirror splits this message on (lib/editor-eol.ts, burpsy-react-ui-elam).
  // It is fixed when the state is built, so it is re-derived only when the text changed under the
  // editor (a new message, a tab switch) and never from the operator's own typing: pasting a CRLF
@@ -1173,13 +1215,7 @@ export function HttpEditor({
  // turned a CRLF request into an LF one on any edit at all (burpsy-react-ui-eslt). The
  // transactions are replayed onto the real text instead (lib/editor-eol.ts reconcile); only when
  // that text no longer matches the document does the document's string stand in, as it always did.
- const writeDoc = charsetActive
-  ? undefined
-  : active === "pretty" && editable
-   ? "pretty"
-   : active === "raw"
-    ? "raw"
-    : undefined;
+ const writeDoc = charsetActive ? undefined : active === "pretty" && editable ? "pretty" : active === "raw" ? "raw" : undefined;
  const cmOnChange = useMemo(() => {
   if (!writeDoc || !onChange) return undefined;
   return (_doc: string, update: ViewUpdate) => {
@@ -1205,7 +1241,10 @@ export function HttpEditor({
   const docLength = value.length - (separator === "\r\n" ? (value.match(/\r\n/g)?.length ?? 0) : 0);
   return [...withSeparator, changeDecorations(value, docLength, changeMarks)];
  }, [extensions, changeMarks, compareWith, active, charsetActive, value, separator]);
- const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
+ const hexDumpText = useMemo(
+  () => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""),
+  [active, bodyBytes, value],
+ );
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
  // the button the operator just pressed.
@@ -1215,10 +1254,10 @@ export function HttpEditor({
     ? hideHeadersIn(prettied, hideList)
     : prettied
    : active === "hex"
-    ? hexDumpText
-    : active === "raw" && charsetActive
-     ? (charsetOverride ?? value)
-     : value;
+     ? hexDumpText
+     : active === "raw" && charsetActive
+       ? (charsetOverride ?? value)
+       : value;
 
  // A Hex selection handed to the Raw view. The byte range is mapped to a character
  // range on the way, because the two views index the same message differently.
@@ -1299,22 +1338,24 @@ export function HttpEditor({
    toast.error("Open the Raw or Pretty view to insert a payload");
    return;
   }
-  mint.mutate({ count: 1 }, {
-   onSuccess: (payload) => {
-    const view = cmViewRef.current;
-    if (!view) return;
-    const sel = view.state.selection.main;
-    view.dispatch({
-     changes: { from: sel.from, to: sel.to, insert: payload.address },
-     selection: { anchor: sel.from + payload.address.length },
-     scrollIntoView: true,
-    });
-    view.focus();
-    toast.success(`Inserted Collaborator payload ${payload.address}`);
+  mint.mutate(
+   { count: 1 },
+   {
+    onSuccess: (payload) => {
+     const view = cmViewRef.current;
+     if (!view) return;
+     const sel = view.state.selection.main;
+     view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: payload.address },
+      selection: { anchor: sel.from + payload.address.length },
+      scrollIntoView: true,
+     });
+     view.focus();
+     toast.success(`Inserted Collaborator payload ${payload.address}`);
+    },
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
    },
-   onError: (failure: unknown) =>
-    toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
-  });
+  );
  }, [mint]);
 
  const selectionGroups = useMemo<MenuGroup[]>(() => {
@@ -1376,8 +1417,8 @@ export function HttpEditor({
           id: "save-to-sitemap",
           label: saveGraphQLToSiteMap
            ? saveGraphQLToSiteMap.enabled
-             ? "Save GraphQL queries to site map"
-             : "Save GraphQL queries to site map (send an introspection query first)"
+            ? "Save GraphQL queries to site map"
+            : "Save GraphQL queries to site map (send an introspection query first)"
            : "Save GraphQL queries to site map (not available here — use Repeater)",
           disabled: !saveGraphQLToSiteMap?.enabled,
           onSelect: () => saveGraphQLToSiteMap?.run(),
@@ -1471,9 +1512,7 @@ export function HttpEditor({
    {
     id: "construct-string",
     title: "Construct string",
-    actions: (
-     Object.entries(CONSTRUCT_DIALECTS) as [ConstructDialect, string][]
-    ).map(([dialect, label]) =>
+    actions: (Object.entries(CONSTRUCT_DIALECTS) as [ConstructDialect, string][]).map(([dialect, label]) =>
      codec(`construct-${dialect}`, label, "", (input: string) => constructString(input, dialect)),
     ),
    },
@@ -1496,12 +1535,24 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value, views, onChange, saveGraphQLToSiteMap]);
+ }, [
+  active,
+  editable,
+  hasSelection,
+  charsetActive,
+  runTransform,
+  showTransform,
+  insertCollaboratorPayload,
+  mint.isPending,
+  payloadMarks,
+  auditSelection,
+  value,
+  views,
+  onChange,
+  saveGraphQLToSiteMap,
+ ]);
 
- const allGroups = useMemo<MenuGroup[]>(
-  () => [...(menuGroups ?? []), ...selectionGroups],
-  [menuGroups, selectionGroups],
- );
+ const allGroups = useMemo<MenuGroup[]>(() => [...(menuGroups ?? []), ...selectionGroups], [menuGroups, selectionGroups]);
 
  // Burp's EDITOR_TOGGLE_* actions and Insert Collaborator payload (2czi), for whichever message
  // editor the operator used last: an editor takes the commands when focus enters it and holds them
@@ -1540,9 +1591,7 @@ export function HttpEditor({
   if (topEditor === editorToken.current) return;
   for (const off of commandRegistrations.current) off();
   topEditor = editorToken.current;
-  commandRegistrations.current = Object.keys(editorCommands.current).map((id) =>
-   registerCommand(id, () => editorCommands.current[id]?.()),
-  );
+  commandRegistrations.current = Object.keys(editorCommands.current).map((id) => registerCommand(id, () => editorCommands.current[id]?.()));
  }, []);
  useEffect(
   () => () => {
@@ -1615,12 +1664,7 @@ export function HttpEditor({
         // means two sets of merged handlers on the same element. app.tsx's menu bar uses
         // a bare button as its trigger for the same reason. `title` carries the hover
         // text the Tooltip would have.
-        <button
-         type="button"
-         className="icon-button icon-button-sm"
-         aria-label={`Actions for ${label}`}
-         title={`Actions for ${label}`}
-        >
+        <button type="button" className="icon-button icon-button-sm" aria-label={`Actions for ${label}`} title={`Actions for ${label}`}>
          <MoreHorizontal size={13} />
         </button>
        }
@@ -1661,16 +1705,44 @@ export function HttpEditor({
       // screen. A details/summary rather than a Radix popover: the strip is already dense
       // with portaled triggers, and a native disclosure cannot z-fight them.
       <details className="editor-tabs-settings">
-       <summary className="icon-button icon-button-sm" aria-label="Message editor tabs settings" title="Show, hide and reorder this editor's tabs">
+       <summary
+        className="icon-button icon-button-sm"
+        aria-label="Message editor tabs settings"
+        title="Show, hide and reorder this editor's tabs"
+       >
         <SlidersHorizontal size={13} />
        </summary>
        <div className="editor-tabs-settings-panel" role="group" aria-label="Optional tabs">
         <p className="field-hint">Pretty and Raw are always shown — Raw is the bytes themselves.</p>
-        {(["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]).map((tab) => {
+        {(
+         [
+          "render",
+          "graphql",
+          "jwt",
+          "params",
+          "protobuf",
+          "headers",
+          "queryparams",
+          "bodyparams",
+          "cookies",
+          "attributes",
+         ] as OptionalEditorTab[]
+        ).map((tab) => {
          const hidden = editorTabs.hidden.includes(tab);
          const order = editorTabs.order.length
           ? editorTabs.order
-          : (["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+          : ([
+             "render",
+             "graphql",
+             "jwt",
+             "params",
+             "protobuf",
+             "headers",
+             "queryparams",
+             "bodyparams",
+             "cookies",
+             "attributes",
+            ] as OptionalEditorTab[]);
          const at = order.indexOf(tab);
          return (
           <div key={tab} className="editor-tabs-settings-row">
@@ -1679,13 +1751,11 @@ export function HttpEditor({
              type="checkbox"
              checked={!hidden}
              onChange={(event) => {
-              const next = event.target.checked
-               ? editorTabs.hidden.filter((t) => t !== tab)
-               : [...editorTabs.hidden, tab];
+              const next = event.target.checked ? editorTabs.hidden.filter((t) => t !== tab) : [...editorTabs.hidden, tab];
               setEditorTabs({ ...editorTabs, hidden: next });
              }}
-            />
-            {" "}{VIEW_LABELS[tab]}
+            />{" "}
+            {VIEW_LABELS[tab]}
            </label>
            <span className="editor-tabs-settings-move">
             <IconButton
@@ -1824,12 +1894,7 @@ export function HttpEditor({
      ) : active === "render" ? (
       // No scripts, no same-origin, no forms: a captured response is attacker
       // controlled and must never run inside the console's own origin.
-      <iframe
-       className="render-frame"
-       title={`${label} rendered`}
-       sandbox=""
-       srcDoc={bodyOf(value)}
-      />
+      <iframe className="render-frame" title={`${label} rendered`} sandbox="" srcDoc={bodyOf(value)} />
      ) : active === "hex" ? (
       <HexEditor
        value={shown}
@@ -1839,20 +1904,20 @@ export function HttpEditor({
        onRevealInRaw={
         views
          ? (selection) => {
-          // Hex indexes bytes; Raw indexes UTF-16 code units over the same
-          // message. The reveal maps the selected byte range to the character
-          // range Raw will scroll to, which is what byteOffsetToCharIndex
-          // exists for — without it a selection past a multibyte character
-          // lands one or more characters off.
-          // Then to CodeMirror's document, which holds one "\n" per CRLF: dispatching the
-          // string index as-is selected one character further right per preceding line
-          // (burpsy-react-ui-ngao).
-          setReveal({
-           from: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.from)),
-           to: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.to)),
-          });
-          pick("raw");
-         }
+            // Hex indexes bytes; Raw indexes UTF-16 code units over the same
+            // message. The reveal maps the selected byte range to the character
+            // range Raw will scroll to, which is what byteOffsetToCharIndex
+            // exists for — without it a selection past a multibyte character
+            // lands one or more characters off.
+            // Then to CodeMirror's document, which holds one "\n" per CRLF: dispatching the
+            // string index as-is selected one character further right per preceding line
+            // (burpsy-react-ui-ngao).
+            setReveal({
+             from: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.from)),
+             to: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.to)),
+            });
+            pick("raw");
+           }
          : undefined
        }
       />
@@ -1980,16 +2045,15 @@ export function HttpEditor({
     <div className="editor-note">{charsetError} — showing the platform default instead.</div>
    ) : hiding ? (
     <div className="editor-note">
-     The eye is on: {hideList.length} header name{hideList.length === 1 ? "" : "s"} listed under Settings › Message
-     editor {hideList.length === 1 ? "is" : "are"} hidden here in Pretty. The message itself is unchanged — Raw and
-     everything sent still carry them — but editing is off while they are hidden, because an edit here would be
-     written back against a head missing those lines. Press the eye again to edit.
+     The eye is on: {hideList.length} header name{hideList.length === 1 ? "" : "s"} listed under Settings › Message editor{" "}
+     {hideList.length === 1 ? "is" : "are"} hidden here in Pretty. The message itself is unchanged — Raw and everything sent still carry
+     them — but editing is off while they are hidden, because an edit here would be written back against a head missing those lines. Press
+     the eye again to edit.
     </div>
    ) : charsetActive ? (
     <div className="editor-note">
-     Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the
-     Pretty/Render/GraphQL/JWT/Params views are off while a character set override is active — switch back
-     to "Platform default" to use them again.
+     Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the Pretty/Render/GraphQL/JWT/Params
+     views are off while a character set override is active — switch back to "Platform default" to use them again.
     </div>
    ) : null}
   </div>
