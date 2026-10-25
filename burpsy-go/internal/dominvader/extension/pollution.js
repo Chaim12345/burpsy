@@ -47,6 +47,7 @@
   method(window, "setTimeout", "settimeout-string", 0);
   method(window.Document && Document.prototype, "write", "document-write", 0);
   method(window, "fetch", "fetch", 0);
+  method(window.XMLHttpRequest && XMLHttpRequest.prototype, "open", "xhr-open", 1);
   // JSON mode changes only the input the page itself parses. It does not pollute
   // Object.prototype directly: only an unsafe downstream merge can prove a source.
   if (p.technique === "json") {

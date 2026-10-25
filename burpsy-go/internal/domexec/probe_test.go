@@ -63,6 +63,7 @@ func TestARestrictedProbeBlocksWorkersFramesAndPopupsBeforeTheirRequests(t *test
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<body>control<script>
 try { new Worker('/worker.js'); } catch(e) {}
+fetch('/api').catch(function(){}); try { new WebSocket(location.origin.replace('http','ws')+'/socket'); }catch(e){}
 try { window.open('/popup'); } catch(e) {}
 var f=document.createElement('iframe');f.src='/frame';document.body.appendChild(f);
 </script>`))

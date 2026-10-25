@@ -13,7 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/domexec"
 )
 
-const ProbeLimitations = "workers/OOPIF not exercised; popups blocked; finite property vocabulary and wrapped sinks only; no gadget observation is not proof of safety; fresh isolated context does not inherit operator login"
+const ProbeLimitations = "workers/OOPIF not exercised; popups blocked; fetch/XHR/WebSocket/WebTransport network blocked, sink arguments observed only; JSON limited to document-parsed data, not AJAX; finite property vocabulary and wrapped sinks only; no gadget observation is not proof of safety; fresh isolated context does not inherit operator login"
 
 type ScanResult struct {
 	Hits        []*Hit   `json:"hits"`

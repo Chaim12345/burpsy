@@ -119,7 +119,7 @@ export function DomInvaderPage(): JSX.Element {
      {pollution ? <Card>
       <div className="stack">
        <h2>Prototype pollution probes</h2>
-       <p>Off by default. Each probe uses a fresh isolated browser context, not your operator login. Only the target origin and current engagement scope are allowed. Workers, frames and popups are blocked.</p>
+       <p>Off by default. Each probe uses a fresh isolated browser context, not your operator login. Only the target origin and current engagement scope are allowed. Workers, frames, popups and fetch/XHR/WebSocket/WebTransport network are blocked; only their wrapped sink arguments are observed.</p>
        <span>Opt into active pollution probes</span>
        <Switch id="pollution-enabled" label="Opt into active pollution probes" checked={pollution.enabled}
         onCheckedChange={(enabled) => setPlan({ ...pollution, enabled })} />
@@ -135,7 +135,7 @@ export function DomInvaderPage(): JSX.Element {
         <Button variant="outline" disabled={set.isPending} onClick={() => set.mutate({ pollution }, { onSuccess: () => {setPlan(null); toast.success("Probe plan saved");}, onError: (e) => toast.error(e.message) })}>Save probe plan</Button>
         <Button disabled={!!plan || !data.enabled || !data.pollution.enabled || scan.isPending} onClick={() => scan.mutate(undefined, {onError: (e) => toast.error(e.message)})}>{scan.isPending ? "Probing..." : "Run saved probe plan"}</Button>
        </div>
-       <span className="cell-dim">Source proof and observed sink gadgets are separate hits. No gadget hit is not proof of safety. JSON mode modifies objects returned by the page's JSON.parse in the isolated probe only.</span>
+       <span className="cell-dim">Source proof and observed sink gadgets are separate hits. No gadget hit is not proof of safety. JSON mode modifies document-parsed JSON in the isolated probe only; AJAX-loaded JSON is not exercised.</span>
        {scan.data ? <div className="stack">
         <p>{scan.data.probes} probes; {scan.data.hits.length} hits; {scan.data.blocked.length} refused requests</p>
         <p>{scan.data.limitations}</p>

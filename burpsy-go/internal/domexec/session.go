@@ -321,7 +321,7 @@ func (s *Session) installFetchGate(tabCtx context.Context) error {
 					}
 				}
 				if e.ResourceType == network.ResourceTypeDocument {
-					headers = append(headers, &fetch.HeaderEntry{Name: "Content-Security-Policy", Value: "worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; sandbox allow-scripts allow-same-origin"})
+					headers = append(headers, &fetch.HeaderEntry{Name: "Content-Security-Policy", Value: "connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; sandbox allow-scripts allow-same-origin"})
 					var body []byte
 					var err error
 					if e.ResponseStatusCode < 300 || e.ResponseStatusCode >= 400 {
