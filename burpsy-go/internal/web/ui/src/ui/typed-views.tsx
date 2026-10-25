@@ -150,19 +150,23 @@ function GraphQLOperationEditor({
  // Typing bumps the generation; so does the raw prop moving, and so does the unmount -
  // the guard is the only thing a dead component's promise still shares with the live one.
  const draftGen = useRef(0);
- const rawRef = useRef(raw);
- useEffect(() => {
-  if (rawRef.current !== raw) {
-   rawRef.current = raw;
-   draftGen.current++;
-  }
- }, [raw]);
+ // The newest async op started; a resolving op resets busy only when it still IS that op -
+ // an older resolution's finally must not clear a newer op's busy flag.
+ const inflightGen = useRef(0);
+ // raw moving bumps the generation at RENDER time, not in an effect: a resolution that
+ // lands in the same tick as the render would beat the effect and write its stale result.
+ const [seenRaw, setSeenRaw] = useState(raw);
+ if (seenRaw !== raw) {
+  setSeenRaw(raw);
+  draftGen.current++;
+ }
  useEffect(() => () => {
   draftGen.current++;
  }, []);
  const dirty = draft !== operation.query;
  const check = () => {
   const gen = ++draftGen.current;
+  inflightGen.current = gen;
   setBusy(true);
   validateGraphQLQuery(draft)
    .then((result) => {
@@ -173,10 +177,13 @@ function GraphQLOperationEditor({
     if (gen !== draftGen.current) return;
     setErrors([{ message: failure instanceof Error ? failure.message : String(failure) }]);
    })
-   .finally(() => setBusy(false));
+   .finally(() => {
+    if (gen === inflightGen.current) setBusy(false);
+   });
  };
  const apply = () => {
   const gen = ++draftGen.current;
+  inflightGen.current = gen;
   setBusy(true);
   setApplyError(null);
   applyGraphQLQuery(raw, index, draft)
@@ -188,7 +195,9 @@ function GraphQLOperationEditor({
     onChange(result.request);
    })
    .catch((failure: unknown) => setApplyError(failure instanceof Error ? failure.message : String(failure)))
-   .finally(() => setBusy(false));
+   .finally(() => {
+    if (gen === inflightGen.current) setBusy(false);
+   });
  };
  return (
   <div>
