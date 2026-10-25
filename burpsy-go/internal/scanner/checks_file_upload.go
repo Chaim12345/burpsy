@@ -93,7 +93,8 @@ const maxUploadProbesPerPoint = 90
 // maxUploadCleanupRequests reserves the deletes and verification fetches of the cleanup pass UP
 // FRONT, on a counter probing cannot touch: a chatty endpoint may spend the whole probe budget
 // and still owes every stored marker its removal attempt. Reservation by construction - the two
-// budgets share no counter - so no endpoint can strand a planted file by being expensive to probe.
+// budgets share no counter. The reservation is itself bounded: a run whose stored markers
+// outnumber it reports the overflow as remaining rather than pretending the attempt happened.
 const maxUploadCleanupRequests = 40
 
 // storedXSSOrFileUpload runs the "Cross-site scripting (stored)" row's two techniques, each behind its
@@ -944,7 +945,7 @@ func uploadCleanupNote(verified, unknown, remaining, unconfirmed []string) strin
 			len(remaining), strings.Join(remaining, ", "))
 	}
 	if len(unconfirmed) > 0 {
-		fmt.Fprintf(&b, "the application named %d further stored location(s) this run never read its marker back from, so nothing was sent to them - no delete fires at a file this check did not prove it created; clean up by hand if they exist: %s. ",
+		fmt.Fprintf(&b, "the application named %d further stored location(s) this run never read its marker back from - probe GETs may have reached them while locating, but no DELETE was sent, because no delete fires at a file this check did not prove it created; clean up by hand if they exist: %s. ",
 			len(unconfirmed), strings.Join(unconfirmed, ", "))
 	}
 	b.WriteString("Every file was an inert marker string; none of them can execute.")
