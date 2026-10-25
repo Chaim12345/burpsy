@@ -48,6 +48,15 @@ import (
 // when driven by a model rather than by a human clicking, and the only place that can be declared
 // without every future facade re-deciding it is next to the route.
 
+// splitPattern splits a Go 1.22 method-qualified pattern ("POST /api/x") into its method and path;
+// a path-only pattern returns an empty method (burpsy-react-ui-vnlh).
+func splitPattern(pattern string) (method, path string) {
+	if m, p, ok := strings.Cut(pattern, " "); ok {
+		return m, p
+	}
+	return "", pattern
+}
+
 // registeredPatterns parses setupRoutes and returns every pattern it registers, plus every call whose
 // pattern was not a string literal. See the file comment for why this is read out of the source.
 func registeredPatterns(t *testing.T) (literal []string, nonLiteral int) {
@@ -63,7 +72,9 @@ func registeredPatterns(t *testing.T) (literal []string, nonLiteral int) {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) == 0 {
+		// route is the vnlh registration helper (routes_register.go): same contract,
+		// methods derived from the manifest instead of a second declaration.
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "route") || len(call.Args) == 0 {
 			return true
 		}
 		lit, ok := call.Args[0].(*ast.BasicLit)
@@ -89,11 +100,31 @@ func Test_every_registered_route_is_in_the_manifest(t *testing.T) {
 	}
 	seen := make(map[string]bool, len(patterns))
 	for _, pattern := range patterns {
-		seen[pattern] = true
-		if _, ok := manifest[pattern]; !ok {
+		// vnlh migration: a pattern may be method-qualified ("POST /api/x"). The manifest is keyed by
+		// path, and the qualified method must be one the manifest declares — a pattern naming a verb
+		// the manifest does not list is exactly the drift the 405 sweep cannot see, because it reads
+		// the same manifest.
+		method, path := splitPattern(pattern)
+		seen[path] = true
+		spec, ok := manifest[path]
+		if !ok {
 			t.Errorf("route %q is registered but has no manifest entry.\n"+
 				"Add one: what it does, which verbs it answers, and its risk class — the risk class is "+
 				"what decides whether an unattended caller has to confirm before invoking it.", pattern)
+			continue
+		}
+		if method != "" {
+			declared := false
+			for _, m := range spec.methods {
+				if m == method {
+					declared = true
+					break
+				}
+			}
+			if !declared {
+				t.Errorf("route %q names a verb the manifest does not declare for %q (%v)",
+					pattern, path, spec.methods)
+			}
 		}
 	}
 	// The other direction, and the reason this test is worth having: a route dropped in a refactor

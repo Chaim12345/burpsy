@@ -121,10 +121,9 @@ func (s *Server) handleBackupConfig(w http.ResponseWriter, r *http.Request) {
 		s.persist.SaveBackupConfig(string(blob))
 		writeJSON(w, http.StatusOK, cfg)
 
-	default:
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+	// No default: the mux admits only GET and PUT — the route is registered twice, once per
+	// verb (burpsy-react-ui-vnlh) — so an unreachable verb never reaches this switch.
 }
 
 // reconcileAutoBackupSchedule makes the managed schedule match the setting: removed when the interval

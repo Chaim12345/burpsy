@@ -1063,14 +1063,14 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
-	s.mux.HandleFunc("/api/backup", s.handleBackup)
+	s.route("/api/backup", s.handleBackup)
 	// The automatic-backup setting — interval schedule and delete-on-clean-shutdown (jkvb). See
 	// api_backup_config.go.
-	s.mux.HandleFunc("/api/backup/config", s.handleBackupConfig)
+	s.route("/api/backup/config", s.handleBackupConfig)
 	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
-	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
-	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
-	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
+	s.route("/api/proxy/ca", s.handleCAStatus)
+	s.route("/api/proxy/ca/import", s.handleCAImport)
+	s.route("/api/proxy/ca/regenerate", s.handleCARegenerate)
 	// Burp's "Open browser" (burpsy-react-ui-bufa): a Chromium pre-wired to a live listener and pinned
 	// to burpsy's CA, its settings, and Burp's "Clear all browser data". See api_browser.go.
 	s.mux.HandleFunc("/api/browser/launch", s.handleBrowserLaunch)

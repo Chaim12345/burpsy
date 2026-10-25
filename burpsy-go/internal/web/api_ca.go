@@ -85,10 +85,7 @@ func (s *Server) caStatus() caStatusResponse {
 
 // handleCAStatus serves GET /api/proxy/ca: which CA is signing, and until when.
 func (s *Server) handleCAStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Verb-checked by the mux: registered as "GET /api/proxy/ca" (burpsy-react-ui-vnlh).
 	writeJSON(w, http.StatusOK, s.caStatus())
 }
 
@@ -98,10 +95,7 @@ func (s *Server) handleCAStatus(w http.ResponseWriter, r *http.Request) {
 // by the CA just replaced, and clients are about to be told to trust the new one. See ImportCA for
 // why that matters and for the one race it cannot close.
 func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Verb-checked by the mux: registered as "POST /api/proxy/ca/import" (burpsy-react-ui-vnlh).
 	// Decoded before the engine check so the schema sweep reaches it (burpsy-react-ui-3zw0); a
 	// malformed body is a 400 whatever this process carries.
 	var req caImportRequest
@@ -165,10 +159,7 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 // certificate signs nothing from here on. That is why the manifest classifies this
 // route riskDestructive and an unattended caller must confirm before invoking it.
 func (s *Server) handleCARegenerate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Verb-checked by the mux: registered as "POST /api/proxy/ca/regenerate" (burpsy-react-ui-vnlh).
 	if s.tlsEngine == nil {
 		// Nothing would sign with a regenerated CA, so minting one would change nothing.
 		http.Error(w, "TLS interception is off, so there is no signing CA to regenerate; start burpsy "+
