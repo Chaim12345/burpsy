@@ -213,3 +213,230 @@ func TestTheLoginExchangeIsStoredWithTheCredentialValuesMasked(t *testing.T) {
 		t.Errorf("the stored login exchange carries the password in history: %s", loginExchange)
 	}
 }
+
+// Two credentials, one crawl: Burp logs in with each set in turn. Both logins reach the target;
+// the later login's session replaces the earlier one for what the frontier fetches next.
+func TestSequentialCredentialsEachGetTheirTurn(t *testing.T) {
+	type visit struct{ path, cookie string }
+	var mu sync.Mutex
+	var posts []string
+	var visits []visit
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/login" {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			mu.Lock()
+			posts = append(posts, string(body))
+			mu.Unlock()
+			vals, _ := url.ParseQuery(string(body))
+			switch vals.Get("user") + "/" + vals.Get("pass") {
+			case "alice/s3cret":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+			case "bob/hunter2":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "bbb", Path: "/"})
+			}
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<html><body><a href="/account">my account</a></body></html>`))
+			return
+		}
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		mu.Lock()
+		visits = append(visits, visit{r.URL.Path, cv})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/html")
+		if r.URL.Path == "/login" {
+			_, _ = w.Write([]byte(`<html><body>
+				<form method="post" action="/login">
+				<input type="text" name="user" value="">
+				<input type="password" name="pass">
+				</form></body></html>`))
+			return
+		}
+		_, _ = w.Write([]byte(`<html><body><a href="/login">sign in</a></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "hunter2"},
+	}
+	rep := run(t, cfg)
+
+	mu.Lock()
+	defer mu.Unlock()
+	sawAlice, sawBob := false, false
+	for _, p := range posts {
+		v, _ := url.ParseQuery(p)
+		if v.Get("user") == "alice" && v.Get("pass") == "s3cret" {
+			sawAlice = true
+		}
+		if v.Get("user") == "bob" && v.Get("pass") == "hunter2" {
+			sawBob = true
+		}
+	}
+	if !sawAlice || !sawBob {
+		t.Errorf("not every credential got its turn: alice=%v bob=%v; posts: %v", sawAlice, sawBob, posts)
+	}
+	if rep.Login == nil || rep.Login.Attempts != 2 || rep.Login.Succeeded != 2 {
+		t.Errorf("login block = %+v, want 2 attempts and 2 succeeded", rep.Login)
+	}
+	// Bob logged in second, so his session is the one the crawl carries from then on.
+	carriedBob := false
+	for _, v := range visits {
+		if v.path == "/account" && v.cookie == "bbb" {
+			carriedBob = true
+		}
+	}
+	if !carriedBob {
+		t.Errorf("no fetch carried the second credential's session; visits: %v", visits)
+	}
+}
+
+// trigger_login_failures (Burp's shipped default, opt-in here): one submission with a
+// deliberately invalid username, to surface the application's bad-login response. The bogus
+// submission must not carry a configured credential.
+func TestInvalidUsernamesTriggerTheLoginFailurePath(t *testing.T) {
+	app := newLoginApp(t)
+	h := newHarness()
+	cfg := h.config(app.srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.UseInvalidUsernames = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	run(t, cfg)
+
+	bogus := false
+	for _, p := range app.posts {
+		v, _ := url.ParseQuery(p)
+		if strings.Contains(v.Get("user"), "burpsy") && v.Get("user") != "alice" {
+			bogus = true
+			if v.Get("pass") == "s3cret" {
+				t.Errorf("the bogus submission carried the configured password; body: %s", p)
+			}
+		}
+	}
+	if !bogus {
+		t.Errorf("no invalid-username submission reached the login form; posts: %v", app.posts)
+	}
+}
+
+// attempt_to_self_register_a_user: a registration form (Burp's distinguishing rule: the form
+// with the most password fields — two or more in practice, password plus confirmation) gets a
+// generated account, and the crawl uses the session it earns. The generated password is masked
+// in the stored exchange exactly like a configured one.
+func TestSelfRegistrationCreatesAnAccountAndCrawlsWithIt(t *testing.T) {
+	var mu sync.Mutex
+	var posts []string
+	var authed []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/register" {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			mu.Lock()
+			posts = append(posts, string(body))
+			mu.Unlock()
+			vals, _ := url.ParseQuery(string(body))
+			if vals.Get("user") != "" && vals.Get("pass") != "" && vals.Get("pass") == vals.Get("confirm") {
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "registered", Path: "/"})
+			}
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<html><body><a href="/account">my account</a></body></html>`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/register":
+			_, _ = w.Write([]byte(`<html><body>
+				<form method="post" action="/register">
+				<input type="text" name="user" value="">
+				<input type="password" name="pass">
+				<input type="password" name="confirm">
+				</form></body></html>`))
+		case "/account":
+			c, err := r.Cookie("session")
+			if err != nil || c.Value != "registered" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			mu.Lock()
+			authed = append(authed, r.URL.Path)
+			mu.Unlock()
+			_, _ = w.Write([]byte(`<html><body>account</body></html>`))
+		default:
+			_, _ = w.Write([]byte(`<html><body><a href="/register">create account</a></body></html>`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.AttemptSelfRegister = true
+	rep := run(t, cfg)
+
+	mu.Lock()
+	var regBody string
+	for _, p := range posts {
+		v, _ := url.ParseQuery(p)
+		if strings.HasPrefix(v.Get("user"), "burpsy") {
+			regBody = p
+		}
+	}
+	mu.Unlock()
+	if regBody == "" {
+		t.Fatalf("no generated-account registration reached /register; posts: %v", posts)
+	}
+	mu.Lock()
+	if len(authed) == 0 {
+		t.Errorf("the self-registered session was never used; authenticated fetches: %v", authed)
+	}
+	mu.Unlock()
+	if rep.Login == nil || !rep.Login.Authenticated {
+		t.Errorf("the report does not reflect the self-registered session; login: %+v", rep.Login)
+	}
+	// The generated password is a credential this run created; history masks it like any other.
+	vals, _ := url.ParseQuery(regBody)
+	gen := vals.Get("pass")
+	for _, f := range rep.Fetches {
+		if f.Method == "POST" && strings.HasSuffix(f.URL, "/register") {
+			ex, err := h.store.GetExchange(f.ExchangeID)
+			if err != nil {
+				t.Fatalf("the registration POST has no stored exchange: %v", err)
+			}
+			msg, err := h.store.Get(core.MsgOrZero(ex.Request))
+			if err != nil {
+				t.Fatalf("the registration POST's request bytes are unreadable: %v", err)
+			}
+			if strings.Contains(string(msg.Raw()), gen) {
+				t.Errorf("the stored registration exchange carries the generated password: %s", msg.Raw())
+			}
+		}
+	}
+}
+
+// crawl_using_provided_logins_only: authentication comes from the provided credentials alone —
+// no self-registration, no invalid usernames.
+func TestProvidedLoginsOnlySkipsSelfRegisterAndInvalidUsernames(t *testing.T) {
+	app := newLoginApp(t)
+	h := newHarness()
+	cfg := h.config(app.srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.AttemptSelfRegister = true
+	cfg.UseInvalidUsernames = true
+	cfg.AuthenticatedCrawlOnly = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	run(t, cfg)
+
+	for _, p := range app.posts {
+		v, _ := url.ParseQuery(p)
+		if u := v.Get("user"); u != "alice" {
+			t.Errorf("a non-provided username %q was submitted under provided-logins-only; body: %s", u, p)
+		}
+	}
+}

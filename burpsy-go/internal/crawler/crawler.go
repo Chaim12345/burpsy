@@ -2052,11 +2052,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	ex, cerr := c.cfg.Capture.Record(scanner.CapturedExchange{
-		Host:     item.url.Hostname(),
-		Port:     portOf(item.url),
-		TLS:      strings.EqualFold(item.url.Scheme, "https"),
-		Method:   item.method,
-		Path:     item.url.RequestURI(),
+		Host:   item.url.Hostname(),
+		Port:   portOf(item.url),
+		TLS:    strings.EqualFold(item.url.Scheme, "https"),
+		Method: item.method,
+		Path:   item.url.RequestURI(),
 		// Masked, when this request carries credential values: the wire bytes were the real
 		// ones, history's are not (burpsy-react-ui-uzil; HeadersWithheld is the precedent).
 		Request:  maskStoredValues(raw, item.maskValues),
@@ -3221,12 +3221,33 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		return
 	}
 
+	// A registration form (Burp's distinguishing rule: the password-carrying form with the most
+	// password fields — two or more in practice) gets a generated account when the operator opted
+	// in, never a provided credential: credentials belong to login forms.
+	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly {
+		c.admitSelfRegistration(f, base, u, depth, rep, lim)
+		return
+	}
 	// A login form with credentials configured is not an ordinary submission: it is the crawl's
 	// way in. One submission per credential, values mapped from the credential rather than the
 	// placeholder fill, the credential values masked in the stored exchange (burpsy-react-ui-uzil).
-	if f.isLoginForm && len(c.cfg.LoginCredentials) > 0 {
-		c.admitCredentialLogins(f, base, u, depth, rep, lim)
-		return
+	// An opted-in invalid-username probe (Burp's trigger_login_failures) joins it; either replaces
+	// the placeholder submission, which for a login form is junk that only looks like a failed
+	// login. crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from
+	// the provided credentials alone: no self-registration above, no invalid usernames here.
+	if f.isLoginForm {
+		handled := false
+		if len(c.cfg.LoginCredentials) > 0 {
+			c.admitCredentialLogins(f, base, u, depth, rep, lim)
+			handled = true
+		}
+		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly {
+			c.admitInvalidUsernameLogin(f, base, u, depth, rep, lim)
+			handled = true
+		}
+		if handled {
+			return
+		}
 	}
 
 	values := url.Values{}

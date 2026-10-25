@@ -114,6 +114,10 @@ type discoveredForm struct {
 	// values onto. Empty when the form has no such control.
 	passwordField string
 	usernameField string
+	// passwordFields are every named password input, in document order. Two or more is Burp's
+	// practical distinguishing mark of a REGISTRATION form (password plus confirmation — his
+	// ordered criteria put the form with the most password fields first).
+	passwordFields []string
 }
 
 // signature is the form's identity for the per-form submission cap (burpsy-react-ui-u0k3).
@@ -788,6 +792,7 @@ func readInput(n *html.Node, f *discoveredForm, label *strings.Builder) {
 		if f.passwordField == "" {
 			f.passwordField = name
 		}
+		f.passwordFields = append(f.passwordFields, name)
 		f.fields = append(f.fields, formField{name: name, value: fillValue(typ, existing)})
 		return
 	}

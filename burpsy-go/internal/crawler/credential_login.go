@@ -38,6 +38,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -278,4 +279,108 @@ func cookiesFromRawResponse(u *url.URL, rawResponse []byte) []LoginCookie {
 		out = append(out, lc)
 	}
 	return out
+}
+
+// invalidUsername is the deliberately-wrong username of a trigger_login_failures submission.
+// Fixed rather than generated: the value must be invalid on every application, a stable string
+// keeps two runs of one crawl byte-comparable, and the tool's own name tells the operator who
+// wrote the row (the fillerText rule).
+const invalidUsername = "burpsy-invalid-user"
+
+// admitInvalidUsernameLogin enqueues one login submission with a username no application has,
+// so the crawl sees the application's bad-login response (Burp's trigger_login_failures). The
+// values are not credentials — nothing is masked — and the response is not harvested: a session
+// granted to a deliberately invalid username is not one to crawl with.
+func (c *Crawler) admitInvalidUsernameLogin(f discoveredForm, base, u *url.URL, depth int, rep *Report, lim *LimitReport) {
+	if f.method == "GET" {
+		c.skips.record(SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "a login form that submits GET would place usernames in the URL; not submitted",
+		})
+		return
+	}
+	values := url.Values{}
+	for _, fl := range f.fields {
+		v := fl.value
+		switch fl.name {
+		case f.usernameField:
+			v = invalidUsername
+		case f.passwordField:
+			v = fillValue("password", "")
+		}
+		values.Add(fl.name, v)
+	}
+	item := frontierItem{
+		url: u, method: f.method, depth: depth, foundAt: base.String(), text: f.label,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+	}
+	for _, fl := range f.fields {
+		item.fieldNames = append(item.fieldNames, fl.name)
+	}
+	if c.enqueue(item, base.String(), lim) {
+		rep.FormsSubmitted++
+	}
+}
+
+// admitSelfRegistration enqueues one registration submission with a generated account (Burp's
+// attempt_to_self_register_a_user). The username and password are generated per run — a fixed
+// account would already exist on the second scan, and the registration would fail for the wrong
+// reason. The generated password is masked in the stored exchange: it is a credential this run
+// created, and history does not keep credentials. The session the registration earns is
+// harvested exactly like a credential login's.
+func (c *Crawler) admitSelfRegistration(f discoveredForm, base, u *url.URL, depth int, rep *Report, lim *LimitReport) {
+	if f.method == "GET" {
+		c.skips.record(SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "a registration form that submits GET would place the generated credentials in the URL; not submitted",
+		})
+		return
+	}
+	username := "burpsy-" + randHex(4)
+	password := "Burpsy-" + randHex(5)
+	values := url.Values{}
+	for _, fl := range f.fields {
+		v := fl.value
+		switch fl.name {
+		case f.usernameField:
+			v = username
+		default:
+			for _, pf := range f.passwordFields {
+				if fl.name == pf {
+					v = password
+					break
+				}
+			}
+		}
+		values.Add(fl.name, v)
+	}
+	item := frontierItem{
+		url: u, method: f.method, depth: depth, foundAt: base.String(), text: f.label,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+		maskValues:  []string{password},
+		loginCred:   username,
+	}
+	for _, fl := range f.fields {
+		item.fieldNames = append(item.fieldNames, fl.name)
+	}
+	if c.enqueue(item, base.String(), lim) {
+		rep.FormsSubmitted++
+	}
+}
+
+// randHex returns n random bytes hex-encoded (2n characters), for the generated self-registration
+// account. crypto/rand: the value is an account password, and a predictable one would be a
+// credential anyone reading this source knows.
+func randHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail on a supported platform; if it ever does, the crawl's clock
+		// still gives a value no other run reuses.
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
 }
