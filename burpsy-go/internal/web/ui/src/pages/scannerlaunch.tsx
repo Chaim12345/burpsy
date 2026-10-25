@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Play, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { formatDuration } from "../lib/api";
@@ -9,7 +9,7 @@ import type { ScannerConfig, XssBrowserTarget } from "../lib/types";
 import { useApp } from "../lib/store";
 import type { AuditResult } from "../lib/types.attack";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, ErrorNotice, Field, Input, Metric, NeedsValueButton, Select, Switch } from "../ui/primitives";
+import { Badge, Button, Card, ErrorNotice, Field, Input, Metric, NeedsValueButton, Select, Switch, Textarea } from "../ui/primitives";
 import { DetailList, JsonView } from "../ui/json";
 import { SimpleTable } from "../ui/table";
 
@@ -328,6 +328,50 @@ function XssRoutes({ routes, onChange }: { routes: XssBrowserTarget[]; onChange:
  );
 }
 
+/** A list the server stores whole, edited one entry per line. The text is kept locally so a trailing
+ *  newline survives while typing; the list the card saves is the trimmed, non-blank lines. */
+function LinesField({
+ label,
+ hint,
+ value,
+ onChange,
+ rows = 3,
+}: {
+ label: string;
+ hint: string;
+ value: string[];
+ onChange: (lines: string[]) => void;
+ rows?: number;
+}): JSX.Element {
+ const [text, setText] = useState(value.join("\n"));
+ const parse = (t: string) =>
+  t
+   .split("\n")
+   .map((l) => l.trim())
+   .filter((l) => l !== "");
+ // A refresh or a save replaces the list from outside; follow it unless the text already means it.
+ useEffect(() => {
+  if (parse(text).join("\n") !== value.join("\n")) setText(value.join("\n"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [value]);
+ return (
+  <Field label={label} hint={hint}>
+   {(id) => (
+    <Textarea
+     id={id}
+     rows={rows}
+     spellCheck={false}
+     value={text}
+     onChange={(event) => {
+      setText(event.target.value);
+      onChange(parse(event.target.value));
+     }}
+    />
+   )}
+  </Field>
+ );
+}
+
 function AuditChecksSection(): JSX.Element {
  const config = useScannerConfig();
  const save = useSaveScannerConfig();
@@ -451,6 +495,55 @@ function AuditChecksSection(): JSX.Element {
         </div>
        </section>
       ))}
+      <section aria-label="Check inputs" style={{ marginTop: "var(--gap)" }}>
+       <h4>Check inputs</h4>
+       <p className="cell-dim" style={{ margin: 0 }}>
+        Values the opt-in checks above read. Saved with the switches.
+       </p>
+       <Field
+        label="Login rate-limit burst"
+        hint="Failed attempts sent by Login rate limiting: 0 = scanner default (20), otherwise 5 to 100"
+       >
+        {(id) => (
+         <Input
+          id={id}
+          type="number"
+          min={0}
+          max={100}
+          value={current.login_rate_limit_attempts ?? 0}
+          onChange={(event) =>
+           setDraft({ ...current, login_rate_limit_attempts: Math.max(0, Math.trunc(Number(event.target.value) || 0)) })
+          }
+          style={{ maxWidth: "6rem" }}
+         />
+        )}
+       </Field>
+       <LinesField
+        label="Password-reset test identities"
+        hint="One per line. Password reset tokens only acts on identities listed here, and changes their password"
+        value={current.reset_test_identities ?? []}
+        onChange={(lines) => setDraft({ ...current, reset_test_identities: lines })}
+       />
+       <Field
+        label="Password-reset mailbox URL"
+        hint="Test inbox the reset mail is read from. {identity} is replaced by the query-escaped identity; blank reads tokens from responses only"
+       >
+        {(id) => (
+         <Input
+          id={id}
+          value={current.reset_mailbox_url ?? ""}
+          onChange={(event) => setDraft({ ...current, reset_mailbox_url: event.target.value })}
+          placeholder="https://mail.test/inbox?to={identity}"
+         />
+        )}
+       </Field>
+       <LinesField
+        label="Restrict the audit to these issue rows"
+        hint="One row name per line, spelled as findings name them. Empty runs every enabled check. The server refuses a name it does not know"
+        value={current.only_rows ?? []}
+        onChange={(lines) => setDraft({ ...current, only_rows: lines })}
+       />
+      </section>
       <XssRoutes routes={current.xss_browser_targets ?? []} onChange={(routes) => setDraft({ ...current, xss_browser_targets: routes })} />
      </div>
     </>
