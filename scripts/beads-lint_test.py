@@ -75,6 +75,33 @@ class Lint(unittest.TestCase):
         rc, _ = self.lint(f"MERGED via integrator. see also {self.landed[:8]} in the notes")
         self.assertEqual(rc, 1)
 
+    def test_one_unlanded_sha_among_valid_ones_rejects_the_closure(self):
+        rc, out = self.lint(f"MERGED via integrator fast-track ({self.landed[:8]}+deadbee1)")
+        self.assertEqual(rc, 1)
+        self.assertIn("deadbee1", out)
+        err = [l for l in out.splitlines() if l.startswith("error:")]
+        self.assertEqual(len(err), 1)
+        self.assertNotIn(self.landed[:8], err[0])
+
+    def test_a_number_or_hex_word_outside_a_citation_position_is_not_a_sha(self):
+        for reason in ("MERGED via integrator, patch 1234567 reviewed", f"MERGED via integrator, {self.landed[:8]} reviewed"):
+            rc, out = self.lint(reason)
+            self.assertEqual(rc, 1, reason)
+            self.assertIn("must cite", out)
+
+    def test_sha_grammar_directly(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bl", LINT)
+        bl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bl)
+        grab = lambda r: [x for g in bl.SHA_RX.findall(bl.MERGED_RX.match(r).group(0)) for x in g.split("+")]
+        self.assertEqual(grab("MERGED via integrator (abcdefa)"), ["abcdefa"])  # an all-letter sha is a sha
+        self.assertEqual(grab("MERGED via integrator at 593179a3."), ["593179a3"])
+        self.assertEqual(grab("MERGED via integrator fast-track (244d0b75+3f10641d): x"), ["244d0b75", "3f10641d"])
+        self.assertEqual(grab("MERGED via integrator after round-2 fixes (ab8501e4). d"), ["ab8501e4"])
+        self.assertEqual(grab("MERGED via integrator (abc123)"), [])  # 6 hex: too short
+        self.assertEqual(grab("MERGED via integrator, patch 1234567"), [])
+
     def test_a_hex_word_is_not_a_sha(self):
         rc, out = self.lint("MERGED via integrator after defaced")
         self.assertEqual(rc, 1)
