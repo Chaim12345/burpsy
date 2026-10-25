@@ -42,6 +42,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/dominvader": false,
  "/api/dominvader/hit": false,
  "/api/dominvader/hits": false,
+ "/api/dominvader/scan": false,
  "/api/engagement/": false,
  "/api/engagement/clickbandit.js": false,
  "/api/events": false,
