@@ -5,6 +5,7 @@ import { formatDuration } from "../lib/api";
 import {
  useRunAudit,
  useScannerIssueTypes,
+ type SecondIdentity,
  useScannerConfigs,
  useScannerCoverage,
  useScannerLive,
@@ -846,12 +847,24 @@ function CoverageCard(): JSX.Element {
    where a scan is started. The result panel stays here rather than on Issues — it describes the run
    (checks that ran, what was refused), not a finding. */
 
+const BLANK_IDENTITY: SecondIdentity = { cookie_header: "", authorization_header: "", api_key_header: "", api_key_value: "" };
+
+const IDENTITY_FIELDS: { key: keyof SecondIdentity; label: string; secret: boolean; placeholder: string }[] = [
+ { key: "cookie_header", label: "Cookie header", secret: false, placeholder: "session=…; csrf=…" },
+ { key: "authorization_header", label: "Authorization header", secret: true, placeholder: "Bearer …" },
+ { key: "api_key_header", label: "API key header", secret: false, placeholder: "X-API-Key" },
+ { key: "api_key_value", label: "API key value", secret: true, placeholder: "key" },
+];
+
 function TargetedAudit(): JSX.Element {
  const configsQuery = useScannerConfigs();
  const runAudit = useRunAudit();
  const [exchangeId, setExchangeId] = useState("");
  const [configName, setConfigName] = useState("");
  const [auditResult, setAuditResult] = useState<AuditResult | null>(null);
+ // Component state only, on purpose: these are another account's credentials. Not the store, not
+ // localStorage, not the saved scan config. Cleared when the audit starts.
+ const [identity, setIdentity] = useState<SecondIdentity>(BLANK_IDENTITY);
 
  const run = () => {
   const id = Number(exchangeId);
@@ -861,8 +874,17 @@ function TargetedAudit(): JSX.Element {
    toast.error("Enter an exchange id — a whole number, counting from 0");
    return;
   }
+  // Trimmed; all four blank means no second identity, so the key is left out (the server rejects an empty one).
+  const trimmed = {
+   cookie_header: identity.cookie_header.trim(),
+   authorization_header: identity.authorization_header.trim(),
+   api_key_header: identity.api_key_header.trim(),
+   api_key_value: identity.api_key_value.trim(),
+  };
+  const secondIdentity = Object.values(trimmed).some((v) => v !== "") ? trimmed : undefined;
+  setIdentity(BLANK_IDENTITY);
   runAudit.mutate(
-   { exchangeId: id, config: configName || undefined },
+   { exchangeId: id, config: configName || undefined, secondIdentity },
    {
     onSuccess: (result) => {
      setAuditResult(result);
@@ -910,6 +932,29 @@ function TargetedAudit(): JSX.Element {
       <Play size={14} />
       {runAudit.isPending ? "Auditing…" : "Audit"}
      </NeedsValueButton>
+    </div>
+    <div className="audit-strip second-identity" role="group" aria-label="Second identity">
+     <div>
+      <span>
+       <strong>Second identity</strong>
+       <small>
+        A second account for the authorization checks. Used for this run only, never saved — held in memory while the audit runs and gone
+        after.
+       </small>
+      </span>
+     </div>
+     {IDENTITY_FIELDS.map((f) => (
+      <Input
+       key={f.key}
+       type={f.secret ? "password" : "text"}
+       autoComplete="off"
+       value={identity[f.key]}
+       onChange={(event) => setIdentity({ ...identity, [f.key]: event.target.value })}
+       aria-label={`Second identity ${f.label.toLowerCase().replace("api", "API")}`}
+       title={f.label}
+       placeholder={f.label}
+      />
+     ))}
     </div>
    </Card>
    {auditResult ? (

@@ -316,10 +316,22 @@ export function useSetScannerLive() {
  * the same id can legitimately produce a different outcome, so there is nothing here a later reader
  * should be handed as if it were current state.
  */
+export interface SecondIdentity {
+ cookie_header: string;
+ authorization_header: string;
+ api_key_header: string;
+ api_key_value: string;
+}
+
 export function useRunAudit() {
  const client = useQueryClient();
- return useMutation<AuditResult, Error, { exchangeId: number; config?: string }>({
-  mutationFn: ({ exchangeId, config }) => api<AuditResult>(`/api/audit/${exchangeId}`, json("POST", config ? { config } : {})),
+ return useMutation<AuditResult, Error, { exchangeId: number; config?: string; secondIdentity?: SecondIdentity }>({
+  mutationFn: ({ exchangeId, config, secondIdentity }) =>
+   api<AuditResult>(
+    `/api/audit/${exchangeId}`,
+    // second_identity rides this one request only (0vzb.46): the server holds it for the run and never saves it.
+    json("POST", { ...(config ? { config } : {}), ...(secondIdentity ? { second_identity: secondIdentity } : {}) }),
+   ),
   onSuccess: () => {
    void client.invalidateQueries({ queryKey: keys.issues });
    void client.invalidateQueries({ queryKey: keys.dashboard });
