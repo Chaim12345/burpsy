@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Decoding a Content-Encoding, so a compressed HTTP message can be read and rewritten.
@@ -31,11 +34,14 @@ import (
 //
 // # What is supported, and why the rest is a refusal rather than a guess
 //
-// gzip and deflate, which are what Burp's own two switches name and what origins actually send. br
-// (Brotli) and zstd have no standard-library decoder; a build cannot decode them, and Unpackable
-// reports false so the caller counts an honest skip rather than handing a rule a body it could not
-// decompress. Adding either means adding a dependency, and inventing a decode that "mostly works"
-// for them would corrupt bodies on the wire.
+// gzip and deflate, which are what Burp's own two switches name, plus br (Brotli) and zstd, which
+// origins increasingly send and Burp decodes without a switch. br and zstd have no
+// standard-library decoder, so they run through andybalholm/brotli and klauspost/compress/zstd —
+// both already linked into this binary through gitleaks, made direct dependencies rather than
+// adding anything new. What is left refused is what no decoder here can read (a chain like
+// "gzip, br", the obsolete "compress"): Unpackable reports false so the caller counts an honest
+// skip rather than handing a rule a body it could not decompress. Inventing a decode that
+// "mostly works" for those would corrupt bodies on the wire.
 
 // MaxDecodedBody bounds the output of one decode.
 //
@@ -51,9 +57,10 @@ const MaxDecodedBody = 64 << 20
 // simply too much of it, and the right response is to leave the message alone and say why.
 var ErrDecodedTooLarge = errors.New("decoded body exceeds the cap")
 
-// ErrUnsupportedEncoding is returned for a Content-Encoding this build cannot decode — br and zstd,
-// principally. Named so a caller can count "we cannot decode this encoding" apart from "this body did
-// not decompress", which are different facts about the same skipped rule.
+// ErrUnsupportedEncoding is returned for a Content-Encoding this build cannot decode — an
+// encoding chain or a name with no decoder here. Named so a caller can count "we cannot decode
+// this encoding" apart from "this body did not decompress", which are different facts about the
+// same skipped rule.
 var ErrUnsupportedEncoding = errors.New("unsupported content encoding")
 
 // Unpackable reports whether DecodeBody can handle this Content-Encoding value.
@@ -65,7 +72,7 @@ var ErrUnsupportedEncoding = errors.New("unsupported content encoding")
 // origins send in practice and is what this handles.
 func Unpackable(encoding string) bool {
 	switch normalizeEncoding(encoding) {
-	case "gzip", "x-gzip", "deflate":
+	case "gzip", "x-gzip", "deflate", "br", "zstd":
 		return true
 	}
 	return false
@@ -120,6 +127,23 @@ func DecodeBody(encoding string, body []byte) ([]byte, error) {
 			// that is the failure the operator should see, with the raw attempt named as also having
 			// failed rather than silently swallowed.
 			return nil, fmt.Errorf("deflate: %w (raw deflate also failed: %v)", err, ferr)
+		}
+		return out, nil
+	case "br":
+		out, err := readCapped(brotli.NewReader(bytes.NewReader(body)))
+		if err != nil {
+			return nil, fmt.Errorf("br: %w", err)
+		}
+		return out, nil
+	case "zstd":
+		zr, err := zstd.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("zstd: %w", err)
+		}
+		defer zr.Close()
+		out, rerr := readCapped(zr)
+		if rerr != nil {
+			return nil, fmt.Errorf("zstd: %w", rerr)
 		}
 		return out, nil
 	default:

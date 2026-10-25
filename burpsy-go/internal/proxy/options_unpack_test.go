@@ -17,6 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 func gzipResponse(t *testing.T, body string) []byte {
@@ -183,17 +186,72 @@ func TestWithUnpackingOffACompressedResponseIsUntouchedAndCounted(t *testing.T) 
 	}
 }
 
+func TestAResponseRuleReachesBrotliAndZstdBodiesWhenUnpackingIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		pack     func(*testing.T, string) []byte
+	}{
+		{"brotli", "br", func(t *testing.T, body string) []byte {
+			var buf bytes.Buffer
+			w := brotli.NewWriter(&buf)
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}},
+		{"zstd", "zstd", func(t *testing.T, body string) []byte {
+			var buf bytes.Buffer
+			w, err := zstd.NewWriter(&buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewOptions()
+			if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := o.Set(OptRemoveAllJavaScript, true); err != nil {
+				t.Fatal(err)
+			}
+			out := o.ApplyResponse(encodedResponse(tc.pack(t, scriptedPage), tc.encoding))
+			text := string(out)
+			if strings.Contains(text, "<script>") {
+				t.Errorf("the script survived: the rule did not reach the %s-decoded body\n%q", tc.encoding, text)
+			}
+			if !strings.Contains(text, "<p>hello</p>") {
+				t.Errorf("the rest of the page is gone\n%q", text)
+			}
+			if c := o.Counters(); c.UnpackedResponses != 1 || c.SkippedCompressed != 0 {
+				t.Errorf("counters = %+v, want one unpacked and none skipped", c)
+			}
+		})
+	}
+}
+
 func TestAnUndecodableEncodingIsLeftAloneAndSaysWhy(t *testing.T) {
 	o := NewOptions()
 	o.Set(OptUnpackCompressedResponses, true)
 	o.Set(OptRemoveAllJavaScript, true)
 
-	// br has no decoder in this build. The body is deliberately not brotli — nothing gets far enough
-	// to look at it, which is the point: the encoding is refused by name.
+	// A body labelled br that is not brotli: corrupt streams are refused by name, never partly
+	// rewritten. (A body that IS brotli unpacks — the case below it.)
 	in := encodedResponse([]byte("\x00\x01\x02not brotli"), "br")
 	out := o.ApplyResponse(in)
 	if !bytes.Equal(in, out) {
-		t.Error("a brotli response was modified by a build with no brotli decoder")
+		t.Error("a corrupt brotli response was partly rewritten")
 	}
 	c := o.Counters()
 	if c.SkippedCompressed != 1 || c.SkippedUnsupportedEncoding != 1 {

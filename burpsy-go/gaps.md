@@ -2376,9 +2376,11 @@ the two differ. Burp evidence is the decompiled agent registry
   Brotli-compressed content received in responses."
 - **burpsy:** on by default per tab (`unpack_responses`, off only when a tab says `false`); the send's answer
   carries `response_unpacked` beside the bytes that arrived, and the pane shows it with an "unpacked gzip"
-  badge. gzip and deflate decode; a `br` response is shown as it arrived with `unpack_error` naming why.
-- **Divergence:** no Brotli decoder in this build (`httputil.Unpackable`), and unpacking is display-only — the
-  stored exchange keeps the compressed bytes, where Burp's Repeater message is the unpacked one.
+  badge. gzip, deflate, br and zstd decode (br/zstd via the andybalholm/brotli and klauspost/compress
+  libraries, made direct dependencies 2026-10-25 under bead mi8d); an encoding chain is shown as it
+  arrived with `unpack_error` naming why.
+- **Divergence:** unpacking is display-only — the stored exchange keeps the compressed bytes, where
+  Burp's Repeater message is the unpacked one.
 
 ### Streaming response timeout — which responses it applies to (of0z)
 - **Burp:** `settings/tools/repeater.html` — "Streaming responses timeout … controls how long Repeater keeps a

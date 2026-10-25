@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 // Repeater's per-tab overrides added by burpsy-react-ui-of0z: "Unpack compressed responses" and
@@ -91,13 +93,44 @@ func TestUnpackCompressedResponsesIsOnByDefaultAndDisplayOnly(t *testing.T) {
 }
 
 func TestUnpackNamesAnEncodingItCannotDecode(t *testing.T) {
-	origin := gzipOrigin(t, "x", "br")
+	// A chain of encodings is the one shape this build will not unwind.
+	origin := gzipOrigin(t, "x", "gzip, br")
 	defer origin.Close()
 	s := newTestServer()
 	_, out, raw := sendRepeater(t, s, strings.TrimPrefix(origin.URL, "http://"), nil)
-	if out.UnpackedFrom != "br" || !strings.Contains(out.UnpackError, "no decoder") || out.ResponseUnpacked != "" {
-		t.Fatalf("a brotli response = %s, want unpacked_from br with the reason it stayed packed", raw)
+	if out.UnpackedFrom != "gzip, br" || !strings.Contains(out.UnpackError, "no decoder") || out.ResponseUnpacked != "" {
+		t.Fatalf("an encoding chain = %s, want unpacked_from naming the chain with the reason it stayed packed", raw)
 	}
+}
+
+func TestUnpackDecodesBrotli(t *testing.T) {
+	origin := brotliOrigin(t, "x")
+	defer origin.Close()
+	s := newTestServer()
+	_, out, raw := sendRepeater(t, s, strings.TrimPrefix(origin.URL, "http://"), nil)
+	// response_unpacked keeps the response headers; only the body is rewritten.
+	if out.UnpackedFrom != "br" || out.UnpackError != "" || !strings.HasSuffix(out.ResponseUnpacked, "\r\n\r\nx") {
+		t.Fatalf("a brotli response = %s, want it unpacked to the plain body", raw)
+	}
+}
+
+// brotliOrigin answers with a real brotli body labelled br — gzipOrigin with the encoder swapped.
+func brotliOrigin(t *testing.T, plain string) *httptest.Server {
+	t.Helper()
+	var packed bytes.Buffer
+	bw := brotli.NewWriter(&packed)
+	if _, err := bw.Write([]byte(plain)); err != nil {
+		t.Fatal(err)
+	}
+	if err := bw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Length", fmt.Sprint(packed.Len()))
+		w.Write(packed.Bytes())
+	}))
 }
 
 // eventStreamOrigin answers with a chunked text/event-stream that sends one event and then holds the

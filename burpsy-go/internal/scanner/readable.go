@@ -20,8 +20,8 @@ import (
 // rebuilt to describe what it now frames: Content-Encoding and Transfer-Encoding dropped,
 // Content-Length set. Every other header is kept byte for byte, so header checks see the wire.
 //
-// undecodable is true when the body is encoded in a way this build cannot read (br, zstd, a chain, a
-// broken stream): the response comes back with whatever could be undone — the chunk framing — and the
+// undecodable is true when the body is encoded in a way this build cannot read (a chain, a broken
+// stream): the response comes back with whatever could be undone — the chunk framing — and the
 // caller counts it, because a check that then finds nothing has not shown the body is clean.
 func readableResponse(raw []byte) (out []byte, undecodable bool) {
 	head, body, ok := splitHeadAndBody(raw)

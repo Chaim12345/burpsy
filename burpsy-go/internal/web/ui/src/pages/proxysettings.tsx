@@ -81,22 +81,22 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   key: "strip_accept_encoding",
   label: "Strip Accept-Encoding from requests",
   // Not "the only way to read a compressed body" any more: unpack_compressed_responses below decodes
-  // gzip and deflate in place. What stripping still buys is the encodings this build has no decoder
-  // for (br, zstd), at the price of changing what the client asked the origin for.
+  // gzip, deflate, br and zstd in place. What stripping still buys is an encoding chain, at the
+  // price of changing what the client asked the origin for.
   detail:
-   "Ask the origin for an uncompressed response (it may compress anyway, and can see the header is gone). Not needed for gzip or deflate when Unpack compressed responses is on; useful for br and zstd, which this build cannot decode.",
+   "Ask the origin for an uncompressed response (it may compress anyway, and can see the header is gone). Not needed for gzip, deflate, br or zstd when Unpack compressed responses is on; useful for encoding chains, which this build does not unwind.",
  },
  {
   key: "unpack_compressed_requests",
   label: "Unpack compressed requests",
   detail:
-   "Decompress a gzip or deflate request body before forwarding, fixing its headers. The origin then receives the uncompressed body, which it may reject. br and zstd are forwarded as sent.",
+   "Decompress a gzip, deflate, br or zstd request body before forwarding, fixing its headers. The origin then receives the uncompressed body, which it may reject.",
  },
  {
   key: "unpack_compressed_responses",
   label: "Unpack compressed responses",
   detail:
-   "Decompress a gzip or deflate response body, fixing its headers, so the rules above can rewrite it; the browser and history get the decompressed body. br and zstd stay compressed (counted below); HTTP/2 responses are not reached.",
+   "Decompress a gzip, deflate, br or zstd response body, fixing its headers, so the rules above can rewrite it; the browser and history get the decompressed body. Encoding chains stay compressed (counted below); HTTP/2 responses are not reached.",
  },
 ];
 
@@ -161,17 +161,17 @@ export function ProxySettingsPage(): JSX.Element {
       value={c.skipped_compressed}
       detail={
        d.options["unpack_compressed_responses"] === true
-        ? "unpacking is on; the rest are br, zstd or undecodable"
-        : "turn on Unpack compressed responses to reach gzip and deflate"
+        ? "unpacking is on; the rest are chains or undecodable"
+        : "turn on Unpack compressed responses to reach gzip, deflate, br and zstd"
       }
      />
      {/* The subset of the one above where unpacking was on and could not help — a different answer
-         to an operator who just ticked the box: "the switch is off" is fixable, "this build has no
-         brotli decoder" is not (proxy.Counters.SkippedUnsupportedEncoding). */}
+         to an operator who just ticked the box: "the switch is off" is fixable, "this build cannot
+         decode that encoding" is not (proxy.Counters.SkippedUnsupportedEncoding). */}
      <Metric
       label="Skipped: unsupported encoding"
       value={c.skipped_unsupported_encoding}
-      detail="unpacking on, but br, zstd, a chain, or a corrupt body"
+      detail="unpacking on, but a chain, or a corrupt body"
       tone={c.skipped_unsupported_encoding > 0 ? "warn" : undefined}
      />
      <Metric label="Skipped: not HTML" value={c.skipped_not_html} />

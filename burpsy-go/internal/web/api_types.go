@@ -206,8 +206,8 @@ type MessageView struct {
 	// reason the operator could not see. This is the readable rendering beside the record, not
 	// instead of it.
 	Decoded *string `json:"decoded,omitempty"`
-	// DecodeError names why a compressed message could not be decoded: an encoding this build has no
-	// decoder for (br, zstd), a corrupt stream, or a body over the cap. Present rather than silent,
+	// DecodeError names why a compressed message could not be decoded: an encoding chain, an
+	// encoding this build has no decoder for, a corrupt stream, or a body over the cap. Present rather than silent,
 	// because "burpsy cannot read this" and "there was nothing to read" are the two states an
 	// unreadable pane must never merge.
 	DecodeError string `json:"decode_error,omitempty"`

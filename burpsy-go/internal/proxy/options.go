@@ -93,24 +93,24 @@ const (
 	// is visible server-side, so the traffic recorded is no longer exactly what
 	// the client would have received.
 	//
-	// The proxy path can unpack gzip, x-gzip and deflate itself
+	// The proxy path can unpack gzip, x-gzip, deflate, br and zstd itself
 	// (httputil.Unpackable), so for those the unpack switch is the less
 	// intrusive choice. Stripping is still the only way the response rules above
-	// get a rewritable body from an origin that answers in br or zstd, or in a
-	// chain of encodings, none of which this build can decode.
+	// get a rewritable body from an origin that answers in a chain of encodings,
+	// which this build does not unwind.
 	OptStripAcceptEncoding OptionKey = "strip_accept_encoding"
-	// OptUnpackCompressedRequests decompresses a gzip or deflate request body before
-	// the request is forwarded, dropping its Content-Encoding and fixing
-	// Content-Length. Burp's proxyOptionsUnpackCompressedRequests.
+	// OptUnpackCompressedRequests decompresses a gzip, deflate, br or zstd request
+	// body before the request is forwarded, dropping its Content-Encoding and
+	// fixing Content-Length. Burp's proxyOptionsUnpackCompressedRequests.
 	//
 	// Its own switch rather than one shared with the response direction, because
 	// they are not the same decision: unpacking a request changes the bytes the
 	// *origin* receives, which an application may reject, while unpacking a
 	// response changes only what the browser receives.
 	OptUnpackCompressedRequests OptionKey = "unpack_compressed_requests"
-	// OptUnpackCompressedResponses decompresses a gzip or deflate response body so
-	// the response modification rules above can reach it, dropping its
-	// Content-Encoding and fixing Content-Length. Burp's
+	// OptUnpackCompressedResponses decompresses a gzip, deflate, br or zstd
+	// response body so the response modification rules above can reach it,
+	// dropping its Content-Encoding and fixing Content-Length. Burp's
 	// proxyOptionsUnpackCompressedResponses; its search keywords are literally
 	// "unpack gzip" and "unpack deflate".
 	//
@@ -120,8 +120,8 @@ const (
 	// observing the traffic the client would really have received. Unpacking asks
 	// the origin for nothing different.
 	//
-	// br and zstd are not decoded — there is no standard-library decoder for either
-	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
+	// A response carrying an encoding this build cannot decode — a chain, or a
+	// name with no decoder here — is counted as SkippedUnsupportedEncoding rather
 	// than reported as unpacked. See internal/httputil.Unpackable.
 	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
 	// OptStripWsExtensions removes the client's Sec-WebSocket-Extensions offer from
@@ -287,10 +287,11 @@ type Counters struct {
 	// strip_accept_encoding to stop the origin sending them at all.
 	SkippedCompressed uint64 `json:"skipped_compressed"`
 	// SkippedUnsupportedEncoding is the subset of SkippedCompressed where unpacking
-	// was ON and the encoding could not be decoded anyway — br or zstd, or a body
-	// that failed to decompress. It is separate because the two say different things
-	// to an operator who has just ticked the box: "the switch is off" is something
-	// they can fix, and "this build cannot decode brotli" is not.
+	// was ON and the encoding could not be decoded anyway — a chain, an encoding
+	// with no decoder here, or a body that failed to decompress. It is separate
+	// because the two say different things to an operator who has just ticked the
+	// box: "the switch is off" is something they can fix, and "this build cannot
+	// decode that encoding" is not.
 	SkippedUnsupportedEncoding uint64 `json:"skipped_unsupported_encoding"`
 	// UnpackedResponses and UnpackedRequests count messages actually decompressed,
 	// not messages seen while the switch was on: a switch that saw no compressed
@@ -542,9 +543,9 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		return raw, false
 	}
 	if !httputil.Unpackable(encoding) {
-		// br, zstd, or a chain of encodings. Counted twice on purpose: SkippedCompressed keeps its
-		// meaning as "a compressed message no rule reached", and the narrower counter says the switch
-		// was on and could not help.
+		// A chain of encodings, or one with no decoder here. Counted twice on purpose:
+		// SkippedCompressed keeps its meaning as "a compressed message no rule reached", and the
+		// narrower counter says the switch was on and could not help.
 		o.skippedCompressed.Add(1)
 		o.skippedUnsupportedEnc.Add(1)
 		return raw, false
@@ -593,9 +594,10 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 //     rules run on plaintext — which is why the switch exists: before it, a compressed
 //     response was permanently in the "the rule was never allowed to look" state, and
 //     strip_accept_encoding was the only escape.
-//   - An encoding this build cannot decode (br, zstd, a chain) is still left alone with the
-//     switch on, counted as SkippedUnsupportedEncoding as well, because "the switch is off"
-//     and "this build has no brotli decoder" are different things to tell an operator.
+//   - An encoding this build cannot decode (a chain, or a name with no decoder here) is
+//     still left alone with the switch on, counted as SkippedUnsupportedEncoding as well,
+//     because "the switch is off" and "this build cannot decode that encoding" are different
+//     things to tell an operator.
 //   - A body that is not HTML is left alone. These are HTML rewrites; running them over
 //     JSON, CSS or an image is at best a no-op and at worst silent corruption.
 //   - A body with no header/body separator is left alone: there is nothing to locate.

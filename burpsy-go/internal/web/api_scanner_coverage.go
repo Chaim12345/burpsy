@@ -64,8 +64,8 @@ func (s *Server) handleScannerCoverage(w http.ResponseWriter, r *http.Request) {
 		"checks":    checks,
 		"skips":     report.Skips,
 		"partition": partition,
-		// Responses the checks ran on with a body this build could not decode (br, zstd, a broken
-		// stream) — a caveat on every clean result over them (burpsy-react-ui-jgnf).
+		// Responses the checks ran on with a body this build could not decode (an encoding
+		// chain, a broken stream) — a caveat on every clean result over them (burpsy-react-ui-jgnf).
 		"undecoded_bodies": report.UndecodedBodies,
 	})
 }
