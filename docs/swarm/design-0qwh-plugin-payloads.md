@@ -1,6 +1,6 @@
 # Design: plugin-provided Intruder payload generators and processors (0qwh)
 
-Status: design accepted for implementation (integrator lane), 2026-10-25. Bead stays open until the gate below is green.
+Status: IMPLEMENTED 2026-10-25, with one recorded course change: the generator half landed as web-side materialization into an ordinary list (the Collaborator precedent, internal/intruder/payload.go's own comment), not the ResolveWith bridge designed below - it reuses every list invariant (per-item length bound, cap semantics) and adds no intruder seam. The processor half landed as designed (ProcessorBridge, NewChainWith). The refusal-below guarantees remained: Resolve refuses an unmaterialized "plugin" source loudly.
 
 ## Facts on the ground
 
