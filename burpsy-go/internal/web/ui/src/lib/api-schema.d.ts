@@ -716,6 +716,26 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/dominvader/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * run the finite opt-in DOM pollution probe plan in an isolated context, same-origin and live engagement-scope gated on each request; workers and frames are not exercised
+         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        post: operations["postApiDominvaderScan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engagement/{id}": {
         parameters: {
             query?: never;
@@ -5271,6 +5291,10 @@ export interface operations {
                     isolated?: boolean;
                     kind?: string;
                     login_page_pattern?: string;
+                    logins?: {
+                        password?: string;
+                        username?: string;
+                    }[];
                     max_capture_bytes?: number;
                     max_depth?: number;
                     max_duration_secs?: number;
@@ -5726,6 +5750,15 @@ export interface operations {
                 "application/json": {
                     canary?: string;
                     enabled?: boolean;
+                    pollution?: {
+                        enabled?: boolean;
+                        hash?: boolean;
+                        json?: boolean;
+                        nested?: boolean;
+                        properties?: string[];
+                        query?: boolean;
+                        target?: string;
+                    };
                 };
             };
         };
@@ -5763,10 +5796,14 @@ export interface operations {
                     frame?: string;
                     id?: number;
                     kind?: string;
+                    limitations?: string;
+                    probe?: string;
+                    property?: string;
                     received_unix_ms?: number;
                     sink?: string;
                     sources?: string[];
                     stack?: string;
+                    technique?: string;
                     ts?: number;
                     url?: string;
                 };
@@ -5792,6 +5829,33 @@ export interface operations {
         };
     };
     deleteApiDominvaderHits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postApiDominvaderScan: {
         parameters: {
             query?: never;
             header?: never;
@@ -8992,6 +9056,10 @@ export interface operations {
                     grpc?: boolean;
                     message?: string;
                     proto?: string;
+                    proto_entry?: string;
+                    proto_files?: {
+                        [key: string]: string;
+                    };
                     rpc_path?: string;
                 };
             };
@@ -9935,6 +10003,7 @@ export interface operations {
             content: {
                 "application/json": {
                     clone?: boolean;
+                    handshake?: string;
                     message?: number;
                     opcode?: string;
                     path?: string;
