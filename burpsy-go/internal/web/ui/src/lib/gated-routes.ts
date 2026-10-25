@@ -120,7 +120,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/repeater/history-export": false,
  "/api/repeater/send": false,
  "/api/repeater/send-group": false,
- "/api/repeater/tabs/": false,
+ "/api/repeater/tabs/": true,
  "/api/repeater/ws-attach": false,
  "/api/repeater/ws-handshake-preview": false,
  "/api/repeater/ws-send": false,

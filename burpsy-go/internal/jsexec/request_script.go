@@ -47,6 +47,23 @@ const (
 	maxScriptLogChars   = 512
 )
 
+// The store's write-time bounds (1944): 128 keys, 4 KiB per value, 256 KiB in all per run,
+// enforced inside the set binding below - host-side interception, so a script cannot write past a
+// cap and have it caught later. Overflow throws a script-visible TypeError (catchable; uncaught it
+// fails the run and NOTHING commits - a credential store forgets nothing silently).
+const (
+	maxScriptStoreKeys       = 128
+	maxScriptStoreValueBytes = 4 * 1024
+	maxScriptStoreTotalBytes = 256 * 1024
+)
+
+// StoreFullPrefix starts every store-overflow TypeError message; ErrStoreFull wraps the run's
+// error when that is what failed it, so a caller can classify the failure without parsing text.
+const StoreFullPrefix = "store full: "
+
+// ErrStoreFull marks a run failed by the store's write-time bounds.
+var ErrStoreFull = errors.New(StoreFullPrefix + "the store's bounds were exceeded")
+
 // ScriptRequest is the outgoing request as the script sees and returns it.
 type ScriptRequest struct {
 	Method  string
@@ -139,7 +156,23 @@ func RunRequestScript(src string, req ScriptRequest, resp *ScriptResponse, store
 			return goja.Null()
 		})
 		_ = storeObj.Set("set", func(k string, v goja.Value) {
-			nextStore[k] = v.String()
+			val := v.String()
+			if _, exists := nextStore[k]; !exists && len(nextStore) >= maxScriptStoreKeys {
+				panic(vm.NewTypeError(StoreFullPrefix + "the store holds " + fmt.Sprint(maxScriptStoreKeys) + " keys"))
+			}
+			if len(val) > maxScriptStoreValueBytes {
+				panic(vm.NewTypeError(StoreFullPrefix + "a value is over " + fmt.Sprint(maxScriptStoreValueBytes) + " bytes"))
+			}
+			total := len(k) + len(val)
+			for kk, vv := range nextStore {
+				if kk != k {
+					total += len(kk) + len(vv)
+				}
+			}
+			if total > maxScriptStoreTotalBytes {
+				panic(vm.NewTypeError(StoreFullPrefix + "the store is over " + fmt.Sprint(maxScriptStoreTotalBytes) + " bytes in all"))
+			}
+			nextStore[k] = val
 		})
 		_ = storeObj.Set("delete", func(k string) { delete(nextStore, k) })
 		_ = vm.Set("store", storeObj)
@@ -216,6 +249,9 @@ func RunRequestScript(src string, req ScriptRequest, resp *ScriptResponse, store
 	if err != nil {
 		var ex *goja.Exception
 		if errors.As(err, &ex) {
+			if strings.HasPrefix(ex.Value().String(), "TypeError: "+StoreFullPrefix) {
+				return ScriptResult{Log: logs}, fmt.Errorf("%w (%s)", ErrStoreFull, ex.Value().String())
+			}
 			return ScriptResult{Log: logs}, fmt.Errorf("the script threw: %s", ex.Value().String())
 		}
 		return ScriptResult{Log: logs}, err

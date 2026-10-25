@@ -74,8 +74,10 @@ func TestRepeaterActionGetNeverServesScriptDerivedOutput(t *testing.T) {
 	if strings.Contains(body, secret) {
 		t.Errorf("GET serves the secret the script derived: %s", body)
 	}
-	if strings.Contains(body, "last_run") || strings.Contains(body, `"log"`) || strings.Contains(body, `"store"`) {
-		t.Errorf("GET serves script-derived fields; it must be the definition only: %s", body)
+	// (Field-name substring checks are meaningless here: the definition carries the script SOURCE,
+	// which names log/store by nature. The pins are the secret's absence and no recorded run.)
+	if strings.Contains(body, `"last_run":`) {
+		t.Errorf("GET serves the recorded run; it must be the definition only: %s", body)
 	}
 	var def struct {
 		Action struct {
@@ -106,14 +108,15 @@ func TestRepeaterActionGetNeverServesScriptDerivedOutput(t *testing.T) {
 		t.Errorf("the gated run response must carry the run's output; got %s", gated)
 	}
 	var run struct {
-		Log   []string          `json:"log"`
-		Store map[string]string `json:"store"`
-		Error string            `json:"error"`
+		Log   []string `json:"log"`
+		Error string   `json:"error"`
 	}
 	if err := decodeJSON(rec.Body.Bytes(), &run); err != nil {
 		t.Fatalf("decode run: %v", err)
 	}
-	if run.Store["c"] == "" || !strings.Contains(run.Error, "leaked") || len(run.Log) == 0 {
+	// The script threw, so by the all-or-nothing store rule its store.set never committed; the
+	// secret it copied is in the log and the error text, which the gated run serves.
+	if !strings.Contains(run.Error, "leaked") || len(run.Log) == 0 || !strings.Contains(run.Log[0], secret) {
 		t.Errorf("the gated run response is incomplete: %+v", run)
 	}
 }

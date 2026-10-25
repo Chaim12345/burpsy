@@ -293,7 +293,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/repeater/tabs/":       {body: typeOf[repeaterTabAction]()},
 	"DELETE /api/repeater/tabs/":    noBody,
 	"POST /api/repeater/tabs/": {variants: map[string]reflect.Type{
-		"1/action/run": nil,
+		"1/action/run": typeOf[repeaterTabActionRunReq](),
 	}},
 	"POST /api/session/rules":    {body: typeOf[sessionRuleDto]()},
 	"PUT /api/session/rules/":    {body: typeOf[sessionRuleDto]()},

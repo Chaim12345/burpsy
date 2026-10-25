@@ -69,7 +69,7 @@ func TestAcceptanceRepeaterTabCustomAction(t *testing.T) {
 	if err := decodeJSON(rec.Body.Bytes(), &def); err != nil {
 		t.Fatalf("decode action: %v", err)
 	}
-	if def.Runs != 1 || strings.Contains(rec.Body.String(), "last_run") {
+	if def.Runs != 1 || strings.Contains(rec.Body.String(), `"last_run":`) {
 		t.Errorf("GET after one auto-run: runs=%d, body %q", def.Runs, rec.Body.String())
 	}
 	rec = postJSON(t, s, "/api/repeater/tabs/tab-1/action/run", map[string]any{"mode": "last"})

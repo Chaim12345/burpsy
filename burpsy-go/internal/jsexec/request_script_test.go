@@ -169,9 +169,9 @@ func TestTheGlobalObjectCarriesOnlyTheLanguageAndTheBindings(t *testing.T) {
 // import() does not even compile - goja here has no module loader.
 func TestNoHostCapabilityIsReachableByAnyConstruction(t *testing.T) {
 	probes := map[string]string{
-		"Function constructor": `Function("return typeof process + ',' + typeof fetch + ',' + typeof require + ',' + typeof XMLHttpRequest + ',' + typeof WebSocket")()`,
-		"eval":                 `eval("typeof process + ',' + typeof fetch + ',' + typeof require")`,
-		"Reflect.get":          `(function(){ var v = Reflect.get(globalThis, "process"); return typeof v; })()`,
+		"Function constructor":  `Function("return typeof process + ',' + typeof fetch + ',' + typeof require + ',' + typeof XMLHttpRequest + ',' + typeof WebSocket")()`,
+		"eval":                  `eval("typeof process + ',' + typeof fetch + ',' + typeof require")`,
+		"Reflect.get":           `(function(){ var v = Reflect.get(globalThis, "process"); return typeof v; })()`,
 		"Proxy over globalThis": `(function(){ var p = new Proxy(globalThis, {}); return typeof Reflect.get(p, "require"); })()`,
 	}
 	for name, expr := range probes {
@@ -197,7 +197,7 @@ func TestNoHostCapabilityIsReachableByAnyConstruction(t *testing.T) {
 func TestTheStoreIsBoundedAtWriteTime(t *testing.T) {
 	// N: exactly at each cap, the set succeeds.
 	atCaps := `
-		for (var i = 0; i < 128; i++) { store.set("k" + i, "v"); }
+		for (var i = 0; i < 127; i++) { store.set("k" + i, "v"); }
 		store.set("big", "x".repeat(4096));
 	`
 	if _, err := RunRequestScript(atCaps, baseReq(), nil, nil); err != nil {

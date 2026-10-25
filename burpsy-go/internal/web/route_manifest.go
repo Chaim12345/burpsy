@@ -812,17 +812,19 @@ var manifest = map[string]route{
 		summary: "send one operator-authored request and record the exchange",
 	},
 	"/api/repeater/tabs/": {
-		// riskLocal: the script runs in the ydmj sandbox - no network, no filesystem, no process -
-		// so installing or running one writes burpsy-local state only (the config, the store, the
-		// inspectable rewritten draft). The auto-run fires on responses to sends the send routes
-		// already authorised; it originates nothing. NOTE: wiwh.1's pending riskScript decision
-		// may reclassify script-carrying surfaces; revisit when it lands.
-		methods: []string{"GET", "PUT", "DELETE", "POST"}, risk: riskLocal, subPath: "1/action",
+		// riskCredential (1944 disposition): PUT installs persistent code that runs over response
+		// traffic, and the script's derived output - log, store, rewritten draft, error text - can
+		// carry response secrets (Set-Cookie, tokens). So every mutating call passes the
+		// confirmation gate bound to method, path and body; GET is ungated because it serves the
+		// DEFINITION only (source, switch, run counters, error kind - never derived output or
+		// error text); script-derived output comes only from the gated POST run. The script is an
+		// untrusted principal, not a local-only helper.
+		methods: []string{"GET", "PUT", "DELETE", "POST"}, risk: riskCredential, subPath: "1/action",
 		actionPaths: map[string][]string{"1/action": {"GET", "PUT", "DELETE"}, "1/action/run": {"POST"}},
 		summary: "one Repeater tab's custom action (1944): PUT installs the tab's sandboxed script " +
-			"(auto_run fires it as each response arrives), GET reads the config and the last run's log " +
-			"and rewritten draft, DELETE removes it, POST {id}/action/run runs it on demand against the " +
-			"tab's latest exchange",
+			"(auto_run fires it as each response arrives), GET reads the definition and run metadata " +
+			"only, DELETE removes it, POST {id}/action/run executes it or replays the recorded run " +
+			"and is the only surface for the script's derived output",
 	},
 	"/api/repeater/send-group": {
 		// riskEgress, not riskAttack: the group is tabs an operator authored by hand and the endpoint
