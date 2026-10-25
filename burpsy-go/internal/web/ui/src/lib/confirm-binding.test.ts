@@ -29,7 +29,12 @@ function fakeConsole(mints: { token: string; binding: string; expires_in?: numbe
  let next = 0;
  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
-  seen.push({ url, method: init?.method ?? "GET", token: new Headers(init?.headers).get(CONFIRM_HEADER), body: (init?.body as string) ?? null });
+  seen.push({
+   url,
+   method: init?.method ?? "GET",
+   token: new Headers(init?.headers).get(CONFIRM_HEADER),
+   body: (init?.body as string) ?? null,
+  });
   if (url.endsWith("/confirm")) {
    const m = mints[next++] ?? mints[mints.length - 1]!;
    return new Response(JSON.stringify({ ...m, expires_in: m.expires_in ?? 60, call: preview }), { status: 200 });
@@ -99,7 +104,9 @@ describe("gatedFetch with an approver", () => {
 
  test("a declined preview sends nothing and says so as a cancel", async () => {
   const seen = fakeConsole([{ token: "t1", binding: "b1" }]);
-  await expect(gatedFetch("/api/collaborator/server", { method: "DELETE" }, { approve: async () => false })).rejects.toBeInstanceOf(ConfirmationDeclined);
+  await expect(gatedFetch("/api/collaborator/server", { method: "DELETE" }, { approve: async () => false })).rejects.toBeInstanceOf(
+   ConfirmationDeclined,
+  );
   expect(seen.map((s) => s.url)).toEqual(["/api/collaborator/server/confirm"]);
  });
 
@@ -122,7 +129,9 @@ describe("gatedFetch with an approver", () => {
    { token: "t1", binding: "b1", expires_in: 0 },
    { token: "t2", binding: "DIFFERENT" },
   ]);
-  await expect(gatedFetch("/api/collaborator/server", { method: "DELETE" }, { approve: async () => true })).rejects.toThrow(/changed between the preview and the send/);
+  await expect(gatedFetch("/api/collaborator/server", { method: "DELETE" }, { approve: async () => true })).rejects.toThrow(
+   /changed between the preview and the send/,
+  );
   expect(seen.filter((s) => !s.url.endsWith("/confirm"))).toEqual([]);
  });
 });

@@ -26,22 +26,20 @@ const fakeStorage = {
 // clobber the environment for every other test file in the run (react-hotkeys-hook installs
 // document/window listeners at import time; a bare object broke them — two files failed with
 // "window.addEventListener is not a function"). Only the storage surface this lib touches is added.
-const existingWindow = (globalThis as Record<string, unknown>).window as
-  | (Record<string, unknown> & { localStorage?: Storage })
-  | undefined;
+const existingWindow = (globalThis as Record<string, unknown>).window as (Record<string, unknown> & { localStorage?: Storage }) | undefined;
 if (existingWindow) {
-  existingWindow.localStorage = fakeStorage as unknown as Storage;
+ existingWindow.localStorage = fakeStorage as unknown as Storage;
 } else {
-  // The stand-in carries no-op listener methods because bun test files share one globalThis:
-  // installing window mid-run makes react-hotkeys-hook's `typeof window < "u"` guard (already
-  // imported by lib/actions through pages/history) start acting on THIS object, and a window
-  // without addEventListener failed the other files' tests with
-  // "window.addEventListener is not a function". A no-op listener set keeps those imports inert.
-  (globalThis as Record<string, unknown>).window = {
-    localStorage: fakeStorage,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  };
+ // The stand-in carries no-op listener methods because bun test files share one globalThis:
+ // installing window mid-run makes react-hotkeys-hook's `typeof window < "u"` guard (already
+ // imported by lib/actions through pages/history) start acting on THIS object, and a window
+ // without addEventListener failed the other files' tests with
+ // "window.addEventListener is not a function". A no-op listener set keeps those imports inert.
+ (globalThis as Record<string, unknown>).window = {
+  localStorage: fakeStorage,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+ };
 }
 
 afterEach(() => store.clear());

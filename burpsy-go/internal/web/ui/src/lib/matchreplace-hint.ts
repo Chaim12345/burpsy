@@ -10,6 +10,6 @@ import type { MatchReplaceCategory, MatchReplaceTarget } from "./types.policy";
  * (burpsy-react-ui-p5zu).
  */
 export function matchPlaceholder(target: MatchReplaceTarget, category: MatchReplaceCategory): string {
-  if (target === "request_header" || target === "response_header") return "empty = add this header";
-  return category === "regex" ? "regex to match" : "text to match";
+ if (target === "request_header" || target === "response_header") return "empty = add this header";
+ return category === "regex" ? "regex to match" : "text to match";
 }

@@ -38,7 +38,13 @@ const ops: APIScanOperation[] = [
    { name: "limit", in: "query", value: "1", source: "placeholder" },
   ],
  },
- { method: "DELETE", template: "/pets/{petId}", path: "/pets/1", key: "DELETE /pets/{petId}", parameters: [{ name: "petId", in: "path", value: "1", source: "placeholder" }] },
+ {
+  method: "DELETE",
+  template: "/pets/{petId}",
+  path: "/pets/1",
+  key: "DELETE /pets/{petId}",
+  parameters: [{ name: "petId", in: "path", value: "1", source: "placeholder" }],
+ },
 ];
 
 const row = (state: ReviewState, endpoint: string, name: string) => {
@@ -72,7 +78,9 @@ test("a row shows its source and the document value until edited, then the opera
  expect(before).toMatchObject({ source: "example", value: "cat", mode: "dynamic", scope: "document", locked: null });
  const state = editRow(emptyReview, before, { value: "dog" });
  expect(row(state, "GET /pets", "q")).toMatchObject({ value: "dog", scope: "endpoint", documentValue: "cat" });
- expect(buildReview(ops, state).fields.parameters).toEqual([{ endpoint: "GET /pets", in: "query", name: "q", value: "dog", mode: "dynamic" }]);
+ expect(buildReview(ops, state).fields.parameters).toEqual([
+  { endpoint: "GET /pets", in: "query", name: "q", value: "dog", mode: "dynamic" },
+ ]);
 });
 
 test("editing a value back to the document's, Dynamic, drops the override instead of sending a no-op", () => {
@@ -81,7 +89,9 @@ test("editing a value back to the document's, Dynamic, drops the override instea
  expect(state.overrides).toEqual({});
  // Fixed with the document's own value is a real choice: it keeps the parameter out of the audit.
  state = editRow(state, row(state, "GET /pets", "q"), { mode: "fixed" });
- expect(buildReview(ops, state).fields.parameters).toEqual([{ endpoint: "GET /pets", in: "query", name: "q", value: "cat", mode: "fixed" }]);
+ expect(buildReview(ops, state).fields.parameters).toEqual([
+  { endpoint: "GET /pets", in: "query", name: "q", value: "cat", mode: "fixed" },
+ ]);
 });
 
 test("an all-endpoints value governs every endpoint carrying the parameter and is sent with endpoint empty", () => {
@@ -119,13 +129,17 @@ test("an override on a removed endpoint is held, not sent, and comes back with t
  expect(built.fields).toEqual({ exclude_endpoints: ["DELETE /pets/{petId}"] });
  expect(built.stale).toEqual([]);
  state = toggleEndpoint(state, "DELETE /pets/{petId}");
- expect(buildReview(ops, state).fields.parameters).toEqual([{ endpoint: "DELETE /pets/{petId}", in: "path", name: "petId", value: "9", mode: "dynamic" }]);
+ expect(buildReview(ops, state).fields.parameters).toEqual([
+  { endpoint: "DELETE /pets/{petId}", in: "path", name: "petId", value: "9", mode: "dynamic" },
+ ]);
 });
 
 test("rows the edited definition no longer describes are reported as stale, not sent, until discarded", () => {
  let state = editRow(emptyReview, row(emptyReview, "GET /pets", "q"), { value: "dog" });
  state = toggleEndpoint(state, "DELETE /pets/{petId}");
- const shrunk = ops.slice(0, 2).map((op) => (op.key === "GET /pets" ? { ...op, parameters: op.parameters?.filter((p) => p.name !== "q") } : op));
+ const shrunk = ops
+  .slice(0, 2)
+  .map((op) => (op.key === "GET /pets" ? { ...op, parameters: op.parameters?.filter((p) => p.name !== "q") } : op));
  const built = buildReview(shrunk, state);
  expect(built.fields).toEqual({});
  expect(built.stale).toEqual(["excluded endpoint DELETE /pets/{petId}", "query parameter “q” on GET /pets"]);
@@ -137,7 +151,9 @@ test("authentication: none sends nothing, each method needs its one required fie
  expect(buildReview(ops, { ...emptyReview, auth: blankAuth("none") }).fields.auth).toBeUndefined();
  expect(buildReview(ops, { ...emptyReview, auth: blankAuth("basic") }).missing).toBe("Basic authentication needs a username.");
  expect(buildReview(ops, { ...emptyReview, auth: blankAuth("bearer") }).missing).toBe("Bearer authentication needs a token.");
- expect(buildReview(ops, { ...emptyReview, auth: { type: "header", name: " ", value: "x" } }).missing).toBe("Header authentication needs a header name.");
+ expect(buildReview(ops, { ...emptyReview, auth: { type: "header", name: " ", value: "x" } }).missing).toBe(
+  "Header authentication needs a header name.",
+ );
  const basic = buildReview(ops, { ...emptyReview, auth: { type: "basic", username: "alice", password: "" } });
  expect(basic).toEqual({ fields: { auth: { type: "basic", username: "alice", password: "" } }, missing: null, stale: [] });
  expect(blankAuth("header")).toEqual({ type: "header", name: "Authorization", value: "" });

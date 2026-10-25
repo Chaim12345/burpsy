@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { filterByIssueSource, ISSUE_SOURCE_FILTERS, type IssueSourceFilter } from "../lib/issue-source-filter";
 import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
-import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Combine, SlidersHorizontal, Sparkles } from "lucide-react";
+import {
+ ChevronDown,
+ ChevronRight,
+ Copy,
+ Download,
+ ExternalLink,
+ FileDown,
+ Globe,
+ Combine,
+ SlidersHorizontal,
+ Sparkles,
+} from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { confirmDialog, promptDialog } from "../lib/dialogs";
@@ -273,19 +284,21 @@ export function ScannerPage(): JSX.Element {
   // the tree, and the empty state — sees one list.
   const all = filterByIssueSource(issues?.findings ?? [], sourceFilter);
   const needle = debouncedTerm.trim().toLowerCase();
-  return all
-   // Burp's "Show only" checkboxes (burpsy-react-ui-4d5c): an empty set shows everything, a
-   // non-empty one is an allow-list, so High+Medium can be shown while Low+Info are not.
-   // False positives are opt-out like Burp's hide-false-positive — they stay listed by
-   // default because the operator marked them deliberately.
-   .filter((f) => severities.size === 0 || severities.has(f.severity))
-   .filter((f) => confidences.size === 0 || confidences.has(f.confidence))
-   .filter((f) => !hideFalsePositives || !f.false_positive)
-   .filter((f) => {
-    if (!needle) return true;
-    const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host} ${f.detail ?? ""}`.toLowerCase();
-    return haystack.includes(needle);
-   });
+  return (
+   all
+    // Burp's "Show only" checkboxes (burpsy-react-ui-4d5c): an empty set shows everything, a
+    // non-empty one is an allow-list, so High+Medium can be shown while Low+Info are not.
+    // False positives are opt-out like Burp's hide-false-positive — they stay listed by
+    // default because the operator marked them deliberately.
+    .filter((f) => severities.size === 0 || severities.has(f.severity))
+    .filter((f) => confidences.size === 0 || confidences.has(f.confidence))
+    .filter((f) => !hideFalsePositives || !f.false_positive)
+    .filter((f) => {
+     if (!needle) return true;
+     const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host} ${f.detail ?? ""}`.toLowerCase();
+     return haystack.includes(needle);
+    })
+  );
  }, [issues, severities, confidences, hideFalsePositives, sourceFilter, debouncedTerm]);
 
  const groups = useMemo(() => groupFindings(rows), [rows]);
@@ -352,11 +365,11 @@ export function ScannerPage(): JSX.Element {
  const viewOnlyActive = confidences.size > 0 || debouncedTerm.trim() !== "";
  const exportScope = viewOnlyActive
   ? `the export carries the severity, false-positive and host axes only — the ${[
-   confidences.size > 0 ? "confidence filter" : null,
-   debouncedTerm.trim() ? "search term" : null,
-  ]
-   .filter(Boolean)
-   .join(" and ")} applies to the view, not the file`
+     confidences.size > 0 ? "confidence filter" : null,
+     debouncedTerm.trim() ? "search term" : null,
+    ]
+     .filter(Boolean)
+     .join(" and ")} applies to the view, not the file`
   : "the tree's current filter";
  const reportQuery = useMemo(() => {
   const params = new URLSearchParams();
@@ -436,16 +449,16 @@ export function ScannerPage(): JSX.Element {
      ...(exchangeId === undefined
       ? []
       : [
-       {
-        id: "goto-exchange",
-        label: `Show exchange #${exchangeId} in HTTP history`,
-        icon: ExternalLink,
-        onSelect: () => {
-         focusExchange(exchangeId);
-         setRoute("history");
-        },
-       },
-      ]),
+         {
+          id: "goto-exchange",
+          label: `Show exchange #${exchangeId} in HTTP history`,
+          icon: ExternalLink,
+          onSelect: () => {
+           focusExchange(exchangeId);
+           setRoute("history");
+          },
+         },
+        ]),
      {
       id: "goto-host",
       label: `Filter history by ${finding.host}`,
@@ -498,7 +511,12 @@ export function ScannerPage(): JSX.Element {
      // describe the whole scan and their Evidence entries carry only a method, host, path and
      // status — a description of a finding is not evidence for it, and an assessor handed one still
      // has to assemble the request and response by hand. This one carries them.
-     { id: "this-finding", label: "Export this issue (with evidence)", icon: FileDown, onSelect: () => window.open(`/api/report/finding/${finding.id}`, "_blank") },
+     {
+      id: "this-finding",
+      label: "Export this issue (with evidence)",
+      icon: FileDown,
+      onSelect: () => window.open(`/api/report/finding/${finding.id}`, "_blank"),
+     },
      // The whole-scan exports, unchanged: a scan of a large project has thousands of rows and
      // their request bodies between them, and inlining those would make the document unusable as a
      // document. That split is why the entry above exists.
@@ -543,7 +561,11 @@ export function ScannerPage(): JSX.Element {
     <LoadingPanel />
    ) : groups.length === 0 ? (
     <Empty
-     title={term || severities.size > 0 || confidences.size > 0 || hideFalsePositives || sourceFilter ? "No finding matches this filter" : "No findings yet"}
+     title={
+      term || severities.size > 0 || confidences.size > 0 || hideFalsePositives || sourceFilter
+       ? "No finding matches this filter"
+       : "No findings yet"
+     }
      detail={issues?.hint ?? "Captured and audited traffic has not produced findings."}
     />
    ) : (
@@ -576,110 +598,111 @@ export function ScannerPage(): JSX.Element {
         </div>
         {hostOpen
          ? host.paths.map((path) => {
-          const pathKey = `p:${host.host}:${path.path}`;
-          const pathOpen = !collapsed[pathKey];
-          return (
-           <div key={pathKey} role="group">
-            <div
-             role="treeitem"
-             aria-level={2}
-             aria-expanded={pathOpen}
-             className="tree-row"
-             style={{ paddingLeft: 22 }}
-             onClick={() => setCollapsed((c) => ({ ...c, [pathKey]: pathOpen }))}
-            >
-             <button type="button" className="tree-toggle" aria-label={pathOpen ? `Collapse ${path.path}` : `Expand ${path.path}`}>
-              {pathOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-             </button>
-             <span className="tree-row-icon" aria-hidden="true" />
-             <span className="tree-row-label" title={path.path}>
-              {path.path}
-             </span>
-             <span className="tree-row-meta">
-              <span className="tree-row-count cell-num">{path.leaves.length}</span>
-             </span>
-            </div>
-            {pathOpen
-             ? path.leaves.map((leaf) => (
-              <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)} docTopic="issues">
-               <div
-                role="treeitem"
-                aria-level={3}
-                aria-selected={leaf.key === selectedKey}
-                className={cn("tree-row", leaf.key === selectedKey && "active", leaf.finding.false_positive && "tree-row-false-positive")}
-                style={{ paddingLeft: 36 }}
-                onClick={() => setSelectedKey(leaf.key)}
-               >
-                <span className="tree-toggle" />
-                <span className="tree-row-icon" aria-hidden="true">
-                 <SeverityDot severity={leaf.finding.severity} />
-                </span>
-                <span className="tree-row-label" title={findingName(leaf.finding)}>
-                 {findingName(leaf.finding)}
-                </span>
-                <span className="tree-row-meta">
-                 {/*
+            const pathKey = `p:${host.host}:${path.path}`;
+            const pathOpen = !collapsed[pathKey];
+            return (
+             <div key={pathKey} role="group">
+              <div
+               role="treeitem"
+               aria-level={2}
+               aria-expanded={pathOpen}
+               className="tree-row"
+               style={{ paddingLeft: 22 }}
+               onClick={() => setCollapsed((c) => ({ ...c, [pathKey]: pathOpen }))}
+              >
+               <button type="button" className="tree-toggle" aria-label={pathOpen ? `Collapse ${path.path}` : `Expand ${path.path}`}>
+                {pathOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+               </button>
+               <span className="tree-row-icon" aria-hidden="true" />
+               <span className="tree-row-label" title={path.path}>
+                {path.path}
+               </span>
+               <span className="tree-row-meta">
+                <span className="tree-row-count cell-num">{path.leaves.length}</span>
+               </span>
+              </div>
+              {pathOpen
+               ? path.leaves.map((leaf) => (
+                  <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)} docTopic="issues">
+                   <div
+                    role="treeitem"
+                    aria-level={3}
+                    aria-selected={leaf.key === selectedKey}
+                    className={cn(
+                     "tree-row",
+                     leaf.key === selectedKey && "active",
+                     leaf.finding.false_positive && "tree-row-false-positive",
+                    )}
+                    style={{ paddingLeft: 36 }}
+                    onClick={() => setSelectedKey(leaf.key)}
+                   >
+                    <span className="tree-toggle" />
+                    <span className="tree-row-icon" aria-hidden="true">
+                     <SeverityDot severity={leaf.finding.severity} />
+                    </span>
+                    <span className="tree-row-label" title={findingName(leaf.finding)}>
+                     {findingName(leaf.finding)}
+                    </span>
+                    <span className="tree-row-meta">
+                     {/*
                                       A merged row covers several parameters, and the count is the
                                       one fact that distinguishes it from a single observation at a
                                       glance. Without it a five-parameter finding and a
                                       one-parameter finding are the same line, and the merge reads
                                       as though four results went missing.
                                     */}
-                 {leaf.finding.params && leaf.finding.params.length > 1 ? (
-                  <span
-                   className="cell-dim tree-row-params"
-                   title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}
-                  >
-                   {leaf.finding.params.length} params
-                  </span>
-                 ) : null}
-                 {/*
+                     {leaf.finding.params && leaf.finding.params.length > 1 ? (
+                      <span
+                       className="cell-dim tree-row-params"
+                       title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}
+                      >
+                       {leaf.finding.params.length} params
+                      </span>
+                     ) : null}
+                     {/*
                                       A false-positive mark must not ride on colour alone (a struck
                                       label at tree density disappears into the strikethrough of
                                       long names), so the row carries the letters too. The title
                                       spells out what the mark means.
                                     */}
-                 {leaf.finding.false_positive ? (
-                  <span className="tree-row-params" title="Marked false positive by an operator">
-                   FP
-                  </span>
-                 ) : null}
-                 {leaf.finding.severity_override ? (
-                  <span
-                   className="tree-row-params"
-                   title={`Severity overridden from ${leaf.finding.original_severity}`}
-                  >
-                   ⇩
-                  </span>
-                 ) : null}
-                 <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
-                {/* When it was found and what found it (burpsy-react-ui-exiu). Without these the list
+                     {leaf.finding.false_positive ? (
+                      <span className="tree-row-params" title="Marked false positive by an operator">
+                       FP
+                      </span>
+                     ) : null}
+                     {leaf.finding.severity_override ? (
+                      <span className="tree-row-params" title={`Severity overridden from ${leaf.finding.original_severity}`}>
+                       ⇩
+                      </span>
+                     ) : null}
+                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
+                     {/* When it was found and what found it (burpsy-react-ui-exiu). Without these the list
                     is an unordered set of rows from every producer in the project: an operator cannot
                     tell which of three tasks raised an issue, cannot separate a person's recording
                     from the scanner's, and cannot order by when something turned up. */}
-                <span
-                 className="cell-dim tree-row-params"
-                 title={
-                  leaf.finding.source === "manual"
-                   ? "Recorded outside a run — no task raised this"
-                   : leaf.finding.task_id
-                   ? `Raised by task ${leaf.finding.task_id}`
-                   : "Raised by a run that did not record which"
-                 }
-                >
-                 {leaf.finding.source === "manual" ? "manual" : "scan"}
-                </span>
-                <span className="cell-dim tree-row-params" title={foundAtTitle(leaf.finding.timestamp_unix_ms)}>
-                 {formatFoundAt(leaf.finding.timestamp_unix_ms)}
-                </span>
-                </span>
-               </div>
-              </ContextMenu>
-             ))
-             : null}
-           </div>
-          );
-         })
+                     <span
+                      className="cell-dim tree-row-params"
+                      title={
+                       leaf.finding.source === "manual"
+                        ? "Recorded outside a run — no task raised this"
+                        : leaf.finding.task_id
+                          ? `Raised by task ${leaf.finding.task_id}`
+                          : "Raised by a run that did not record which"
+                      }
+                     >
+                      {leaf.finding.source === "manual" ? "manual" : "scan"}
+                     </span>
+                     <span className="cell-dim tree-row-params" title={foundAtTitle(leaf.finding.timestamp_unix_ms)}>
+                      {formatFoundAt(leaf.finding.timestamp_unix_ms)}
+                     </span>
+                    </span>
+                   </div>
+                  </ContextMenu>
+                 ))
+               : null}
+             </div>
+            );
+           })
          : null}
        </div>
       );
@@ -756,14 +779,14 @@ export function ScannerPage(): JSX.Element {
        // there is one, so the common case does not read as a list of one.
        ...(selected.finding.params && selected.finding.params.length > 1
         ? [
-         {
-          label: `Parameters (${selected.finding.params.length})`,
-          value: selected.finding.params.join(", "),
-         },
-        ]
+           {
+            label: `Parameters (${selected.finding.params.length})`,
+            value: selected.finding.params.join(", "),
+           },
+          ]
         : selected.finding.param
-         ? [{ label: "Parameter", value: selected.finding.param }]
-         : []),
+          ? [{ label: "Parameter", value: selected.finding.param }]
+          : []),
        { label: "Times seen", value: selected.finding.times_seen },
        // How many later reports of this issue were merged into it (oorl) — shown only when some
        // were, so a finding seen once does not carry a row of zeros.
@@ -979,12 +1002,12 @@ export function ScannerPage(): JSX.Element {
    <SplitPane storageId="issues" orientation="horizontal" defaultMasterSize="34" minMasterSize="20" master={treePane} detail={advisory} />
 
    <ReportSettingsDialog
-   open={reportSettingsOpen}
-   onOpenChange={setReportSettingsOpen}
-   settings={reportSettings}
-   onApply={setReportSettings}
-  />
-  <ConsolidationDialog
+    open={reportSettingsOpen}
+    onOpenChange={setReportSettingsOpen}
+    settings={reportSettings}
+    onApply={setReportSettings}
+   />
+   <ConsolidationDialog
     open={consolidationOpen}
     onOpenChange={setConsolidationOpen}
     issueNames={[...new Set((issues?.findings ?? []).flatMap((finding) => (finding.check_name ? [finding.check_name] : [])))].sort()}

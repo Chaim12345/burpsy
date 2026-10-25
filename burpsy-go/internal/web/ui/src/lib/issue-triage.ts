@@ -8,17 +8,17 @@ import type { FindingDetail } from "./types.attack";
  * engine's word, `false_positive` and `comment` replace their value wholesale.
  */
 export interface IssueTriagePatch {
-  severity?: string;
-  confidence?: string;
-  false_positive?: boolean;
-  comment?: string;
+ severity?: string;
+ confidence?: string;
+ false_positive?: boolean;
+ comment?: string;
 }
 
 /** The callbacks the menu needs to be pure: the page owns the mutation, the prompts, the toasts. */
 export interface TriageCallbacks {
-  apply: (patch: IssueTriagePatch, message: string) => void;
-  editComment: (current: string) => void;
-  remove: () => void;
+ apply: (patch: IssueTriagePatch, message: string) => void;
+ editComment: (current: string) => void;
+ remove: () => void;
 }
 
 export const SEVERITY_OPTIONS = ["Critical", "High", "Medium", "Low", "Informational"];
@@ -35,77 +35,77 @@ export const CONFIDENCE_OPTIONS = ["Certain", "Firm", "Tentative"];
  * with none, clearing would be an action that does nothing.
  */
 export function triageMenuGroups(finding: FindingDetail, cb: TriageCallbacks): MenuGroup[] {
-  const severityItems = [
+ const severityItems = [
+  {
+   id: "severity-clear",
+   label: "Engine default (clear override)",
+   disabled: finding.original_severity === undefined,
+   onSelect: () => cb.apply({ severity: "" }, `Severity override cleared — engine severity restored`),
+  },
+  ...SEVERITY_OPTIONS.map((name) => ({
+   id: `severity-${name.toLowerCase()}`,
+   label: name,
+   disabled: finding.severity === name,
+   onSelect: () => cb.apply({ severity: name }, `${findingName(finding)} set to ${name}`),
+  })),
+ ];
+ const confidenceItems = [
+  {
+   id: "confidence-clear",
+   label: "Engine default (clear override)",
+   disabled: finding.original_confidence === undefined,
+   onSelect: () => cb.apply({ confidence: "" }, `Confidence override cleared — engine confidence restored`),
+  },
+  ...CONFIDENCE_OPTIONS.map((name) => ({
+   id: `confidence-${name.toLowerCase()}`,
+   label: name,
+   disabled: finding.confidence === name,
+   onSelect: () => cb.apply({ confidence: name }, `${findingName(finding)} set to ${name} confidence`),
+  })),
+ ];
+ return [
+  {
+   id: "triage",
+   title: "Triage",
+   actions: [
     {
-      id: "severity-clear",
-      label: "Engine default (clear override)",
-      disabled: finding.original_severity === undefined,
-      onSelect: () => cb.apply({ severity: "" }, `Severity override cleared — engine severity restored`),
+     id: "severity",
+     label: "Set severity",
+     submenu: [{ id: "severity-options", actions: severityItems }],
+     onSelect: () => {},
     },
-    ...SEVERITY_OPTIONS.map((name) => ({
-      id: `severity-${name.toLowerCase()}`,
-      label: name,
-      disabled: finding.severity === name,
-      onSelect: () => cb.apply({ severity: name }, `${findingName(finding)} set to ${name}`),
-    })),
-  ];
-  const confidenceItems = [
     {
-      id: "confidence-clear",
-      label: "Engine default (clear override)",
-      disabled: finding.original_confidence === undefined,
-      onSelect: () => cb.apply({ confidence: "" }, `Confidence override cleared — engine confidence restored`),
+     id: "confidence",
+     label: "Set confidence",
+     submenu: [{ id: "confidence-options", actions: confidenceItems }],
+     onSelect: () => {},
     },
-    ...CONFIDENCE_OPTIONS.map((name) => ({
-      id: `confidence-${name.toLowerCase()}`,
-      label: name,
-      disabled: finding.confidence === name,
-      onSelect: () => cb.apply({ confidence: name }, `${findingName(finding)} set to ${name} confidence`),
-    })),
-  ];
-  return [
     {
-      id: "triage",
-      title: "Triage",
-      actions: [
-        {
-          id: "severity",
-          label: "Set severity",
-          submenu: [{ id: "severity-options", actions: severityItems }],
-          onSelect: () => {},
-        },
-        {
-          id: "confidence",
-          label: "Set confidence",
-          submenu: [{ id: "confidence-options", actions: confidenceItems }],
-          onSelect: () => {},
-        },
-        {
-          id: "comment",
-          label: finding.comment ? "Edit comment" : "Add comment",
-          onSelect: () => cb.editComment(finding.comment),
-        },
-        {
-          id: "false-positive",
-          label: finding.false_positive ? "Unmark false positive" : "Mark false positive",
-          disabled: false,
-          onSelect: () =>
-            cb.apply(
-              { false_positive: !finding.false_positive },
-              finding.false_positive ? `False positive mark removed` : `Marked false positive`,
-            ),
-        },
-        {
-          id: "delete",
-          label: "Delete issue",
-          danger: true,
-          onSelect: () => cb.remove(),
-        },
-      ],
+     id: "comment",
+     label: finding.comment ? "Edit comment" : "Add comment",
+     onSelect: () => cb.editComment(finding.comment),
     },
-  ];
+    {
+     id: "false-positive",
+     label: finding.false_positive ? "Unmark false positive" : "Mark false positive",
+     disabled: false,
+     onSelect: () =>
+      cb.apply(
+       { false_positive: !finding.false_positive },
+       finding.false_positive ? `False positive mark removed` : `Marked false positive`,
+      ),
+    },
+    {
+     id: "delete",
+     label: "Delete issue",
+     danger: true,
+     onSelect: () => cb.remove(),
+    },
+   ],
+  },
+ ];
 }
 
 function findingName(f: FindingDetail): string {
-  return f.issue_name ?? f.check_name ?? "Unnamed finding";
+ return f.issue_name ?? f.check_name ?? "Unnamed finding";
 }

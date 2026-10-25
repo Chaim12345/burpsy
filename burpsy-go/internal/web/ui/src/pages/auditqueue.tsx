@@ -82,17 +82,26 @@ export function AuditQueuePage(): JSX.Element {
       <Metric label="Pending" value={d.totals.items_pending} />
       <Metric label="Auditing" value={d.totals.items_auditing} />
       <Metric label="Completed" value={d.totals.items_completed_audit} tone={d.totals.items_completed_audit > 0 ? "good" : undefined} />
-      <Metric label="Bounded" value={d.totals.items_bounded} tone={d.totals.items_bounded > 0 ? "warn" : undefined} detail="hit a budget or breaker" />
+      <Metric
+       label="Bounded"
+       value={d.totals.items_bounded}
+       tone={d.totals.items_bounded > 0 ? "warn" : undefined}
+       detail="hit a budget or breaker"
+      />
       <Metric label="Failed" value={d.totals.items_failed} tone={d.totals.items_failed > 0 ? "bad" : undefined} />
       <Metric label="Out of scope" value={d.totals.items_out_of_scope} />
      </div>
      <Card>
       <SectionHeading
        title="Queue"
-       detail={`${d.returned} row(s)${d.truncated ? ` of ${d.queue.retained} retained` : ""} · Burp status parity: ${d.parity.burp_statuses_modelled}/${d.parity.burp_statuses_declared} modelled${d.parity.burp_statuses_not_modelled?.length
-        ? ` (not modelled: ${d.parity.burp_statuses_not_modelled.map((gap) => gap.label || gap.status).filter(Boolean).join(", ")})`
-        : ""
-        }`}
+       detail={`${d.returned} row(s)${d.truncated ? ` of ${d.queue.retained} retained` : ""} · Burp status parity: ${d.parity.burp_statuses_modelled}/${d.parity.burp_statuses_declared} modelled${
+        d.parity.burp_statuses_not_modelled?.length
+         ? ` (not modelled: ${d.parity.burp_statuses_not_modelled
+            .map((gap) => gap.label || gap.status)
+            .filter(Boolean)
+            .join(", ")})`
+         : ""
+       }`}
       />
       {/* Progress and evidence are columns rather than a row's expansion because a partial audit is
           diagnosed FROM THE TABLE: the question is "which items stopped early, and how far did they
@@ -124,30 +133,30 @@ export function AuditQueuePage(): JSX.Element {
             <div style={{ marginTop: 2 }}>
              <Badge
               tone={item.url_disposition === "NETWORK_ERROR" ? "bad" : "good"}
-              title={item.url_disposition === "NETWORK_ERROR" ? "This URL's probes failed below HTTP — it never answered" : "This URL was reached and audited"}
+              title={
+               item.url_disposition === "NETWORK_ERROR"
+                ? "This URL's probes failed below HTTP — it never answered"
+                : "This URL was reached and audited"
+              }
              >
               {item.url_disposition}
              </Badge>
             </div>
            ) : null}
           </td>
-          <td title="Steps that reached a disposition, out of the steps this item planned">
-           {itemProgress(item)}
-          </td>
+          <td title="Steps that reached a disposition, out of the steps this item planned">{itemProgress(item)}</td>
           <td
            className="cell-num"
            title={
             item.point_kinds?.length
              ? `Enumerated for: ${item.point_kinds.join(", ")}` +
-             (item.points_skipped ? ` · ${item.points_skipped} dropped at the per-request ceiling` : "") +
-             (item.points_declined_places ? ` · ${item.points_declined_places} places the enumerator refused` : "")
+               (item.points_skipped ? ` · ${item.points_skipped} dropped at the per-request ceiling` : "") +
+               (item.points_declined_places ? ` · ${item.points_declined_places} places the enumerator refused` : "")
              : "No insertion points were recorded for this item"
            }
           >
            {item.points_enumerated ?? 0}
-           {item.points_skipped ? (
-            <span className="cell-dim"> +{item.points_skipped} at limit</span>
-           ) : null}
+           {item.points_skipped ? <span className="cell-dim"> +{item.points_skipped} at limit</span> : null}
           </td>
           <td className="cell-dim">{itemTiming(item) || "—"}</td>
           <td className="cell-num">{item.attempts}</td>

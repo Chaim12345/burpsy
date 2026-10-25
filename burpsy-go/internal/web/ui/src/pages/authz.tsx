@@ -92,7 +92,10 @@ export function AuthzPage(): JSX.Element {
 
  return (
   <div className="page">
-   <PageHeader title="Access control" description="Re-send a request as each identity and see whether access control held — the BOLA/IDOR test." />
+   <PageHeader
+    title="Access control"
+    description="Re-send a request as each identity and see whether access control held — the BOLA/IDOR test."
+   />
    {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
 
    <Card>
@@ -102,7 +105,12 @@ export function AuthzPage(): JSX.Element {
       <Button
        variant="quiet"
        size="small"
-       onClick={() => setIdentities((cur) => [...cur, { label: `identity ${cur.length + 1}`, baseline: cur.length === 0, cookie: "", headers: {}, strip_cookie: false }])}
+       onClick={() =>
+        setIdentities((cur) => [
+         ...cur,
+         { label: `identity ${cur.length + 1}`, baseline: cur.length === 0, cookie: "", headers: {}, strip_cookie: false },
+        ])
+       }
       >
        <Plus size={13} />
        Add
@@ -124,14 +132,25 @@ export function AuthzPage(): JSX.Element {
       {identities.map((id, i) => (
        <Card key={i}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-         <Field label="Label">{(fid) => <Input id={fid} value={id.label} onChange={(e) => patch(i, { label: e.target.value })} style={{ maxWidth: "var(--w-sm)" }} />}</Field>
-         <Checkbox label="Baseline" checked={id.baseline} onCheckedChange={(on) => setIdentities((cur) => cur.map((x, j) => ({ ...x, baseline: j === i ? on : on ? false : x.baseline })))} />
+         <Field label="Label">
+          {(fid) => (
+           <Input id={fid} value={id.label} onChange={(e) => patch(i, { label: e.target.value })} style={{ maxWidth: "var(--w-sm)" }} />
+          )}
+         </Field>
+         <Checkbox
+          label="Baseline"
+          checked={id.baseline}
+          onCheckedChange={(on) => setIdentities((cur) => cur.map((x, j) => ({ ...x, baseline: j === i ? on : on ? false : x.baseline })))}
+         />
          <Checkbox label="Strip cookie (no auth)" checked={id.strip_cookie} onCheckedChange={(on) => patch(i, { strip_cookie: on })} />
          <Button variant="quiet" size="small" onClick={() => setIdentities((cur) => cur.filter((_, j) => j !== i))}>
           <Trash2 size={13} />
          </Button>
         </div>
-        <Field label="Source from session rule" hint="run a logged-in session's login macro and use its fresh cookie (burpsy-react-ui-q7f8), instead of pasting one">
+        <Field
+         label="Source from session rule"
+         hint="run a logged-in session's login macro and use its fresh cookie (burpsy-react-ui-q7f8), instead of pasting one"
+        >
          {(fid) => (
           <Select
            id={fid}
@@ -150,10 +169,25 @@ export function AuthzPage(): JSX.Element {
          )}
         </Field>
         <Field label="Cookie" hint="replaces the request's Cookie header; leave blank to keep the captured one unless Strip is set">
-         {(fid) => <Input id={fid} value={id.cookie} onChange={(e) => patch(i, { cookie: e.target.value })} placeholder="session=...; role=user" disabled={id.session_rule_id !== undefined} />}
+         {(fid) => (
+          <Input
+           id={fid}
+           value={id.cookie}
+           onChange={(e) => patch(i, { cookie: e.target.value })}
+           placeholder="session=...; role=user"
+           disabled={id.session_rule_id !== undefined}
+          />
+         )}
         </Field>
         <Field label="Extra headers" hint="one per line, Name: value (Authorization, X-API-Key)">
-         {(fid) => <Textarea id={fid} rows={2} value={headersText(id.headers)} onChange={(e) => patch(i, { headers: parseHeaders(e.target.value) })} />}
+         {(fid) => (
+          <Textarea
+           id={fid}
+           rows={2}
+           value={headersText(id.headers)}
+           onChange={(e) => patch(i, { headers: parseHeaders(e.target.value) })}
+          />
+         )}
         </Field>
        </Card>
       ))}
@@ -164,7 +198,16 @@ export function AuthzPage(): JSX.Element {
    <Card>
     <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
      <Field label="Exchange id to test" hint="from HTTP history — the request to replay under each identity">
-      {(fid) => <Input id={fid} value={exchangeId} inputMode="numeric" onChange={(e) => setExchangeId(e.target.value)} placeholder="e.g. 42" style={{ maxWidth: "var(--w-xs)" }} />}
+      {(fid) => (
+       <Input
+        id={fid}
+        value={exchangeId}
+        inputMode="numeric"
+        onChange={(e) => setExchangeId(e.target.value)}
+        placeholder="e.g. 42"
+        style={{ maxWidth: "var(--w-xs)" }}
+       />
+      )}
      </Field>
      <Button onClick={run} disabled={runTest.isPending || identities.length < 2}>
       <Play size={13} />
@@ -192,7 +235,12 @@ export function AuthzPage(): JSX.Element {
          </td>
          <td>
           {v.verdict !== "Baseline" && v.response_id ? (
-           <Button variant="quiet" size="small" onClick={() => void diffVsBaseline(v)} title="Diff this response against the baseline in Comparer">
+           <Button
+            variant="quiet"
+            size="small"
+            onClick={() => void diffVsBaseline(v)}
+            title="Diff this response against the baseline in Comparer"
+           >
             <GitCompare size={13} />
             Diff
            </Button>

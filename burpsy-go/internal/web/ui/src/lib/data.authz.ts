@@ -38,7 +38,10 @@ export interface AuthzTestResult {
 const authzKey = ["authz", "identities"] as const;
 
 export function useAuthzIdentities(): UseQueryResult<{ identities: AuthzIdentity[] }> {
- return useQuery({ queryKey: authzKey, queryFn: ({ signal }) => api<{ identities: AuthzIdentity[] }>("/api/authz/identities", { signal }) });
+ return useQuery({
+  queryKey: authzKey,
+  queryFn: ({ signal }) => api<{ identities: AuthzIdentity[] }>("/api/authz/identities", { signal }),
+ });
 }
 
 export function useSaveAuthzIdentities() {

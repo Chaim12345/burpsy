@@ -15,29 +15,29 @@ export type SearchArea = "both" | "headers" | "body";
 
 /** One entry of the endpoint's tool vocabulary. Served, never hardcoded here — see below. */
 export interface SearchTool {
-  id: string;
-  label: string;
+ id: string;
+ label: string;
 }
 
 export interface SearchOptions {
-  term: string;
-  caseSensitive: boolean;
-  regex: boolean;
-  negate: boolean;
-  inScope: boolean;
-  location: SearchLocation;
-  area: SearchArea;
-  /** Empty means every tool, which is the dialog's opening state. */
-  tools: string[];
+ term: string;
+ caseSensitive: boolean;
+ regex: boolean;
+ negate: boolean;
+ inScope: boolean;
+ location: SearchLocation;
+ area: SearchArea;
+ /** Empty means every tool, which is the dialog's opening state. */
+ tools: string[];
 }
 
 /** One match location. `offset`/`len` index the bytes `/api/message/{message_id}` returns. */
 export interface SearchMatch {
-  direction: "request" | "response";
-  area: "headers" | "body";
-  message_id: number;
-  offset: number;
-  len: number;
+ direction: "request" | "response";
+ area: "headers" | "body";
+ message_id: number;
+ offset: number;
+ len: number;
 }
 
 /**
@@ -48,37 +48,37 @@ export interface SearchMatch {
  * in step with the first — the console already knows how to render an Exchange everywhere else.
  */
 export type SearchResult = Exchange & {
-  organizer: boolean;
-  match_count: number;
-  matches: SearchMatch[];
-  matches_truncated: boolean;
+ organizer: boolean;
+ match_count: number;
+ matches: SearchMatch[];
+ matches_truncated: boolean;
 };
 
 export interface SearchResponse {
-  term: string;
-  /** Exchanges the scan examined, so "no matches" is distinguishable from "nothing was looked at". */
-  scanned: number;
-  returned: number;
-  /** True when the scan stopped at the limit with traffic left unexamined. */
-  truncated: boolean;
-  negate: boolean;
-  /** The selection that ran, echoed. Empty means every tool. */
-  tools: string[];
-  /** The vocabulary the endpoint accepts. Rendered from this, so the dialog cannot offer a tool the
-   *  server would refuse — the same reason the session tools-scope checklist is served. */
-  tool_options: SearchTool[];
-  results: SearchResult[];
+ term: string;
+ /** Exchanges the scan examined, so "no matches" is distinguishable from "nothing was looked at". */
+ scanned: number;
+ returned: number;
+ /** True when the scan stopped at the limit with traffic left unexamined. */
+ truncated: boolean;
+ negate: boolean;
+ /** The selection that ran, echoed. Empty means every tool. */
+ tools: string[];
+ /** The vocabulary the endpoint accepts. Rendered from this, so the dialog cannot offer a tool the
+  *  server would refuse — the same reason the session tools-scope checklist is served. */
+ tool_options: SearchTool[];
+ results: SearchResult[];
 }
 
 export const EMPTY_SEARCH_OPTIONS: SearchOptions = {
-  term: "",
-  caseSensitive: false,
-  regex: false,
-  negate: false,
-  inScope: false,
-  location: "both",
-  area: "both",
-  tools: [],
+ term: "",
+ caseSensitive: false,
+ regex: false,
+ negate: false,
+ inScope: false,
+ location: "both",
+ area: "both",
+ tools: [],
 };
 
 /**
@@ -89,16 +89,16 @@ export const EMPTY_SEARCH_OPTIONS: SearchOptions = {
  * with the tool vocabulary and no results rather than an error.
  */
 export function buildSearchQuery(options: SearchOptions): string {
-  const params = new URLSearchParams();
-  params.set("q", options.term);
-  if (options.caseSensitive) params.set("case", "1");
-  if (options.regex) params.set("regex", "1");
-  if (options.negate) params.set("negate", "1");
-  if (options.inScope) params.set("in_scope", "1");
-  if (options.location !== "both") params.set("location", options.location);
-  if (options.area !== "both") params.set("area", options.area);
-  if (options.tools.length > 0) params.set("tools", [...options.tools].sort().join(","));
-  return params.toString();
+ const params = new URLSearchParams();
+ params.set("q", options.term);
+ if (options.caseSensitive) params.set("case", "1");
+ if (options.regex) params.set("regex", "1");
+ if (options.negate) params.set("negate", "1");
+ if (options.inScope) params.set("in_scope", "1");
+ if (options.location !== "both") params.set("location", options.location);
+ if (options.area !== "both") params.set("area", options.area);
+ if (options.tools.length > 0) params.set("tools", [...options.tools].sort().join(","));
+ return params.toString();
 }
 
 /**
@@ -109,24 +109,24 @@ export function buildSearchQuery(options: SearchOptions): string {
  * list looking like a short answer.
  */
 export function describeSearch(options: SearchOptions): string {
-  const modes = [options.regex ? "regular expression" : "literal text"];
-  modes.push(options.caseSensitive ? "case sensitive" : "case insensitive");
-  if (options.negate) modes.push("negative matches");
-  if (options.inScope) modes.push("in scope only");
+ const modes = [options.regex ? "regular expression" : "literal text"];
+ modes.push(options.caseSensitive ? "case sensitive" : "case insensitive");
+ if (options.negate) modes.push("negative matches");
+ if (options.inScope) modes.push("in scope only");
 
-  const where = options.location === "both" ? "requests and responses" : `${options.location}s`;
-  const area = options.area === "both" ? "headers and bodies" : options.area;
-  const tools = options.tools.length > 0 ? options.tools.join(", ") : "every tool";
+ const where = options.location === "both" ? "requests and responses" : `${options.location}s`;
+ const area = options.area === "both" ? "headers and bodies" : options.area;
+ const tools = options.tools.length > 0 ? options.tools.join(", ") : "every tool";
 
-  return `${modes.join(", ")} — ${where}, ${area}, across ${tools}`;
+ return `${modes.join(", ")} — ${where}, ${area}, across ${tools}`;
 }
 
 /** A slice of a message to render, and whether anything was left out of either end. */
 export interface MessageWindow {
-  start: number;
-  end: number;
-  leading: boolean;
-  trailing: boolean;
+ start: number;
+ end: number;
+ leading: boolean;
+ trailing: boolean;
 }
 
 /**
@@ -138,19 +138,19 @@ export interface MessageWindow {
  * truncated shows a request's opening as though it were the whole request.
  */
 export function matchWindow(offset: number, length: number, total: number, radius = 2000): MessageWindow {
-  const size = Math.max(1, length) + radius * 2;
-  if (total <= size) return { start: 0, end: total, leading: false, trailing: false };
-  let start = Math.max(0, offset - radius);
-  const end = Math.min(total, start + size);
-  // Re-anchor after clamping the end, so the window keeps its size at the tail of a message.
-  start = Math.max(0, end - size);
-  return { start, end, leading: start > 0, trailing: end < total };
+ const size = Math.max(1, length) + radius * 2;
+ if (total <= size) return { start: 0, end: total, leading: false, trailing: false };
+ let start = Math.max(0, offset - radius);
+ const end = Math.min(total, start + size);
+ // Re-anchor after clamping the end, so the window keeps its size at the tail of a message.
+ start = Math.max(0, end - size);
+ return { start, end, leading: start > 0, trailing: end < total };
 }
 
 /** A run of message text, either matched or not. */
 export interface HighlightSegment {
-  text: string;
-  hit: boolean;
+ text: string;
+ hit: boolean;
 }
 
 /**
@@ -167,27 +167,27 @@ export interface HighlightSegment {
  * rendering artefact either way, so the later span is dropped rather than doubled.
  */
 export function highlightSegments(text: string, windowStart: number, matches: SearchMatch[]): HighlightSegment[] {
-  const spans = matches
-    .map((match) => ({
-      // Clamped to the window at both ends before anything is sliced: an unclamped negative start
-      // reaches String.slice as a from-the-end index, which highlights a run of bytes at the *tail*
-      // of the pane that the server never matched.
-      start: Math.max(0, match.offset - windowStart),
-      end: Math.min(text.length, match.offset - windowStart + match.len),
-    }))
-    .filter((span) => span.end > 0 && span.start < text.length && span.end > span.start)
-    .sort((a, b) => a.start - b.start);
+ const spans = matches
+  .map((match) => ({
+   // Clamped to the window at both ends before anything is sliced: an unclamped negative start
+   // reaches String.slice as a from-the-end index, which highlights a run of bytes at the *tail*
+   // of the pane that the server never matched.
+   start: Math.max(0, match.offset - windowStart),
+   end: Math.min(text.length, match.offset - windowStart + match.len),
+  }))
+  .filter((span) => span.end > 0 && span.start < text.length && span.end > span.start)
+  .sort((a, b) => a.start - b.start);
 
-  const out: HighlightSegment[] = [];
-  let cursor = 0;
-  for (const span of spans) {
-    if (span.start < cursor) continue;
-    if (span.start > cursor) out.push({ text: text.slice(cursor, span.start), hit: false });
-    out.push({ text: text.slice(span.start, span.end), hit: true });
-    cursor = span.end;
-  }
-  if (cursor < text.length) out.push({ text: text.slice(cursor), hit: false });
-  return out;
+ const out: HighlightSegment[] = [];
+ let cursor = 0;
+ for (const span of spans) {
+  if (span.start < cursor) continue;
+  if (span.start > cursor) out.push({ text: text.slice(cursor, span.start), hit: false });
+  out.push({ text: text.slice(span.start, span.end), hit: true });
+  cursor = span.end;
+ }
+ if (cursor < text.length) out.push({ text: text.slice(cursor), hit: false });
+ return out;
 }
 
 /**
@@ -197,13 +197,13 @@ export function highlightSegments(text: string, windowStart: number, matches: Se
  * heuristic preferred would make the row's count unexplainable.
  */
 export function firstMatch(result: SearchResult): SearchMatch | null {
-  const [first] = result.matches;
-  return first ?? null;
+ const [first] = result.matches;
+ return first ?? null;
 }
 
 /** How a row's match count reads. Truncation is stated, never rounded away into "200+". */
 export function matchCountLabel(result: SearchResult): string {
-  if (result.match_count === 0) return "0";
-  if (result.matches_truncated) return `${result.matches.length} of ${result.match_count}`;
-  return `${result.match_count}`;
+ if (result.match_count === 0) return "0";
+ if (result.matches_truncated) return `${result.matches.length} of ${result.match_count}`;
+ return `${result.match_count}`;
 }

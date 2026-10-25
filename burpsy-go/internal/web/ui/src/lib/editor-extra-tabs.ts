@@ -14,20 +14,30 @@
 // The request-only views (Query params, Body params, Cookies on a request) are the ones that
 // change. A response is never offered them on the strength of being editable: Intercept can
 // edit a held response, and a response has no query string to add a parameter to.
-import { addBodyParam, addHeader, bodyParamSpans, cookieSpans, cookiesOf, headerValue, isResponse, parseMessage, querySpans } from "./message";
+import {
+ addBodyParam,
+ addHeader,
+ bodyParamSpans,
+ cookieSpans,
+ cookiesOf,
+ headerValue,
+ isResponse,
+ parseMessage,
+ querySpans,
+} from "./message";
 import type { OptionalEditorTab } from "./store";
 
 /** The extra tabs a message gets, in their default strip order. */
 export function extraEditorTabs(value: string, editable: boolean): OptionalEditorTab[] {
-  const tabs: OptionalEditorTab[] = ["headers", "attributes"];
-  const response = isResponse(value);
-  // Every view, so an item can be added where none exists yet — on a request only.
-  const offerAll = editable && !response;
-  if (offerAll || querySpans(value).length > 0) tabs.push("queryparams");
-  if (offerAll || bodyParamSpans(value).length > 0) tabs.push("bodyparams");
-  const cookies = response ? cookiesOf(parseMessage(value).headers, true).length : cookieSpans(value).length;
-  if (offerAll || cookies > 0) tabs.push("cookies");
-  return tabs;
+ const tabs: OptionalEditorTab[] = ["headers", "attributes"];
+ const response = isResponse(value);
+ // Every view, so an item can be added where none exists yet — on a request only.
+ const offerAll = editable && !response;
+ if (offerAll || querySpans(value).length > 0) tabs.push("queryparams");
+ if (offerAll || bodyParamSpans(value).length > 0) tabs.push("bodyparams");
+ const cookies = response ? cookiesOf(parseMessage(value).headers, true).length : cookieSpans(value).length;
+ if (offerAll || cookies > 0) tabs.push("cookies");
+ return tabs;
 }
 
 /**
@@ -38,8 +48,7 @@ export function extraEditorTabs(value: string, editable: boolean): OptionalEdito
  * type keeps it (and an unwritable one never reaches here — see BodyParamsTab).
  */
 export function addBodyParamToRequest(raw: string, name: string, value: string): string {
-  const declared = headerValue(parseMessage(raw).headers, "content-type");
-  const typed = declared === undefined ? addHeader(raw, "Content-Type", "application/x-www-form-urlencoded") : raw;
-  return addBodyParam(typed, name, value);
+ const declared = headerValue(parseMessage(raw).headers, "content-type");
+ const typed = declared === undefined ? addHeader(raw, "Content-Type", "application/x-www-form-urlencoded") : raw;
+ return addBodyParam(typed, name, value);
 }
-

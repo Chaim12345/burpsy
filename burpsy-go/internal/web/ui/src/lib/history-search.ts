@@ -11,36 +11,36 @@
 // keeps "negative match" an exact inversion rather than a second matcher to keep in sync.
 
 export interface HistorySearchOptions {
-  caseSensitive: boolean;
-  regex: boolean;
+ caseSensitive: boolean;
+ regex: boolean;
 }
 
 export interface CompiledHistorySearch {
-  matcher: ((hay: string) => boolean) | null;
-  error: string | null;
+ matcher: ((hay: string) => boolean) | null;
+ error: string | null;
 }
 
 /** Compile the search field into a row predicate. Empty text means no search is active,
  * whatever the modifiers hold — a ticked checkbox alone must not narrow the table. */
 export function compileHistorySearch(text: string, options: HistorySearchOptions): CompiledHistorySearch {
-  const needle = text.trim();
-  if (needle === "") return { matcher: null, error: null };
+ const needle = text.trim();
+ if (needle === "") return { matcher: null, error: null };
 
-  if (options.regex) {
-    try {
-      const re = new RegExp(needle, options.caseSensitive ? "" : "i");
-      return { matcher: (hay: string) => re.test(hay), error: null };
-    } catch (failure) {
-      return {
-        matcher: null,
-        error: failure instanceof Error ? failure.message : "invalid regular expression",
-      };
-    }
+ if (options.regex) {
+  try {
+   const re = new RegExp(needle, options.caseSensitive ? "" : "i");
+   return { matcher: (hay: string) => re.test(hay), error: null };
+  } catch (failure) {
+   return {
+    matcher: null,
+    error: failure instanceof Error ? failure.message : "invalid regular expression",
+   };
   }
+ }
 
-  const cmp = options.caseSensitive ? needle : needle.toLowerCase();
-  return {
-    matcher: (hay: string) => (options.caseSensitive ? hay : hay.toLowerCase()).includes(cmp),
-    error: null,
-  };
+ const cmp = options.caseSensitive ? needle : needle.toLowerCase();
+ return {
+  matcher: (hay: string) => (options.caseSensitive ? hay : hay.toLowerCase()).includes(cmp),
+  error: null,
+ };
 }

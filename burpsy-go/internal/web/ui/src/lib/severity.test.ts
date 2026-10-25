@@ -18,7 +18,13 @@ describe("severity", () => {
 
  test("keeps the mapping the four surfaces used to repeat", () => {
   expect(["Critical", "High", "Medium", "Low", "Informational", "", "x"].map(severityTone)).toEqual([
-   "bad", "bad", "warn", "info", "neutral", "neutral", "neutral",
+   "bad",
+   "bad",
+   "warn",
+   "info",
+   "neutral",
+   "neutral",
+   "neutral",
   ]);
   // Advisories spell severities in capitals; they map the same.
   expect(["HIGH", "MEDIUM", "LOW", "INFO"].map(severityTone)).toEqual(["bad", "warn", "info", "neutral"]);

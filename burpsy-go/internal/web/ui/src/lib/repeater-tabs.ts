@@ -45,7 +45,7 @@ export function tabDropdownGroups(
  }
  return [...byGroup.entries()].map(([id, members]) => ({
   id,
-  title: id === "" ? "Ungrouped" : named.find((group) => group.id === id)?.name ?? id,
+  title: id === "" ? "Ungrouped" : (named.find((group) => group.id === id)?.name ?? id),
   tabs: members,
  }));
 }
@@ -110,7 +110,7 @@ export function reorderTabWithinGroup(tabs: TabLike[], tabId: string, to: number
  if (moved === groupMembers) return tabs;
  const next = [...tabs];
  let cursor = 0;
- return next.map((tab) => (tab.groupId === groupId ? moved[cursor++] ?? tab : tab));
+ return next.map((tab) => (tab.groupId === groupId ? (moved[cursor++] ?? tab) : tab));
 }
 
 /**
@@ -151,7 +151,10 @@ export function tabColour(
  * opening the search shows the full list to narrow rather than a blank box that reads as "no tabs".
  */
 export function filterTabs<T extends { name: string; target?: string }>(tabs: T[], query: string): T[] {
- const words = query.toLowerCase().split(/\s+/).filter((word) => word !== "");
+ const words = query
+  .toLowerCase()
+  .split(/\s+/)
+  .filter((word) => word !== "");
  if (words.length === 0) return tabs;
  return tabs.filter((tab) => {
   const haystack = `${tab.name}\n${tab.target ?? ""}`.toLowerCase();

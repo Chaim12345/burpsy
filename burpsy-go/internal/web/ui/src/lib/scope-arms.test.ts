@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
-  decodeHostArm,
-  decodePathArm,
-  encodeHostArm,
-  encodePathArm,
-  hostArmProblem,
-  pathArmProblem,
-  RANGE_ARM_TAG,
-  REGEX_ARM_TAG,
-  type HostArmMode,
+ decodeHostArm,
+ decodePathArm,
+ encodeHostArm,
+ encodePathArm,
+ hostArmProblem,
+ pathArmProblem,
+ RANGE_ARM_TAG,
+ REGEX_ARM_TAG,
+ type HostArmMode,
 } from "./scope-arms";
 
 // The arms ride inside the pattern and path strings, which are also the rule's identity on remove,
@@ -102,26 +102,26 @@ describe("refusing an arm the server would refuse", () => {
 // valid thing for a pattern to match literally, so the rule rendered as armed and could never match a
 // host. Same for a range, and for a path.
 test("a pasted tag is refused instead of being tagged twice", () => {
-  const hostCases: [HostArmMode, string, string][] = [
-    ["regex", "regex:^api\\.example\\.com$", "regex:"],
-    ["range", "range:10.0.0.0/24", "range:"],
-    ["wildcard", "regex:^a$", "regex:"],
-  ];
-  for (const [mode, pasted, tag] of hostCases) {
-    const problem = hostArmProblem(mode, pasted);
-    expect(problem, `host mode ${mode} accepted ${pasted}`).not.toBeNull();
-    expect(problem).toContain(tag);
-  }
+ const hostCases: [HostArmMode, string, string][] = [
+  ["regex", "regex:^api\\.example\\.com$", "regex:"],
+  ["range", "range:10.0.0.0/24", "range:"],
+  ["wildcard", "regex:^a$", "regex:"],
+ ];
+ for (const [mode, pasted, tag] of hostCases) {
+  const problem = hostArmProblem(mode, pasted);
+  expect(problem, `host mode ${mode} accepted ${pasted}`).not.toBeNull();
+  expect(problem).toContain(tag);
+ }
 
-  const pathProblem = pathArmProblem("regex", "regex:/v1/.*");
-  expect(pathProblem).not.toBeNull();
-  expect(pathProblem).toContain("regex:");
+ const pathProblem = pathArmProblem("regex", "regex:/v1/.*");
+ expect(pathProblem).not.toBeNull();
+ expect(pathProblem).toContain("regex:");
 
-  // The refusal has to say what to write instead, or the operator's next attempt is a guess.
-  expect(hostArmProblem("regex", "regex:^api\\.example\\.com$")).toContain("^api\\.example\\.com$");
-  expect(pathArmProblem("regex", "regex:/v1/.*")).toContain("/v1/.*");
+ // The refusal has to say what to write instead, or the operator's next attempt is a guess.
+ expect(hostArmProblem("regex", "regex:^api\\.example\\.com$")).toContain("^api\\.example\\.com$");
+ expect(pathArmProblem("regex", "regex:/v1/.*")).toContain("/v1/.*");
 
-  // And a value that merely *contains* a tag is untouched: only a leading one is the mistake.
-  expect(hostArmProblem("regex", "^api-regex:example$")).toBeNull();
-  expect(pathArmProblem("regex", "/v1/regex:thing")).toBeNull();
+ // And a value that merely *contains* a tag is untouched: only a leading one is the mistake.
+ expect(hostArmProblem("regex", "^api-regex:example$")).toBeNull();
+ expect(pathArmProblem("regex", "/v1/regex:thing")).toBeNull();
 });

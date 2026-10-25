@@ -44,7 +44,11 @@ describe("fetchCaExport", () => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
    const url = String(input);
    seen.push({ url, token: new Headers(init?.headers).get(CONFIRM_HEADER), body: (init?.body as string) ?? null });
-   if (url === `${CA_EXPORT_URL}/confirm`) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
+   if (url === `${CA_EXPORT_URL}/confirm`)
+    return new Response(
+     JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
+     { status: 200 },
+    );
    return new Response(new Uint8Array([1, 2, 3]), {
     status: 200,
     headers: { "content-type": "application/x-pkcs12", "content-disposition": 'attachment; filename="burpsy-ca.p12"' },
@@ -62,7 +66,11 @@ describe("fetchCaExport", () => {
  test("a cert export sends no password field at all", async () => {
   let body = "";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-   if (String(input).endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
+   if (String(input).endsWith("/confirm"))
+    return new Response(
+     JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
+     { status: 200 },
+    );
    body = String(init?.body ?? "");
    return new Response("-----BEGIN CERTIFICATE-----\n", { status: 200 });
   }) as typeof fetch;
@@ -73,7 +81,11 @@ describe("fetchCaExport", () => {
 
  test("a refusal throws the server's text with its status", async () => {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
-   if (String(input).endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
+   if (String(input).endsWith("/confirm"))
+    return new Response(
+     JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
+     { status: 200 },
+    );
    return new Response("TLS interception is off, so there is no signing CA to export", { status: 503 });
   }) as typeof fetch;
   await expect(fetchCaExport("key")).rejects.toThrow(/TLS interception is off/);
