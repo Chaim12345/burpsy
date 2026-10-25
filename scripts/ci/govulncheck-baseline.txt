@@ -3,7 +3,6 @@
 # (scripts/ci-lint.sh vuln) fails only on an id that is NOT listed here. Remove a line when the
 # fix lands; the gate prints entries that no longer fire. Never add a line to get a build green
 # without a bead that owns the fix.
-GO-2026-5932  # x/crypto/openpgp unmaintained (transitive); no fixed version exists
 GO-2026-6603  # net/http HTTP/2 Trailer memory (stdlib; fixed by a Go patch release)
 GO-2026-6610  # net/http HTTP/2 transport framing headers (stdlib)
 GO-2026-6611  # net/http HTTP/2 window-change CPU (stdlib)
