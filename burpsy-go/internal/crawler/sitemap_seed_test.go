@@ -86,7 +86,9 @@ func TestSeedingMarksAKnownRequestAsAlreadyQueued(t *testing.T) {
 	}
 
 	u := mustURL(t, "http://a.test/known")
-	key := requestFingerprint("GET", u, nil, "")
+	// The queued table is namespaced by crawl phase (burpsy-react-ui-crediso); seeding runs in
+	// the unauthenticated phase, so the key is the crawler's own dedup key for it.
+	key := c.dedupKey("GET", u, nil, "")
 	if !c.queued[key] {
 		t.Error("the site map's URL is not in the queued table, so a second crawl would still fetch it " +
 			"— which is the whole saving this bead is about")
@@ -118,11 +120,11 @@ func TestSeedingAnOutOfScopeHostIsRefused(t *testing.T) {
 			"console has ever seen, including ones this engagement does not cover, and seeding one would "+
 			"mark it already-handled so the scope gate never sees it", seeded)
 	}
-	if c.queued[requestFingerprint("GET", mustURL(t, "http://out-of-scope.test/secret"), nil, "")] {
+	if c.queued[c.dedupKey("GET", mustURL(t, "http://out-of-scope.test/secret"), nil, "")] {
 		t.Error("an out-of-scope URL is in the queued table; seeding it smuggles a scope decision " +
 			"through a performance optimisation")
 	}
-	if !c.queued[requestFingerprint("GET", mustURL(t, "http://in-scope.test/ok"), nil, "")] {
+	if !c.queued[c.dedupKey("GET", mustURL(t, "http://in-scope.test/ok"), nil, "")] {
 		t.Error("the in-scope host was not seeded either, so the scope filter is refusing too much")
 	}
 }
@@ -139,7 +141,7 @@ func TestOnlyTheNamedOriginsAreSeeded(t *testing.T) {
 	if seeded != 1 {
 		t.Errorf("seeded %d, want 1: naming one origin must not seed the whole map", seeded)
 	}
-	if c.queued[requestFingerprint("GET", mustURL(t, "http://elsewhere.test/there"), nil, "")] {
+	if c.queued[c.dedupKey("GET", mustURL(t, "http://elsewhere.test/there"), nil, "")] {
 		t.Error("a host the caller did not name was seeded; a crawl of one origin must not inherit " +
 			"another origin's dedup state")
 	}
@@ -153,10 +155,10 @@ func TestOnlyTheMethodsTheMapRecordedAreSeeded(t *testing.T) {
 	c.SeedFromSiteMap(sm, []string{"a.test:80"}, allowInScope(scope))
 
 	u := mustURL(t, "http://a.test/thing")
-	if !c.queued[requestFingerprint("POST", u, nil, "")] {
+	if !c.queued[c.dedupKey("POST", u, nil, "")] {
 		t.Error("the method the map recorded was not seeded")
 	}
-	if c.queued[requestFingerprint("GET", u, nil, "")] {
+	if c.queued[c.dedupKey("GET", u, nil, "")] {
 		t.Error("a method the map never observed was seeded; that claims a request was made which " +
 			"was not, and would suppress a GET the crawl has never made")
 	}
@@ -237,7 +239,7 @@ func TestSeedingNeverMarksTheCrawlsOwnSeedAsAlreadyQueued(t *testing.T) {
 		t.Errorf("seeded %d, want 1: /other only — the crawl's own seed is not the site map's to spare", got)
 	}
 	seed := mustURL(t, "http://a.test/")
-	if c.queued[requestFingerprint("GET", seed, nil, "")] {
+	if c.queued[c.dedupKey("GET", seed, nil, "")] {
 		t.Fatal("the crawl's own seed was marked already-queued; Run would drop it and the crawl would fetch nothing")
 	}
 	if !c.enqueue(frontierItem{url: seed, method: "GET", depth: 0}, "", &LimitReport{Limits: c.limits}) {

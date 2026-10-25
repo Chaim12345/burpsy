@@ -1203,6 +1203,13 @@ type Crawler struct {
 	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
 	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
 	locationShapes map[string][]string
+	// phaseLocations and phaseLocationShapes are the same two structures, scoped to the current
+	// crawl phase and reset when a credential phase begins (burpsy-react-ui-crediso): they decide
+	// only whether a response's links are walked (see recordPhaseWalk), so a page another phase
+	// already walked does not suppress this phase's walk, while the location count above stays
+	// global and honest — identical content is one location however many phases fetched it.
+	phaseLocations      map[string]locationEntry
+	phaseLocationShapes map[string][]string
 	// notFound is each probed directory's answer for a nonexistent name (s92h); nil marks a directory
 	// whose probe could not be read. notFoundProbes counts probes against maxNotFoundProbes.
 	notFound       map[string]*notFoundShape
@@ -1226,6 +1233,21 @@ type Crawler struct {
 	relogins int
 	// login is the recorded login's jar and report, nil without Config.BrowserLogin.
 	login *loginState
+	// credPhase is which crawl phase is running (burpsy-react-ui-crediso): 0 for the
+	// unauthenticated phase, N >= 1 for the phase crawling behind LoginCredentials[N-1]. Frontier
+	// dedup and template quotas are namespaced by it, so each credential's phase re-crawls the
+	// application behind its own login — per-phase state, no cross-credential leakage. Phases are
+	// sequential: the frontier drains before the next phase begins, so every item in flight
+	// belongs to the current phase and c.login is always the current phase's session.
+	credPhase int
+	// loginForm records the first identified login form when credentials are configured; the
+	// phases build their login submissions from it at phase start rather than at discovery —
+	// Burp discovers login functions unauthenticated and answers them per credential.
+	loginForm *credentialLoginForm
+	// authChallenged are the URLs the unauthenticated phase bounced off (401/403): each
+	// credential phase re-fetches them WITH its session. Bounded; discovery-order.
+	authChallenged     []string
+	authChallengedSeen map[string]bool
 	// credLoginLocationBase is len(c.locations) at the moment the first credential login
 	// succeeded: locations the crawl already knew before it had a session, so the report's
 	// PagesFoundAfterLogin counts what the login actually unlocked rather than the whole map.
@@ -1451,23 +1473,26 @@ func New(cfg Config) (*Crawler, error) {
 		senders: make(map[string]*sender.AuthorisedSender),
 		// Built from the validated seeds below rather than from cfg.Seeds' raw strings, so the key is
 		// computed from the same parse the requests are.
-		credentialOrigins: make(map[string]bool),
-		queued:            make(map[string]bool),
-		locations:         make(map[string]locationEntry),
-		locationShapes:    make(map[string][]string),
-		notFound:          make(map[string]*notFoundShape),
-		templates:         make(map[string]int),
-		templateOK:        make(map[string]bool),
-		hostLimiters:      make(map[string]*intruder.RateLimiter),
-		robotsSeeded:      make(map[string]bool),
-		requestsPer:       rps,
-		rateCapped:        capped,
-		throttle:          throttle,
-		poolName:          poolName,
-		poolConcurrency:   poolConcurrency,
-		retention:         retention,
-		loginPage:         loginPage,
-		login:             newLoginStateOrNil(cfg.BrowserLogin),
+		credentialOrigins:   make(map[string]bool),
+		queued:              make(map[string]bool),
+		locations:           make(map[string]locationEntry),
+		locationShapes:      make(map[string][]string),
+		phaseLocations:      make(map[string]locationEntry),
+		phaseLocationShapes: make(map[string][]string),
+		notFound:            make(map[string]*notFoundShape),
+		templates:           make(map[string]int),
+		templateOK:          make(map[string]bool),
+		authChallengedSeen:  make(map[string]bool),
+		hostLimiters:        make(map[string]*intruder.RateLimiter),
+		robotsSeeded:        make(map[string]bool),
+		requestsPer:         rps,
+		rateCapped:          capped,
+		throttle:            throttle,
+		poolName:            poolName,
+		poolConcurrency:     poolConcurrency,
+		retention:           retention,
+		loginPage:           loginPage,
+		login:               newLoginStateOrNil(cfg.BrowserLogin),
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They
@@ -1649,6 +1674,11 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// budget and had nothing left to do reports as complete rather than as truncated. A bound is
 		// only a stop when there was still work it prevented.
 		if len(c.frontier) == 0 {
+			// The unauthenticated phase drains first; then each credential in turn gets its
+			// own phase behind its own login (burpsy-react-ui-crediso).
+			if c.startNextCredentialPhase(ctx, &rep, &lim) {
+				continue
+			}
 			break
 		}
 		if err := ctx.Err(); err != nil {
@@ -2048,6 +2078,16 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	c.noteSent()
 	c.observe(item.url, res.Status)
 
+	// A 401/403 in the unauthenticated phase is a page the login exists to unlock: remembered so
+	// each credential phase re-fetches it WITH its session (burpsy-react-ui-crediso).
+	if c.credPhase == 0 && res.Status != nil && (*res.Status == 401 || *res.Status == 403) && len(c.authChallenged) < maxAuthChallenged {
+		k := item.url.String()
+		if !c.authChallengedSeen[k] {
+			c.authChallengedSeen[k] = true
+			c.authChallenged = append(c.authChallenged, k)
+		}
+	}
+
 	// Capped before capture, not after. The bytes are already in memory — SendRaw read them, bounded
 	// by httputil's own 64 MiB ceiling — but storing them would put them in the segment log for the
 	// life of the capture, to have at most MaxParseBytes of them examined. Refusing to capture is a
@@ -2390,9 +2430,12 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
-	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
-		// Already seen at another URL, exactly or within the tolerance band: the links here are the
-		// links there, so descending again would spend budget re-walking a subtree already covered.
+	c.recordStructuredLocation(page, item.url.String(), &fetch, rep)
+	if !c.recordPhaseWalk(page, item.url.String()) {
+		// Already walked in THIS crawl phase, exactly or within the tolerance band: the links here
+		// are the links there, so descending again would spend budget re-walking a subtree already
+		// covered. The duplicate was still counted above — the count is global; only the walk is
+		// per-phase (burpsy-react-ui-crediso).
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
@@ -3285,25 +3328,36 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 
 	// A registration form (Burp's distinguishing rule: the password-carrying form with the most
 	// password fields — two or more in practice) gets a generated account when the operator opted
-	// in, never a provided credential: credentials belong to login forms.
-	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly {
+	// in, never a provided credential: credentials belong to login forms. Self-registration is an
+	// unauthenticated-phase act, as Burp runs it.
+	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly && c.credPhase == 0 {
 		c.admitSelfRegistration(f, base, u, depth, rep, lim)
 		return
 	}
-	// A login form with credentials configured is not an ordinary submission: it is the crawl's
-	// way in. One submission per credential, values mapped from the credential rather than the
-	// placeholder fill, the credential values masked in the stored exchange (burpsy-react-ui-uzil).
-	// An opted-in invalid-username probe (Burp's trigger_login_failures) joins it; either replaces
-	// the placeholder submission, which for a login form is junk that only looks like a failed
-	// login. crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from
-	// the provided credentials alone: no self-registration above, no invalid usernames here.
-	if f.isLoginForm {
+	// A login form with credentials configured is not submitted on discovery: it is RECORDED, and
+	// each credential phase's first act is the login (burpsy-react-ui-crediso — Burp discovers
+	// login functions in the unauthenticated phase, then logs in per credential). The
+	// invalid-username probe (Burp's trigger_login_failures) is an unauthenticated-phase act too.
+	// crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from the
+	// provided credentials alone: no self-registration above, no invalid usernames here.
+	if f.isLoginForm && len(f.passwordFields) < 2 {
 		handled := false
 		if len(c.cfg.LoginCredentials) > 0 {
-			c.admitCredentialLogins(f, base, u, depth, rep, lim)
+			if f.method == "GET" {
+				// A GET submission puts the form data set in the URL, and the URL is in every
+				// log, history row and Referer the request ever touches. Credentials do not go
+				// in URLs.
+				c.skips.record(SkipRecord{
+					Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+					FoundAt: base.String(),
+					Detail:  "a login form that submits GET would place the credentials in the URL; not submitted",
+				})
+			} else {
+				c.recordLoginForm(f, base, u, depth)
+			}
 			handled = true
 		}
-		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly {
+		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly && c.credPhase == 0 {
 			c.admitInvalidUsernameLogin(f, base, u, depth, rep, lim)
 			handled = true
 		}
@@ -3353,6 +3407,14 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 			set[item.method+" "+item.url.String()+" "+string(item.body)] = struct{}{}
 		}
 	}
+}
+
+// dedupKey namespaces the frontier seen-set by the crawl phase (burpsy-react-ui-crediso): a
+// request the unauthenticated phase made is MADE AGAIN in each credential phase, with that
+// phase's session — an authenticated view is different content, and sharing the seen-set across
+// phases would suppress exactly the fetches the phases exist for.
+func (c *Crawler) dedupKey(method string, u *url.URL, body []byte, fragment string) string {
+	return strconv.Itoa(c.credPhase) + "|" + requestFingerprint(method, u, body, fragment)
 }
 
 // enqueue is the tail of the admission pipeline shared by links, forms and seeds: scope, query,
@@ -3417,7 +3479,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
-	key := requestFingerprint(item.method, item.url, item.body, item.fragment)
+	key := c.dedupKey(item.method, item.url, item.body, item.fragment)
 	if c.queued[key] {
 		c.skips.record(SkipRecord{
 			Reason: SkipAlreadyQueued, URL: item.url.String(), Method: item.method,
@@ -3429,7 +3491,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 	// space. Checked after the exact key so that a genuine repeat reports as a repeat, and before the
 	// frontier bound so that an infinite application reports as an infinite application rather than as
 	// a full queue — see SkipTemplateQuota for why that distinction is the whole point.
-	template := urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
+	template := strconv.Itoa(c.credPhase) + "|" + urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
 	if n := c.templates[template]; n >= c.limits.MaxTemplateVisits {
 		lim.record(StopTemplateQuota)
 		lim.TemplateQuotaDropped++
