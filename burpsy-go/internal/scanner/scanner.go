@@ -206,6 +206,15 @@ type ScanConfig struct {
 	// compiled-in corpus is attached; WithConfig can switch it off. Off with a corpus attached
 	// audits the built-ins alone, which is the honest opt-out.
 	CheckCorpus bool
+	// DisableGraphQLIngest switches off the GraphQL ingestion validation gate
+	// (graphql_ingest.go): at ingestion, gqlparser validates the parent document of every
+	// derived GraphQL argument point, and a document no GraphQL server would accept yields
+	// no argument points - probing inside it would measure the server's parser error path,
+	// not a resolver. The zero value keeps the gate ON: it is ingestion hygiene shared by
+	// every check rather than a check family, so a plain ScanConfig{} must not defeat it,
+	// and auditing exactly the string-scan shape bcheck derives unvalidated takes this
+	// deliberate opt-out.
+	DisableGraphQLIngest bool
 	// CheckExtendedCoverage admits every remaining catalog TypeIndex the registry declares — the
 	// Task 6 completeness sweep's native (header/CORS/CSP, cache poisoning/deception) and explicit
 	// declined rows. Off by default: these rows have no individual ScanConfig switch of their own

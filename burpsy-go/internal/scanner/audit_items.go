@@ -955,11 +955,14 @@ const declinedPastLimitPrefix = bcheck.DeclinedPastLimitWhat
 // kinds is returned alongside because the count is meaningless without it — see
 // AuditItem.PointKinds. Enumeration happens only when an item ledger is attached, so a CLI audit and
 // a unit test pay nothing: it is one request parse per item, cheap beside a probe but not free.
-func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) ([]AuditItemPoint, []string) {
+func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions, graphQLIngest bool) ([]AuditItemPoint, []string) {
 	if len(raw) == 0 {
 		return nil, kinds
 	}
 	points, declined := bcheck.EnumerateWith(raw, kinds, opts)
+	if graphQLIngest {
+		points = filterGraphQLPointsByValidation(points)
+	}
 	out := make([]AuditItemPoint, 0, len(points)+len(declined))
 	for _, p := range points {
 		out = append(out, AuditItemPoint{

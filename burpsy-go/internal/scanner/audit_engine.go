@@ -1809,7 +1809,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			bumpPhase(&o, c.phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
 		}
 	}
-	rowSel := newRowSelection(s.ConfigSnapshot().OnlyRows)
+	// One snapshot feeds the row selection and the queue row's enumeration below: both
+	// must read the same configuration even if an operator flips a switch mid-audit.
+	snap := s.ConfigSnapshot()
+	rowSel := newRowSelection(snap.OnlyRows)
 	o.UnitsPlanned = len(units)
 
 	// The queue's row for this item, filled in at the one moment every fact it needs is in hand: the
@@ -1817,7 +1820,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions())
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions(), !snap.DisableGraphQLIngest)
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 
