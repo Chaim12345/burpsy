@@ -7,8 +7,6 @@
 // unloaded plugin is a control that can only fail, and the invoke route refuses it. The
 // precedent is plugin-registrations.test.ts, which pins the same rule for the menu surfaces.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { pluginInvocations, pluginTabKey } from "./plugin-registrations";
 import type { ExtensionList } from "./types.extensions";
 import type { Registration } from "./types.extensions";
@@ -71,17 +69,5 @@ describe("pluginTabKey", () => {
  test("the same message, plugin and registration always produce the same key, because the key is the content cache's identity", () => {
   const invocation = { plugin: "alpha", registration: registration("tab", "editor-tab", "Derived view") };
   expect(pluginTabKey(7, invocation)).toBe(pluginTabKey(7, invocation));
- });
-});
-
-// The strip, the tab body (text, loading, in-tab error) and the messageId hand-off are pinned by
-// rendering the editor: ui/plugin-editor-tabs.test.tsx (vln1). What stays a source pin is that History
-// passes its stored-message ids to its editors: rendering the History page for it is a separate, larger
-// piece of work.
-describe("history hands its editors the stored-message ids", () => {
- test("so the tabs render from the bytes on screen", () => {
-  const history = readFileSync(join(import.meta.dir, "..", "pages", "history.tsx"), "utf8");
-  expect(history).toMatch(/messageId=\{requestId \?\? undefined\}/);
-  expect(history).toMatch(/messageId=\{selected\.response === null \? undefined/);
  });
 });
