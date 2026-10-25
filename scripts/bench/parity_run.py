@@ -208,6 +208,49 @@ class LiveCtx:
                               http_json, confirm, time.sleep)
 
 
+    def _collect_hidden_inputs(self, spec, out_dir):
+        """j1mk.13's burpsy side: Param-Miner-style guessing is an on-demand action
+        (POST /api/hidden-inputs), never part of an audit, so this class collects from the
+        guessing run's confirmed inputs instead of audit findings."""
+        findings = []
+        kinds = spec.get("hidden_kinds", ["query", "cookie", "header"])
+        for t in spec["targets"]:
+            before = {r["id"] for r in http_json("GET", f"{self.web}/api/history")}
+            proxied_through(self.proxy, t["url"], t.get("method", "GET"), headers=t.get("headers"))
+            time.sleep(0.05)
+            new_ids = [r["id"] for r in http_json("GET", f"{self.web}/api/history")
+                       if r["id"] not in before]
+            if not new_ids:
+                raise RuntimeError(f"the proxy did not capture {t['url']} (out of scope?)")
+            body = {"exchange_id": new_ids[-1], "kinds": kinds}
+            raw_body = json.dumps(body, separators=(",", ":"))
+            tok = http_json("POST", f"{self.web}/api/hidden-inputs/confirm",
+                            {"method": "POST", "url": "/api/hidden-inputs", "body": raw_body})["token"]
+            started = http_json("POST", f"{self.web}/api/hidden-inputs", body,
+                                {CONFIRM_HEADER: tok}, timeout=30)
+            task = started["task_id"]
+            deadline = time.time() + self.audit_timeout
+            while True:
+                run = http_json("GET", f"{self.web}/api/hidden-inputs?task={task}", timeout=15)
+                if run.get("state") != "running":
+                    break
+                if time.time() > deadline:
+                    raise TimeoutError(f"hidden-input guessing did not finish within "
+                                       f"{self.audit_timeout}s on {t['url']}")
+                time.sleep(1.0)
+            res = run.get("result") or {}
+            if run.get("state") == "failed":
+                raise RuntimeError(f"hidden-input run failed on {t['url']}: "
+                                   f"{res.get('reason') or run.get('summary')}")
+            for inp in res.get("inputs") or []:
+                technique = inp.get("kind", "") + ("/reflected" if inp.get("reflected") else "")
+                findings.append({"url": t["url"], "parameter": inp.get("name", ""),
+                                 "class": spec["name"], "technique": technique})
+        return findings
+
+
+
+
 def _collect_crawl(spec, out_dir, web, audit_timeout, http_json, confirm, sleep):
     """j1mk.27's burpsy side: a crawl, not an audit. The crawl's captured traffic — it
     travels the same store path as the proxy's (CRAWL-02), so the /api/history id-difference
@@ -255,46 +298,6 @@ def _collect_crawl(spec, out_dir, web, audit_timeout, http_json, confirm, sleep)
             and int(r.get("port") or 0) == seed_port
             and r.get("source") == "crawl"]
     return parity_adapters.from_burpsy_crawl_history(rows, spec["name"])
-
-    def _collect_hidden_inputs(self, spec, out_dir):
-        """j1mk.13's burpsy side: Param-Miner-style guessing is an on-demand action
-        (POST /api/hidden-inputs), never part of an audit, so this class collects from the
-        guessing run's confirmed inputs instead of audit findings."""
-        findings = []
-        kinds = spec.get("hidden_kinds", ["query", "cookie", "header"])
-        for t in spec["targets"]:
-            before = {r["id"] for r in http_json("GET", f"{self.web}/api/history")}
-            proxied_through(self.proxy, t["url"], t.get("method", "GET"), headers=t.get("headers"))
-            time.sleep(0.05)
-            new_ids = [r["id"] for r in http_json("GET", f"{self.web}/api/history")
-                       if r["id"] not in before]
-            if not new_ids:
-                raise RuntimeError(f"the proxy did not capture {t['url']} (out of scope?)")
-            body = {"exchange_id": new_ids[-1], "kinds": kinds}
-            raw_body = json.dumps(body, separators=(",", ":"))
-            tok = http_json("POST", f"{self.web}/api/hidden-inputs/confirm",
-                            {"method": "POST", "url": "/api/hidden-inputs", "body": raw_body})["token"]
-            started = http_json("POST", f"{self.web}/api/hidden-inputs", body,
-                                {CONFIRM_HEADER: tok}, timeout=30)
-            task = started["task_id"]
-            deadline = time.time() + self.audit_timeout
-            while True:
-                run = http_json("GET", f"{self.web}/api/hidden-inputs?task={task}", timeout=15)
-                if run.get("state") != "running":
-                    break
-                if time.time() > deadline:
-                    raise TimeoutError(f"hidden-input guessing did not finish within "
-                                       f"{self.audit_timeout}s on {t['url']}")
-                time.sleep(1.0)
-            res = run.get("result") or {}
-            if run.get("state") == "failed":
-                raise RuntimeError(f"hidden-input run failed on {t['url']}: "
-                                   f"{res.get('reason') or run.get('summary')}")
-            for inp in res.get("inputs") or []:
-                technique = inp.get("kind", "") + ("/reflected" if inp.get("reflected") else "")
-                findings.append({"url": t["url"], "parameter": inp.get("name", ""),
-                                 "class": spec["name"], "technique": technique})
-        return findings
 
 
 def _wait_task(web, task, timeout):
@@ -346,3 +349,4 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+

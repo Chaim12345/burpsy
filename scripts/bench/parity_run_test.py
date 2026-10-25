@@ -10,6 +10,7 @@ import tarfile
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -442,6 +443,69 @@ class TestCollectCrawlLoop(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 parity_run._collect_crawl(dict(self.SPEC), d, "http://web", 30,
                                             fx.http_json, fx.confirm, lambda s: None)
+
+
+class TestHiddenInputsCollection(unittest.TestCase):
+    """Regression for the round-2 review finding: _collect_hidden_inputs was accidentally
+    nested (dead) under the module-level _collect_crawl instead of remaining a LiveCtx
+    method. These tests drive the REAL dispatch + collection path with only the HTTP and
+    proxy seams faked."""
+
+    SPEC = {"name": "hidden-parameter-discovery",
+            "burpsy_collect": "hidden-inputs",
+            "targets": [{"url": "http://127.0.0.1:19090/hidden/account", "method": "GET"}]}
+
+    def _ctx_and_calls(self, states):
+        calls = []
+        hist = [[], [{"id": 41}]]
+        task = {"task_id": 7}
+
+        def fake_http_json(method, url, body=None, headers=None, timeout=60):
+            calls.append((method, url, body, headers))
+            if url.endswith("/api/history"):
+                return hist.pop(0)
+            if url.endswith("/api/hidden-inputs/confirm"):
+                return {"token": "tok"}
+            if url.endswith("/api/hidden-inputs"):
+                return dict(task)
+            if "/api/hidden-inputs?task=7" in url:
+                return states.pop(0)
+            raise AssertionError(f"unexpected call {method} {url}")
+
+        ctx = parity_run.LiveCtx("http://proxy", "http://web", "/tools", audit_timeout=30)
+        return ctx, calls, fake_http_json
+
+    def test_collect_burpsy_dispatches_to_the_real_hidden_inputs_method(self):
+        self.assertTrue(hasattr(parity_run.LiveCtx, "_collect_hidden_inputs"),
+                        "_collect_hidden_inputs must stay a LiveCtx method")
+        done = {"state": "done", "result": {"inputs": [
+            {"name": "preview", "kind": "query", "reflected": False},
+            {"name": "x-api-version", "kind": "header", "reflected": False}]}}
+        ctx, calls, fake = self._ctx_and_calls([done])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(parity_run, "http_json", fake), \
+                mock.patch.object(parity_run, "proxied_through", lambda *a, **k: None), \
+                mock.patch.object(parity_run.time, "sleep", lambda s: None):
+            got = ctx.collect_burspy(dict(self.SPEC), d)
+        self.assertEqual([("preview", "query"), ("x-api-version", "header")],
+                         [(f["parameter"], f["technique"]) for f in got])
+        posts = {url: (body, headers) for m, url, body, headers in calls if m == "POST"}
+        self.assertIn("http://web/api/hidden-inputs/confirm", posts)
+        body, headers = posts["http://web/api/hidden-inputs"]
+        self.assertEqual({parity_run.CONFIRM_HEADER: "tok"}, headers)
+        self.assertEqual(41, body["exchange_id"])
+        self.assertEqual(["query", "cookie", "header"], body["kinds"])
+
+    def test_failed_run_is_loud(self):
+        ctx, calls, fake = self._ctx_and_calls(
+            [{"state": "failed", "result": {"reason": "engine down"}}])
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(parity_run, "http_json", fake), \
+                mock.patch.object(parity_run, "proxied_through", lambda *a, **k: None), \
+                mock.patch.object(parity_run.time, "sleep", lambda s: None):
+            with self.assertRaises(RuntimeError) as cm:
+                ctx.collect_burpsy(dict(self.SPEC), d)
+        self.assertIn("engine down", str(cm.exception))
 
 
 class TestCrawlSpecOrchestration(unittest.TestCase):
