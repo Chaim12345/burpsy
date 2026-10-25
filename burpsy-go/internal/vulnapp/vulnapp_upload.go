@@ -322,6 +322,10 @@ func registerUpload(mux *http.ServeMux) {
 			writeUploadJSON(w, map[string]any{"stored": false, "error": "file content is not an image"})
 			return
 		}
+		// The scan skips the first 32 bytes: that is the region the magic-byte check above
+		// already classified, and where an honest image header lives. A polyglot's markup starts
+		// after its magic, so skipping the header region is what keeps this fixture a check of
+		// content rather than a second read of the same bytes.
 		rest := content
 		if len(rest) > 32 {
 			rest = rest[32:]

@@ -90,9 +90,10 @@ const maxUploadPointsPerRequest = 2
 // The polyglot class and its keep-probing variants raised the worst case past the original 60.
 const maxUploadProbesPerPoint = 90
 
-// maxUploadCleanupRequests bounds the deletes and verification fetches of the cleanup pass
-// SEPARATELY: a chatty endpoint may spend the whole probe budget and still owes every stored
-// marker its removal attempt, so cleanup can never be starved by the probing it follows.
+// maxUploadCleanupRequests reserves the deletes and verification fetches of the cleanup pass UP
+// FRONT, on a counter probing cannot touch: a chatty endpoint may spend the whole probe budget
+// and still owes every stored marker its removal attempt. Reservation by construction - the two
+// budgets share no counter - so no endpoint can strand a planted file by being expensive to probe.
 const maxUploadCleanupRequests = 40
 
 // storedXSSOrFileUpload runs the "Cross-site scripting (stored)" row's two techniques, each behind its
@@ -196,11 +197,22 @@ type uploadProber struct {
 	sent int
 	// ref is the accepted benign upload every other attempt is compared with.
 	ref *uploadAttempt
-	// stored is every URL a confirmed-stored probe file was read back from or named at, so the
-	// run can try to remove them afterwards.
-	stored []string
+	// stored is every location a confirmed-stored probe file was read back from, and every
+	// candidate a named-but-never-fetched location resolves to. The distinction is destructive-
+	// action safety: only a URL our own marker bytes were read back from may receive a DELETE.
+	stored []trackedFile
 	// cleanupSent counts cleanup's own requests against maxUploadCleanupRequests.
 	cleanupSent int
+}
+
+// trackedFile is one location a stored probe file may live at.
+type trackedFile struct {
+	url string
+	// confirmed is true only when this run read its own marker bytes back from this exact URL.
+	// Anything less - the response named the location, a candidate pattern matched - never sees
+	// a DELETE: firing one at a file we never proved we created is an intrusive destructive
+	// action with no confirmation.
+	confirmed bool
 }
 
 // uploadAttempt is one upload and what became of it.
@@ -443,8 +455,10 @@ func svgCanary(marker string) (string, string) {
 
 func plainMarker(marker string) (string, string) { return marker + "\n", marker }
 
-// gifMagic is the header that makes a content sniffer read the file as image/gif: the signature,
-// a 1x1 logical screen descriptor, and a black-only global colour table.
+// gifMagic is the byte run that makes a content sniffer CLASSIFY the file as image/gif: the
+// signature, a 1x1 logical screen descriptor, and a black-only global colour table. It is
+// magic-compatible, not a complete valid GIF - the bypass it demonstrates lives entirely in
+// classification, which is the only claim the finding makes.
 const gifMagic = "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00"
 
 // gifHTMLPolyglot is both faces of the classic image/HTML polyglot: GIF89a magic for the sniffer,
@@ -605,7 +619,9 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 				"<script>/*"+xss.marker+"*/</script>"),
 			fmt.Sprintf("a file uploaded through %s %q is served back from %s as a document a browser "+
 				"renders, with the script it carried intact, so anyone sent that link runs it in this "+
-				"origin. The uploaded script was an inert comment; nothing was executed by this check.",
+				"origin. The uploaded script was an inert comment; nothing was executed by this check. "+
+				"This is the first upload variant demonstrated to render on this point, reported so the "+
+				"chain is proved - not an exhaustive list of every file the application would render.",
 				p.point.Kind, p.point.Name, xss.fetched)))
 	}
 	if t := p.traversal(ctx, safe); t != nil {
@@ -712,6 +728,12 @@ func (p *uploadProber) judge(ctx context.Context, a *uploadAttempt, ext string) 
 		return false
 	}
 	a.accepted = strings.HasSuffix(strings.ToLower(stored), "."+strings.ToLower(ext))
+	if !a.accepted && a.fetched != "" {
+		// The marker WAS read back, so the file is stored - the application renamed it (a safe
+		// extension appended, say), which fails this class's extension test but does not un-store
+		// the file. It is this run's marker either way: account for it.
+		p.track(a)
+	}
 	return a.accepted
 }
 
@@ -805,14 +827,18 @@ func (p *uploadProber) traversal(ctx context.Context, safe string) *Finding {
 			p.point.Kind, p.point.Name))
 }
 
-// track remembers where one confirmed-stored attempt's file lives, for the cleanup pass.
+// track remembers where one confirmed-stored attempt's file lives, for the cleanup pass. A
+// fetched-back file is confirmed at its URL; a file the response merely NAMED contributes every
+// candidate, all unconfirmed - the tester gets the full list, and no candidate is deleted.
 func (p *uploadProber) track(a *uploadAttempt) {
 	if a.fetched != "" {
-		p.stored = append(p.stored, a.fetched)
+		p.stored = append(p.stored, trackedFile{url: a.fetched, confirmed: true})
 		return
 	}
-	if cs := p.candidates(a.location); len(cs) > 0 && cs[0] != nil {
-		p.stored = append(p.stored, cs[0].String())
+	for _, u := range p.candidates(a.location) {
+		if u != nil {
+			p.stored = append(p.stored, trackedFile{url: u.String()})
+		}
 	}
 }
 
@@ -820,11 +846,11 @@ func (p *uploadProber) track(a *uploadAttempt) {
 // and every location that remains for the tester to clean up by hand - to each finding. With no
 // findings the removal still runs, silently: a quiet endpoint is not a reason to leave markers.
 func (p *uploadProber) sweep(ctx context.Context, findings []*Finding) {
-	verified, unverified, remaining := p.cleanup(ctx)
-	if len(verified) == 0 && len(unverified) == 0 && len(remaining) == 0 {
+	verified, unknown, remaining, unconfirmed := p.cleanup(ctx)
+	if len(verified)+len(unknown)+len(remaining)+len(unconfirmed) == 0 {
 		return
 	}
-	note := uploadCleanupNote(verified, unverified, remaining)
+	note := uploadCleanupNote(verified, unknown, remaining, unconfirmed)
 	for _, f := range findings {
 		f.Description += note
 	}
@@ -838,36 +864,45 @@ const (
 	removalFailed removal = iota
 	// removalVerified: the delete was accepted AND the re-fetch says the file is gone (404/410).
 	removalVerified
-	// removalUnverified: the delete was accepted but the re-fetch could not say - a network error
-	// or a status that is neither "gone" nor a served file. The file is probably gone; "probably"
-	// is not "verified", and the finding says which it got.
-	removalUnverified
+	// removalUnknown: the delete was accepted but the re-fetch could not say - a network error, a
+	// blocked request, or a status that is neither "gone" nor a served file (401/403/500). The
+	// removal state is UNKNOWN, and the finding says exactly that rather than "removed".
+	removalUnknown
 )
 
-// cleanup tries DELETE on every stored probe URL through the same scope-enforcing gate, on its own
-// request budget (maxUploadCleanupRequests).
-func (p *uploadProber) cleanup(ctx context.Context) (verified, unverified, remaining []string) {
+// cleanup tries DELETE on every CONFIRMED stored probe URL through the same scope-enforcing gate,
+// on its own request budget (maxUploadCleanupRequests). Locations the application named but this
+// run never read its marker back from are reported, never sent anything.
+func (p *uploadProber) cleanup(ctx context.Context) (verified, unknown, remaining, unconfirmed []string) {
 	seen := map[string]bool{}
-	for _, raw := range p.stored {
-		if seen[raw] {
+	confirmedByURL := map[string]bool{}
+	for _, tf := range p.stored {
+		confirmedByURL[tf.url] = confirmedByURL[tf.url] || tf.confirmed
+	}
+	for _, tf := range p.stored {
+		if seen[tf.url] {
 			continue
 		}
-		seen[raw] = true
-		target, err := url.Parse(raw)
+		seen[tf.url] = true
+		if !confirmedByURL[tf.url] {
+			unconfirmed = append(unconfirmed, tf.url)
+			continue
+		}
+		target, err := url.Parse(tf.url)
 		if err != nil {
-			remaining = append(remaining, raw)
+			remaining = append(remaining, tf.url)
 			continue
 		}
 		switch p.remove(ctx, target) {
 		case removalVerified:
-			verified = append(verified, raw)
-		case removalUnverified:
-			unverified = append(unverified, raw)
+			verified = append(verified, tf.url)
+		case removalUnknown:
+			unknown = append(unknown, tf.url)
 		default:
-			remaining = append(remaining, raw)
+			remaining = append(remaining, tf.url)
 		}
 	}
-	return verified, unverified, remaining
+	return verified, unknown, remaining, unconfirmed
 }
 
 // remove deletes one stored probe file and reports what the outcome proves.
@@ -878,7 +913,7 @@ func (p *uploadProber) remove(ctx context.Context, target *url.URL) removal {
 	}
 	check, err := p.requestKind(ctx, "GET", target, true)
 	if err != nil {
-		return removalUnverified
+		return removalUnknown
 	}
 	if check.Status == 404 || check.Status == 410 {
 		return removalVerified
@@ -887,24 +922,30 @@ func (p *uploadProber) remove(ctx context.Context, target *url.URL) removal {
 		// Still served after an accepted delete: the delete was a no-op.
 		return removalFailed
 	}
-	return removalUnverified
+	return removalUnknown
 }
 
-// uploadCleanupNote is the finding paragraph reporting the probe-file cleanup.
-func uploadCleanupNote(verified, unverified, remaining []string) string {
+// uploadCleanupNote is the finding paragraph reporting the probe-file cleanup. Each category says
+// exactly what was proved: verified removal, removal state unknown, still stored, or never
+// confirmed enough to touch.
+func uploadCleanupNote(verified, unknown, remaining, unconfirmed []string) string {
 	var b strings.Builder
 	b.WriteString("\n\nStored probe files: ")
 	if len(verified) > 0 {
 		fmt.Fprintf(&b, "this check removed %d file(s) it had uploaded, each verified gone by re-fetching: %s. ",
 			len(verified), strings.Join(verified, ", "))
 	}
-	if len(unverified) > 0 {
-		fmt.Fprintf(&b, "the application accepted a delete for %d file(s) but the removal could not be verified (the re-fetch did not come back clean); confirm by hand: %s. ",
-			len(unverified), strings.Join(unverified, ", "))
+	if len(unknown) > 0 {
+		fmt.Fprintf(&b, "the application accepted a delete for %d file(s) but their removal state is UNKNOWN (the verification re-fetch was blocked or errored); confirm by hand: %s. ",
+			len(unknown), strings.Join(unknown, ", "))
 	}
 	if len(remaining) > 0 {
 		fmt.Fprintf(&b, "%d stored probe file(s) remain for the tester to clean up - no delete is exposed for them, it was refused, or the file is still served afterwards: %s. ",
 			len(remaining), strings.Join(remaining, ", "))
+	}
+	if len(unconfirmed) > 0 {
+		fmt.Fprintf(&b, "the application named %d further stored location(s) this run never read its marker back from, so nothing was sent to them - no delete fires at a file this check did not prove it created; clean up by hand if they exist: %s. ",
+			len(unconfirmed), strings.Join(unconfirmed, ", "))
 	}
 	b.WriteString("Every file was an inert marker string; none of them can execute.")
 	return b.String()

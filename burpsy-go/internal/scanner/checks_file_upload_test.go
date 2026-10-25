@@ -267,10 +267,12 @@ func TestUploadCleanupNoteSaysExactlyWhatWasProved(t *testing.T) {
 		[]string{"http://h/files/a.html"},
 		[]string{"http://h/files/b.gif"},
 		[]string{"http://h/files/c.gif"},
+		[]string{"http://h/files/d.gif"},
 	)
 	for _, want := range []string{"removed 1 file(s)", "verified gone", "a.html",
-		"accepted a delete for 1 file(s)", "could not be verified", "b.gif",
-		"1 stored probe file(s) remain", "c.gif"} {
+		"accepted a delete for 1 file(s)", "UNKNOWN", "b.gif",
+		"1 stored probe file(s) remain", "c.gif",
+		"never read its marker back", "nothing was sent", "d.gif"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("cleanup note is missing %q: %q", want, note)
 		}
