@@ -1055,7 +1055,8 @@ func (s *Sender) SendRawOutcome(
 		keep = false
 	}
 	if keep {
-		if ic := s.pool.take(key, plan.wantH2); ic != nil {
+		route := s.routeState(host, useTLS)
+		if ic := s.pool.take(key, plan.wantH2, route); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
@@ -1174,7 +1175,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: s.routeState(host, useTLS)})
 		}
 		return resp, out, err
 	}
@@ -1369,7 +1370,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: s.routeState(host, false)})
 	} else {
 		conn.Close()
 	}
