@@ -1182,15 +1182,16 @@ export const useApp = create<AppState>()(
       }
       // The same rule for a ws tab's edited negotiation request (burpsy-react-ui-ws3e): the edit
       // was previewed against one authority - a captured connection's or an explicit target's -
-      // so ANY change to the tab's aim (mode, socket, target or path, including clearing one to
-      // undefined) drops the stored edit rather than dialling yesterday's bytes at today's
-      // target. The comparison is by value, so a patch that restates the current aim - the
-      // chooser re-rendering, a form re-emitting - keeps a legitimate edit; and there is no
-      // same-patch exception: a retarget that also carries wsHandshake still clears, because
-      // trusting the caller to pair them is exactly the edit/destination confusion this rule
-      // exists to prevent. The editor's own keystrokes patch only wsHandshake and keep it.
+      // so a change to the tab's aim (mode, socket, target or path, including clearing one to
+      // undefined) drops a stored edit rather than dialling yesterday's bytes at today's target.
+      // The comparison is by value, so a patch restating the current aim keeps a legitimate edit.
+      // The atomic pair is the exception and is correct operator semantics: a patch carrying a
+      // NEW wsHandshake together with the new aim means that edit for that target, so it is
+      // kept - what must never ride a retarget is the STALE edit the operator did not resupply.
+      // The editor's own keystrokes patch only wsHandshake and keep it.
       if (
        tab.wsHandshake !== undefined &&
+       !("wsHandshake" in patch) &&
        (("wsMode" in patch && patch.wsMode !== tab.wsMode) ||
         ("wsSocket" in patch && patch.wsSocket !== tab.wsSocket) ||
         ("target" in patch && patch.target !== tab.target) ||

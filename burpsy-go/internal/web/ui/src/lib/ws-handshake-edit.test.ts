@@ -74,15 +74,18 @@ describe("a stored handshake edit does not survive a retarget", () => {
   expect(tab(id).wsHandshake).toBe("GET /x HTTP/1.1\r\n\r\n");
  });
 
- test("a retarget that carries wsHandshake in the same patch still clears it", () => {
-  // The same-patch exception would trust the caller to pair the new authority with a fresh edit;
-  // that trust is the edit/destination confusion the rule exists to prevent.
+ test("an atomic target+fresh-edit patch keeps the new edit for the new target", () => {
+  // Atomic-pair semantics: the operator supplying a NEW handshake in the same patch as the new
+  // target means it for that target. What the rule forbids is the STALE edit riding the retarget
+  // - so the seed below (an edit written against the old target) is the load-bearing part: the
+  // atomic patch must replace it, not preserve it and not clear to the synthetic head.
   const id = openWsTab();
+  useApp.getState().updateRepeaterTab(id, { wsHandshake: "GET /stale HTTP/1.1\r\n\r\n" });
   useApp.getState().updateRepeaterTab(id, {
    target: "ws://other.test",
    wsHandshake: "GET /fresh HTTP/1.1\r\n\r\n",
   });
-  expect(tab(id).wsHandshake).toBeUndefined();
+  expect(tab(id).wsHandshake).toBe("GET /fresh HTTP/1.1\r\n\r\n");
  });
 });
 

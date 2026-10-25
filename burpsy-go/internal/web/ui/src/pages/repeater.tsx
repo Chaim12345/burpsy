@@ -2361,7 +2361,8 @@ function WsHandshakeEditor({ tab, mode }: { tab: RepeaterTab; mode: WsConnection
       Sent as shown, except the wire invariants, which refresh at send time: Sec-WebSocket-Key gets
       a fresh nonce (RFC 6455), any extension offer is removed, the target line goes origin-form,
       and Content-Length, Transfer-Encoding and anything after the header block are dropped.
-      Every other byte is dialed exactly as written.
+      Every other byte is dialed exactly as written. Changing the connection, target or path
+      clears your edit; an edit given together with the new target applies to that target.
      </p>
      {edited !== undefined ? (
       <Button variant="outline" size="small" onClick={() => updateRepeaterTab(tab.id, { wsHandshake: undefined })}>
