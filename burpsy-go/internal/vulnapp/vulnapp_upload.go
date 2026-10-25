@@ -20,6 +20,7 @@ package vulnapp
 // The store is bounded (uploadStoreCap) so a long scan cannot grow it without limit.
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"mime"
@@ -66,10 +67,13 @@ func uploadEndpoints() []Endpoint {
 			"flattens the filename to its last component before storing (a name under a missing "+
 				"directory is stored like any other), yet ECHOES the name as sent - including any "+
 				"\"../\" - in the location it reports, so only the missing-directory control tells it apart"),
-		up("/fu/safe/allowlist/upload", "File upload functionality", true,
-			"stores only names whose final extension is png/jpg/jpeg/gif/txt (case-insensitive, no NUL, "+
-				"no path separators); a refused file gets HTTP 200 and a message QUOTING the refused path, "+
-				"so only the response-shape comparison tells refusal from acceptance"),
+		up("/fu/safe/allowlist/upload", "File upload functionality", false,
+			"an extension allowlist alone is NOT a safe twin for this row: .gif is allowed and the "+
+				"content is never inspected, so the GIF89a HTML polyglot is stored - true at "+
+				"acceptance strength only, since the forced-download serving can never render it"),
+		up("/fu/safe/strict/upload", "File upload functionality", true,
+			"pairs the extension allowlist with a content check past the magic bytes: a stored "+
+				"file whose body carries HTML markup is refused, so the polyglot fails here"),
 		// --- a content-sniffing filter: the polyglot is stored, but served by its extension ---
 		up("/fu/sniff/upload", "File upload functionality", false,
 			"requires image magic bytes for an image extension, and the GIF89a HTML polyglot passes; "+
@@ -111,6 +115,8 @@ func newUploadStore() *uploadStore {
 		"/fu/safe":                  true,
 		"/fu/sniff":                 true,
 		"/fu/sniff/files":           true,
+		"/fu/safe/strict":           true,
+		"/fu/safe/strict/files":     true,
 		"/fu/trustct":               true,
 		"/fu/trustct/files":         true,
 	}}
@@ -297,6 +303,42 @@ func registerUpload(mux *http.ServeMux) {
 			return
 		}
 		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/safe/allowlist/files/" + name})
+	})
+
+	// Safe: the allowlist AND a content check past the magic bytes - a file whose body carries
+	// HTML markup after its image header is refused, so the GIF89a polyglot fails here.
+	mux.HandleFunc("/fu/safe/strict/upload", func(w http.ResponseWriter, r *http.Request) {
+		name, content, ok := readUpload(r)
+		if r.Method != http.MethodPost || !ok {
+			http.Error(w, "send a multipart file", http.StatusBadRequest)
+			return
+		}
+		ext := strings.ToLower(path.Ext(name))
+		if strings.ContainsAny(name, "\x00/\\") || !allowed[ext] {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file type not allowed"})
+			return
+		}
+		if ext != ".txt" && !strings.HasPrefix(http.DetectContentType(content), "image/") {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file content is not an image"})
+			return
+		}
+		rest := content
+		if len(rest) > 32 {
+			rest = rest[32:]
+		}
+		if bytes.Contains(bytes.ToLower(rest), []byte("<!doctype")) ||
+			bytes.Contains(bytes.ToLower(rest), []byte("<html")) ||
+			bytes.Contains(bytes.ToLower(rest), []byte("<script")) ||
+			bytes.Contains(bytes.ToLower(rest), []byte("<svg")) {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file content is not a plain image"})
+			return
+		}
+		base := path.Base(name)
+		if _, ok := s.put("/fu/safe/strict/files", base, content); !ok {
+			http.Error(w, "could not store the file", http.StatusInternalServerError)
+			return
+		}
+		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/safe/strict/files/" + base})
 	})
 
 	// A filter that checks magic bytes: an image extension must carry image content. The GIF89a
