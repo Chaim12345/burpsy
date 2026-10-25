@@ -27,14 +27,18 @@ func TestRepeaterGraphQLValidateParsesWithThePinnedParser(t *testing.T) {
 		t.Fatalf("validate: %d %s", rec.Code, rec.Body.String())
 	}
 	var ok repeaterGraphQLValidateResp
-	json.Unmarshal(rec.Body.Bytes(), &ok)
+	if err := json.Unmarshal(rec.Body.Bytes(), &ok); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if !ok.OK || len(ok.Errors) != 0 {
 		t.Errorf("a valid document did not validate: %+v", ok)
 	}
 
 	rec = postJSON(t, s, "/api/repeater/graphql-validate", map[string]any{"query": "{ book { author }"})
 	var bad repeaterGraphQLValidateResp
-	json.Unmarshal(rec.Body.Bytes(), &bad)
+	if err := json.Unmarshal(rec.Body.Bytes(), &bad); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if bad.OK || len(bad.Errors) == 0 {
 		t.Fatalf("a broken document validated: %+v", bad)
 	}
@@ -52,7 +56,9 @@ func TestRepeaterGraphQLQueryReplacesOnlyTheQueryContent(t *testing.T) {
 		t.Fatalf("replace: %d %s", rec.Code, rec.Body.String())
 	}
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if resp.Source != "body" {
 		t.Errorf("source = %q, want body", resp.Source)
 	}
@@ -81,7 +87,9 @@ func TestRepeaterGraphQLQueryPicksTheNamedBatchOperation(t *testing.T) {
 		"request": raw, "index": 1, "query": "{ c }",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if !strings.Contains(resp.Request, `{"query":"{ a }"}`) || !strings.Contains(resp.Request, `{"query":"{ c }","variables":{}}`) {
 		t.Errorf("the wrong operation was edited:\n%s", resp.Request)
 	}
@@ -94,7 +102,9 @@ func TestRepeaterGraphQLQueryEditsTheURLCarrierWithCodecParity(t *testing.T) {
 		"request": raw, "index": 0, "query": "{ b(c: \"x+y\") }",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if resp.Source != "params" {
 		t.Errorf("source = %q, want params", resp.Source)
 	}
@@ -140,7 +150,9 @@ func TestRepeaterGraphQLQueryIndexesOnlyGraphQLDocuments(t *testing.T) {
 		"request": raw, "index": 0, "query": "{c}",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if strings.Contains(resp.Request, `"query":"{c}"},{"query":"{b}"`) {
 		t.Errorf("index 0 hit the not-GraphQL entry the UI never listed:\n%s", resp.Request)
 	}
@@ -155,7 +167,9 @@ func TestRepeaterGraphQLQueryIndexesOnlyGraphQLDocuments(t *testing.T) {
 	rec = postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
 		"request": mixed, "index": 0, "query": "{c}",
 	})
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if resp.Source != "body" || !strings.Contains(resp.Request, `{"query":"{c}"}`) || !strings.Contains(resp.Request, "query=notgraphql") {
 		t.Errorf("a not-GraphQL URL parameter shadowed the body's carrier: source=%q\n%s", resp.Source, resp.Request)
 	}
@@ -190,7 +204,9 @@ func TestRepeaterGraphQLQueryReadsEveryJSONWhitespaceAroundTheColon(t *testing.T
 		"request": raw, "index": 0, "query": "{b}",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if rec.Code != http.StatusOK || !strings.Contains(resp.Request, "\"query\"\n:\r\t\"{b}\"") {
 		t.Errorf("a carrier written with LF/CR/tab around the colon was not read: %d\n%s", rec.Code, resp.Request)
 	}
@@ -223,7 +239,9 @@ func TestRepeaterGraphQLQueryCountsDuplicateKeysLikeJSONParse(t *testing.T) {
 		"request": raw, "index": 0, "query": "{c}",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if !strings.Contains(resp.Request, `{"query":"{a}","query":"{c}"}`) {
 		t.Errorf("a duplicate key did not resolve last-wins like JSON.parse:\n%s", resp.Request)
 	}
@@ -234,7 +252,9 @@ func TestRepeaterGraphQLQueryCountsDuplicateKeysLikeJSONParse(t *testing.T) {
 	rec = postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
 		"request": batch, "index": 1, "query": "{d}",
 	})
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if !strings.Contains(resp.Request, `[{"query":"{a}","query":"{b}"},{"query":"{d}"}]`) {
 		t.Errorf("a duplicate key in one batch element shifted the next element's index:\n%s", resp.Request)
 	}
@@ -261,7 +281,9 @@ func TestRepeaterGraphQLQueryAShadowedKeyDoesNotAppendTheObjectTwice(t *testing.
 		"request": raw, "index": 1, "query": "{d}",
 	})
 	var resp repeaterGraphQLQueryResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if !strings.Contains(resp.Request, `[{"query":"{a}","query":"note","query":"{b}"},{"query":"{d}"}]`) {
 		t.Errorf("index 1 did not name the second element:\n%s", resp.Request)
 	}
