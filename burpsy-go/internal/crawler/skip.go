@@ -309,11 +309,16 @@ const (
 	// the phase boundary retires that session, so the owed retry is abandoned and counted, never
 	// sent under the next phase's.
 	SkipPhaseAbandoned
+
+	// SkipLoginFormIgnored means a second login form was found while the crawl already answers
+	// an earlier one (burpsy-react-ui-crediso): one login function per crawl, and the content
+	// behind the ignored form is a coverage hole that must be visible.
+	SkipLoginFormIgnored
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [47]Skip{
+var SkipAll = [48]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -361,6 +366,7 @@ var SkipAll = [47]Skip{
 	SkipSeedRedirectedOutOfScope,
 	SkipInteractionUnavailable,
 	SkipPhaseAbandoned,
+	SkipLoginFormIgnored,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -462,6 +468,8 @@ func (s Skip) slot() int {
 		return 45
 	case SkipPhaseAbandoned:
 		return 46
+	case SkipLoginFormIgnored:
+		return 47
 	}
 	panic("unknown Skip")
 }
@@ -563,6 +571,8 @@ func (s Skip) String() string {
 		return "interaction-unavailable"
 	case SkipPhaseAbandoned:
 		return "phase-abandoned"
+	case SkipLoginFormIgnored:
+		return "login-form-ignored"
 	}
 	return "unknown"
 }
@@ -667,6 +677,8 @@ func (s Skip) Explanation() string {
 		return "the page was to be driven in a browser (clicks, form fills) and the interaction pass could not run for it, so any route reachable only by a click is missing rather than absent"
 	case SkipPhaseAbandoned:
 		return "a retry the crawl still owed when its credential phase ended; re-issuing it under the next phase's session would be a different request, so it was abandoned and counted"
+	case SkipLoginFormIgnored:
+		return "a second login form; the crawl answers the first login form it found (one login function per crawl), so content behind this one is missing rather than absent"
 	}
 	return "unknown skip"
 }
@@ -738,7 +750,7 @@ func (s Skip) Category() SkipCategory {
 		SkipAPILocationOutOfScope, SkipSeedRedirectedOutOfScope:
 		return CategoryScope
 	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap,
-		SkipFormDestinationExhausted:
+		SkipFormDestinationExhausted, SkipLoginFormIgnored:
 		return CategoryPolicy
 	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded, SkipSoftNotFound:
 		return CategoryDuplicate

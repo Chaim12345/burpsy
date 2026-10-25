@@ -1077,6 +1077,10 @@ type Crawler struct {
 	// same set and a threshold cannot differ between the pass that trips it and the report that
 	// names it.
 	eh ErrorHandling
+	// followUpPassesSpent is how many of this crawl phase's configured follow-up passes have
+	// run: the per-request retry bound (o0c5) is per PHASE under credential phases
+	// (burpsy-react-ui-crediso), reset at each phase boundary.
+	followUpPassesSpent int
 	// followUp is the set of requests that ended in a transport failure, kept for the follow-up pass.
 	// Per-crawl, not per-run, and drained pass by pass so a request that fails twice is retried on
 	// the NEXT pass rather than twice in the same one.
@@ -1252,8 +1256,10 @@ type Crawler struct {
 	// credential phase re-fetches them WITH its session. GET-only, deliberately: replaying a
 	// challenged POST would re-send a body under a session the unauthenticated phase did not
 	// hold — a write with new authority, which the re-fetch is not licensed to make. Bounded
-	// (maxAuthChallenged); discovery-order. challengedSeeded marks that the current phase has
-	// already issued its re-fetches, so a re-login does not re-seed them.
+	// (maxAuthChallenged); discovery-order. The seen-map is bounded by construction: every URL
+	// in it was admitted to the frontier, and the admitted-request table is bounded by
+	// MaxFingerprints (SkipFingerprintBudget refuses past it). challengedSeeded marks that the
+	// current phase has already issued its re-fetches, so a re-login does not re-seed them.
 	authChallenged     []string
 	authChallengedSeen map[string]bool
 	challengedSeeded   bool
@@ -1492,16 +1498,19 @@ func New(cfg Config) (*Crawler, error) {
 		templates:           make(map[string]int),
 		templateOK:          make(map[string]bool),
 		authChallengedSeen:  make(map[string]bool),
-		hostLimiters:        make(map[string]*intruder.RateLimiter),
-		robotsSeeded:        make(map[string]bool),
-		requestsPer:         rps,
-		rateCapped:          capped,
-		throttle:            throttle,
-		poolName:            poolName,
-		poolConcurrency:     poolConcurrency,
-		retention:           retention,
-		loginPage:           loginPage,
-		login:               newLoginStateOrNil(cfg.BrowserLogin),
+		// -1 until the first SUCCESSFUL credential login: "no login has unlocked anything
+		// yet" must read differently from "the login unlocked everything from location 0".
+		credLoginLocationBase: -1,
+		hostLimiters:          make(map[string]*intruder.RateLimiter),
+		robotsSeeded:          make(map[string]bool),
+		requestsPer:           rps,
+		rateCapped:            capped,
+		throttle:              throttle,
+		poolName:              poolName,
+		poolConcurrency:       poolConcurrency,
+		retention:             retention,
+		loginPage:             loginPage,
+		login:                 newLoginStateOrNil(cfg.BrowserLogin),
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They
@@ -1683,6 +1692,21 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// budget and had nothing left to do reports as complete rather than as truncated. A bound is
 		// only a stop when there was still work it prevented.
 		if len(c.frontier) == 0 {
+			// Owed retries run before the drain is declared: a recovered request's links are
+			// admitted to THIS phase's frontier and execute under THIS phase's session — a
+			// phase whose retry recovered something is not drained (burpsy-react-ui-crediso).
+			// A no-op with nothing owed or the phase's pass budget spent.
+			c.runFollowUpPasses(ctx, &rep, &lim)
+			if len(c.frontier) > 0 {
+				continue
+			}
+			// A retry inside the pass may be what tripped the error-handling policy: re-check
+			// BEFORE the next phase's login is admitted — the policy just said this target is
+			// not to be sent to.
+			if c.checkPauseThresholds(&rep, &lim) {
+				pausedByPolicy = true
+				break
+			}
 			// The unauthenticated phase drains first; then each credential in turn gets its
 			// own phase behind its own login (burpsy-react-ui-crediso).
 			if c.startNextCredentialPhase(ctx, &rep, &lim) {
@@ -1810,7 +1834,10 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 	// lim.Requests, which is assigned once after the loop and reads zero for the whole crawl, so a
 	// follow-up pass could spend a second full request budget on top of the first: the one way a
 	// retry feature makes a tool cost more than the operator agreed to.
-	for pass := 0; pass < passes; pass++ {
+	// The pass budget is per crawl PHASE (burpsy-react-ui-crediso): the drain-time call and a
+	// later crawl-end call in the same phase share it, so a request still gets at most
+	// FollowUpPasses extra attempts per phase — the bound o0c5 states, carried into phases.
+	for ; c.followUpPassesSpent < passes; c.followUpPassesSpent++ {
 		if len(c.followUp) == 0 {
 			break
 		}

@@ -139,10 +139,17 @@ type credentialLoginForm struct {
 	depth         int
 }
 
-// recordLoginForm keeps the first identified login form; later ones are noted and ignored — one
-// login function per crawl, the same "one auth method" reading as New's BrowserLogin refusal.
+// recordLoginForm keeps the first identified login form. One login function per crawl — the
+// same "one auth method" reading as New's BrowserLogin refusal — so a LATER login form is
+// ignored, and the ignoring is recorded: content behind a second login function is a coverage
+// hole the operator can see, not a silent choice.
 func (c *Crawler) recordLoginForm(f discoveredForm, base, u *url.URL, depth int) {
 	if c.loginForm != nil {
+		c.skips.record(SkipRecord{
+			Reason: SkipLoginFormIgnored, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "the crawl answers the first login form it found (" + c.loginForm.foundAt + "); this later one is ignored",
+		})
 		return
 	}
 	c.loginForm = &credentialLoginForm{
@@ -210,14 +217,14 @@ func (c *Crawler) buildCredentialLoginItem(cred LoginCredential) (frontierItem, 
 // (burpsy-react-ui-crediso): the unauthenticated phase runs first; then each credential in turn
 // gets its own crawl behind its own login.
 //
-// A phase boundary is a WHOLE-session boundary. It rebuilds every piece of per-credential state:
-// the jar (dropped, never carried into the next login), the re-login closure (it re-sends the
-// login of the phase that built it, so a phase that has not logged in has NONE — the expiry path
-// refuses rather than invoke another phase's), the report's current-session fields (the crawl
-// ends described by the phase it ended in: a failed phase is unauthenticated, whatever an earlier
-// phase earned), the expiry detector's template memory, and the walk decision's location set.
-// What accumulates across phases is only the report's COUNTERS (Attempts, Succeeded, Failed) and
-// the global location count.
+// A phase boundary ends the whole SESSION: the jar (dropped, never carried into the next login),
+// the re-login closure (it re-sends the login of the phase that built it, so a phase that has
+// not logged in has NONE — the expiry path refuses rather than invoke another phase's), and the
+// report's current-session fields (the crawl ends described by the phase it ended in: a failed
+// phase is unauthenticated, whatever an earlier phase earned) are rebuilt; the expiry detector's
+// template memory, the walk decision's location set and the follow-up pass budget restart. What
+// deliberately ACCUMULATES across phases is the ledger: the report's counters (Attempts,
+// Succeeded, Failed, Relogins) and the global location count.
 //
 // The phase's first act is the login submission, ADMITTED TO THE FRONTIER like every other
 // request — so the run loop's own gates decide whether it is sent: cancellation, the suite pause,
@@ -232,16 +239,6 @@ func (c *Crawler) startNextCredentialPhase(ctx context.Context, rep *Report, lim
 		return false
 	}
 	for c.credPhase < len(c.cfg.LoginCredentials) {
-		// The error-handling policy senior to a new phase: a target that has started timing out
-		// is not one the next credential's login should be sent to. The loop's own check then
-		// ends the crawl with the policy's stop.
-		if c.checkPauseThresholds(rep, lim) {
-			return false
-		}
-		// The draining phase's owed retries run now, under ITS session, before the boundary
-		// retires it (burpsy-react-ui-crediso): a follow-up retry is the same request under the
-		// same session, and after the boundary that session is gone.
-		c.runFollowUpPasses(ctx, rep, lim)
 		cred := c.cfg.LoginCredentials[c.credPhase]
 		c.credPhase++ // phases are 1-indexed by the counter: phase N answers credentials[N-1]
 		if c.login != nil {
@@ -261,6 +258,7 @@ func (c *Crawler) startNextCredentialPhase(ctx context.Context, rep *Report, lim
 		c.phaseLocations = map[string]locationEntry{}
 		c.phaseLocationShapes = map[string][]string{}
 		c.challengedSeeded = false
+		c.followUpPassesSpent = 0
 		item, refusal := c.buildCredentialLoginItem(cred)
 		if refusal != nil {
 			c.skips.record(*refusal)
@@ -289,7 +287,6 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 		// Burp's own rule) — so this branch is the credentials-only case.
 		st = &loginState{report: LoginReport{Method: "credentials", CookieNames: []string{}, Blocked: []string{}, RenderBlocked: []string{}}}
 		c.login = st
-		c.credLoginLocationBase = len(c.locations)
 	}
 	st.report.Attempts++
 	if len(cookies) == 0 {
@@ -300,6 +297,11 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 	st.report.Succeeded++
 	st.report.Authenticated = true
 	st.report.Label = item.loginCred
+	if c.credLoginLocationBase < 0 {
+		// The baseline is the first SUCCESS, not the first attempt: a login that never
+		// succeeds unlocked nothing, and a failed first attempt must not peg the count.
+		c.credLoginLocationBase = len(c.locations)
+	}
 	// This credential's jar replaces whatever the phase boundary left (already dropped in
 	// startNextCredentialPhase), so the rest of this phase drains under this session.
 	jar, _ := cookiejar.New(nil)

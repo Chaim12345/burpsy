@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 )
 
 // isolationApp has one login form and two accounts whose post-login content differs:
@@ -270,6 +271,11 @@ func TestAFailedCredentialPhaseStaysUnauthenticated(t *testing.T) {
 	if rep.Login == nil || rep.Login.Authenticated {
 		t.Errorf("login block = %+v, want the crawl ending unauthenticated: the last phase's login failed", rep.Login)
 	}
+	// ...but what ALICE's login unlocked is not un-found by bob's failure: /account and /private
+	// behind her session are pages found after A login.
+	if rep.Login != nil && rep.Login.PagesFoundAfterLogin < 2 {
+		t.Errorf("PagesFoundAfterLogin = %d, want >= 2 — the failed final phase does not zero what alice's login unlocked", rep.Login.PagesFoundAfterLogin)
+	}
 	// Phase 2's expiry-looking page must not re-run phase 1's login: alice's credentials are sent
 	// exactly once, in her own phase.
 	mu.Lock()
@@ -484,5 +490,254 @@ func TestAFollowUpRetryNeverFiresUnderAnotherPhaseSession(t *testing.T) {
 	}
 	if rep.Skips.Count(SkipPhaseAbandoned) != 1 {
 		t.Errorf("SkipPhaseAbandoned count = %d, want 1", rep.Skips.Count(SkipPhaseAbandoned))
+	}
+}
+
+// A login that NEVER succeeds unlocked nothing: the pages-found-after-login baseline is the first
+// SUCCESS, not the first attempt — a failed-only crawl reports zero.
+func TestNoSuccessfulLoginMeansNoPagesFoundAfterLogin(t *testing.T) {
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<a href="/login">sign in</a><a href="/about">about</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			page(w, `<p>bad credentials</p>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form>`)
+	})
+	mux.HandleFunc("/about", func(w http.ResponseWriter, r *http.Request) { page(w, `<p>about</p>`) })
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "wrong"}}
+	rep := run(t, cfg)
+
+	if rep.Login == nil {
+		t.Fatal("no login block: the attempt happened and must be reported")
+	}
+	if rep.Login.Authenticated {
+		t.Errorf("Authenticated = true after a failed-only crawl")
+	}
+	if rep.Login.PagesFoundAfterLogin != 0 {
+		t.Errorf("PagesFoundAfterLogin = %d, want 0 — no login ever succeeded, so no page was found after one", rep.Login.PagesFoundAfterLogin)
+	}
+}
+
+// A retry that RECOVERS during a phase's follow-up pass admits links to the frontier — and those
+// links belong to THAT phase: the phase is not drained until its post-retry frontier is drained,
+// so a recovered discovery executes under its own phase's session, never the next credential's.
+func TestRecoveredRetryLinksStayInTheirPhase(t *testing.T) {
+	var mu sync.Mutex
+	var fetches []string
+	record := func(r *http.Request) string {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		mu.Lock()
+		fetches = append(fetches, r.URL.Path+" cookie="+cv)
+		mu.Unlock()
+		return cv
+	}
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		page(w, `<a href="/login">sign in</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		if r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			vals, _ := url.ParseQuery(string(body))
+			switch vals.Get("user") + "/" + vals.Get("pass") {
+			case "alice/s3cret":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+			case "bob/hunter2":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "bbb", Path: "/"})
+			}
+			page(w, `<a href="/account">my account</a>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form><a href="/account">account</a>`)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		switch cv := record(r); cv {
+		case "aaa", "bbb":
+			page(w, `<p>account</p><a href="/flaky">flaky</a>`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+			page(w, `<p>forbidden</p>`)
+		}
+	})
+	var flakyMu sync.Mutex
+	flakyCalls := 0
+	mux.HandleFunc("/flaky", func(w http.ResponseWriter, r *http.Request) {
+		cv := record(r)
+		if cv == "aaa" {
+			// Fails once at transport level, recovers on the retry — and the recovered page is
+			// where /late is discovered.
+			flakyMu.Lock()
+			flakyCalls++
+			first := flakyCalls == 1
+			flakyMu.Unlock()
+			if first {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+				return
+			}
+		}
+		page(w, `<p>flaky</p><a href="/late">late</a>`)
+	})
+	mux.HandleFunc("/late", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		page(w, `<p>late</p>`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.ErrorHandling = ErrorHandling{FollowUpPasses: intp(1)}
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "hunter2"},
+	}
+	run(t, cfg)
+
+	count := func(want string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, f := range fetches {
+			if f == want {
+				n++
+			}
+		}
+		return n
+	}
+	// /late is discovered from the page alice's RETRY recovered: it is fetched inside HER phase,
+	// under her session...
+	if n := count("/late cookie=aaa"); n != 1 {
+		t.Errorf("/late fetches with alice's session = %d, want 1 — a recovered retry's discovery belongs to the retry's phase", n)
+	}
+	// ...and bob's phase discovers it again through his own /flaky — once, under HIS session...
+	if n := count("/late cookie=bbb"); n != 1 {
+		t.Errorf("/late fetches with bob's session = %d, want 1 (his phase's own discovery)", n)
+	}
+	// ...and never sessionless: the old-phase item must not outlive the boundary.
+	if n := count("/late cookie="); n != 0 {
+		t.Errorf("/late fetches with no session = %d, want 0 — a phase-1 item must not execute after the phase-1 jar is dropped", n)
+	}
+}
+
+// A pause threshold tripped BY a retry inside the follow-up pass ends the crawl: the next phase's
+// login is not sent to the target the policy just paused against.
+func TestAPauseTrippedByARetryStopsTheNextPhaseLogin(t *testing.T) {
+	var mu sync.Mutex
+	posts := map[string]int{}
+	page := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		page(w, `<a href="/login">sign in</a>`)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			body := make([]byte, r.ContentLength)
+			_, _ = r.Body.Read(body)
+			vals, _ := url.ParseQuery(string(body))
+			mu.Lock()
+			posts[vals.Get("user")]++
+			mu.Unlock()
+			switch vals.Get("user") + "/" + vals.Get("pass") {
+			case "alice/s3cret":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "aaa", Path: "/"})
+			case "bob/hunter2":
+				http.SetCookie(w, &http.Cookie{Name: "session", Value: "bbb", Path: "/"})
+			}
+			page(w, `<a href="/account">my account</a>`)
+			return
+		}
+		page(w, `<form method="post" action="/login">
+			<input type="text" name="user" value="">
+			<input type="password" name="pass">
+			</form><a href="/account">account</a>`)
+	})
+	mux.HandleFunc("/account", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		if cv == "aaa" || cv == "bbb" {
+			page(w, `<p>account</p><a href="/flaky">flaky</a>`)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		page(w, `<p>forbidden</p>`)
+	})
+	mux.HandleFunc("/flaky", func(w http.ResponseWriter, r *http.Request) {
+		c, _ := r.Cookie("session")
+		cv := ""
+		if c != nil {
+			cv = c.Value
+		}
+		if cv == "aaa" {
+			// Always slower than the sender timeout: the original send and the retry both time
+			// out — the SECOND consecutive timeout is what trips the pause, inside the pass.
+			time.Sleep(time.Second)
+			return
+		}
+		page(w, `<p>ok</p>`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := fastTimeoutConfig(h, srv.URL+"/")
+	cfg.SubmitForms = true
+	cfg.ErrorHandling = ErrorHandling{PauseOnTimeoutCount: intp(2), FollowUpPasses: intp(1)}
+	cfg.LoginCredentials = []LoginCredential{
+		{Username: "alice", Password: "s3cret"},
+		{Username: "bob", Password: "hunter2"},
+	}
+	// runLikeProduction: the sender's real timeout drives the pause threshold; run()'s 30s
+	// test context would mask it.
+	rep := runLikeProduction(t, cfg)
+
+	mu.Lock()
+	bobPosts := posts["bob"]
+	mu.Unlock()
+	if bobPosts != 0 {
+		t.Errorf("bob's login was sent %d times after the retry tripped the pause threshold — the boundary must re-check the policy before the next phase begins", bobPosts)
+	}
+	if !rep.Limits.Hit(StopPausedTimeouts) {
+		t.Errorf("stops = %v, want StopPausedTimeouts recorded", rep.Limits.Stops)
 	}
 }
