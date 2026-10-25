@@ -186,3 +186,18 @@ Two consequences of the drop that the script handles, and that a hand-started in
 (`vulnapp_build_requests.py` regenerates it from the app's source and its `/scanner` and
 `/allEndPoint` answers). Its cookies, tokens and accounts are placeholders; the seeders replace them
 at run time, and nothing seeded is ever written back to it.
+
+## Parity diff (j1mk.1)
+
+`parity.py` is the comparison step of the parity harness: it diffs burpsy's findings with a reference
+tool's on the same target, per class (both found, reference-only = a burpsy miss to file as a bead,
+burpsy-only = verify TP or FP), and scores both against the target's labels when a truth list is
+given. Input is JSON lists of `{url, parameter, class, technique?}`; an adapter per reference tool
+turns that tool's own output into this shape. Output is `parity.json` plus `parity.md`.
+
+    python3 scripts/bench/parity.py --burpsy B.json --reference R.json [--truth T.json] --out DIR --ref-name sqlmap
+    python3 scripts/bench/parity_test.py
+
+Not built yet: the reference-tool adapters and pinned, hash-checked installs, the containerised
+public suites (OWASP Benchmark, WAVSEP, DVWA, Juice Shop), and the nightly job that runs them under
+`scripts/capped-run.sh` and stores results.
