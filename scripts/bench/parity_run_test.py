@@ -486,7 +486,7 @@ class TestHiddenInputsCollection(unittest.TestCase):
                 mock.patch.object(parity_run, "http_json", fake), \
                 mock.patch.object(parity_run, "proxied_through", lambda *a, **k: None), \
                 mock.patch.object(parity_run.time, "sleep", lambda s: None):
-            got = ctx.collect_burspy(dict(self.SPEC), d)
+            got = ctx.collect_burpsy(dict(self.SPEC), d)
         self.assertEqual([("preview", "query"), ("x-api-version", "header")],
                          [(f["parameter"], f["technique"]) for f in got])
         posts = {url: (body, headers) for m, url, body, headers in calls if m == "POST"}
