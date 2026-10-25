@@ -9,6 +9,7 @@ require (
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/klauspost/compress v1.18.0
 	github.com/projectdiscovery/wappalyzergo v0.2.93
 	github.com/rs/zerolog v1.33.0
@@ -16,6 +17,7 @@ require (
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	go.uber.org/zap v1.26.0
 	golang.org/x/net v0.57.0
+	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.55.0
@@ -42,7 +44,6 @@ require (
 	github.com/gitleaks/go-gitdiff v0.9.1 // indirect
 	github.com/h2non/filetype v1.1.3 // indirect
 	github.com/hashicorp/go-version v1.7.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
@@ -75,7 +76,6 @@ require (
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
-	golang.org/x/sync v0.22.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
 

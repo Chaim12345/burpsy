@@ -33,7 +33,9 @@ import (
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
+	"github.com/hashicorp/golang-lru/v2"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 // DefaultCADir returns the default CA directory path.
@@ -269,17 +271,39 @@ func matchPattern(pattern, host string) bool {
 // choice. The NotBefore backdate absorbs a client clock a few minutes fast.
 const leafValidityDays = 397
 
+// leafCacheBound caps each per-host leaf cache (burpsy-react-ui-iyew). The old
+// sync.Map pool held one RSA keypair per host forever, so a long session crawling
+// thousands of vhosts — or a client scanning invented SNI names — grew it without
+// limit. Eviction under the bound costs only a re-mint on the next visit. A var
+// rather than a const so tests can shrink it; production code must not touch it.
+var leafCacheBound = 4096
+
 // TlsEngine handles TLS certificate generation and signing.
 type TlsEngine struct {
-	mu       sync.Mutex
-	caCert   *x509.Certificate
-	caPriv   *rsa.PrivateKey
-	certPool sync.Map // cache of generated certificates
+	// mu guards the caCert/caPriv pair during an ImportCA/RegenerateCA swap. Leaf
+	// minting reads the pair under RLock, so first visits to DIFFERENT hosts mint
+	// in parallel — the old code held one Lock around RSA keygen, serialising every
+	// first visit behind whichever host was minting (burpsy-react-ui-iyew) — while
+	// the swap still waits for every in-flight mint, so no leaf is signed by a
+	// half-swapped pair.
+	mu     sync.RWMutex
+	caCert *x509.Certificate
+	caPriv *rsa.PrivateKey
+
+	// poolMu guards the two LRU caches below (lru.Cache is not goroutine-safe). It
+	// is held only for O(1) Get/Add/Purge, never around key generation.
+	poolMu   sync.Mutex
+	certPool *lru.Cache[string, *tls.Certificate] // bounded cache of CA-signed leaves
+	mint     singleflight.Group                   // per-host dedup of CA-signed mints
+
 	// selfSigned caches the self-signed leaves a listener in CertModeSelfSigned serves
 	// (burpsy-react-ui-4trc). SEPARATE from certPool on purpose: the two modes produce
 	// different certificates for the same hostname, and one cache would hand a listener
-	// whichever mode happened to ask first.
-	selfSigned sync.Map
+	// whichever mode happened to ask first. Bounded by the same leafCacheBound
+	// (burpsy-react-ui-iyew): a self-signed listener is just as reachable by a
+	// hostname scan.
+	selfSigned *lru.Cache[string, *tls.Certificate]
+	selfMint   singleflight.Group
 }
 
 // GetCertificate returns or generates a certificate for the given host.
@@ -293,19 +317,50 @@ type TlsEngine struct {
 // the CA validate every leaf.
 func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 	// Check cache first
-	if cert, ok := e.certPool.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+	e.poolMu.Lock()
+	cached, ok := e.certPool.Get(host)
+	e.poolMu.Unlock()
+	if ok {
+		return cached, nil
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// singleflight shares one mint between concurrent first visits to the SAME
+	// host; different hosts proceed in parallel (burpsy-react-ui-iyew).
+	v, err, _ := e.mint.Do(host, func() (any, error) {
+		// RLock, not Lock: mints for different hosts overlap. ImportCA's write
+		// Lock waits for this RLock, which is also what keeps the cache add below
+		// from landing after the swap's purge — the purge cannot run while a mint
+		// is in flight.
+		e.mu.RLock()
+		defer e.mu.RUnlock()
 
-	// Double-checked after taking the lock: two concurrent misses for the same
-	// host would otherwise mint two leaves, and only one would be kept.
-	if cert, ok := e.certPool.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+		// Re-checked inside the flight: a completed earlier flight may have added
+		// the leaf after our fast-path miss.
+		e.poolMu.Lock()
+		cached, ok := e.certPool.Get(host)
+		e.poolMu.Unlock()
+		if ok {
+			return cached, nil
+		}
+
+		cert, err := e.mintCALeaf(host)
+		if err != nil {
+			return nil, err
+		}
+		e.poolMu.Lock()
+		e.certPool.Add(host, cert)
+		e.poolMu.Unlock()
+		return cert, nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return v.(*tls.Certificate), nil
+}
 
+// mintCALeaf generates and signs a fresh leaf for host. Callers hold e.mu at
+// least for reading, so the CA pair cannot change under it.
+func (e *TlsEngine) mintCALeaf(host string) (*tls.Certificate, error) {
 	// Generate new key for this host
 	hostPriv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -358,15 +413,11 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 
 	// Leaf first, then the CA. Leaf is filled in so crypto/tls does not
 	// re-parse the DER on every handshake.
-	cert := &tls.Certificate{
+	return &tls.Certificate{
 		Certificate: [][]byte{leafDER, e.caCert.Raw},
 		PrivateKey:  hostPriv,
 		Leaf:        leaf,
-	}
-
-	// Cache it
-	e.certPool.Store(host, cert)
-	return cert, nil
+	}, nil
 }
 
 // LoadOrGenerateCA loads or generates a CA certificate.
@@ -487,9 +538,19 @@ func loadCA(certData, keyData []byte) (*TlsEngine, error) {
 		return nil, err
 	}
 
+	pool, err := lru.New[string, *tls.Certificate](leafCacheBound)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create leaf cache: %w", err)
+	}
+	selfSignedPool, err := lru.New[string, *tls.Certificate](leafCacheBound)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create self-signed leaf cache: %w", err)
+	}
 	return &TlsEngine{
-		caCert: caCert,
-		caPriv: caKey,
+		caCert:     caCert,
+		caPriv:     caKey,
+		certPool:   pool,
+		selfSigned: selfSignedPool,
 	}, nil
 }
 
@@ -540,11 +601,12 @@ func (e *TlsEngine) ImportCA(certPEM, keyPEM []byte) error {
 	defer e.mu.Unlock()
 	e.caCert = loaded.caCert
 	e.caPriv = loaded.caPriv
-	// Every cached leaf was signed by the CA just replaced. See above.
-	e.certPool.Range(func(key, _ any) bool {
-		e.certPool.Delete(key)
-		return true
-	})
+	// Every cached leaf was signed by the CA just replaced. See above. The write
+	// Lock above already excludes in-flight mints (they hold RLock), so no leaf
+	// signed by the old CA can be added after this purge.
+	e.poolMu.Lock()
+	e.certPool.Purge()
+	e.poolMu.Unlock()
 	return nil
 }
 

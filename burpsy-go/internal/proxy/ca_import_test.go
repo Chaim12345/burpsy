@@ -106,8 +106,7 @@ func TestImportCAEmptiesTheLeafCache(t *testing.T) {
 			t.Fatalf("priming %s: %v", h, err)
 		}
 	}
-	cached := 0
-	engine.certPool.Range(func(_, _ any) bool { cached++; return true })
+	cached := cachedLeafCount(engine)
 	if cached != len(hosts) {
 		t.Fatalf("precondition: %d cached leaves, want %d", cached, len(hosts))
 	}
@@ -117,14 +116,11 @@ func TestImportCAEmptiesTheLeafCache(t *testing.T) {
 		t.Fatalf("ImportCA: %v", err)
 	}
 
-	remaining := 0
-	engine.certPool.Range(func(k, _ any) bool {
-		remaining++
-		t.Errorf("leaf for %v survived the import; it is signed by a CA no client trusts any more", k)
-		return true
-	})
+	engine.poolMu.Lock()
+	remaining := engine.certPool.Len()
+	engine.poolMu.Unlock()
 	if remaining != 0 {
-		t.Errorf("%d stale leaves remain", remaining)
+		t.Errorf("%d stale leaves remain; they are signed by a CA no client trusts any more", remaining)
 	}
 
 	// And every host re-signs under the new CA, which is the property the operator experiences.
@@ -186,8 +182,7 @@ func TestARefusedImportChangesNothing(t *testing.T) {
 			}
 			// And the cache must not have been flushed either — flushing on failure would discard
 			// perfectly good leaves and cause a needless re-sign storm.
-			cached := 0
-			engine.certPool.Range(func(_, _ any) bool { cached++; return true })
+			cached := cachedLeafCount(engine)
 			if cached != 1 {
 				t.Errorf("%d cached leaves after a refused import, want 1 — the cache was touched", cached)
 			}

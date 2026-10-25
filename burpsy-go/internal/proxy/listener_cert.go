@@ -174,15 +174,41 @@ func redactedSpec(spec ListenerSpec) ListenerSpec {
 // certificates for the same hostname, and one cache would hand a listener whichever mode happened
 // to ask first.
 func (e *TlsEngine) selfSignedCertificate(host string) (*tls.Certificate, error) {
-	if cert, ok := e.selfSigned.Load(host); ok {
-		return cert.(*tls.Certificate), nil
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if cert, ok := e.selfSigned.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+	e.poolMu.Lock()
+	cached, ok := e.selfSigned.Get(host)
+	e.poolMu.Unlock()
+	if ok {
+		return cached, nil
 	}
 
+	// Per-host singleflight, same shape as GetCertificate — except there is no CA
+	// in the path, so the mint never touches e.mu: a CA swap neither waits for nor
+	// invalidates self-signed leaves.
+	v, err, _ := e.selfMint.Do(host, func() (any, error) {
+		e.poolMu.Lock()
+		cached, ok := e.selfSigned.Get(host)
+		e.poolMu.Unlock()
+		if ok {
+			return cached, nil
+		}
+
+		cert, err := e.mintSelfSignedLeaf(host)
+		if err != nil {
+			return nil, err
+		}
+		e.poolMu.Lock()
+		e.selfSigned.Add(host, cert)
+		e.poolMu.Unlock()
+		return cert, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*tls.Certificate), nil
+}
+
+// mintSelfSignedLeaf generates a fresh self-signed leaf for host.
+func (e *TlsEngine) mintSelfSignedLeaf(host string) (*tls.Certificate, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("self-signed key: %w", err)
@@ -216,7 +242,5 @@ func (e *TlsEngine) selfSignedCertificate(host string) (*tls.Certificate, error)
 	if err != nil {
 		return nil, fmt.Errorf("parsing the self-signed certificate: %w", err)
 	}
-	cert := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv, Leaf: leaf}
-	e.selfSigned.Store(host, cert)
-	return cert, nil
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv, Leaf: leaf}, nil
 }
