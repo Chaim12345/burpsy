@@ -89,12 +89,27 @@ class Lint(unittest.TestCase):
             self.assertEqual(rc, 1, reason)
             self.assertIn("must cite", out)
 
+    def test_spaced_or_junk_multi_citation_is_rejected_not_half_checked(self):
+        g = self.landed[:8]
+        for reason in (f"MERGED via integrator ({g} + deadbee1)", f"MERGED via integrator ({g}+zzz)",
+                       f"MERGED via integrator ({g}+)", f"MERGED via integrator ({g}+DEADBEE1)"):
+            rc, out = self.lint(reason)
+            self.assertEqual(rc, 1, reason)
+            self.assertIn("malformed", out, reason)
+
+    def test_uppercase_sha_is_not_a_citation(self):
+        rc, out = self.lint(f"MERGED via integrator ({self.landed[:8].upper()})")
+        self.assertEqual(rc, 1)
+        self.assertIn("must cite", out)
+
     def test_sha_grammar_directly(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("bl", LINT)
         bl = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(bl)
-        grab = lambda r: [x for g in bl.SHA_RX.findall(bl.MERGED_RX.match(r).group(0)) for x in g.split("+")]
+        grab = lambda r: bl.merged_citations(bl.MERGED_RX.match(r).group(0))[0]
+        self.assertEqual(bl.merged_citations("MERGED via integrator (abcdefa + 1234567)")[0], [])
+        self.assertNotEqual(bl.merged_citations("MERGED via integrator (abcdefa + 1234567)")[1], "")
         self.assertEqual(grab("MERGED via integrator (abcdefa)"), ["abcdefa"])  # an all-letter sha is a sha
         self.assertEqual(grab("MERGED via integrator at 593179a3."), ["593179a3"])
         self.assertEqual(grab("MERGED via integrator fast-track (244d0b75+3f10641d): x"), ["244d0b75", "3f10641d"])
