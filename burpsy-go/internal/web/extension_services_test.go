@@ -102,7 +102,8 @@ func TestExtensionTrafficReadsTheStoreAndScope(t *testing.T) {
 	reqID, _ := s.store.Put([]byte(raw), core.DirectionRequest)
 	rspID, _ := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), core.DirectionResponse)
 	status := uint16(200)
-	s.store.AddExchange(&core.Exchange{Host: "example.test", Port: 80, Method: "GET", Path: "/a", Status: &status, Request: core.MsgPtr(reqID), Response: &rspID})
+	ex := &core.Exchange{Host: "example.test", Port: 80, Method: "GET", Path: "/a", Status: &status, Request: core.MsgPtr(reqID), Response: &rspID}
+	s.store.AddExchange(ex)
 
 	svc := s.ExtensionServices()
 	page, err := svc.Traffic.Query(context.Background(), "plug", extension.TrafficQuery{Source: extension.TrafficProxy, Host: "example.test", IncludeBodies: true})
@@ -120,8 +121,24 @@ func TestExtensionTrafficReadsTheStoreAndScope(t *testing.T) {
 	}
 	// The bounded page is honoured: a limit of 0 means the default, and an
 	// over-limit ask is clamped, not obeyed.
-	if _, err := svc.Traffic.Query(context.Background(), "plug", extension.TrafficQuery{Source: extension.TrafficOrganizer}); err == nil {
-		t.Fatal("the organizer source answered as if wired")
+	if p2, err := svc.Traffic.Query(context.Background(), "plug", extension.TrafficQuery{Source: extension.TrafficProxy, Limit: extension.MaxTrafficPage + 100}); err != nil || len(p2.Items) > extension.MaxTrafficPage {
+		t.Fatalf("clamped page = %+v %v", p2, err)
+	}
+
+	// The organizer source pages the operator's saved list in its own order.
+	if s.organizer == nil {
+		t.Skip("this test server has no organizer")
+	}
+	item := s.organizer.Add(int(ex.ID))
+	if item.ID == 0 {
+		t.Fatal("organizer add failed")
+	}
+	opage, err := svc.Traffic.Query(context.Background(), "plug", extension.TrafficQuery{Source: extension.TrafficOrganizer})
+	if err != nil {
+		t.Fatalf("organizer query: %v", err)
+	}
+	if opage.Total != 1 || len(opage.Items) != 1 || opage.Items[0].Method != "GET" {
+		t.Fatalf("organizer page = %+v", opage)
 	}
 
 	in, err := svc.Traffic.InScope(context.Background(), "http://example.test/a")

@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/sender"
@@ -136,12 +137,7 @@ func (s *Server) extensionSend(ctx context.Context, plugin string, req extension
 type extensionTraffic struct{ srv *Server }
 
 func (t extensionTraffic) Query(_ context.Context, _ string, q extension.TrafficQuery) (extension.TrafficPage, error) {
-	// The organizer source is not wired in this slice: the organizer store
-	// exposes no read API the host can page yet, and answering with the proxy
-	// history instead would silently rename what the plugin asked for.
-	if q.Source == extension.TrafficOrganizer {
-		return extension.TrafficPage{}, errors.New("the organizer source is not wired yet")
-	}
+
 	limit := q.Limit
 	if limit <= 0 {
 		limit = extension.DefaultTrafficPage
@@ -154,27 +150,54 @@ func (t extensionTraffic) Query(_ context.Context, _ string, q extension.Traffic
 		offset = 0
 	}
 	page := extension.TrafficPage{Items: []extension.TrafficItem{}}
+	if q.Source == extension.TrafficOrganizer {
+		if t.srv.organizer == nil {
+			return extension.TrafficPage{}, errors.New("no organizer is wired")
+		}
+		// The organizer's own order is preserved, the rule organizerView states:
+		// it is a list the operator built. Unresolved items (an evicted exchange)
+		// are skipped here rather than carried as empty rows: a plugin paged for
+		// traffic, and a note-only row answers a question it did not ask.
+		for _, item := range t.srv.organizer.List() {
+			ex, err := t.srv.store.GetExchange(core.ExchangeID(item.Exchange))
+			if err != nil || ex == nil {
+				continue
+			}
+			t.addIfMatch(&page, ex, q, offset, limit)
+		}
+		return page, nil
+	}
 	for _, ex := range t.srv.store.Exchanges() {
+		t.addIfMatch(&page, ex, q, offset, limit)
+	}
+	return page, nil
+}
+
+// addIfMatch applies the query's filters and paging to one exchange. Total is
+// the count across EVERY match, paged or not — a page that reported only its
+// own length would tell the plugin there is no more when there is.
+func (t extensionTraffic) addIfMatch(page *extension.TrafficPage, ex *core.Exchange, q extension.TrafficQuery, offset, limit int) {
+	{
 		if q.Host != "" && !strings.EqualFold(ex.Host, q.Host) {
-			continue
+			return
 		}
 		if q.Method != "" && !strings.EqualFold(ex.Method, q.Method) {
-			continue
+			return
 		}
 		status := 0
 		if ex.Status != nil {
 			status = int(*ex.Status)
 		}
 		if q.Status != 0 && status != q.Status {
-			continue
+			return
 		}
 		url := fmt.Sprintf("%s:%d%s", ex.Host, ex.Port, ex.Path)
 		if q.Contains != "" && !strings.Contains(url, q.Contains) {
-			continue
+			return
 		}
 		page.Total++
 		if page.Total <= offset || len(page.Items) >= limit {
-			continue
+			return
 		}
 		item := extension.TrafficItem{ID: int(ex.ID), Method: ex.Method, URL: url, Status: status}
 		if q.IncludeBodies {
@@ -191,7 +214,6 @@ func (t extensionTraffic) Query(_ context.Context, _ string, q extension.Traffic
 		}
 		page.Items = append(page.Items, item)
 	}
-	return page, nil
 }
 
 func (t extensionTraffic) InScope(_ context.Context, rawurl string) (bool, error) {
