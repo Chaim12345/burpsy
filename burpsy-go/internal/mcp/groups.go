@@ -59,8 +59,8 @@ var groupedTools = []groupSpec{
 		name: "history", group: groupRequests,
 		short: "Reads captured proxy traffic: the history list, one exchange, a stored message, a suite-wide search, counters, the Target analyzer, and a Repeater tab's history as one export.",
 		ops: []string{
-			"GET /api/history", "GET /api/message/", "GET /api/search", "GET /api/stats",
-			"GET /api/engagement/", "GET /api/exchange/in-browser/", "GET /api/target/analyze",
+			"GET /api/history", "GET /api/message/{id}", "GET /api/search", "GET /api/stats",
+			"GET /api/engagement/", "GET /api/exchange/in-browser/{id}", "GET /api/target/analyze",
 			"POST /api/repeater/history-export",
 		},
 	},
@@ -95,7 +95,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "websockets", group: groupRequests,
 		short: "Reads captured WebSocket connections, their message history, and one message.",
-		ops:   []string{"GET /api/ws/connections", "GET /api/ws/history", "GET /api/ws/message/"},
+		ops:   []string{"GET /api/ws/connections", "GET /api/ws/history", "GET /api/ws/message/{id}"},
 	},
 	{
 		name: "intercept", group: groupRequests,
@@ -106,7 +106,7 @@ var groupedTools = []groupSpec{
 		name: "intercept_control", group: groupRequests,
 		short: "Forwards, drops, edits or annotates held messages, and sets the intercept switch and its rules.",
 		ops: []string{
-			"POST /api/intercept/", "POST /api/intercept/annotate/", "POST /api/intercept/drop-all",
+			"POST /api/intercept/", "POST /api/intercept/annotate/{id}", "POST /api/intercept/drop-all",
 			"POST /api/intercept/enable", "POST /api/intercept/forward-all", "POST /api/intercept/in-scope-only",
 			"GET /api/intercept/newline-correction", "PUT /api/intercept/newline-correction",
 			"GET /api/intercept/rules/", "PUT /api/intercept/rules/",
@@ -195,7 +195,9 @@ var groupedTools = []groupSpec{
 	{
 		name: "tasks", group: groupScanning,
 		short: "Reads one task (and an async audit's finished result), cancels, re-runs or removes it, and pauses or resumes every task.",
-		ops:   []string{"GET /api/tasks/", "POST /api/tasks/", "DELETE /api/tasks/"},
+		ops: []string{"GET /api/tasks/{id}", "DELETE /api/tasks/{id}", "POST /api/tasks/{id}/cancel",
+			"POST /api/tasks/{id}/again", "POST /api/tasks/{id}/pause", "POST /api/tasks/{id}/resume",
+			"POST /api/tasks/pause", "POST /api/tasks/resume"},
 	},
 	{
 		name: "datasets", group: groupDatasets,
@@ -388,7 +390,7 @@ var groupedTools = []groupSpec{
 		short: "Polls for and reads out-of-band interactions, and reports the channel's status.",
 		ops: []string{
 			"POST /api/collaborator/poll", "GET /api/collaborator/status",
-			"GET /api/collaborator/interactions", "GET /api/collaborator/interaction/",
+			"GET /api/collaborator/interactions", "GET /api/collaborator/interaction/{id}",
 		},
 	},
 	{
@@ -426,6 +428,13 @@ var groupedTools = []groupSpec{
 		name: "protobuf", group: groupUtilities,
 		short: "Decodes or encodes a protobuf message.",
 		ops:   []string{"POST /api/protobuf/decode", "POST /api/protobuf/encode"},
+	},
+	{
+		// Its own tool: reflect-decode is riskEgress (it fetches the descriptor source), so it
+		// cannot share the local-write protobuf tool - one tool, one risk class.
+		name: "protobuf_reflect", group: groupUtilities,
+		short: "Decodes a protobuf message by reflecting on a descriptor source it fetches.",
+		ops:   []string{"POST /api/protobuf/reflect-decode"},
 	},
 	{
 		name: "match_replace", group: groupUtilities,

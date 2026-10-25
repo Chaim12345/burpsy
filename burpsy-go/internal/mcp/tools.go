@@ -287,10 +287,14 @@ func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 // pathExample is a concrete path under a subtree pattern: the manifest's own subPath when it names
 // one, otherwise a placeholder that makes the shape obvious.
 func pathExample(r web.MCPRouteInfo) string {
-	if r.SubPath != "" {
-		return r.Pattern + r.SubPath
+	sub := r.SubPath
+	if sub == "" {
+		sub = "{id}"
 	}
-	return r.Pattern + "{id}"
+	if i := strings.Index(r.Pattern, "{"); i >= 0 {
+		return r.Pattern[:i] + sub + r.Pattern[strings.Index(r.Pattern, "}")+1:]
+	}
+	return r.Pattern + sub
 }
 
 // confirmToolDescriptor describes the mint step.
@@ -813,8 +817,14 @@ func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
 			return resolvedCall{}, err
 		}
 		route, method = o.route, o.method
-		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" && strings.HasSuffix(route.Pattern, "/") {
-			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" {
+			id := strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+			switch {
+			case strings.HasSuffix(route.Pattern, "/"):
+				args.Path = route.Pattern + id
+			case strings.Contains(route.Pattern, "{id}"):
+				args.Path = strings.Replace(route.Pattern, "{id}", id, 1)
+			}
 		}
 	}
 	// Checked before the path is resolved, on what the caller asked for, so the refusal does not depend
@@ -879,7 +889,7 @@ func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (st
 		}
 	}
 
-	if !strings.HasSuffix(r.Pattern, "/") {
+	if !strings.HasSuffix(r.Pattern, "/") && !strings.Contains(r.Pattern, "{") {
 		if raw == "" {
 			raw = r.Pattern
 		}
@@ -887,7 +897,8 @@ func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (st
 			return "", fmt.Errorf("the %s tool calls %s and nothing else; %q is a different route — call its own tool", name, r.Pattern, raw)
 		}
 	} else if raw == "" {
-		return "", fmt.Errorf("%s is a subtree pattern and is not itself a URL: supply \"path\", for example %s", r.Pattern, pathExample(r))
+		// A subtree or {param} pattern is not itself a URL; the caller names the concrete path.
+		return "", fmt.Errorf("%s is not itself a URL: supply \"path\", for example %s", r.Pattern, pathExample(r))
 	}
 
 	resolved, ok := web.MCPRouteForPath(raw)

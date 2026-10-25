@@ -325,11 +325,13 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 //
 // Longest-prefix, because ServeMux does the same thing and the gate has to agree with it: a gate
 // that resolved "/api/audit/" to "/api/audit" would read a different risk for the same route the
-// mux routed.
+// mux routed. "{param}" segments (burpsy-react-ui-fxxm) match one non-empty segment each, the way
+// the mux's own wildcards do; between two patterns that match, the one with more literal text
+// wins, which is the mux's literal-beats-wildcard rule restated for a table lookup.
 func routeRiskFor(path string) (string, riskClass, bool) {
 	best, bestRisk, found := "", riskClass(""), false
 	for pattern, r := range manifest {
-		if pattern != "/" && !pathHasPrefix(path, pattern) {
+		if pattern == "/" || !patternMatches(pattern, path) {
 			continue
 		}
 		if !found || len(pattern) > len(best) {
@@ -337,6 +339,45 @@ func routeRiskFor(path string) (string, riskClass, bool) {
 		}
 	}
 	return best, bestRisk, found
+}
+
+// patternMatches reports whether path falls under pattern: a subtree pattern (trailing slash) by
+// segment-bounded prefix, a {param} pattern by shape - same segment count, literals equal, every
+// wildcard segment non-empty - and anything else exactly.
+func patternMatches(pattern, path string) bool {
+	if !strings.Contains(pattern, "{") {
+		return pathHasPrefix(path, pattern)
+	}
+	pSegs := strings.Split(strings.TrimSuffix(pattern, "/"), "/")
+	if strings.HasSuffix(pattern, "/") {
+		// A subtree pattern that also carries a wildcard: the path must have at least as many
+		// segments, and every pattern segment must match in place.
+		aSegs := strings.Split(path, "/")
+		if len(aSegs) < len(pSegs) {
+			return false
+		}
+		aSegs = aSegs[:len(pSegs)]
+		return segmentsMatch(pSegs, aSegs)
+	}
+	aSegs := strings.Split(path, "/")
+	return len(aSegs) == len(pSegs) && segmentsMatch(pSegs, aSegs)
+}
+
+// segmentsMatch is patternMatches' segment loop: a "{...}" segment matches any one non-empty
+// segment; anything else must be byte-equal.
+func segmentsMatch(pSegs, aSegs []string) bool {
+	for i, ps := range pSegs {
+		if strings.HasPrefix(ps, "{") && strings.HasSuffix(ps, "}") {
+			if aSegs[i] == "" {
+				return false
+			}
+			continue
+		}
+		if ps != aSegs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // confirmPatternFor strips the /confirm suffix a confirmation request carries, and restores a
