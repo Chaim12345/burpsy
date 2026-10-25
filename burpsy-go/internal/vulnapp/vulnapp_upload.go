@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -85,6 +86,16 @@ func uploadEndpoints() []Endpoint {
 		up("/fu/trustct/upload", "Cross-site scripting (stored)", false,
 			"checks the same magic bytes but serves the stored file with the Content-Type the upload "+
 				"declared, so a GIF89a HTML polyglot sent as text/html renders with its script"),
+		// --- a store whose reported location is not where the file is, and a renamer ---
+		up("/fu/misname/upload", "File upload functionality", false,
+			"accepts any extension and reports the stored location under the name it was sent, as the "+
+				"open upload does - but the file is kept under store/ and never appears at the named "+
+				"location, so acceptance is all a scan can prove there and deleting the named location "+
+				"would be acting on a URL the scan never confirmed it created"),
+		up("/fu/rename/upload", "File upload functionality", true,
+			"stores every upload under its name plus a .txt suffix and reports the TRUE name, so the "+
+				"stored file is read back from the reported location yet never keeps a dangerous "+
+				"extension"),
 	}
 }
 
@@ -119,6 +130,11 @@ func newUploadStore() *uploadStore {
 		"/fu/safe/strict/files":     true,
 		"/fu/trustct":               true,
 		"/fu/trustct/files":         true,
+		"/fu/misname":               true,
+		"/fu/misname/files":         true,
+		"/fu/misname/store":         true,
+		"/fu/rename":                true,
+		"/fu/rename/files":          true,
 	}}
 }
 
@@ -185,6 +201,20 @@ func (s *uploadStore) del(p string) bool {
 	delete(s.files, p)
 	delete(s.types, p)
 	return true
+}
+
+// list returns the stored paths under prefix, so a test can inspect what cleanup left behind.
+func (s *uploadStore) list(prefix string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for p := range s.files {
+		if strings.HasPrefix(p, prefix) {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // filenameParam reads a part's filename exactly as sent. mime/multipart's FileName() applies
@@ -395,18 +425,75 @@ func registerUpload(mux *http.ServeMux) {
 		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/trustct/files/" + base})
 	})
 
-	// Serving and removal. The open store exposes a DELETE on its files; the rest do not. The
-	// open and filtered stores serve by extension, trustct serves the declared type, and the
-	// safe stores serve downloads.
+	// A store that reports one location and keeps the file elsewhere: every upload lands under
+	// /fu/misname/store/ (where it IS fetchable) but the response names /fu/misname/files/,
+	// where nothing ever appears. A client that verifies or deletes only the location it was
+	// told about acts on a URL it never confirmed it created.
+	mux.HandleFunc("/fu/misname/upload", func(w http.ResponseWriter, r *http.Request) {
+		name, content, ok := readUpload(r)
+		if r.Method != http.MethodPost || !ok {
+			http.Error(w, "send a multipart file", http.StatusBadRequest)
+			return
+		}
+		base := path.Base(name)
+		if _, ok := s.put("/fu/misname/store", base, content); !ok {
+			http.Error(w, "could not store the file", http.StatusInternalServerError)
+			return
+		}
+		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/misname/files/" + base})
+	})
+
+	// A store that renames every upload: the file is kept under its name plus a .txt suffix and
+	// the response reports the TRUE name, so a marker read back from the reported location no
+	// longer carries the uploaded extension. The delete API below covers its files.
+	mux.HandleFunc("/fu/rename/upload", func(w http.ResponseWriter, r *http.Request) {
+		name, content, ok := readUpload(r)
+		if r.Method != http.MethodPost || !ok {
+			http.Error(w, "send a multipart file", http.StatusBadRequest)
+			return
+		}
+		trueName := path.Base(name) + ".txt"
+		if _, ok := s.put("/fu/rename/files", trueName, content); !ok {
+			http.Error(w, "could not store the file", http.StatusInternalServerError)
+			return
+		}
+		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/rename/files/" + trueName})
+	})
+
+	// deleteLedger counts DELETE requests per path, so tests can prove which URLs a client
+	// chose to delete - and which it was careful not to.
+	var delMu sync.Mutex
+	deleteLedger := map[string]int{}
+	mux.HandleFunc("/fu/delcount", func(w http.ResponseWriter, r *http.Request) {
+		delMu.Lock()
+		counts := make(map[string]int, len(deleteLedger))
+		for p, n := range deleteLedger {
+			counts[p] = n
+		}
+		delMu.Unlock()
+		writeUploadJSON(w, counts)
+	})
+	mux.HandleFunc("/fu/rename/list", func(w http.ResponseWriter, r *http.Request) {
+		writeUploadJSON(w, s.list("/fu/rename/files/"))
+	})
+
+	// Serving and removal. The open store exposes a DELETE on its files; the rename store
+	// exposes one too (its files are fetchable under the names it reports); the rest do not.
+	// The open and filtered stores serve by extension, trustct serves the declared type, and
+	// the safe stores serve downloads.
 	serve := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
+			delMu.Lock()
+			deleteLedger[r.URL.Path]++
+			delMu.Unlock()
 			if strings.HasPrefix(r.URL.Path, "/fu/trustct/files/") {
 				// A delete API that accepts and does nothing: the file is served afterwards
 				// exactly as before.
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			if !strings.HasPrefix(r.URL.Path, "/fu/files/") {
+			if !strings.HasPrefix(r.URL.Path, "/fu/files/") &&
+				!strings.HasPrefix(r.URL.Path, "/fu/rename/files/") {
 				http.Error(w, "no delete is exposed here", http.StatusMethodNotAllowed)
 				return
 			}

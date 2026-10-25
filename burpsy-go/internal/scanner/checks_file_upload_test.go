@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -276,5 +277,111 @@ func TestUploadCleanupNoteSaysExactlyWhatWasProved(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("cleanup note is missing %q: %q", want, note)
 		}
+	}
+}
+
+// deleteCounts reads the fixture store's per-path DELETE ledger.
+func deleteCounts(t *testing.T, rt *runtimeTarget) map[string]int {
+	t.Helper()
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(rt.srv.URL + "/fu/delcount")
+	if err != nil {
+		t.Fatalf("read the delete ledger: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var counts map[string]int
+	if err := json.NewDecoder(resp.Body).Decode(&counts); err != nil {
+		t.Fatalf("decode the delete ledger: %v", err)
+	}
+	return counts
+}
+
+// TestFileUploadNeverDeletesALocationItOnlyHeardAbout: /fu/misname stores every upload fetchably
+// under /fu/misname/store/ but reports locations under /fu/misname/files/, where nothing is - so
+// the marker is never read back from the reported location. The accepted-extension row may fire
+// on the named location, but no DELETE may reach a URL the check never proved it created; the
+// reported locations are listed as unconfirmed, for the tester.
+func TestFileUploadNeverDeletesALocationItOnlyHeardAbout(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	if rt.findingsFor(t, "/fu/upload", false)["File upload functionality"] == nil {
+		t.Fatal("the check found no accepted-extension row on the open upload in this run")
+	}
+	got := rt.findingsFor(t, "/fu/misname/upload", false)
+	f := got["File upload functionality"]
+	if f == nil {
+		t.Fatalf("the misnaming upload accepted the classes under a named location; rows: %s", joinRows(got))
+	}
+	if !strings.Contains(f.Description, "never read its marker back") || !strings.Contains(f.Description, "/fu/misname/files/") {
+		t.Errorf("the locations the check only heard about are not listed as unconfirmed: %q", f.Description)
+	}
+	if x := got["Cross-site scripting (stored)"]; x != nil {
+		t.Errorf("nothing was ever read back, yet stored XSS was claimed: %q", x.Evidence)
+	}
+	for path, n := range deleteCounts(t, rt) {
+		if strings.HasPrefix(path, "/fu/misname/files/") && n > 0 {
+			t.Errorf("a DELETE reached %s, a location the check never confirmed it created", path)
+		}
+	}
+}
+
+// TestFileUploadCleansUpARenamedMarkerItReadBack: /fu/rename stores every upload under its name
+// plus a .txt suffix and reports the true name, so the marker IS fetched back but the extension
+// test fails - no accepted-extension row, no XSS. A marker read back is still this check's file:
+// cleanup deletes it, up to its bounded reservation (maxUploadCleanupRequests, one DELETE plus one
+// verifying GET per file). This endpoint attracts more confirmed markers than the reservation
+// covers, so the reservation must be spent to its bound - and only markers past it remain stored.
+func TestFileUploadCleansUpARenamedMarkerItReadBack(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	got := rt.findingsFor(t, "/fu/rename/upload", false)
+	if f := got["File upload functionality"]; f != nil {
+		t.Errorf("a file renamed to .txt was reported as an accepted dangerous extension: %q", f.Evidence)
+	}
+	if x := got["Cross-site scripting (stored)"]; x != nil {
+		t.Errorf("a file served as text/plain was reported as stored XSS: %q", x.Evidence)
+	}
+	deleted := 0
+	var paths []string
+	for path, n := range deleteCounts(t, rt) {
+		if strings.HasPrefix(path, "/fu/rename/files/") {
+			deleted += n
+			paths = append(paths, path)
+		}
+	}
+	if deleted == 0 {
+		t.Fatalf("the renamed markers the check read back were never deleted")
+	}
+	maxRemovals := maxUploadCleanupRequests / 2
+	if deleted > maxRemovals {
+		t.Errorf("cleanup fired %d deletes, past its bounded reservation of %d", deleted, maxRemovals)
+	}
+	// Every marker whose delete was accepted stays deleted.
+	for _, path := range paths {
+		resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(rt.srv.URL + path)
+		if err != nil {
+			t.Fatalf("re-fetch %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("DELETE was accepted at %s but the file is still served (HTTP %d)", path, resp.StatusCode)
+		}
+	}
+	// Markers may remain stored ONLY because the bounded reservation was spent in full.
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(rt.srv.URL + "/fu/rename/list")
+	if err != nil {
+		t.Fatalf("list the rename store: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var listing []string
+	if err := json.NewDecoder(resp.Body).Decode(&listing); err != nil {
+		t.Fatalf("decode the rename listing: %v", err)
+	}
+	survivors := 0
+	for _, path := range listing {
+		if strings.Contains(path, "bfu") {
+			survivors++
+		}
+	}
+	if survivors > 0 && deleted < maxRemovals {
+		t.Errorf("%d probe markers remain stored although cleanup spent only %d of its %d-delete reservation",
+			survivors, deleted, maxRemovals)
 	}
 }
