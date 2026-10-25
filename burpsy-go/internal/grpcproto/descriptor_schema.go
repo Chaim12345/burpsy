@@ -65,6 +65,7 @@ func parseProtoDescriptorsFile(src, filePath string) (*Schema, error) {
 		msgs:  map[string]*messageDesc{},
 		enums: map[string]*enumDesc{},
 		rpcs:  map[string]rpcDesc{},
+		descs: map[string]protoreflect.MessageDescriptor{},
 	}
 	// Shells first, fields second: a field's message reference may name a type
 	// declared later in the file, or the message itself.
@@ -109,6 +110,7 @@ func buildMessageShells(s *Schema, md protoreflect.MessageDescriptor) {
 		s.msgs[full] = &messageDesc{full: full, fields: map[int]*fieldDesc{}}
 		s.order = append(s.order, full)
 	}
+	s.descs[full] = md
 	for i := 0; i < md.Messages().Len(); i++ {
 		if n := md.Messages().Get(i); !n.IsMapEntry() {
 			buildMessageShells(s, n)
@@ -263,6 +265,7 @@ func SchemaFromFiles(files []protoreflect.FileDescriptor) (*Schema, error) {
 		msgs:  map[string]*messageDesc{},
 		enums: map[string]*enumDesc{},
 		rpcs:  map[string]rpcDesc{},
+		descs: map[string]protoreflect.MessageDescriptor{},
 	}
 	for _, fd := range files {
 		for i := 0; i < fd.Messages().Len(); i++ {

@@ -177,3 +177,29 @@ func TestProtobufDecodeAnUnresolvedImportNamesItselfAndTheFallback(t *testing.T)
 		t.Fatalf("the error must point at the schemaless fallback: %q", text)
 	}
 }
+
+func TestProtobufDecodeTheOracleRefusesANonconformingBodyHonestly(t *testing.T) {
+	s := newTestServer()
+	proto := `syntax = "proto3"; message M { int32 n = 1; string s = 2; }`
+	// Field 2 declared string, bytes 0xff: invalid UTF-8. The schemaless walk
+	// shows it as hex; the oracle refuses the schema's claims over it.
+	b64 := base64.StdEncoding.EncodeToString([]byte{0x08, 0x96, 0x01, 0x12, 0x01, 0xff})
+	r := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto, "message": "M"})
+	if r.Code != http.StatusOK {
+		t.Fatalf("a nonconforming body is reported, not a 400: got %d", r.Code)
+	}
+	var resp protoDecodeResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	fr := resp.Frames[0]
+	if fr.Error == "" || !strings.Contains(fr.Error, "M") {
+		t.Fatalf("the mismatch must be named: %+v", fr)
+	}
+	if len(fr.Fields) != 2 {
+		t.Fatalf("the schemaless structure stays visible: %+v", fr)
+	}
+	if fr.Fields[0].Name != "" || fr.Fields[1].Name != "" {
+		t.Fatalf("a nonconforming body drops the schema's names: %+v", fr.Fields)
+	}
+}

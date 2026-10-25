@@ -118,7 +118,7 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 				if fields, derr := grpcproto.Decode(fr.Message); derr != nil {
 					view.Error = derr.Error()
 				} else {
-					view.Fields = annotateFields(schema, body.Message, fields)
+					view.Fields, view.Error = validateAndAnnotate(schema, body.Message, fr.Message, fields)
 				}
 			}
 			resp.Frames = append(resp.Frames, view)
@@ -129,7 +129,7 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		if derr != nil {
 			view.Error = derr.Error()
 		} else {
-			view.Fields = annotateFields(schema, body.Message, fields)
+			view.Fields, view.Error = validateAndAnnotate(schema, body.Message, raw, fields)
 		}
 		resp.Frames = []protoFrameView{view}
 	}
@@ -143,6 +143,21 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 // annotateFields names fields against the chosen message, or returns them untouched when there is no
 // schema or no message chosen. The message was validated before decoding began, so an Annotate error
 // here cannot happen; falling back to the unnamed tree keeps the handler total regardless.
+// validateAndAnnotate runs the 0rrb 2b oracle before the schema's names are
+// applied: a body the descriptor cannot hold (invalid UTF-8 in a declared
+// string, a missing proto2 required field) is reported as the mismatch it is,
+// and the tree drops the schema's names - they are the schema's claims about a
+// body that does not conform to it. The schemaless structure stays visible: it
+// makes no claims.
+func validateAndAnnotate(schema *grpcproto.Schema, message string, raw []byte, fields []grpcproto.Field) ([]grpcproto.Field, string) {
+	if schema != nil && message != "" {
+		if verr := schema.Validate(message, raw); verr != nil {
+			return fields, verr.Error()
+		}
+	}
+	return annotateFields(schema, message, fields), ""
+}
+
 func annotateFields(schema *grpcproto.Schema, message string, fields []grpcproto.Field) []grpcproto.Field {
 	if schema == nil || message == "" {
 		return fields
