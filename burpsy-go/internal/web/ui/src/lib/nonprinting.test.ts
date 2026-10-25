@@ -62,17 +62,18 @@ describe("the non-printing toggle is wired into the editor", () => {
   test("both halves are installed together, only while toggled on", () => {
     // Glyphs without EOL markers would render ␀ for a NUL byte but leave every CRLF looking
     // like an LF - the toggle on and still wrong about the byte that matters most.
-    expect(editor).toMatch(/if \(showNonPrinting\) base\.push\(nonPrintingGlyphs, nonPrintingEOLPlugin\(rawTextRef\)\)/);
+    expect(editor).toMatch(/if \(showNonPrinting\) base\.push\(nonPrintingGlyphs, nonPrintingEOLPlugin\(\)\)/);
   });
 
   test("the toolbar button is a pressed-state toggle on the text views", () => {
     expect(editor).toMatch(/aria-pressed=\{showNonPrinting\}/);
   });
 
-  test("the EOL markers read the raw text, not the CodeMirror document", () => {
-    // The regression this guards: refactoring buildEOLMarkers to read view.state.doc would
-    // still pass every render, and certify LF on CRLF messages from then on.
-    expect(editor).toMatch(/rawTextRef\.current = shown/);
-    expect(editor).toMatch(/const glyphs = breakGlyphs\(raw\)/);
+  test("the EOL markers name the document's own line separator, not a guess from LF", () => {
+    // The regression this guards: naming the glyph from a constant would certify LF on CRLF
+    // messages. The document is built with EditorState.lineSeparator (lib/editor-eol.ts), so
+    // state.lineBreak is the message's real break.
+    expect(editor).toMatch(/breakGlyphs\(view\.state\.lineBreak\)/);
+    expect(editor).toMatch(/EditorState\.lineSeparator\.of\(separator\)/);
   });
 });
