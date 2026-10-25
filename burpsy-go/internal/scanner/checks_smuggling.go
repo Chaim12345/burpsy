@@ -341,6 +341,21 @@ func checkRequestSmuggling(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		}
 	}
 
+	// CL.0: the response-differential technique (checks_smuggling_cl0.go). The smuggled prefix is
+	// answered on the scanner's own connection and consumed by the scanner's own follow-up.
+	hit, evidence, ok := r.smuggledPrefixProbe(ctx)
+	if ok && hit {
+		detail := "The endpoint answered a POST without reading its declared Content-Length body and " +
+			"then parsed the body bytes as a separate request on the same connection (CL.0): a smuggled " +
+			"request for a canary path was executed and its 404 answer arrived in the response slot of " +
+			"the scanner's own follow-up request, while a consistently framed control pair showed no " +
+			"such answer. Detection was by response differential only: nothing was queued for any other " +
+			"user's connection, and no timing was involved."
+		f := buildHeaderFinding(cc, smugglingRow, "high", "firm", evidence, detail)
+		f.Param = "CL.0"
+		return []*Finding{f}, nil
+	}
+
 	if ex.TLS {
 		f, err := r.http2Downgrade(ctx)
 		if err != nil || f != nil {
@@ -466,16 +481,6 @@ func nonEmpty(s, fallback string) string {
 	return s
 }
 
-// checkClientSideDesync is the "Client-side desync" row's runner, and it declines.
-//
-// Client-side desync is a server that answers a POST without reading its Content-Length body. The
-// cheap half — the server answering before a declared body arrives — is a hint, not a proof, and the
-// proof (sending a body that is itself a request and watching it get answered on the same connection)
-// poisons the back-end connection whenever a front end that does honour Content-Length streams the
-// request to that server. The previous runner sent exactly such a pipelined framing pair, unauthorised,
-// and fired on its socket-poisoning side effect. Until a confirmation exists that cannot leave bytes
-// on a connection someone else will use, the row is honestly unsupported.
-func checkClientSideDesync(context.Context, *CheckContext) ([]*Finding, error) {
-	return nil, fmt.Errorf("Client-side desync: no detection that cannot poison a shared back-end connection "+
-		"is implemented, so no probe is sent: %w", errCheckUnsupported)
-}
+// checkClientSideDesync lives in checks_smuggling_cl0.go (0vzb.40): the smuggled-prefix probe
+// whose poisoned answer is consumed by the scanner's own follow-up on the scanner's own
+// connection, which is the confirmation the old declining runner said did not exist.

@@ -240,16 +240,17 @@ func TestRequestSmugglingSendsNothingOutsideTheScope(t *testing.T) {
 	}
 }
 
-// Client-side desync declines without sending anything: its only confirmation could poison a shared
-// back-end connection.
-func TestClientSideDesyncDeclinesWithoutSending(t *testing.T) {
+// Client-side desync's probe runs on the scanner's own connection and consumes its own
+// follow-up, so it never leaves anything for a third party's connection. A target that never
+// answers leaves the batch unread: the check stays silent - no finding, no error - rather than
+// report on half a probe.
+func TestClientSideDesyncStaysSilentWhenTheProbeCannotBeRead(t *testing.T) {
 	st := startScriptedTarget(t, func(int, string) bool { return false })
-	_, err := checkClientSideDesync(context.Background(), smugglingAt(st.host, st.port, false))
-	if !errors.Is(err, errCheckUnsupported) {
-		t.Fatalf("err = %v, want unsupported", err)
+	fs, err := checkClientSideDesync(context.Background(), smugglingAt(st.host, st.port, false))
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
-	if got := st.received(); len(got) != 0 {
-		t.Fatalf("client-side desync sent %d request(s)", len(got))
+	if len(fs) != 0 {
+		t.Fatalf("findings = %v", fs)
 	}
 }
