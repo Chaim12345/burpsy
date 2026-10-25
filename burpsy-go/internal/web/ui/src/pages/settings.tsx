@@ -66,7 +66,8 @@ import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
 import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
 import { FileLoggingSection } from "./settings.logging";
 import { ScanConfigDetail } from "./settings.scanconfig";
-import { autoBackupSchema, backupNowSchema, probeSchema } from "../lib/form-schemas";
+import { autoBackupSchema, backupNowSchema, intervalHoursSchema, poolSchema, probeSchema } from "../lib/form-schemas";
+import { WholeNumberInput } from "../ui/whole-number-input";
 import { useZodForm } from "../lib/use-zod-form";
 
 const THEMES: { value: Theme; label: string }[] = [
@@ -1274,12 +1275,11 @@ function NetworkSection(): JSX.Element {
       </Field>
       <Field label="Lookup timeout (ms)">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.resolution.timeout_ms}
-         onChange={(event) => patchSection("resolution", { timeout_ms: Number(event.target.value) })}
+         onCommit={(next) => patchSection("resolution", { timeout_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
@@ -1302,36 +1302,33 @@ function NetworkSection(): JSX.Element {
      <Toolbar>
       <Field label="Connect (ms)" hint="TCP connect and TLS handshake">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.timeouts.connect_ms}
-         onChange={(event) => patchSection("timeouts", { connect_ms: Number(event.target.value) })}
+         onCommit={(next) => patchSection("timeouts", { connect_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
       </Field>
       <Field label="Read (ms)" hint="Wait for a response to begin">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.timeouts.read_ms}
-         onChange={(event) => patchSection("timeouts", { read_ms: Number(event.target.value) })}
+         onCommit={(next) => patchSection("timeouts", { read_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
       </Field>
       <Field label="Total (ms)" hint="Dial through last body byte">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.timeouts.total_ms}
-         onChange={(event) => patchSection("timeouts", { total_ms: Number(event.target.value) })}
+         onCommit={(next) => patchSection("timeouts", { total_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
@@ -1368,14 +1365,13 @@ function NetworkSection(): JSX.Element {
       </Field>
       <Field label="Max hops" hint={`Bounded to ${data.accepted.max_redirect_hops}`}>
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={1}
          max={data.accepted.max_redirect_hops}
          value={draft.redirects.max_hops}
          disabled={!following}
-         onChange={(event) => patchSection("redirects", { max_hops: Number(event.target.value) })}
+         onCommit={(next) => patchSection("redirects", { max_hops: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
@@ -1481,14 +1477,11 @@ function NetworkSection(): JSX.Element {
       />
       <Field label="Expect-continue timeout (ms)" hint="How long to wait for a 100 before sending the body">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.continue.expect_continue_timeout_ms}
-         onChange={(event) =>
-          patchSection("continue", { expect_continue_timeout_ms: Number(event.target.value) })
-         }
+         onCommit={(next) => patchSection("continue", { expect_continue_timeout_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
@@ -1531,12 +1524,11 @@ function NetworkSection(): JSX.Element {
       </Field>
       <Field label="Open-ended timeout (ms)">
        {(id) => (
-        <Input
+        <WholeNumberInput
          id={id}
-         type="number"
          min={0}
          value={draft.streaming.timeout_ms}
-         onChange={(event) => patchSection("streaming", { timeout_ms: Number(event.target.value) })}
+         onCommit={(next) => patchSection("streaming", { timeout_ms: next })}
          style={{ maxWidth: "var(--w-xs)" }}
         />
        )}
@@ -3836,12 +3828,11 @@ function PoolDialog({
  const [increment, setIncrement] = useState(String(initial.throttle?.increment_ms ?? 50));
 
  // Keyed on `initial` by the caller, so the form is remounted per pool rather
- // than syncing state in an effect.
- const delayMs = Number(delay) || 0;
- // Automatic throttling works by increasing the delay between requests, and
- // there is no multiple of zero larger than zero — so the combination is
- // refused here as well as by the server, rather than sent to be rejected.
- const throttleImpossible = throttle && delayMs <= 0;
+ // than syncing state in an effect. poolSchema (vlrh.1) turns the text into the Pool and refuses what
+ // the server refuses — including automatic throttling over a zero delay, which works by increasing
+ // the delay and so has nothing to multiply — so a bad pool is never sent to be rejected.
+ const parsed = poolSchema.safeParse({ name, maxConcurrent, delay, throttle, increment });
+ const problem = parsed.success ? null : (parsed.error.issues[0]?.message ?? "Check the fields");
 
  return (
   <Modal
@@ -3887,26 +3878,16 @@ function PoolDialog({
      </Field>
     ) : null}
    </div>
-   {throttleImpossible ? (
-    <p className="field-hint">
-     Automatic throttling needs a non-zero delay between requests: it works by increasing that delay, and there is
-     no multiple of zero larger than zero.
-    </p>
-   ) : null}
+   {problem && name.trim() ? <p className="field-hint">{problem}</p> : null}
    <div className="page-actions">
     <Button variant="outline" onClick={() => onOpenChange(false)}>
      Cancel
     </Button>
     <Button
-     disabled={pending || !name.trim() || throttleImpossible}
-     onClick={() =>
-      onSubmit({
-       name: name.trim(),
-       max_concurrent: Number(maxConcurrent) || 1,
-       delay_ms: delayMs,
-       throttle: throttle ? { increment_ms: Number(increment) || 1 } : null,
-      })
-     }
+     disabled={pending || !parsed.success}
+     onClick={() => {
+      if (parsed.success) onSubmit(parsed.data);
+     }}
     >
      {editing ? "Save pool" : "Create pool"}
     </Button>
@@ -4150,6 +4131,7 @@ function ScheduleDialog({
  const [repeat, setRepeat] = useState((initial?.interval_secs ?? 0) > 0);
  const [intervalHours, setIntervalHours] = useState(String((initial?.interval_secs ?? 86_400) / 3600));
  const [pool, setPool] = useState(initial?.pool ?? "");
+ const intervalSecs = intervalHoursSchema.safeParse(intervalHours);
  const [params, setParams] = useState(initial?.params ? JSON.stringify(initial.params, null, 2) : "");
 
  // Parsed here so a malformed blob is caught before it is armed rather than at
@@ -4237,19 +4219,20 @@ function ScheduleDialog({
     )}
    </Field>
    {paramsError ? <p className="field-hint">{paramsError}</p> : null}
+   {repeat && !intervalSecs.success ? <p className="field-hint">{intervalSecs.error.issues[0]?.message}</p> : null}
    <div className="page-actions">
     <Button variant="outline" onClick={() => onOpenChange(false)}>
      Cancel
     </Button>
     <Button
-     disabled={pending || !name.trim() || !kind || !firstMs || Boolean(paramsError)}
+     disabled={pending || !name.trim() || !kind || !firstMs || Boolean(paramsError) || (repeat && !intervalSecs.success)}
      onClick={() =>
       onSubmit({
        name: name.trim(),
        kind,
        enabled,
        first_ms: firstMs,
-       interval_secs: repeat ? Math.round((Number(intervalHours) || 24) * 3600) : 0,
+       interval_secs: repeat && intervalSecs.success ? intervalSecs.data : 0,
        pool: pool || undefined,
        params: params.trim() ? JSON.parse(params) : undefined,
       })
