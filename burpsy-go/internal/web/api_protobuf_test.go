@@ -2,9 +2,9 @@ package web
 
 import (
 	"encoding/base64"
-	"strings"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/grpcproto"
