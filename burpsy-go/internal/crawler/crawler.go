@@ -1028,6 +1028,10 @@ type frontierItem struct {
 	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
 	// crawl would not have found at all.
 	renderedOrigin bool
+	// phase is the crawl phase that owns this item (burpsy-react-ui-crediso): the phase a
+	// transport-failure retry must execute within, because re-issuing it under another phase's
+	// session is a different request. Stamped at admission.
+	phase int
 	// maskValues are the secrets this request carries on the wire whose values history must not
 	// keep: the stored exchange's request bytes replace each with a placeholder (credential
 	// login, burpsy-react-ui-uzil). Nil for every ordinary request.
@@ -1073,6 +1077,10 @@ type Crawler struct {
 	// same set and a threshold cannot differ between the pass that trips it and the report that
 	// names it.
 	eh ErrorHandling
+	// followUpPassesSpent is how many of this crawl phase's configured follow-up passes have
+	// run: the per-request retry bound (o0c5) is per PHASE under credential phases
+	// (burpsy-react-ui-crediso), reset at each phase boundary.
+	followUpPassesSpent int
 	// followUp is the set of requests that ended in a transport failure, kept for the follow-up pass.
 	// Per-crawl, not per-run, and drained pass by pass so a request that fails twice is retried on
 	// the NEXT pass rather than twice in the same one.
@@ -1203,6 +1211,13 @@ type Crawler struct {
 	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
 	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
 	locationShapes map[string][]string
+	// phaseLocations and phaseLocationShapes are the same two structures, scoped to the current
+	// crawl phase and reset when a credential phase begins (burpsy-react-ui-crediso): they decide
+	// only whether a response's links are walked (see recordPhaseWalk), so a page another phase
+	// already walked does not suppress this phase's walk, while the location count above stays
+	// global and honest — identical content is one location however many phases fetched it.
+	phaseLocations      map[string]locationEntry
+	phaseLocationShapes map[string][]string
 	// notFound is each probed directory's answer for a nonexistent name (s92h); nil marks a directory
 	// whose probe could not be read. notFoundProbes counts probes against maxNotFoundProbes.
 	notFound       map[string]*notFoundShape
@@ -1226,6 +1241,28 @@ type Crawler struct {
 	relogins int
 	// login is the recorded login's jar and report, nil without Config.BrowserLogin.
 	login *loginState
+	// credPhase is which crawl phase is running (burpsy-react-ui-crediso): 0 for the
+	// unauthenticated phase, N >= 1 for the phase crawling behind LoginCredentials[N-1]. Frontier
+	// dedup and template quotas are namespaced by it, so each credential's phase re-crawls the
+	// application behind its own login — per-phase state, no cross-credential leakage. Phases are
+	// sequential: the frontier drains before the next phase begins, so every item in flight
+	// belongs to the current phase and c.login is always the current phase's session.
+	credPhase int
+	// loginForm records the first identified login form when credentials are configured; the
+	// phases build their login submissions from it at phase start rather than at discovery —
+	// Burp discovers login functions unauthenticated and answers them per credential.
+	loginForm *credentialLoginForm
+	// authChallenged are the GET URLs the unauthenticated phase bounced off (401/403): each
+	// credential phase re-fetches them WITH its session. GET-only, deliberately: replaying a
+	// challenged POST would re-send a body under a session the unauthenticated phase did not
+	// hold — a write with new authority, which the re-fetch is not licensed to make. Bounded
+	// (maxAuthChallenged); discovery-order. The seen-map is bounded by construction: every URL
+	// in it was admitted to the frontier, and the admitted-request table is bounded by
+	// MaxFingerprints (SkipFingerprintBudget refuses past it). challengedSeeded marks that the
+	// current phase has already issued its re-fetches, so a re-login does not re-seed them.
+	authChallenged     []string
+	authChallengedSeen map[string]bool
+	challengedSeeded   bool
 	// credLoginLocationBase is len(c.locations) at the moment the first credential login
 	// succeeded: locations the crawl already knew before it had a session, so the report's
 	// PagesFoundAfterLogin counts what the login actually unlocked rather than the whole map.
@@ -1451,23 +1488,29 @@ func New(cfg Config) (*Crawler, error) {
 		senders: make(map[string]*sender.AuthorisedSender),
 		// Built from the validated seeds below rather than from cfg.Seeds' raw strings, so the key is
 		// computed from the same parse the requests are.
-		credentialOrigins: make(map[string]bool),
-		queued:            make(map[string]bool),
-		locations:         make(map[string]locationEntry),
-		locationShapes:    make(map[string][]string),
-		notFound:          make(map[string]*notFoundShape),
-		templates:         make(map[string]int),
-		templateOK:        make(map[string]bool),
-		hostLimiters:      make(map[string]*intruder.RateLimiter),
-		robotsSeeded:      make(map[string]bool),
-		requestsPer:       rps,
-		rateCapped:        capped,
-		throttle:          throttle,
-		poolName:          poolName,
-		poolConcurrency:   poolConcurrency,
-		retention:         retention,
-		loginPage:         loginPage,
-		login:             newLoginStateOrNil(cfg.BrowserLogin),
+		credentialOrigins:   make(map[string]bool),
+		queued:              make(map[string]bool),
+		locations:           make(map[string]locationEntry),
+		locationShapes:      make(map[string][]string),
+		phaseLocations:      make(map[string]locationEntry),
+		phaseLocationShapes: make(map[string][]string),
+		notFound:            make(map[string]*notFoundShape),
+		templates:           make(map[string]int),
+		templateOK:          make(map[string]bool),
+		authChallengedSeen:  make(map[string]bool),
+		// -1 until the first SUCCESSFUL credential login: "no login has unlocked anything
+		// yet" must read differently from "the login unlocked everything from location 0".
+		credLoginLocationBase: -1,
+		hostLimiters:          make(map[string]*intruder.RateLimiter),
+		robotsSeeded:          make(map[string]bool),
+		requestsPer:           rps,
+		rateCapped:            capped,
+		throttle:              throttle,
+		poolName:              poolName,
+		poolConcurrency:       poolConcurrency,
+		retention:             retention,
+		loginPage:             loginPage,
+		login:                 newLoginStateOrNil(cfg.BrowserLogin),
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They
@@ -1649,6 +1692,26 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// budget and had nothing left to do reports as complete rather than as truncated. A bound is
 		// only a stop when there was still work it prevented.
 		if len(c.frontier) == 0 {
+			// Owed retries run before the drain is declared: a recovered request's links are
+			// admitted to THIS phase's frontier and execute under THIS phase's session — a
+			// phase whose retry recovered something is not drained (burpsy-react-ui-crediso).
+			// A no-op with nothing owed or the phase's pass budget spent.
+			c.runFollowUpPasses(ctx, &rep, &lim)
+			if len(c.frontier) > 0 {
+				continue
+			}
+			// A retry inside the pass may be what tripped the error-handling policy: re-check
+			// BEFORE the next phase's login is admitted — the policy just said this target is
+			// not to be sent to.
+			if c.checkPauseThresholds(&rep, &lim) {
+				pausedByPolicy = true
+				break
+			}
+			// The unauthenticated phase drains first; then each credential in turn gets its
+			// own phase behind its own login (burpsy-react-ui-crediso).
+			if c.startNextCredentialPhase(ctx, &rep, &lim) {
+				continue
+			}
 			break
 		}
 		if err := ctx.Err(); err != nil {
@@ -1707,6 +1770,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	if !pausedByPolicy {
 		c.runFollowUpPasses(ctx, &rep, &lim)
 	}
+	// Retries an ENDED phase still owes can never run — the session they belong to is retired —
+	// so they are abandoned here, counted and named per request, rather than silently kept.
+	c.dropAbandonedPhaseItems(&lim)
 
 	lim.FrontierRemaining = len(c.frontier)
 	lim.Templates = len(c.templates)
@@ -1724,13 +1790,16 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	rep.SpeculativeAdmitted = c.speculativeAdmitted
 	if c.login != nil {
 		login := c.login.report
-		if login.Authenticated {
-			login.PagesFoundAfterLogin = rep.Locations
-			if login.Method == "credentials" {
-				// The crawl ran unauthenticated until it found the form; only what it
-				// reached after the first successful login is "found after login".
+		if login.Method == "credentials" {
+			// What the first successful credential login unlocked, however the LAST phase
+			// ended: a failed later phase makes the crawl's ENDING unauthenticated (the
+			// Authenticated flag above is the current phase's, burpsy-react-ui-crediso); it
+			// does not un-find the pages an earlier phase's session reached.
+			if c.credLoginLocationBase >= 0 {
 				login.PagesFoundAfterLogin = rep.Locations - c.credLoginLocationBase
 			}
+		} else if login.Authenticated {
+			login.PagesFoundAfterLogin = rep.Locations
 		}
 		rep.Login = &login
 	}
@@ -1738,7 +1807,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 }
 
 // runFollowUpPasses re-issues the requests that ended in a transport failure, up to the configured
-// count (burpsy-react-ui-o0c5).
+// count (burpsy-react-ui-o0c5). Runs at each credential phase's drain as well as at the crawl's
+// end, and only for the CURRENT phase's items: the retry carries the session, so it belongs to
+// the phase whose session it was (burpsy-react-ui-crediso).
 //
 // Through the ordinary perform path, deliberately: a retried request is captured, scanned and
 // traversed exactly like a first attempt, so a flaky endpoint that answers on the second try
@@ -1763,7 +1834,10 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 	// lim.Requests, which is assigned once after the loop and reads zero for the whole crawl, so a
 	// follow-up pass could spend a second full request budget on top of the first: the one way a
 	// retry feature makes a tool cost more than the operator agreed to.
-	for pass := 0; pass < passes; pass++ {
+	// The pass budget is per crawl PHASE (burpsy-react-ui-crediso): the drain-time call and a
+	// later crawl-end call in the same phase share it, so a request still gets at most
+	// FollowUpPasses extra attempts per phase — the bound o0c5 states, carried into phases.
+	for ; c.followUpPassesSpent < passes; c.followUpPassesSpent++ {
 		if len(c.followUp) == 0 {
 			break
 		}
@@ -1779,6 +1853,13 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 		remaining := c.followUp
 		c.followUp = nil
 		for i, item := range remaining {
+			if item.phase != c.credPhase {
+				// Owed by a phase that has ended: not this pass's to run, because the session
+				// it belongs to is retired. It stays queued; dropAbandonedPhaseItems is what
+				// becomes of it (burpsy-react-ui-crediso).
+				c.followUp = append(c.followUp, item)
+				continue
+			}
 			if ctx.Err() != nil {
 				c.followUp = append(c.followUp, remaining[i:]...)
 				lim.record(StopFollowUpCancelled)
@@ -1810,6 +1891,29 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 	}
 }
 
+// dropAbandonedPhaseItems abandons the follow-up retries owed by phases that have already ended
+// (burpsy-react-ui-crediso). A retry is the same request under the same session; the phase
+// boundary retired the session, so the owed retry is dropped with the count and a per-request
+// record rather than sent under another phase's session — or silently dropped. The LAST phase's
+// own leftovers keep the pre-crediso treatment: the crawl is over, their report is the Failed
+// count they already carry.
+func (c *Crawler) dropAbandonedPhaseItems(lim *LimitReport) {
+	var kept []frontierItem
+	for _, item := range c.followUp {
+		if item.phase == c.credPhase {
+			kept = append(kept, item)
+			continue
+		}
+		lim.PhaseDropped++
+		c.skips.record(SkipRecord{
+			Reason: SkipPhaseAbandoned, URL: item.url.String(), Method: item.method,
+			Text: item.text, FoundAt: item.foundAt,
+			Detail: "the crawl phase that owed this retry ended; re-issuing it under another phase's session would be a different request",
+		})
+	}
+	c.followUp = kept
+}
+
 // noteTransportFailure records a send that never came back, for the follow-up pass, and advances the
 // timeout counters the pause thresholds read (o0c5).
 //
@@ -1820,6 +1924,9 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 // Only a TIMEOUT extends the consecutive streak; a refused connection or reset breaks it, because
 // Burp's threshold is about a target that has stopped answering, not one that answers "no".
 func (c *Crawler) noteTransportFailure(item frontierItem, timedOut bool) {
+	// Backstop for the few requests that never passed enqueue (a source-map fetch, an
+	// introspection): the failing send belongs to the phase that sent it.
+	item.phase = c.credPhase
 	c.followUp = append(c.followUp, item)
 	if timedOut {
 		c.timeouts++
@@ -2047,6 +2154,21 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 	c.noteSent()
 	c.observe(item.url, res.Status)
+
+	// A 401/403 in the unauthenticated phase is a page the login exists to unlock: remembered so
+	// each credential phase re-fetches it WITH its session (burpsy-react-ui-crediso). GET-only —
+	// see the field. Past maxAuthChallenged the overflow is counted, not silent.
+	if c.credPhase == 0 && item.method == "GET" && res.Status != nil && (*res.Status == 401 || *res.Status == 403) {
+		k := item.url.String()
+		if !c.authChallengedSeen[k] {
+			c.authChallengedSeen[k] = true
+			if len(c.authChallenged) >= maxAuthChallenged {
+				lim.AuthChallengedDropped++
+			} else {
+				c.authChallenged = append(c.authChallenged, k)
+			}
+		}
+	}
 
 	// Capped before capture, not after. The bytes are already in memory — SendRaw read them, bounded
 	// by httputil's own 64 MiB ceiling — but storing them would put them in the segment log for the
@@ -2390,9 +2512,12 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
-	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
-		// Already seen at another URL, exactly or within the tolerance band: the links here are the
-		// links there, so descending again would spend budget re-walking a subtree already covered.
+	c.recordStructuredLocation(page, item.url.String(), &fetch, rep)
+	if !c.recordPhaseWalk(page, item.url.String()) {
+		// Already walked in THIS crawl phase, exactly or within the tolerance band: the links here
+		// are the links there, so descending again would spend budget re-walking a subtree already
+		// covered. The duplicate was still counted above — the count is global; only the walk is
+		// per-phase (burpsy-react-ui-crediso).
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
@@ -3285,25 +3410,36 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 
 	// A registration form (Burp's distinguishing rule: the password-carrying form with the most
 	// password fields — two or more in practice) gets a generated account when the operator opted
-	// in, never a provided credential: credentials belong to login forms.
-	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly {
+	// in, never a provided credential: credentials belong to login forms. Self-registration is an
+	// unauthenticated-phase act, as Burp runs it.
+	if len(f.passwordFields) >= 2 && c.cfg.AttemptSelfRegister && !c.cfg.AuthenticatedCrawlOnly && c.credPhase == 0 {
 		c.admitSelfRegistration(f, base, u, depth, rep, lim)
 		return
 	}
-	// A login form with credentials configured is not an ordinary submission: it is the crawl's
-	// way in. One submission per credential, values mapped from the credential rather than the
-	// placeholder fill, the credential values masked in the stored exchange (burpsy-react-ui-uzil).
-	// An opted-in invalid-username probe (Burp's trigger_login_failures) joins it; either replaces
-	// the placeholder submission, which for a login form is junk that only looks like a failed
-	// login. crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from
-	// the provided credentials alone: no self-registration above, no invalid usernames here.
-	if f.isLoginForm {
+	// A login form with credentials configured is not submitted on discovery: it is RECORDED, and
+	// each credential phase's first act is the login (burpsy-react-ui-crediso — Burp discovers
+	// login functions in the unauthenticated phase, then logs in per credential). The
+	// invalid-username probe (Burp's trigger_login_failures) is an unauthenticated-phase act too.
+	// crawl_using_provided_logins_only (AuthenticatedCrawlOnly) takes authentication from the
+	// provided credentials alone: no self-registration above, no invalid usernames here.
+	if f.isLoginForm && len(f.passwordFields) < 2 {
 		handled := false
 		if len(c.cfg.LoginCredentials) > 0 {
-			c.admitCredentialLogins(f, base, u, depth, rep, lim)
+			if f.method == "GET" {
+				// A GET submission puts the form data set in the URL, and the URL is in every
+				// log, history row and Referer the request ever touches. Credentials do not go
+				// in URLs.
+				c.skips.record(SkipRecord{
+					Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+					FoundAt: base.String(),
+					Detail:  "a login form that submits GET would place the credentials in the URL; not submitted",
+				})
+			} else {
+				c.recordLoginForm(f, base, u, depth)
+			}
 			handled = true
 		}
-		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly {
+		if c.cfg.UseInvalidUsernames && !c.cfg.AuthenticatedCrawlOnly && c.credPhase == 0 {
 			c.admitInvalidUsernameLogin(f, base, u, depth, rep, lim)
 			handled = true
 		}
@@ -3353,6 +3489,14 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 			set[item.method+" "+item.url.String()+" "+string(item.body)] = struct{}{}
 		}
 	}
+}
+
+// dedupKey namespaces the frontier seen-set by the crawl phase (burpsy-react-ui-crediso): a
+// request the unauthenticated phase made is MADE AGAIN in each credential phase, with that
+// phase's session — an authenticated view is different content, and sharing the seen-set across
+// phases would suppress exactly the fetches the phases exist for.
+func (c *Crawler) dedupKey(method string, u *url.URL, body []byte, fragment string) string {
+	return strconv.Itoa(c.credPhase) + "|" + requestFingerprint(method, u, body, fragment)
 }
 
 // enqueue is the tail of the admission pipeline shared by links, forms and seeds: scope, query,
@@ -3417,7 +3561,11 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
-	key := requestFingerprint(item.method, item.url, item.body, item.fragment)
+	// The owning phase is the one that admits the item: phases are sequential and the frontier
+	// drains before the next begins, so the admission-time phase IS the phase the item executes
+	// in — and the phase a transport-failure retry must stay within (burpsy-react-ui-crediso).
+	item.phase = c.credPhase
+	key := c.dedupKey(item.method, item.url, item.body, item.fragment)
 	if c.queued[key] {
 		c.skips.record(SkipRecord{
 			Reason: SkipAlreadyQueued, URL: item.url.String(), Method: item.method,
@@ -3429,7 +3577,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 	// space. Checked after the exact key so that a genuine repeat reports as a repeat, and before the
 	// frontier bound so that an infinite application reports as an infinite application rather than as
 	// a full queue — see SkipTemplateQuota for why that distinction is the whole point.
-	template := urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
+	template := strconv.Itoa(c.credPhase) + "|" + urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
 	if n := c.templates[template]; n >= c.limits.MaxTemplateVisits {
 		lim.record(StopTemplateQuota)
 		lim.TemplateQuotaDropped++

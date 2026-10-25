@@ -244,6 +244,12 @@ func containsSorted(sorted []string, s string) bool {
 // The candidates are tried in admission order and the FIRST match wins, so a fold names the
 // earliest location the page could be, which is the one whose first sighting an operator reads.
 func (c *Crawler) foldWithinTolerance(page pageStructure) (string, bool) {
+	return foldWithinToleranceIn(page, c.locationShapes, c.locations, c.toleranceBand())
+}
+
+// foldWithinToleranceIn is foldWithinTolerance against an explicit location set, so the global
+// count and the per-phase walk decision can each ask the question against their own maps.
+func foldWithinToleranceIn(page pageStructure, shapes map[string][]string, locations map[string]locationEntry, band int) (string, bool) {
 	// A shape is only ever set by a document that parsed, so an empty one here means the parse
 	// produced no structure at all and there is nothing to compare. Refused before the loop rather
 	// than inside it: the empty string is not a bucket key anything is indexed under.
@@ -251,9 +257,9 @@ func (c *Crawler) foldWithinTolerance(page pageStructure) (string, bool) {
 		return "", false
 	}
 	keys := relaxedLinkKeys(page.linkTargets)
-	for _, fingerprint := range c.locationShapes[page.shape] {
-		entry, known := c.locations[fingerprint]
-		if known && withinTolerance(page.linkTargets, keys, entry, c.toleranceBand()) {
+	for _, fingerprint := range shapes[page.shape] {
+		entry, known := locations[fingerprint]
+		if known && withinTolerance(page.linkTargets, keys, entry, band) {
 			return entry.at, true
 		}
 	}
@@ -298,6 +304,31 @@ func (c *Crawler) recordStructuredLocation(page pageStructure, at string, fetch 
 	}
 	c.locations[page.fingerprint] = newLocationEntry(at, page.linkTargets)
 	c.locationShapes[page.shape] = append(c.locationShapes[page.shape], page.fingerprint)
+	return true
+}
+
+// recordPhaseWalk decides whether this response's links are walked, against the crawl phase's own
+// location set (burpsy-react-ui-crediso). It answers the question recordStructuredLocation answers
+// globally — "have the links of this page already been walked" — for the phase alone: a credential
+// phase re-crawls the application behind its own session, and a page an earlier phase saw (under a
+// different session, or none) is NOT a reason to skip the walk here, because the walk is how the
+// phase discovers what the application shows this credential. The location COUNT stays global:
+// recordStructuredLocation runs first, and identical content is counted and annotated as one
+// location no matter how many phases fetched it. What changes per phase is only the traversal.
+// This structure records nothing and touches no counter — the duplicate and fold skips the global
+// recording already wrote are the whole accounting.
+func (c *Crawler) recordPhaseWalk(page pageStructure, at string) bool {
+	if page.fingerprint == "" {
+		return true
+	}
+	if _, seen := c.phaseLocations[page.fingerprint]; seen {
+		return false
+	}
+	if _, folded := foldWithinToleranceIn(page, c.phaseLocationShapes, c.phaseLocations, c.toleranceBand()); folded {
+		return false
+	}
+	c.phaseLocations[page.fingerprint] = newLocationEntry(at, page.linkTargets)
+	c.phaseLocationShapes[page.shape] = append(c.phaseLocationShapes[page.shape], page.fingerprint)
 	return true
 }
 
