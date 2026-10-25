@@ -44,7 +44,11 @@ var idorUsers = map[int]idorUser{
 	3: {3, "carol", "carol@example.test", 870},
 }
 
-var idorSessions = map[string]int{"s-alice-4c1e9b": 1}
+var idorSessions = map[string]int{"s-alice-4c1e9b": 1, "s-bob-9f2c7a": 2}
+
+// IDORSecondSessionCookie is bob's session cookie (user 2): the second configured identity a
+// two-identity authorization check replays under.
+const IDORSecondSessionCookie = "sid=s-bob-9f2c7a"
 
 type idorOrder struct {
 	ID      int      `json:"id"`
