@@ -63,7 +63,7 @@ func (s *Server) materialiseDomAuditor() (dir, bypass string, err error) {
 		_ = os.RemoveAll(s.domExtDir)
 		s.domExtDir = ""
 	}
-	dir, err = dominvader.Materialise("", s.domInvader.Config(report))
+	dir, err = dominvader.Materialise("", s.domInvader.BeginWorkerLaunch(report))
 	if err != nil {
 		return "", "", err
 	}

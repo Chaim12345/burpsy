@@ -1,6 +1,9 @@
 package dominvader
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +130,42 @@ func TestMessageDecisionDeliveryDoesNotClaimThePageAppliedIt(t *testing.T) {
 	s.Poll(token, now)
 	if got := s.Messages(now)[0].State; got != "drop-decision-delivered" {
 		t.Fatalf("decision delivery was confused with browser execution: %s", got)
+	}
+}
+
+func TestWorkerLaunchCapabilityIsPrivateToTheWorkerAndRotates(t *testing.T) {
+	s := NewStore()
+	cfg := s.BeginWorkerLaunch("http://localhost/hit")
+	if cfg.WorkerCapability == "" || !s.WorkerAuthorized(cfg.WorkerCapability) {
+		t.Fatal("launch did not establish worker capability")
+	}
+	dir, err := Materialise(t.TempDir(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := os.ReadFile(filepath.Join(dir, "config.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(main), cfg.WorkerCapability) {
+		t.Fatal("worker capability leaked into page-world config")
+	}
+	worker, err := os.ReadFile(filepath.Join(dir, "worker-config.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(worker), cfg.WorkerCapability) {
+		t.Fatal("worker cannot authenticate its own launch")
+	}
+	manifest, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(manifest), "worker-config.js") {
+		t.Fatal("worker-only config declared page accessible")
+	}
+	next := s.BeginWorkerLaunch("http://localhost/hit")
+	if next.WorkerCapability == cfg.WorkerCapability || s.WorkerAuthorized(cfg.WorkerCapability) || s.WorkerAuthorized("") {
+		t.Fatal("stale/empty capability remained authorized")
 	}
 }

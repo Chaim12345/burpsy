@@ -139,7 +139,8 @@ type Server struct {
 	// domInvader is the operator-side DOM auditor's state (burpsy-react-ui-wl94): the canary, the
 	// switch and the reported source/sink hits. The browser bakes its config from this on launch and
 	// the report endpoint feeds it.
-	domInvader *dominvader.Store
+	domInvader  *dominvader.Store
+	domMessages *dominvader.MessageStore
 	// authz holds the project's access-control test identities (burpsy-react-ui-cr37).
 	authz authzState
 	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
@@ -346,6 +347,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
 		domInvader:         dominvader.NewStore(),
+		domMessages:        dominvader.NewMessageStore(),
 	}
 	// One wiring call gives every task in the process — including a crawl registered from outside this
 	// package — a started and a finished event, without either side knowing about the other.
@@ -1098,6 +1100,9 @@ func (s *Server) setupRoutes() {
 	s.route("/api/dominvader", s.handleDomInvader)
 	s.route("/api/dominvader/hit", s.handleDomInvaderHit)
 	s.route("/api/dominvader/hits", s.handleDomInvaderHits)
+	s.route("/api/dominvader/messages/register", s.handleDomMessageWorker)
+	s.route("/api/dominvader/messages/report", s.handleDomMessageWorker)
+	s.route("/api/dominvader/messages/poll", s.handleDomMessageWorker)
 	s.route("/api/protobuf/decode", s.handleProtobufDecode)
 	s.route("/api/protobuf/reflect-decode", s.handleProtobufReflectDecode)
 	s.route("/api/protobuf/encode", s.handleProtobufEncode)

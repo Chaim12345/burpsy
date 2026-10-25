@@ -11,6 +11,7 @@ package dominvader
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,8 @@ var extensionFS embed.FS
 // Config is what the extension needs baked in at launch: the canary to watch, whether to watch at
 // all, and where to report. It is written into the materialised extension as config.js.
 type Config struct {
+	// WorkerCapability is written only into worker-config.js, never MAIN config JSON.
+	WorkerCapability string `json:"-"`
 	// Canary is the operator's marker string. The extension reports a flow only when a value carrying
 	// this string reaches a source or a sink.
 	Canary string `json:"canary"`
@@ -77,6 +80,12 @@ func Materialise(parent string, cfg Config) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "config.js"), []byte(configJS(cfg)), 0o644); err != nil {
 		return "", fmt.Errorf("dom auditor: writing config.js: %w", err)
 	}
+	if cfg.WorkerCapability != "" {
+		blob, _ := json.Marshal(cfg.WorkerCapability)
+		if err := os.WriteFile(filepath.Join(dir, "worker-config.js"), []byte("self.__burpsyDI_workerCapability = "+string(blob)+";\n"), 0600); err != nil {
+			return "", fmt.Errorf("writing worker config: %w", err)
+		}
+	}
 	return dir, nil
 }
 
@@ -124,13 +133,14 @@ const maxHits = 2000
 // Store holds the operator's canary, the on/off switch, and the recent hits. One per server; the
 // browser materialises its config from this, and the report endpoint adds to it.
 type Store struct {
-	mu       sync.RWMutex
-	canary   string
-	enabled  bool
-	hits     []*Hit
-	nextID   uint64
-	seen     map[string]uint64 // dedupe key -> hit id, so a repeat bumps the existing row's count
-	onChange func()
+	mu               sync.RWMutex
+	canary           string
+	enabled          bool
+	workerCapability string
+	hits             []*Hit
+	nextID           uint64
+	seen             map[string]uint64 // dedupe key -> hit id, so a repeat bumps the existing row's count
+	onChange         func()
 }
 
 // NewStore makes a store with a fresh canary and the feature off, Burp's default.
@@ -245,4 +255,21 @@ func (s *Store) Clear() {
 	s.seen = map[string]uint64{}
 	s.mu.Unlock()
 	s.signal()
+}
+
+// BeginWorkerLaunch rotates the private extension-worker capability. Call only
+// while materialising a new operator-browser launch, never for public views.
+func (s *Store) BeginWorkerLaunch(report string) Config {
+	token := messageToken()
+	s.mu.Lock()
+	s.workerCapability = token
+	s.mu.Unlock()
+	cfg := s.Config(report)
+	cfg.WorkerCapability = token
+	return cfg
+}
+func (s *Store) WorkerAuthorized(token string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.workerCapability != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.workerCapability)) == 1
 }

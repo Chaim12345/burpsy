@@ -958,6 +958,10 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskLocal,
 		summary: "clear the DOM auditor's reported hits",
 	},
+	"/api/dominvader/messages/poll":     {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame decision mailbox"},
+	"/api/dominvader/messages/register": {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker frame registration"},
+	"/api/dominvader/messages/report":   {methods: []string{"POST"}, risk: riskLocal, summary: "private capability-authenticated extension worker untrusted message observation"},
+
 	"/api/scanner/secrets": {
 		// riskLocal: the secret scan reads responses burpsy already captured and sends nothing; the
 		// switch changes which findings future captures file, which is this tool's own state.
