@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -130,21 +129,11 @@ func ResponseIsFrameless(head []byte) bool {
 	if !responseHasBody(head) {
 		return false
 	}
-	headerBlock := head
-	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
-		headerBlock = headerBlock[idx+1:]
-	}
-	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-	mimeHead, err := h.ReadMIMEHeader()
-	if err != nil {
-		// An unparseable head is not treated as frameless. Refusing to stream is the safe direction:
-		// the buffered path is what this proxy did for every response before streaming existed.
+	te, cl := ResponseFraming(head)
+	if cl != "" {
 		return false
 	}
-	if strings.TrimSpace(mimeHead.Get("Content-Length")) != "" {
-		return false
-	}
-	if strings.TrimSpace(mimeHead.Get("Transfer-Encoding")) != "" {
+	if te != "" {
 		return false
 	}
 	return true
@@ -162,16 +151,8 @@ func ResponseIsChunked(head []byte) bool {
 	if !responseHasBody(head) {
 		return false
 	}
-	headerBlock := head
-	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
-		headerBlock = headerBlock[idx+1:]
-	}
-	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-	mimeHead, err := h.ReadMIMEHeader()
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(mimeHead.Get("Transfer-Encoding")), "chunked")
+	te, _ := ResponseFraming(head)
+	return strings.EqualFold(te, "chunked")
 }
 
 // responseHasBody reports whether a response head can be followed by a body at all.
@@ -194,6 +175,70 @@ func responseHasBody(head []byte) bool {
 	return !(len(statusLine) >= 12 && (statusLine[9] == '1' || string(statusLine[9:12]) == "204" || string(statusLine[9:12]) == "304"))
 }
 
+// ResponseFraming reads the two fields a body reader needs — Transfer-Encoding and
+// Content-Length — out of a response head, tolerating header lines that are not well-formed.
+//
+// net/textproto's ReadMIMEHeader refuses a whole block over one malformed line: a header value
+// split by a CRLF injection leaves a fragment with no colon, which is exactly the input the refusal
+// fires on, and refusing turned the entire response — injected bytes included — into one "malformed
+// MIME header" error. Those injected bytes are the evidence a CRLF probe exists to collect, so the
+// reader must see past the line it cannot use rather than discard the message that carries it
+// (burpsy-react-ui-0vzb.24). A line with no colon is not framing information, so skipping it costs
+// the reader nothing; the framing fields themselves still parse, and obs-fold continuations join
+// the field they continue the way ReadMIMEHeader joined them.
+//
+// Values come back as written (whitespace-trimmed), first occurrence winning — ReadMIMEHeader.Get's
+// own rule — so callers keep their existing comparisons.
+func ResponseFraming(head []byte) (transferEncoding, contentLength string) {
+	// Skip the status line; the fields live after it.
+	rest := head
+	idx := bytes.IndexByte(rest, '\n')
+	if idx < 0 {
+		return "", ""
+	}
+	rest = rest[idx+1:]
+	// continued says which field an obs-fold line continues, so "Transfer-Encoding: gzip" followed
+	// by "\tchunked" reads the way ReadMIMEHeader would have joined it.
+	var continued *string
+	for len(rest) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(rest, '\n'); idx >= 0 {
+			line, rest = rest[:idx], rest[idx+1:]
+		} else {
+			line, rest = rest, nil
+		}
+		line = bytes.TrimRight(line, "\r")
+		if len(line) == 0 {
+			break
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if continued != nil {
+				*continued = *continued + " " + strings.TrimSpace(string(line))
+			}
+			continue
+		}
+		name, value, ok := bytes.Cut(line, []byte(":"))
+		if !ok {
+			// The malformed line itself: evidence for whoever reads the bytes, not framing
+			// information for whoever reads the body.
+			continued = nil
+			continue
+		}
+		value = bytes.TrimSpace(value)
+		switch {
+		case strings.EqualFold(string(name), "Transfer-Encoding") && transferEncoding == "":
+			transferEncoding = string(value)
+			continued = &transferEncoding
+		case strings.EqualFold(string(name), "Content-Length") && contentLength == "":
+			contentLength = string(value)
+			continued = &contentLength
+		default:
+			continued = nil
+		}
+	}
+	return transferEncoding, contentLength
+}
+
 // ReadResponseBody reads the body that follows a response head, per the
 // head's framing. head must be exactly what ReadResponseHead returned. A head
 // that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
@@ -201,23 +246,14 @@ func responseHasBody(head []byte) bool {
 func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 	var body bytes.Buffer
 	if responseHasBody(head) {
-		// Skip the status line; ReadMIMEHeader expects headers only.
-		headerBlock := head
-		if idx := bytes.Index(headerBlock, []byte("\r\n")); idx != -1 {
-			headerBlock = headerBlock[idx+2:]
-		}
-		h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-		mimeHead, err := h.ReadMIMEHeader()
-		if err != nil {
-			return nil, fmt.Errorf("parsing response headers: %w", err)
-		}
+		te, cl := ResponseFraming(head)
 
 		// remaining bounds the total body we will buffer, so a malicious upstream
 		// that declares a huge Content-Length or streams endless chunks cannot
 		// exhaust the proxy's memory. Reads past the cap are truncated.
 		remaining := MaxResponseBodyBytes
 
-		if te := mimeHead.Get("Transfer-Encoding"); strings.EqualFold(te, "chunked") {
+		if strings.EqualFold(te, "chunked") {
 			// Read chunked body until the terminating zero chunk.
 			for {
 				sizeLine, err := br.ReadString('\n')
@@ -279,7 +315,7 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					break
 				}
 			}
-		} else if cl := mimeHead.Get("Content-Length"); cl != "" {
+		} else if cl != "" {
 			n, err := strconv.ParseInt(cl, 10, 64)
 			if err != nil || n < 0 {
 				return nil, fmt.Errorf("bad Content-Length %q", cl)
