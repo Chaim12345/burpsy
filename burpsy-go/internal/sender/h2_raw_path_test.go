@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -220,5 +221,40 @@ func TestSendH2StillCarriesParseableTargetsVerbatim(t *testing.T) {
 		if got := peer.lastPath(t); got != target {
 			t.Fatalf("the peer saw :path %q, want %q verbatim", got, target)
 		}
+	}
+}
+
+// burpsy-react-ui-swqq: the shapes url.Parse accepts-but-transforms ride h2 byte-for-byte -
+// fragments are not dropped and spaces are not re-encoded.
+func TestH2SendCarriesParseTransformedTargetsVerbatim(t *testing.T) {
+	for _, target := range []string{"/a#b", "/a?x=1#frag", "/a#b?c=d"} {
+		t.Run(target, func(t *testing.T) {
+			peer := startRawH2Peer(t)
+			s := testSender()
+			raw := []byte("GET " + target + " HTTP/1.1\r\nHost: " + peer.host + "\r\n\r\n")
+			sendRawToH2(t, s, peer, raw)
+			if got := peer.lastPath(t); got != target {
+				t.Fatalf(":path on the wire = %q, want %q verbatim", got, target)
+			}
+		})
+	}
+}
+
+// '/a b' is a different case from the fragment shapes: a raw space breaks the request line's own
+// tokenisation, so the carriability bar refuses it before any URL is built - and per the ruling,
+// refusal stays for what the bar already rejects. The verbatim rule never gets a say.
+func TestH2SendRefusesARawSpaceInTheRequestLine(t *testing.T) {
+	peer := startRawH2Peer(t)
+	s := testSender()
+	raw := []byte("GET /a b HTTP/1.1\r\nHost: " + peer.host + "\r\n\r\n")
+	// ForceH2 against an h2-only endpoint: the bar's refusal sends HTTP/1.1 with the reason
+	// recorded, and the h2-only peer answers that with EOF - the transport error is expected;
+	// the downgrade record is the claim under test.
+	_, outcome, err := s.SendRawOutcome(context.Background(), peer.host, peer.port, true, raw, ProtocolPreferenceForceH2)
+	if err == nil {
+		t.Fatal("an h1 fallback against an h2-only peer answered 200 - check the peer")
+	}
+	if !outcome.Downgraded() || !strings.Contains(outcome.Downgrade.String(), "request line") {
+		t.Fatalf("downgrade = %v, want the request line named as what h2 had nowhere to put", outcome.Downgrade)
 	}
 }

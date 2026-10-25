@@ -72,3 +72,36 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	}
 	return resp, outcome, nil
 }
+
+// H3Plan is what an HTTP/1.1 byte string becomes when it is carried over HTTP/3: the
+// pseudo-header model h2 and h3 share, with the hop-by-hop fields h3 has nowhere to put already
+// refused or accounted for.
+type H3Plan struct {
+	Method    string
+	Path      string
+	Authority string
+	// Headers are in the order the request wrote them, with the Host header removed (it became
+	// Authority) and hop-by-hop fields dropped. Names are lowercased.
+	Headers []burpsyhttp2.Header
+	Body    []byte
+}
+
+// PlanH3 applies the carriability bar to raw HTTP/1.1 bytes for an HTTP/3 carry
+// (burpsy-react-ui-vln3 ruling B). The bar is planH2's, because RFC 9114's request model is RFC
+// 9113's: any construct h2 has nowhere to put, h3 has nowhere to put either, and one planner
+// means the two legs can never drift apart on what they refuse. The error names the refused
+// construct; what the caller does with a refusal is its own policy (the sender's explicit pin
+// errors, the proxy's Alt-Svc leg falls back and says so).
+func PlanH3(raw []byte) (H3Plan, error) {
+	plan, down := planH2(raw)
+	if down != nil {
+		return H3Plan{}, fmt.Errorf("HTTP/3 cannot carry this request: %s", down)
+	}
+	return H3Plan{
+		Method:    plan.Method,
+		Path:      plan.Path,
+		Authority: plan.Authority,
+		Headers:   plan.Headers,
+		Body:      plan.Body,
+	}, nil
+}

@@ -881,6 +881,25 @@ type ProxyConfig struct {
 type NetworkSettings struct {
 	Resolution sender.ResolutionSettings
 	Continue   sender.ContinueSettings
+	// http3AltSvc is the mandatory kill switch for the h3 Alt-Svc leg (burpsy-react-ui-vln3,
+	// integrator ruling C): when on - the default - forwarded responses teach the proxy which
+	// origins advertise HTTP/3 and later forwards to those origins may ride QUIC. Off makes the
+	// feature inert: nothing learned, nothing ridden. Unexported so the zero value cannot be
+	// mistaken for a choice; the seed and the switch are the accessors below.
+	http3AltSvc bool
+}
+
+// SetHTTP3AltSvc flips the h3 Alt-Svc kill switch (ruling C).
+func (n *NetworkSettings) SetHTTP3AltSvc(on bool) {
+	if n == nil {
+		return
+	}
+	n.http3AltSvc = on
+}
+
+// HTTP3AltSvcEnabled reports whether the h3 Alt-Svc leg is live. Default ON.
+func (n *NetworkSettings) HTTP3AltSvcEnabled() bool {
+	return n != nil && n.http3AltSvc
 }
 
 // NewNetworkSettings returns the live holder with the defaults this leg has always had plus the one
@@ -888,7 +907,8 @@ type NetworkSettings struct {
 // any client and Burp does the same (burpsy-react-ui-o1eu).
 func NewNetworkSettings() *NetworkSettings {
 	return &NetworkSettings{
-		Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		Continue:    sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		http3AltSvc: true,
 	}
 }
 
@@ -927,6 +947,8 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		// (sender.DefaultNetworkSettings).
 		network: &NetworkSettings{
 			Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+			// Default ON per ruling C: the operator's switch is SetHTTP3AltSvc, not a zero value.
+			http3AltSvc: true,
 		},
 	}
 	// On, matching Burp's default. A proxy that let permessage-deflate be
@@ -1817,13 +1839,13 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				s.writeProxyError(tlsClient, wsRetargetRefusalResponse())
 				continue
 			}
-			responseData, serverIP, firstByte, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
+			forwarded, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
 			if err != nil {
 				s.config.logger.Error("retargeted forward failed", zap.Error(err))
 				return
 			}
 			completed := time.Now()
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited, downgrade, false, nil) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, forwarded.response, startTime, forwarded.firstByte, completed, forwarded.serverIP, requestEdited, downgrade, false, forwarded.note, forwarded.protocol) {
 				return
 			}
 			continue
@@ -2039,7 +2061,15 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 // with its four stage boundaries — and a copy of those steps is how the two paths started disagreeing
 // about what a response row means. The write is the ONLY step streaming does differently, so it is
 // the only step this flag changes. See stream_response.go for why streaming cannot hold or rewrite.
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool, extraNote *string) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool, extraNote *string, protocol ...core.Protocol) bool {
+	// The carrier of the upstream leg, for the row. Variadic so the persistent-tunnel and
+	// plaintext paths - always HTTP/1.1, by the ALPN policy that built them - keep their call
+	// sites unchanged; the retargeted forward (vln3) is the one path that can ride HTTP/3 and
+	// passes what forwardRequest established. A row stamps HTTP/3 only when QUIC carried it.
+	rowProtocol := core.ProtocolHTTP1
+	if len(protocol) > 0 {
+		rowProtocol = protocol[0]
+	}
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -2147,7 +2177,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			Started:   startTime,
 			FirstByte: firstByte,
 			Completed: completed,
-			Protocol:  core.ProtocolHTTP1,
+			Protocol:  rowProtocol,
 
 			RequestOriginal:  reqStages.original,
 			RequestAuto:      reqStages.auto,
@@ -3551,16 +3581,46 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, time.Time, error) {
+// forwardResult is one forward's response plus the honest record of what carried it: the
+// protocol the bytes actually rode and, when an h3 attempt fell back, a note naming the attempt
+// and the carrier (burpsy-react-ui-vln3 ruling A). The exchange row is built from these, never
+// from what was hoped.
+type forwardResult struct {
+	response  []byte
+	serverIP  string
+	firstByte time.Time
+	protocol  core.Protocol
+	note      *string
+}
+
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) (forwardResult, error) {
+	// HTTP/3 selection (vln3): a live advertisement this proxy learned from the origin's own
+	// responses, the operator's kill switch on, and the request carriable - then the forward
+	// rides QUIC. A request h3 has nowhere to put is not an error here: nothing was attempted,
+	// and HTTP/1.1 carrying it is the ordinary truth of the row.
+	var h3Note *string
+	if tls && s.config.network.HTTP3AltSvcEnabled() {
+		if endpoint, ok := s.config.altSvc.h3Endpoint(host, port, time.Now()); ok {
+			result, attempted, err := s.forwardH3(requestData, host, port, endpoint)
+			if err == nil {
+				return result, nil
+			}
+			if attempted {
+				// Ruling A: the fallback carries the record of both the attempt and the carrier.
+				note := fmt.Sprintf("HTTP/3 was advertised by this origin and attempted; the endpoint did not answer QUIC (%v); the exchange was carried over HTTP/1.1", err)
+				h3Note = &note
+			}
+		}
+	}
 	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return forwardResult{}, err
 	}
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
 	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
-		return nil, serverIP, time.Time{}, err
+		return forwardResult{serverIP: serverIP}, err
 	}
 
 	// The first-byte instant is read here so a caller building an exchange row can report TTFB
@@ -3580,9 +3640,59 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 		// learned nonce outlives the connection in the credential store rather than in a socket.
 		if headEnd := requestHeadEnd(resp); headEnd > 0 {
 			learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(resp[:headEnd]))
+			// Alt-Svc discovery (vln3): only responses burpsy itself received teach the table, and
+			// only while the operator's kill switch leaves the leg live.
+			if tls && s.config.network.HTTP3AltSvcEnabled() {
+				if value, ok := headerValueFold(string(resp[:headEnd]), "alt-svc"); ok {
+					s.config.altSvc.learn(host, port, value, time.Now())
+				}
+			}
 		}
 	}
-	return resp, serverIP, firstByte, err
+	if err != nil {
+		return forwardResult{serverIP: serverIP}, err
+	}
+	return forwardResult{response: resp, serverIP: serverIP, firstByte: firstByte, protocol: core.ProtocolHTTP1, note: h3Note}, nil
+}
+
+// h3AttemptTimeout bounds one QUIC attempt. A handshake either completes promptly or the
+// endpoint is not there; the ruling-A fallback must not stall the client leg while UDP silence
+// is litigated.
+const h3AttemptTimeout = 3 * time.Second
+
+// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3). The
+// bool reports whether a QUIC attempt actually happened: a request the carriability bar refuses
+// is not an attempt, so its "failure" earns no fallback note - HTTP/1.1 was always going to
+// carry it, and the row saying so needs no explanation. The TLS policy is the proxy's own: the
+// same verify switch, roots and version floor dialUpstreamTLS applies, over a different carrier.
+func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoint string) (forwardResult, bool, error) {
+	plan, err := sender.PlanH3(requestData)
+	if err != nil {
+		return forwardResult{}, false, err
+	}
+	policy := s.config.TLS()
+	tlsConfig := &tls.Config{ServerName: host, NextProtos: []string{"h3"}}
+	policy.applyToH3(tlsConfig)
+	if source := s.clientCertSource(); source != nil {
+		if cert := source.For(host); cert != nil {
+			tlsConfig.Certificates = []tls.Certificate{*cert}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
+	defer cancel()
+	resp, err := httputil.RoundTripH3(ctx, tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	if err != nil {
+		return forwardResult{}, true, err
+	}
+	// firstByte is the attempt's completion: RoundTripH3 reads the body inside the one call, so
+	// no earlier instant is honestly available here. Documented rather than faked.
+	return forwardResult{
+		response:  resp,
+		serverIP:  endpoint,
+		firstByte: time.Now(),
+		protocol:  core.ProtocolHTTP3,
+	}, true, nil
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting

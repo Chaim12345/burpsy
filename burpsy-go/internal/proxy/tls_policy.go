@@ -129,6 +129,26 @@ func (p *TLSPolicy) Verify() bool {
 // a dial never sees verification from one edit and a root pool from another: an operator turning
 // verification off and adding a CA in two clicks should not get a handshake that is half one setting
 // and half the other.
+// applyToH3 is applyTo for the HTTP/3 leg (burpsy-react-ui-vln3): the same verify switch, root
+// pool and version floor, read under the same single lock acquisition, mapped onto the tls.Config
+// a QUIC dial consumes. The policy is the operator's either way; only the carrier differs.
+func (p *TLSPolicy) applyToH3(conf *tls.Config) {
+	if p == nil || conf == nil {
+		return
+	}
+	p.mu.RLock()
+	verify, roots, minVersion := p.verify, p.roots, p.minVersion
+	p.mu.RUnlock()
+
+	conf.InsecureSkipVerify = !verify
+	if roots != nil {
+		conf.RootCAs = roots
+	}
+	if minVersion != 0 {
+		conf.MinVersion = minVersion
+	}
+}
+
 func (p *TLSPolicy) applyTo(dialer *alpn.Dialer) {
 	if p == nil || dialer == nil {
 		return
