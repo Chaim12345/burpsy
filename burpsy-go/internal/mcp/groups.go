@@ -501,4 +501,10 @@ var notExposed = map[string]string{
 	"GET /api/skills/":        "served as MCP prompts: prompts/get renders a skill through it",
 	"PUT /api/skills/disabled": "the operator's per-project switch, set in the console's Settings; an agent sees its effect " +
 		"as the skills prompts/list no longer offers",
+	"GET /api/openapi.json": "the API's self-description for codegen and tooling (the typed console client's source); " +
+		"agents consume the API through the grouped MCP tools, not the raw document",
+	"POST /api/dominvader/scan": "operator-driven DOM pollution audit from the console while the auditor is young; " +
+		"egress-bearing probe execution stays operator-triggered - revisit agent exposure with the wkrc broad-coverage work",
+	"GET /api/repeater/ws-handshake-preview": "the console's live preview while the operator edits a WS handshake; " +
+		"a read-only render of state the operator already owns, with no agent edit-preview loop to serve",
 }
