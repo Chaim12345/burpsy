@@ -15,7 +15,14 @@ export type ConsoleStream = "output" | "error";
 export type ConsoleSource = "plugin" | "stderr" | "host" | "protocol";
 
 /** The five registration points that have an honest web analogue. */
-export type RegistrationKind = "context-menu" | "menu" | "editor-tab" | "session-action" | "hotkey";
+export type RegistrationKind =
+ | "context-menu"
+ | "menu"
+ | "editor-tab"
+ | "session-action"
+ | "hotkey"
+ | "payload-generator"
+ | "payload-processor";
 
 export interface Registration {
  id: string;

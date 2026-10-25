@@ -60,6 +60,8 @@ const KIND_LABEL: Record<Registration["kind"], string> = {
  "editor-tab": "Message-editor tab",
  "session-action": "Session-handling action",
  hotkey: "Hotkey",
+ "payload-generator": "Intruder payload generator",
+ "payload-processor": "Intruder payload processor",
 };
 
 function timeOf(atMs: number): string {
@@ -199,6 +201,9 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
          <Play size={13} />
          Run
         </Button>
+       ) : registration.kind === "payload-generator" || registration.kind === "payload-processor" ? (
+        // The Intruder engine is the consumer: choose it as a payload type or processing rule there.
+        <span className="cell-dim">used in Intruder</span>
        ) : (
         // Not offered rather than offered and broken: both other kinds are invoked with a
         // message, and this tab selects none. They are reachable from POST
