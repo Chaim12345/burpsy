@@ -91,6 +91,10 @@ timeout=(-timeout 1700s)
 # checks (timing SQLi, rate-limit) - a contention flake reverts this.
 parallel=(-parallel 12)
 if [ "${CI_SHARD_RACE:-}" = 1 ]; then
+  # Scanner under -race at raised parallelism is unmeasured (the race evidence covered
+  # internal/web, internal/proxy, internal/dash and internal/pool only), so race-mode shards
+  # keep the default -parallel. Integrator guard for evmi; robust to future workflow edits.
+  parallel=()
   race=(-race)
   # Race-instrumented code runs several times slower; the nightly job's timeout-minutes is the
   # real bound.
