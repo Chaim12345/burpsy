@@ -795,6 +795,17 @@ func runtimeScanConfig() *ScanConfig {
 		CheckSSRFInBand: true,
 		// The IDOR check (0vzb.12). It only acts on a credentialed read with an object reference.
 		CheckIDOR: true,
+		// The BFLA pass (0vzb.46 slice 2). It only acts on a credentialed GET/HEAD whose path names
+		// an admin operation, replayed under the second configured identity - here bob
+		// (vulnapp.IDORSecondSessionCookie), an ordinary user next to alice's administrator.
+		CheckBFLA:      true,
+		SecondIdentity: SecondIdentity{CookieHeader: vulnapp.IDORSecondSessionCookie},
+		// The mass-assignment pass (0vzb.46 slice 3) plus the writes opt-in it requires. It only
+		// acts on a credentialed JSON create/update whose own answer names a privileged field, so
+		// every other endpoint costs it nothing; the corpus is disposable, which is exactly what
+		// the writes opt-in is for.
+		CheckMassAssignment: true,
+		CheckAPIWrites:      true,
 		// The login rate-limit and username-enumeration rows (checks_auth_logic.go). They act only on a
 		// request carrying an identity and a password or one-time-code field, and the rate-limit burst
 		// stops after one request unless the answer shows the endpoint evaluates credentials.
@@ -831,6 +842,8 @@ func runtimeScanConfig() *ScanConfig {
 		// Server-side prototype pollution (0vzb.3): __proto__ members merged into posted JSON bodies,
 		// proven by the endpoint's own serialisation shape, and reverted; the merge targets are vulnapp's.
 		CheckServerSidePrototypePollution: true,
+		CheckRaceConditions:               true,
+		CheckOAuth:                        true,
 		// LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of
 		// requests a model likely answers; the stand-in models are vulnapp's own.
 		CheckLLMPromptInjection: true,

@@ -1,0 +1,97 @@
+package scanner
+
+// CL.0 / client-side desync tests (burpsy-react-ui-0vzb.40).
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/vulnapp"
+)
+
+func runCL0(t *testing.T, listener string) ([]*Finding, error) {
+	t.Helper()
+	l, err := vulnapp.StartListener(listener)
+	if err != nil {
+		t.Fatalf("start %s: %v", listener, err)
+	}
+	t.Cleanup(func() { l.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return checkRequestSmuggling(ctx, smugglingAt(l.Host, l.Port, l.TLS))
+}
+
+func runClientSideDesync(t *testing.T, listener string) ([]*Finding, error) {
+	t.Helper()
+	l, err := vulnapp.StartListener(listener)
+	if err != nil {
+		t.Fatalf("start %s: %v", listener, err)
+	}
+	t.Cleanup(func() { l.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return checkClientSideDesync(ctx, smugglingAt(l.Host, l.Port, l.TLS))
+}
+
+func TestCL0ReportsTheSmuggledPrefixAnswer(t *testing.T) {
+	fs, err := runCL0(t, "desync-cl0")
+	if err != nil {
+		t.Fatalf("check errored: %v", err)
+	}
+	var f *Finding
+	for _, x := range fs {
+		if x.Name == smugglingRow {
+			f = x
+		}
+	}
+	if f == nil {
+		t.Fatalf("no smuggling finding (got %v)", fs)
+	}
+	if f.Param != "CL.0" || f.Severity != "high" || f.Confidence != "firm" {
+		t.Fatalf("param/severity/confidence = %q/%s/%s", f.Param, f.Severity, f.Confidence)
+	}
+}
+
+func TestCL0StaysQuietWhenTheBodyIsRead(t *testing.T) {
+	fs, err := runCL0(t, "desync-cl0-safe")
+	if err != nil {
+		t.Fatalf("check errored: %v", err)
+	}
+	for _, x := range fs {
+		if x.Name == smugglingRow {
+			t.Fatalf("safe twin reported: %+v", x)
+		}
+	}
+}
+
+func TestClientSideDesyncReportsTheSmuggledPrefixAnswer(t *testing.T) {
+	fs, err := runClientSideDesync(t, "desync-client-side")
+	if err != nil {
+		t.Fatalf("check errored: %v", err)
+	}
+	var f *Finding
+	for _, x := range fs {
+		if x.Name == "Client-side desync" {
+			f = x
+		}
+	}
+	if f == nil {
+		t.Fatalf("no client-side desync finding (got %v)", fs)
+	}
+	if f.Severity != "high" || f.Confidence != "firm" {
+		t.Fatalf("severity/confidence = %s/%s", f.Severity, f.Confidence)
+	}
+}
+
+func TestClientSideDesyncStaysQuietOnTheSafeTwin(t *testing.T) {
+	fs, err := runClientSideDesync(t, "desync-csd-safe")
+	if err != nil {
+		t.Fatalf("check errored: %v", err)
+	}
+	for _, x := range fs {
+		if x.Name == "Client-side desync" {
+			t.Fatalf("safe twin reported: %+v", x)
+		}
+	}
+}

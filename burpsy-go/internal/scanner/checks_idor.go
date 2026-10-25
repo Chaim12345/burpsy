@@ -101,15 +101,26 @@ func brokenAccessControlOrIDOR(bac CheckRunner) CheckRunner {
 		if idorEnabled(cc.Config) {
 			idorF, idorErr = checkIDOR(ctx, cc)
 		}
-		switch {
-		case len(idorF) > 0:
-			return append(bacF, idorF...), nil
-		case bacErr != nil:
-			return bacF, bacErr
-		case idorErr != nil:
-			return nil, idorErr
+		var bflaF []*Finding
+		var bflaErr error
+		if bflaIdentity(cc.Config) != nil {
+			bflaF, bflaErr = checkBFLA(ctx, cc)
 		}
-		return bacF, nil
+		var maF []*Finding
+		var maErr error
+		if maEnabled(cc.Config) {
+			maF, maErr = checkMassAssignment(ctx, cc)
+		}
+		out := append(append(append(bacF, idorF...), bflaF...), maF...)
+		if len(out) > 0 {
+			return out, nil
+		}
+		for _, err := range []error{bacErr, idorErr, bflaErr, maErr} {
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
 	}
 }
 
@@ -135,8 +146,142 @@ func checkIDOR(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("idor: %w", err)
 	}
-	p := &idorProber{cc: cc, h: h, raw: raw, sessionIDs: idorSessionIDs(raw)}
+	p := &idorProber{cc: cc, h: h, raw: raw, sessionIDs: idorSessionIDs(raw), sec: idorSecondIdentity(cc.Config)}
 	return p.run(ctx)
+}
+
+// idorSecondIdentity returns the configured second identity when the two-identity switch admitted
+// it, else nil.
+func idorSecondIdentity(c *ScanConfig) *SecondIdentity {
+	if c == nil || !c.CheckIDORTwoIdentity {
+		return nil
+	}
+	sec := &c.SecondIdentity
+	if sec.CookieHeader == "" && sec.AuthorizationHeader == "" && (sec.APIKeyHeader == "" || sec.APIKeyValue == "") {
+		return nil
+	}
+	return sec
+}
+
+// idorReidentity rewrites raw's credential headers to identity B's: cookies are replaced BY NAME so
+// a non-credential cookie riding the same header (an object reference, a raised role) survives, and
+// Authorization and the configured API-key header are replaced whole. covered is false when the
+// request authenticates over a channel B cannot fill - a Cookie header sharing no cookie name with
+// B's set, or an Authorization header B has no counterpart for - because then the replay is still
+// identity A and would prove nothing.
+func idorReidentity(raw string, sec *SecondIdentity) (string, bool) {
+	head, body, hasBody := strings.Cut(raw, "\r\n\r\n")
+	lines := strings.Split(head, "\r\n")
+	bCookies := map[string]string{}
+	for _, c := range strings.Split(sec.CookieHeader, ";") {
+		if n, v, ok := strings.Cut(strings.TrimSpace(c), "="); ok {
+			bCookies[n] = strings.TrimSpace(v)
+		}
+	}
+	out := []string{lines[0]}
+	covered := true
+	for _, line := range lines[1:] {
+		name, value, ok := strings.Cut(line, ":")
+		n, v := strings.TrimSpace(name), strings.TrimSpace(value)
+		switch {
+		case ok && strings.EqualFold(n, "cookie"):
+			var pairs []string
+			replaced := false
+			for _, c := range strings.Split(v, ";") {
+				c = strings.TrimSpace(c)
+				cn, _, _ := strings.Cut(c, "=")
+				if bv, isB := bCookies[cn]; isB {
+					pairs = append(pairs, cn+"="+bv)
+					replaced = true
+				} else {
+					pairs = append(pairs, c)
+				}
+			}
+			if !replaced {
+				if len(bCookies) == 0 {
+					covered = false
+				}
+				out = append(out, line)
+				continue
+			}
+			out = append(out, "Cookie: "+strings.Join(pairs, "; "))
+		case ok && strings.EqualFold(n, "authorization"):
+			if sec.AuthorizationHeader == "" {
+				covered = false
+				out = append(out, line)
+				continue
+			}
+			out = append(out, "Authorization: "+sec.AuthorizationHeader)
+		case ok && sec.APIKeyHeader != "" && strings.EqualFold(n, sec.APIKeyHeader):
+			out = append(out, n+": "+sec.APIKeyValue)
+		default:
+			out = append(out, line)
+		}
+	}
+	res := strings.Join(out, "\r\n") + "\r\n\r\n"
+	if hasBody {
+		res += body
+	}
+	return res, covered
+}
+
+// crossRead asks whether identity B is served identity A's object: the original request - A's own
+// reference - replayed under B's credentials. A match on A's baseline shape with no stable-leaf
+// difference is A's object in B's hands; the echo trap (an endpoint that serves the SESSION's own
+// record whatever the id) answers with B's record instead, which differs and concludes nothing.
+// Controls: the same request with every credential stripped must not be served the object, and the
+// cross-read repeated must be stable.
+func (p *idorProber) crossRead(ctx context.Context, b *idorBase, c idorCandidate) (*Finding, error) {
+	braw, covered := idorReidentity(b.raw, p.sec)
+	if !covered {
+		return nil, nil
+	}
+	br, err := p.send(ctx, braw)
+	if err != nil {
+		return nil, err
+	}
+	if !b.isObject(br) || len(b.diff(b.shape, idorShapeOf(br.Body))) > 0 {
+		return nil, nil
+	}
+	keep := map[string]bool{}
+	if c.point.Kind == bcheck.IpCookie {
+		keep[c.point.Name] = true
+	}
+	nr, err := p.send(ctx, idorAnonymous(b.raw, keep))
+	if err != nil {
+		return nil, err
+	}
+	if b.isObject(nr) {
+		return nil, nil // served without credentials: public data
+	}
+	again, err := p.send(ctx, braw)
+	if err != nil {
+		return nil, err
+	}
+	if !b.isObject(again) || len(b.diff(idorShapeOf(br.Body), idorShapeOf(again.Body))) > 0 {
+		return nil, nil
+	}
+	return p.crossFinding(b, c, br, nr), nil
+}
+
+func (p *idorProber) crossFinding(b *idorBase, c idorCandidate, br, nr ProbeResponse) *Finding {
+	where := fmt.Sprintf("%s %q", idorKindLabel(c.point.Kind), c.point.Name)
+	if c.point.Kind == bcheck.IpURLPathFilename || c.point.Kind == bcheck.IpURLPathFolder {
+		where = fmt.Sprintf("path segment %q", c.value)
+	}
+	detail := fmt.Sprintf("The request as captured holds the object reference in %s and returns the "+
+		"captured identity's object. Replayed under a second configured identity - another account on "+
+		"the same application - it returned HTTP %d with the SAME object, unchanged: the second "+
+		"identity can read the first identity's object, so object-level authorization is not enforced. "+
+		"Controls: the same request with every credential removed returned HTTP %d without the object, "+
+		"and the cross-read repeated returned the same object again.", where, br.Status, nr.Status)
+	f := buildHeaderFinding(p.cc, idorIssue, "high", "firm",
+		fmt.Sprintf("second identity replay -> HTTP %d, %s", br.Status, excerpt(br.Body, 0, 160)), detail)
+	f.Param = c.point.Name
+	f.Solution = "Authorize every object access on the server against the authenticated identity: look the " +
+		"object up within the current user's own scope, or check ownership before returning it. Never " +
+		"decide authorization from a client-held id or role."
+	return f
 }
 
 // idorProber holds one exchange's run.
@@ -145,6 +290,7 @@ type idorProber struct {
 	h          *ProbeHarness
 	raw        string
 	sessionIDs map[string]bool
+	sec        *SecondIdentity
 	sends      int
 }
 
@@ -220,6 +366,19 @@ func (p *idorProber) run(ctx context.Context) ([]*Finding, error) {
 	roles := idorRoleVariants(p.h.Points())
 	var failures []string
 	for _, c := range cands {
+		if p.sec != nil {
+			cf, err := p.crossRead(ctx, orig, c)
+			if err != nil {
+				failures = append(failures, err.Error())
+				if errors.Is(err, errIDORBudget) {
+					break
+				}
+				continue
+			}
+			if cf != nil {
+				return []*Finding{cf}, nil
+			}
+		}
 		f, refused, err := p.probe(ctx, orig, c, "")
 		if err != nil {
 			failures = append(failures, err.Error())

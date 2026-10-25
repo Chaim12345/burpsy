@@ -384,6 +384,10 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckClientIPSpoofing = false
 		case "CheckServerSidePrototypePollution":
 			cfg.CheckServerSidePrototypePollution = false
+		case "CheckRaceConditions":
+			cfg.CheckRaceConditions = false
+		case "CheckOAuth":
+			cfg.CheckOAuth = false
 		case "CheckURLAuthBypass":
 			cfg.CheckURLAuthBypass = false
 		case "CheckCookieAttributes":
