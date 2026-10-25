@@ -130,6 +130,15 @@ const (
 	// hotkey here is a suite-wide binding, which is also what Burp's context-less
 	// overload means ("it will fire for any supported context").
 	KindHotKey Kind = "hotkey"
+	// KindPayloadGenerator is the analogue of registerPayloadGeneratorProvider (burpsy-react-ui-0qwh):
+	// an Intruder payload source the plugin computes, pulled one position at a time through
+	// payload.generate until the plugin answers done.
+	KindPayloadGenerator Kind = "payload-generator"
+	// KindPayloadProcessor is the analogue of registerPayloadProcessor: a rewrite applied to each
+	// payload before it is sent, through payload.process. Neither payload kind has a console
+	// surface; the Intruder engine is their consumer, through Host.GeneratePayload and
+	// Host.ProcessPayload.
+	KindPayloadProcessor Kind = "payload-processor"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
@@ -137,7 +146,7 @@ const (
 // UI is indistinguishable from a working one.
 var validKinds = map[Kind]bool{
 	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
-	KindHotKey: true,
+	KindHotKey: true, KindPayloadGenerator: true, KindPayloadProcessor: true,
 }
 
 // NormaliseChord spells a Burp-Settings hotkey ("Ctrl+Shift+P") in the console's own
@@ -367,6 +376,15 @@ type InvokeParams struct {
 	// sees the old shape.
 	Selected []SelectedExchange `json:"selected,omitempty"`
 	Editor   *EditorMessage     `json:"editor,omitempty"`
+
+	// Position, Payload, BaseValue and Encoding are the payload.generate / payload.process payload.
+	// Position is the payload's 0-based index in the attack, a pointer because 0 is real. Payload and
+	// BaseValue are text, or base64 when Encoding is "base64" (set whenever the bytes are not valid
+	// UTF-8), pointers because an empty payload is a real value.
+	Position  *int    `json:"position,omitempty"`
+	Payload   *string `json:"payload,omitempty"`
+	BaseValue *string `json:"base_value,omitempty"`
+	Encoding  string  `json:"encoding,omitempty"`
 }
 
 // MaxHotkeySelection bounds the rows one hotkey invocation may carry. The caller already
@@ -400,6 +418,12 @@ type InvokeResult struct {
 	// (a plugin that only observes, or only rewrote the jar through burpsy's cookies), and is
 	// therefore distinguished from an empty object only by being absent.
 	Request *SessionRequest `json:"request,omitempty"`
+	// Payload, Encoding, Done and Action are the payload methods' answers: payload.generate fills
+	// Payload (or Done when the plugin has no more), payload.process fills Payload or Action "skip".
+	Payload  *string `json:"payload,omitempty"`
+	Encoding string  `json:"encoding,omitempty"`
+	Done     bool    `json:"done,omitempty"`
+	Action   string  `json:"action,omitempty"`
 }
 
 // SessionRequest is one request inside a sessionAction.invoke call, in the sender's own vocabulary.
@@ -561,6 +585,23 @@ var MethodSpecs = []MethodSpec{
 			"because a plugin has no route to the traffic store.",
 	},
 	{
+		Name: "payload.generate", Direction: HostToPlugin, Call: "request", Kind: KindPayloadGenerator,
+		Params: `{"registration": string, "position": int}`,
+		Result: `{"payload"?: string, "encoding"?: "base64", "done"?: bool}`,
+		Why: "The analogue of PayloadGenerator.generatePayloadFor: the Intruder engine asks for the payload at " +
+			"a position and the plugin answers it, or answers done when it has no more. Text, or base64 when the " +
+			"bytes are not valid UTF-8. A plugin that fails or times out ends that attack's generator; the engine " +
+			"never substitutes a payload the plugin did not produce.",
+	},
+	{
+		Name: "payload.process", Direction: HostToPlugin, Call: "request", Kind: KindPayloadProcessor,
+		Params: `{"registration": string, "payload": string, "base_value"?: string, "encoding"?: "base64"}`,
+		Result: `{"payload"?: string, "encoding"?: "base64", "action"?: "skip"}`,
+		Why: "The analogue of PayloadProcessor.processPayload: rewrite one payload before it is sent, or answer " +
+			"action skip to drop it. A failing processor is an error the engine handles by keeping the original " +
+			"payload and counting the failure; a half-processed value is never returned beside an error.",
+	},
+	{
 		Name: "event.raise", Direction: PluginToHost, Call: "request",
 		Params: `{"level": "debug"|"info"|"error"|"critical", "message": string}`,
 		Result: `{}`,
@@ -601,6 +642,21 @@ var MethodSpecs = []MethodSpec{
 		Why: "The analogue of http().sendRequest() (grant: http.send). The request goes through " +
 			"sender.AuthorisedSender, so the engagement scope decides before the dial: an out-of-scope request is " +
 			"answered -32003 and counted, never silently dropped.",
+	},
+	{
+		Name: "traffic.query", Direction: PluginToHost, Call: "request",
+		Params: `{"source": "proxy"|"sitemap"|"organizer", "host"?: string, "method"?: string, "status"?: int, "contains"?: string, "offset"?: int, "limit"?: int, "include_bodies"?: bool}`,
+		Result: `{"items": [{"id": int, "method": string, "url": string, "status": int, "request"?: string, "response"?: string}], "total": int}`,
+		Why: "Read access to the traffic store (grant: traffic.query): proxy().history(filter), " +
+			"siteMap().requestResponses() and organizer().items(). Paged, 50 by default and 200 at most; raw " +
+			"messages are included only with include_bodies, and an answer over the message bound is an error " +
+			"rather than a plugin left waiting. Read-only: a plugin changes traffic only through http.send.",
+	},
+	{
+		Name: "scope.check", Direction: PluginToHost, Call: "request",
+		Params: `{"url": string}`,
+		Result: `{"in_scope": bool}`,
+		Why:    "The analogue of scope().isInScope(url) (grant: scope.check): the engagement scope's answer for one URL.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",

@@ -62,9 +62,17 @@ counterpart: Phase 8 never shipped on that side.
   reaper goroutine waits on both readers first and is the only caller; `stop` waits on `s.exited`. An
   unload returns only once the child has actually been reaped — reporting success while the process was
   still running is a lie the next load would trip over.
-- **A plugin has no route to this process's traffic store, and cannot originate a request.** Message
-  bytes are handed to it in the invocation. A send method would have to bind `sender.AuthorisedSender`
-  per call; it is not wired, and it is declared in `UnsupportedCapabilities` rather than left silent.
+- **A plugin reaches the host only through grant-gated methods over injected `Services`.** The plugin->host
+  methods (`event.raise`, `storage.*`, `ai.prompt`, `http.send`, `traffic.query`, `scope.check`; hostapi.go)
+  each need a per-plugin grant (`Config.Grants`, the operator's `-plugin-grants`): without one the answer is
+  JSON-RPC -32001 and the service is never reached. A nil service answers -32002 (not wired), a scope
+  refusal -32003, bad params -32602. The package imports no store, sender or AI client: the process wiring
+  supplies them. `http.send` must be backed by `sender.AuthorisedSender`; `traffic.query` is read-only.
+  Handlers run off the reader goroutine, at most four at once, each bounded by `CallTimeout`, and an answer
+  over the message bound is an error, not a silent drop that leaves the plugin waiting.
+- **Payload generators and processors have no console surface.** Kinds `payload-generator` and
+  `payload-processor` are consumed by the Intruder engine through `Host.GeneratePayload` / `ProcessPayload`.
+  On any error the processor returns a nil payload so the caller keeps the original and counts the failure.
 - **There is no registry, store or install path,** and `PolicyView.Registry` is a nullable field holding
   null rather than an omission, so a caller reads "there is no store" instead of inferring it.
 

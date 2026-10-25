@@ -262,6 +262,8 @@ var inbound = map[string]func(*session, rpcMessage){
 	"storage.delete": hostStorageDelete,
 	"ai.prompt":      hostAIPrompt,
 	"http.send":      hostHTTPSend,
+	"traffic.query":  hostTrafficQuery,
+	"scope.check":    hostScopeCheck,
 	"log": func(s *session, msg rpcMessage) {
 		var params LogParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {

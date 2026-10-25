@@ -99,6 +99,14 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "repeater-collision", "kind": "hotkey", "label": "Collides with Repeater", "chord": "Ctrl+R"},
 			},
 		}
+	case "payloads":
+		return map[string]any{
+			"name": "payloader", "version": "0.1", "type": "go-test", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "tokens", "kind": "payload-generator", "label": "Signed tokens"},
+				{"id": "upper", "kind": "payload-processor", "label": "Upper-case"},
+			},
+		}
 	case "no-registrations":
 		return map[string]any{"name": "quiet", "version": "1.0", "type": "shell", "protocol": ProtocolVersion}
 	default:
@@ -203,6 +211,37 @@ func runHelperPlugin(behaviour string) {
 				continue
 			}
 			reply(msg.ID, map[string]any{"output": "method=" + msg.Method + " params=" + string(msg.Params)})
+
+		case "payload.generate":
+			var in struct {
+				Position int `json:"position"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			switch {
+			case in.Position >= 3:
+				reply(msg.ID, map[string]any{"done": true})
+			case in.Position == 1:
+				// Not valid UTF-8 as text, so it travels as base64.
+				reply(msg.ID, map[string]any{"payload": "/wCA", "encoding": "base64"})
+			default:
+				reply(msg.ID, map[string]any{"payload": fmt.Sprintf("tok-%d", in.Position)})
+			}
+
+		case "payload.process":
+			var in struct {
+				Payload   string `json:"payload"`
+				BaseValue string `json:"base_value"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			switch in.Payload {
+			case "drop":
+				reply(msg.ID, map[string]any{"action": "skip"})
+			case "boom":
+				emit(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(msg.ID),
+					"error": map[string]any{"code": -32000, "message": "processor failed"}})
+			default:
+				reply(msg.ID, map[string]any{"payload": strings.ToUpper(in.Payload) + "|" + in.BaseValue})
+			}
 
 		case "editor.render":
 			reply(msg.ID, map[string]any{"text": "method=" + msg.Method + " params=" + string(msg.Params)})

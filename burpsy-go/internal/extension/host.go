@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 )
@@ -529,7 +531,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case seen[reg.ID]:
 			refuse(fmt.Sprintf("%q is declared twice; an invoke could not say which was meant", reg.ID))
 		case !validKinds[reg.Kind]:
-			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action and hotkey",
+			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action, hotkey, payload-generator and payload-processor",
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
@@ -691,6 +693,10 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
 	case KindHotKey:
 		err = sess.call(callCtx, "hotkey.invoke", params, &result)
+	case KindPayloadGenerator:
+		err = sess.call(callCtx, "payload.generate", params, &result)
+	case KindPayloadProcessor:
+		err = sess.call(callCtx, "payload.process", params, &result)
 	default:
 		// Unreachable: validate() refuses any other kind at load. Kept as a real
 		// error rather than a panic so a future kind added to validKinds and not
@@ -704,6 +710,112 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		return InvokeResult{}, err
 	}
 	return result, nil
+}
+
+// ErrWrongKind is a payload call against a registration of the other payload kind.
+var ErrWrongKind = errors.New("registration has a different kind")
+
+func (h *Host) kindOf(name, registration string) (Kind, error) {
+	p, err := h.lookup(name)
+	if err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, reg := range p.registrations {
+		if reg.ID == registration {
+			return reg.Kind, nil
+		}
+	}
+	return "", fmt.Errorf("%q registration %q: %w", name, registration, ErrUnknownRegistration)
+}
+
+func encodePayload(b []byte) (string, string) {
+	if utf8.Valid(b) {
+		return string(b), ""
+	}
+	return base64.StdEncoding.EncodeToString(b), "base64"
+}
+
+func decodePayload(s *string, encoding string) ([]byte, error) {
+	if s == nil {
+		return nil, nil
+	}
+	switch encoding {
+	case "":
+		return []byte(*s), nil
+	case "base64":
+		return base64.StdEncoding.DecodeString(*s)
+	}
+	return nil, fmt.Errorf("unknown payload encoding %q", encoding)
+}
+
+// GeneratePayload asks a payload-generator registration for the payload at position. done is
+// true when the plugin has no more. The Intruder engine is the caller.
+func (h *Host) GeneratePayload(ctx context.Context, name, registration string, position int) (payload []byte, done bool, err error) {
+	kind, err := h.kindOf(name, registration)
+	if err != nil {
+		return nil, false, err
+	}
+	if kind != KindPayloadGenerator {
+		return nil, false, fmt.Errorf("%q registration %q is %q: %w", name, registration, kind, ErrWrongKind)
+	}
+	res, err := h.Invoke(ctx, name, InvokeParams{Registration: registration, Position: &position})
+	if err != nil {
+		return nil, false, err
+	}
+	if res.Done {
+		return nil, true, nil
+	}
+	if res.Payload == nil {
+		return nil, false, fmt.Errorf("%q registration %q answered neither a payload nor done", name, registration)
+	}
+	out, err := decodePayload(res.Payload, res.Encoding)
+	if err != nil {
+		return nil, false, fmt.Errorf("%q registration %q: undecodable payload: %w", name, registration, err)
+	}
+	return out, false, nil
+}
+
+// ProcessPayload runs a payload-processor registration over one payload. skip is true when the
+// plugin drops it. On any error the returned payload is nil, so the caller keeps the original.
+func (h *Host) ProcessPayload(ctx context.Context, name, registration string, payload, base []byte) (out []byte, skip bool, err error) {
+	kind, err := h.kindOf(name, registration)
+	if err != nil {
+		return nil, false, err
+	}
+	if kind != KindPayloadProcessor {
+		return nil, false, fmt.Errorf("%q registration %q is %q: %w", name, registration, kind, ErrWrongKind)
+	}
+	ptext, penc := encodePayload(payload)
+	params := InvokeParams{Registration: registration, Payload: &ptext, Encoding: penc}
+	if base != nil {
+		btext, benc := encodePayload(base)
+		if benc != "" && penc == "" {
+			// One encoding field covers both; send both as base64 when either needs it.
+			ptext, penc = base64.StdEncoding.EncodeToString(payload), "base64"
+			params.Payload, params.Encoding = &ptext, penc
+		}
+		if penc == "base64" && benc == "" {
+			btext = base64.StdEncoding.EncodeToString(base)
+		}
+		params.BaseValue = &btext
+	}
+	res, err := h.Invoke(ctx, name, params)
+	if err != nil {
+		return nil, false, err
+	}
+	if res.Action == "skip" {
+		return nil, true, nil
+	}
+	if res.Payload == nil {
+		return nil, false, fmt.Errorf("%q registration %q answered neither a payload nor skip", name, registration)
+	}
+	out, err = decodePayload(res.Payload, res.Encoding)
+	if err != nil {
+		return nil, false, fmt.Errorf("%q registration %q: undecodable payload: %w", name, registration, err)
+	}
+	return out, false, nil
 }
 
 // markFailed records a load that did not complete and returns the row to serve.

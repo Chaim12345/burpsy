@@ -173,19 +173,23 @@ func KindCount() int { return len(kindLabels) }
 // which Montoya call it is the analogue of, so the APIs tab can be read next to
 // Burp's own documentation.
 var kindLabels = map[Kind]string{
-	KindContextMenu:   "Context-menu item",
-	KindMenu:          "Menu action",
-	KindEditorTab:     "Message-editor tab",
-	KindSessionAction: "Session-handling action",
-	KindHotKey:        "Hotkey",
+	KindContextMenu:      "Context-menu item",
+	KindMenu:             "Menu action",
+	KindEditorTab:        "Message-editor tab",
+	KindSessionAction:    "Session-handling action",
+	KindHotKey:           "Hotkey",
+	KindPayloadGenerator: "Intruder payload generator",
+	KindPayloadProcessor: "Intruder payload processor",
 }
 
 var kindMontoya = map[Kind]string{
-	KindContextMenu:   "registerContextMenuItemsProvider",
-	KindMenu:          "registerMenuBarItem",
-	KindEditorTab:     "registerHttpRequestEditorProvider (read-only half only)",
-	KindSessionAction: "registerSessionHandlingAction",
-	KindHotKey:        "registerHotKeyHandler",
+	KindContextMenu:      "registerContextMenuItemsProvider",
+	KindMenu:             "registerMenuBarItem",
+	KindEditorTab:        "registerHttpRequestEditorProvider (read-only half only)",
+	KindSessionAction:    "registerSessionHandlingAction",
+	KindHotKey:           "registerHotKeyHandler",
+	KindPayloadGenerator: "registerPayloadGeneratorProvider",
+	KindPayloadProcessor: "registerPayloadProcessor",
 }
 
 func kindViews() []KindView {

@@ -27,6 +27,7 @@ import (
 // Grant names are the plugin->host method names, one grant per method.
 var grantable = []string{
 	"event.raise", "storage.get", "storage.set", "storage.delete", "ai.prompt", "http.send",
+	"traffic.query", "scope.check",
 }
 
 // ErrUnknownGrant is a grant naming something that is not a plugin->host method.
@@ -112,6 +113,58 @@ type Services struct {
 	// Send performs one request through the authorised sender. It must return
 	// ErrOutOfScope (wrapped is fine) for a request the engagement scope refuses.
 	Send func(ctx context.Context, plugin string, req SessionRequest) (SessionResponse, error)
+	// Traffic is read access to the proxy history, site map and organizer, and the scope.
+	Traffic TrafficReader
+}
+
+// TrafficSource names which store a traffic.query reads (Montoya proxy().history(),
+// siteMap().requestResponses(), organizer().items()).
+type TrafficSource string
+
+const (
+	TrafficProxy     TrafficSource = "proxy"
+	TrafficSitemap   TrafficSource = "sitemap"
+	TrafficOrganizer TrafficSource = "organizer"
+)
+
+// Page bounds for traffic.query.
+const (
+	DefaultTrafficPage = 50
+	MaxTrafficPage     = 200
+)
+
+// TrafficQuery is one filtered, paged read. Empty filters match everything.
+type TrafficQuery struct {
+	Source        TrafficSource
+	Host          string
+	Method        string
+	Status        int // 0 matches any
+	Contains      string
+	Offset, Limit int
+	IncludeBodies bool
+}
+
+// TrafficItem is one stored exchange. Request and Response are raw message text, set only
+// when the query asked for bodies.
+type TrafficItem struct {
+	ID       int    `json:"id"`
+	Method   string `json:"method"`
+	URL      string `json:"url"`
+	Status   int    `json:"status"`
+	Request  string `json:"request,omitempty"`
+	Response string `json:"response,omitempty"`
+}
+
+// TrafficPage is one page and the store's total match count.
+type TrafficPage struct {
+	Items []TrafficItem `json:"items"`
+	Total int           `json:"total"`
+}
+
+// TrafficReader is the read-only window onto the stores. It must not mutate anything.
+type TrafficReader interface {
+	Query(ctx context.Context, plugin string, q TrafficQuery) (TrafficPage, error)
+	InScope(ctx context.Context, url string) (bool, error)
 }
 
 // Bounds on what a plugin may hand the host in one call.
@@ -207,6 +260,12 @@ func (s *session) hostCall(method string, msg rpcMessage, run func(ctx context.C
 		enc, err := json.Marshal(res)
 		if err != nil {
 			s.reply(id, nil, &rpcError{Code: CodeServiceFailed, Message: "encoding the answer: " + err.Error()})
+			return
+		}
+		if len(enc)+128 > s.maxMessageBytes {
+			// An answer the transport would refuse to write would leave the plugin waiting forever.
+			s.reply(id, nil, &rpcError{Code: CodeServiceFailed,
+				Message: fmt.Sprintf("the answer is %d bytes, over the %d-byte message bound; ask for less", len(enc), s.maxMessageBytes)})
 			return
 		}
 		s.reply(id, enc, nil)
@@ -391,5 +450,78 @@ func hostHTTPSend(s *session, msg rpcMessage) {
 			return nil, failed(err)
 		}
 		return map[string]any{"response": resp}, nil
+	})
+}
+
+func hostTrafficQuery(s *session, msg rpcMessage) {
+	s.hostCall("traffic.query", msg, func(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+		var p struct {
+			Source        TrafficSource `json:"source"`
+			Host          string        `json:"host"`
+			Method        string        `json:"method"`
+			Status        int           `json:"status"`
+			Contains      string        `json:"contains"`
+			Offset        int           `json:"offset"`
+			Limit         int           `json:"limit"`
+			IncludeBodies bool          `json:"include_bodies"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, invalid("unreadable params: %v", err)
+		}
+		switch p.Source {
+		case TrafficProxy, TrafficSitemap, TrafficOrganizer:
+		default:
+			return nil, invalid("source %q is not proxy, sitemap or organizer", p.Source)
+		}
+		if p.Offset < 0 || p.Limit < 0 || p.Status < 0 {
+			return nil, invalid("offset, limit and status must not be negative")
+		}
+		if p.Limit == 0 {
+			p.Limit = DefaultTrafficPage
+		}
+		if p.Limit > MaxTrafficPage {
+			p.Limit = MaxTrafficPage
+		}
+		if s.api.services.Traffic == nil {
+			return nil, notWired("traffic.query")
+		}
+		page, err := s.api.services.Traffic.Query(ctx, s.name, TrafficQuery{
+			Source: p.Source, Host: p.Host, Method: p.Method, Status: p.Status, Contains: p.Contains,
+			Offset: p.Offset, Limit: p.Limit, IncludeBodies: p.IncludeBodies,
+		})
+		if err != nil {
+			return nil, failed(err)
+		}
+		if page.Items == nil {
+			page.Items = []TrafficItem{}
+		}
+		if !p.IncludeBodies {
+			items := make([]TrafficItem, len(page.Items))
+			copy(items, page.Items)
+			for i := range items {
+				items[i].Request, items[i].Response = "", ""
+			}
+			page.Items = items
+		}
+		return page, nil
+	})
+}
+
+func hostScopeCheck(s *session, msg rpcMessage) {
+	s.hostCall("scope.check", msg, func(ctx context.Context, raw json.RawMessage) (any, *rpcError) {
+		var p struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.URL == "" {
+			return nil, invalid("scope.check needs a url")
+		}
+		if s.api.services.Traffic == nil {
+			return nil, notWired("scope.check")
+		}
+		in, err := s.api.services.Traffic.InScope(ctx, p.URL)
+		if err != nil {
+			return nil, failed(err)
+		}
+		return map[string]any{"in_scope": in}, nil
 	})
 }
