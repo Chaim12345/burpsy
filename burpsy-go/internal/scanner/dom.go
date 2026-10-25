@@ -830,8 +830,13 @@ func (e *domEngine) analyse(sc domScriptSrc) {
 		e.taint = map[string]domTaint{}
 		e.seen = map[string]bool{}
 	}
-	stmts := domSplitStatements(sc.text)
 	e.noteScriptShape(sc)
+	// r996: a script goja's parser accepts is walked on the AST (scopes, aliases, function
+	// arguments); anything it rejects falls through to the lexical pass rather than going blind.
+	if e.analyseAST(sc) {
+		return
+	}
+	stmts := domSplitStatements(sc.text)
 
 	// Propagation first, then sinks. Doing taint to a fixpoint before looking for sinks makes the
 	// pass insensitive to statement order, which over-reports a sink placed above the assignment

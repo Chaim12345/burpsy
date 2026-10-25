@@ -407,6 +407,17 @@ type ScanConfig struct {
 	// Forwarded as its own probe, for an access-control (401/403) or rate-limit (429) differential and
 	// for the claimed address reflected. Off by default: it claims loopback to refused pages.
 	CheckClientIPSpoofing bool
+	// CheckServerSidePrototypePollution admits the non-destructive JSON __proto__ techniques
+	// (checks_sppj.go, 0vzb.3): json-spaces and status-override probes, each reverted after it
+	// answers. Off by default: the probe replays the application's own POST, which on a
+	// state-changing endpoint is the operator's call.
+	CheckServerSidePrototypePollution bool
+	// CheckURLAuthBypass admits the URL-interpretation access-bypass check (checks_url_bypass.go,
+	// 0vzb.4): on a safe-method request refused with 401/403, normalised spellings of the path
+	// (/%2e/admin, ..;/, trailing %20/%09) and the X-Original-URL / X-Rewrite-URL override headers on
+	// an allowed carrier page. Off by default: it replays a refused request under spellings meant to
+	// defeat the refusal.
+	CheckURLAuthBypass bool
 	// CheckCookieAttributes admits burpsy's two cookie rows (checks_cookie_attrs.go, 0vzb.19), read from
 	// captured Set-Cookie headers: a __Host-/__Secure- cookie a browser rejects for missing its prefix's
 	// attributes, and a session cookie with no effective SameSite restriction. Passive; off by default

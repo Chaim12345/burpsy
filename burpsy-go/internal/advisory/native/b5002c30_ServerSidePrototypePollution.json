@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687408,
+  "name": "Server-side prototype pollution",
+  "description": "<p>The application merges a posted JSON body into server-side objects without dropping the __proto__ key, so a client can write properties onto the server-side object prototype that every object inherits. The finding was proven non-destructively: a {\"__proto__\":{\"json spaces\":10}} member changed how the endpoint serialised its own JSON responses (or a {\"__proto__\":{\"status\":510}} member changed the status of its error answers), and a null member reverted the change. Both are documented detection techniques for the class; the same write primitive can, with the right property, alter authorisation decisions, option lookups, or template resolution server-side.</p>\n<p>This row is burpsy's own: Burp's catalogue covers only the client-side (DOM) form, and Burp tests the server-side class by hand or with a BApp under the generic extension-generated type.</p>",
+  "remediation": "<p>Merge user-supplied JSON with a routine that drops __proto__, constructor and prototype keys, or build target objects with Object.create(null) semantics. Validate request bodies against a schema that rejects unknown top-level members. Where the runtime allows, freeze Object.prototype on services that merge untrusted JSON.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "PortSwigger Research: Server-side prototype pollution",
+      "url": "https://portswigger.net/research/server-side-prototype-pollution"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: Prototype pollution",
+      "url": "https://portswigger.net/web-security/prototype-pollution"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')",
+      "url": "https://cwe.mitre.org/data/definitions/1321.html"
+    }
+  ]
+}

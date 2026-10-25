@@ -828,6 +828,9 @@ func runtimeScanConfig() *ScanConfig {
 		// Server-side parameter pollution (0vzb.3): delimiters appended to query and body values of GET
 		// and POST requests, each against its literal control; the internal APIs are vulnapp's own.
 		CheckServerSideParamPollution: true,
+		// Server-side prototype pollution (0vzb.3): __proto__ members merged into posted JSON bodies,
+		// proven by the endpoint's own serialisation shape, and reverted; the merge targets are vulnapp's.
+		CheckServerSidePrototypePollution: true,
 		// LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of
 		// requests a model likely answers; the stand-in models are vulnapp's own.
 		CheckLLMPromptInjection: true,
