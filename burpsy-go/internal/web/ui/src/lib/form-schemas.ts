@@ -62,3 +62,48 @@ export const autoBackupSchema = z
   })
   .transform(({ interval, dir, retention }) => ({ interval_minutes: interval, dir, retention: retention ?? 0 }));
 export type AutoBackupForm = z.input<typeof autoBackupSchema>;
+
+/** A resource pool (Settings > Resource pools). Mirrors the server's own refusals, so a bad pool is never sent. */
+export const poolSchema = z
+  .object({
+    name: z.string().trim().min(1, "Enter a pool name"),
+    maxConcurrent: wholeNumber("Max concurrent requests must be a whole number").pipe(
+      z.number().min(1, "Max concurrent requests must be at least 1"),
+    ),
+    delay: wholeNumber("The delay must be a whole number of milliseconds").pipe(
+      z.number().min(0, "The delay cannot be negative"),
+    ),
+    throttle: z.boolean(),
+    // Only read while throttling is on, so a stale value in a hidden field never blocks a save.
+    increment: z.string().trim(),
+  })
+  .transform((value, ctx) => {
+    let increment_ms = 0;
+    if (value.throttle) {
+      if (!/^\d+$/.test(value.increment) || Number(value.increment) < 1) {
+        ctx.addIssue({ code: "custom", path: ["increment"], message: "The throttle increment must be a whole number above 0" });
+        return z.NEVER;
+      }
+      increment_ms = Number(value.increment);
+      if (value.delay <= 0) {
+        ctx.addIssue({ code: "custom", path: ["delay"], message: "Automatic throttling needs a delay above 0" });
+        return z.NEVER;
+      }
+    }
+    return {
+      name: value.name,
+      max_concurrent: value.maxConcurrent,
+      delay_ms: value.delay,
+      throttle: value.throttle ? { increment_ms } : null,
+    };
+  });
+export type PoolForm = z.input<typeof poolSchema>;
+
+/** A schedule's repeat interval, typed in hours (fractions allowed), saved as whole seconds. */
+export const intervalHoursSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+(\.\d+)?$/, "Enter the interval in hours, e.g. 24 or 0.5")
+  .transform(Number)
+  .pipe(z.number().min(1 / 60, "The interval must be at least 1 minute"))
+  .transform((hours) => Math.max(1, Math.round(hours * 3600)));
