@@ -38,6 +38,12 @@ import (
 // a probe was written to get; re-encoding them would be worse than failing: the server would be
 // asked about a request the operator did not write, and the result would read as evidence about
 // their probe.
+//
+// One deliberate asymmetry, pinned on both sides so nobody "fixes" one against the other: this
+// helper carries a RAW SPACE verbatim ('/a b' is just bytes here), while the senders' carriability
+// bars refuse the same target before any URL is built - a raw space breaks the request line's own
+// tokenisation, and carrying what the parser refused would make burpsy the more-permissive parser
+// (the smuggling shape; swqq). Both behaviors are the contract.
 func RequestURL(authority, rawTarget string) (*url.URL, error) {
 	if parsed, err := url.Parse("https://" + authority + rawTarget); err == nil && parsed.RequestURI() == rawTarget {
 		return parsed, nil
