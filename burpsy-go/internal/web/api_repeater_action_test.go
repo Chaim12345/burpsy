@@ -57,26 +57,37 @@ func TestAcceptanceRepeaterTabCustomAction(t *testing.T) {
 		t.Fatalf("repeater send: %v", err)
 	}
 
-	// The run is inspectable: its log saw the response, and the rewrite it produced is there
-	// for the tab's next send.
+	// GET is the definition only (1944 disposition): it says the action ran, and the run's
+	// inspectable output - its log, its store, the rewritten draft - comes from the gated POST.
 	rec = get(t, s, "/api/repeater/tabs/tab-1/action")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read the action: %d %s", rec.Code, rec.Body)
 	}
-	var state struct {
-		LastRun struct {
-			Log     []string `json:"log"`
-			Request string   `json:"request"`
-		} `json:"last_run"`
+	var def struct {
+		Runs uint64 `json:"runs"`
 	}
-	if err := decodeJSON(rec.Body.Bytes(), &state); err != nil {
+	if err := decodeJSON(rec.Body.Bytes(), &def); err != nil {
 		t.Fatalf("decode action: %v", err)
 	}
-	if len(state.LastRun.Log) == 0 || state.LastRun.Log[0] != "saw 200" {
-		t.Errorf("the auto-run did not see the response: %v", state.LastRun.Log)
+	if def.Runs != 1 || strings.Contains(rec.Body.String(), "last_run") {
+		t.Errorf("GET after one auto-run: runs=%d, body %q", def.Runs, rec.Body.String())
 	}
-	if !strings.Contains(state.LastRun.Request, "X-Action-Ran: yes") {
-		t.Errorf("the auto-run's rewritten request is missing the stamp: %q", state.LastRun.Request)
+	rec = postJSON(t, s, "/api/repeater/tabs/tab-1/action/run", map[string]any{"mode": "last"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read the recorded run: %d %s", rec.Code, rec.Body)
+	}
+	var state struct {
+		Log     []string `json:"log"`
+		Request string   `json:"request"`
+	}
+	if err := decodeJSON(rec.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if len(state.Log) == 0 || state.Log[0] != "saw 200" {
+		t.Errorf("the auto-run did not see the response: %v", state.Log)
+	}
+	if !strings.Contains(state.Request, "X-Action-Ran: yes") {
+		t.Errorf("the auto-run's rewritten request is missing the stamp: %q", state.Request)
 	}
 
 	// On demand: the same script runs against the tab's latest exchange when the operator asks.
@@ -137,15 +148,13 @@ func TestRepeaterTabActionGuardRails(t *testing.T) {
 	}
 	rec = get(t, s, "/api/repeater/tabs/tab-1/action")
 	var state struct {
-		LastRun *struct {
-			Log []string `json:"log"`
-		} `json:"last_run"`
+		Runs uint64 `json:"runs"`
 	}
 	if err := decodeJSON(rec.Body.Bytes(), &state); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if state.LastRun != nil {
-		t.Errorf("a manual-only action ran on a send: %v", state.LastRun.Log)
+	if state.Runs != 0 {
+		t.Errorf("a manual-only action ran on a send: runs=%d", state.Runs)
 	}
 
 	// On demand it runs, and its store survives into the next run.
@@ -177,17 +186,30 @@ func TestRepeaterTabActionGuardRails(t *testing.T) {
 		t.Fatalf("a failed run is still a run: %d", rec.Code)
 	}
 	var failed struct {
-		Error string `json:"error"`
+		Error     string `json:"error"`
+		ErrorKind string `json:"error_kind"`
 	}
 	if err := decodeJSON(rec.Body.Bytes(), &failed); err != nil {
 		t.Fatalf("decode failed run: %v", err)
 	}
-	if !strings.Contains(failed.Error, "boom") {
-		t.Errorf("the script's failure was not reported: %q", failed.Error)
+	if !strings.Contains(failed.Error, "boom") || failed.ErrorKind != "exception" {
+		t.Errorf("the script's failure was not reported: %q (%q)", failed.Error, failed.ErrorKind)
 	}
 	rec = get(t, s, "/api/repeater/tabs/tab-1/action")
 	if rec.Code != http.StatusOK {
 		t.Errorf("the config did not survive its script's failure: %d", rec.Code)
+	}
+	var after struct {
+		Action struct {
+			Script string `json:"script"`
+		} `json:"action"`
+		HasError bool `json:"has_error"`
+	}
+	if err := decodeJSON(rec.Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode after failure: %v", err)
+	}
+	if after.Action.Script == "" || !after.HasError {
+		t.Errorf("the definition after the failure: %+v", after)
 	}
 }
 
@@ -219,7 +241,7 @@ func TestRepeaterTabActionPersists(t *testing.T) {
 			Script  string `json:"script"`
 			AutoRun bool   `json:"auto_run"`
 		} `json:"action"`
-		LastRun *struct{} `json:"last_run"`
+		Runs uint64 `json:"runs"`
 	}
 	if err := decodeJSON(rec.Body.Bytes(), &state); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -227,8 +249,8 @@ func TestRepeaterTabActionPersists(t *testing.T) {
 	if state.Action.Script != `log("x")` || !state.Action.AutoRun {
 		t.Errorf("the config did not round-trip: %+v", state.Action)
 	}
-	if state.LastRun != nil {
-		t.Errorf("a run log crossed a reopen; only the config is project state")
+	if state.Runs != 0 || strings.Contains(rec.Body.String(), "last_run") {
+		t.Errorf("a run log crossed a reopen; only the config is project state: %q", rec.Body.String())
 	}
 
 	// Deleted is deleted on disk too.
