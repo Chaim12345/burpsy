@@ -304,8 +304,9 @@ type TimeoutSettings struct {
 	ConnectMS int `json:"connect_ms"`
 	// ReadMS bounds the wait for a response to begin arriving. Zero means no bound of its own.
 	ReadMS int `json:"read_ms"`
-	// TotalMS bounds one whole exchange, dial through last body byte. Zero means unbounded, which is
-	// only sane when the caller supplies a context deadline instead.
+	// TotalMS bounds one whole exchange, dial through last body byte. Zero names no bound of its
+	// own; when the caller's context has no deadline either, a built-in bound still ends the
+	// exchange rather than letting a silent peer hang it forever.
 	TotalMS int `json:"total_ms"`
 }
 
@@ -928,9 +929,10 @@ func (n NetworkSettings) exchangeTimeout() time.Duration {
 // been declared open-ended and the ordinary read or total bound for everything else.
 //
 // The fall-through order matters: read_ms is the specific bound and wins when set, total_ms stands in
-// when it is not, and zero means "no deadline of our own" so the caller's context decides. Returning
-// the total here rather than nothing is what preserves the previous behaviour, where
-// SenderConfig.Timeout was the only deadline a raw read ever had.
+// when it is not, and zero means "no bound of our own" - the caller's context decides when it has a
+// deadline, and the built-in defaultExchangeBound decides when it does not. Returning the total here
+// rather than nothing is what preserves the previous behaviour, where SenderConfig.Timeout was the
+// only deadline a raw read ever had.
 func (n NetworkSettings) readTimeout(host string) time.Duration {
 	if n.Streaming.isStreaming(host) {
 		return time.Duration(n.Streaming.TimeoutMS) * time.Millisecond

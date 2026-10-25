@@ -147,8 +147,14 @@ func durationMS(d time.Duration) int {
 	return int(d / time.Millisecond)
 }
 
+// defaultExchangeBound ends one exchange's read when neither the operator's timeouts nor the
+// caller's context does: an unbounded read on a connection the peer keeps open is a hang-forever
+// primitive (757d). A var, not a const, so a test can shrink it rather than wait it out.
+var defaultExchangeBound = 30 * time.Second
+
 // deadlineFor is the connection deadline one raw send gets: the context's when it has one, the
 // sender's own bound otherwise — and, for a derived run sender, whichever of the two is sooner.
+// When neither exists the built-in defaultExchangeBound answers: every exchange is bounded.
 func (s *Sender) deadlineFor(ctxDeadline time.Time, hasCtx bool, host string) (time.Time, bool) {
 	bound := s.Network().readTimeout(host)
 	switch {
@@ -162,7 +168,10 @@ func (s *Sender) deadlineFor(ctxDeadline time.Time, hasCtx bool, host string) (t
 	case bound > 0:
 		return time.Now().Add(bound), true
 	}
-	return time.Time{}, false
+	// Neither the operator nor the caller bounded this exchange: the built-in bound does. A read
+	// with no deadline at all hangs for as long as the peer keeps the connection open, which a
+	// keep-alive peer has every reason to do (757d).
+	return time.Now().Add(defaultExchangeBound), true
 }
 
 // applyDeadline sets conn's deadline from deadlineFor.
