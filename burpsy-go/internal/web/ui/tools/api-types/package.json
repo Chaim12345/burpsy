@@ -1,0 +1,9 @@
+{
+ "name": "burpsy-api-types-tool",
+ "private": true,
+ "description": "Isolated toolchain for scripts/gen-api-types.mjs (burpsy-react-ui-pg5a). The app pins typescript@7 (the native compiler, no JS API); openapi-typescript needs the TypeScript 5 JS API, so it lives here with its own typescript rather than fighting the app's pin.",
+ "dependencies": {
+  "openapi-typescript": "^7.13.0",
+  "typescript": "^5.9.0"
+ }
+}

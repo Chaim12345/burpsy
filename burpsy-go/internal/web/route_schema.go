@@ -160,9 +160,25 @@ type opSchema struct {
 	keysCheckedBy string
 	// query lists the query parameters the handler reads.
 	query []queryParam
+	// response is the type the handler's success path encodes (burpsy-react-ui-pg5a), declared from
+	// a code read of that path — CONFIRMED in the SOURCE-OF-TRUTH sense, and marked in the published
+	// document as declared. Nil means the shape is not verified, and the document says so rather
+	// than publishing a guess.
+	response reflect.Type
 }
 
 func typeOf[T any]() reflect.Type { return reflect.TypeFor[T]() }
+
+// sortedKeys is every key of a string-keyed map in order — the deterministic iteration the schema
+// table, the OpenAPI builder, and their tests all need.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // noBody is an op whose whole request is its path and query.
 var noBody = opSchema{}
