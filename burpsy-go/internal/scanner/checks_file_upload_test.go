@@ -2,7 +2,9 @@ package scanner
 
 import (
 	"context"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -94,10 +96,19 @@ func TestFileUploadStaysQuietOnTheSafeUploads(t *testing.T) {
 	}
 
 	allow := rt.findingsFor(t, "/fu/safe/allowlist/upload", false)
-	for _, row := range []string{"Cross-site scripting (stored)", "File path traversal", "File upload functionality"} {
+	for _, row := range []string{"Cross-site scripting (stored)", "File path traversal"} {
 		if f := allow[row]; f != nil {
 			t.Errorf("%q reported against an extension allowlist whose refusals quote the refused path: %q", row, f.Evidence)
 		}
+	}
+	// .gif is on the allowlist, so the GIF89a HTML polyglot is genuinely stored here - the
+	// accepted row is TRUE, at acceptance strength only: served as a forced text/plain download,
+	// nothing renders, and the finding must not hint otherwise.
+	f := allow["File upload functionality"]
+	if f == nil {
+		t.Errorf("the allowlist stores the GIF89a polyglot but the check did not say so; rows: %s", joinRows(allow))
+	} else if !strings.Contains(f.Evidence, "polyglot") {
+		t.Errorf("the accepted row does not name the polyglot as one: %q", f.Evidence)
 	}
 }
 
@@ -158,5 +169,88 @@ func TestUploadLocationsAreUnescapedAndResolved(t *testing.T) {
 	want := []string{"http://h:8080/app/upload/-77_bfutok.svg", "http://h:8080/app/api/app/upload/-77_bfutok.svg"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("candidates = %v, want %v", got, want)
+	}
+}
+
+// TestFileUploadPolyglotBeatsAContentSniffingFilter: a filter that demands image magic bytes for
+// an image extension still stores the GIF89a HTML polyglot. Served by its extension it comes back
+// as image/gif, so no XSS is claimed - but the bypass is reported, and with no delete exposed the
+// finding lists the stored probe files left behind.
+func TestFileUploadPolyglotBeatsAContentSniffingFilter(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	// The open endpoint must show the check working in this run, or the row below proves nothing.
+	if rt.findingsFor(t, "/fu/upload", false)["File upload functionality"] == nil {
+		t.Fatal("the check found no accepted-extension row on the open upload in this run")
+	}
+	got := rt.findingsFor(t, "/fu/sniff/upload", false)
+	f := got["File upload functionality"]
+	if f == nil {
+		t.Fatalf("the sniffing upload stored the GIF89a HTML polyglot but the check said nothing; rows: %s", joinRows(got))
+	}
+	if !strings.Contains(f.Evidence, ".gif") || !strings.Contains(f.Evidence, "polyglot") {
+		t.Errorf("the accepted polyglot is not named as one: %q", f.Evidence)
+	}
+	if x := got["Cross-site scripting (stored)"]; x != nil {
+		t.Errorf("a polyglot served as image/gif was reported as stored XSS: %q", x.Evidence)
+	}
+	if !strings.Contains(f.Description, "/fu/sniff/files/") {
+		t.Errorf("no delete is exposed, yet the stored probe files are not listed for cleanup: %q", f.Description)
+	}
+}
+
+// TestFileUploadPolyglotRendersWhenTheServerTrustsTheDeclaredType: the same sniffing filter, but
+// the stored file is served with the Content-Type the upload declared. The polyglot sent as
+// text/html renders, so the stored-XSS row fires with the polyglot's name in evidence.
+func TestFileUploadPolyglotRendersWhenTheServerTrustsTheDeclaredType(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	got := rt.findingsFor(t, "/fu/trustct/upload", false)
+	f := got["Cross-site scripting (stored)"]
+	if f == nil {
+		t.Fatalf("the declared-type replay renders the polyglot but the check said nothing; rows: %s", joinRows(got))
+	}
+	if !strings.Contains(f.Evidence, ".gif") || !strings.Contains(f.Evidence, "text/html") {
+		t.Errorf("the evidence does not show the polyglot served as a document: %q", f.Evidence)
+	}
+}
+
+// TestFileUploadRemovesItsProbeFilesWhenDeleteIsExposed: on an endpoint with a delete, every
+// stored probe file is removed after the findings are built, the finding says so, and the file
+// the XSS proof was fetched from is gone.
+func TestFileUploadRemovesItsProbeFilesWhenDeleteIsExposed(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	got := rt.findingsFor(t, "/fu/upload", false)
+	f := got["Cross-site scripting (stored)"]
+	if f == nil {
+		t.Fatal("the stored-XSS row did not fire on the open upload in this run")
+	}
+	if !strings.Contains(f.Description, "removed") {
+		t.Errorf("the finding does not report the probe-file removal: %q", f.Description)
+	}
+	m := regexp.MustCompile(`fetched (https?://\S+?\.html)[,:]`).FindStringSubmatch(f.Evidence)
+	if m == nil {
+		t.Fatalf("no fetched URL in the evidence to re-check: %q", f.Evidence)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(m[1])
+	if err != nil {
+		t.Fatalf("re-fetching the removed probe file: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("the probe file the XSS proof used is still served after the check ran: HTTP %d", resp.StatusCode)
+	}
+}
+
+// TestGifHTMLPolyglotIsAnImageToASniffer pins the polyglot's two faces: image magic first, an
+// HTML document with the intact canary after.
+func TestGifHTMLPolyglotIsAnImageToASniffer(t *testing.T) {
+	body, canary := gifHTMLPolyglot(uploadMarker("bfuTESTTOKEN"))
+	if !strings.HasPrefix(body, "GIF89a") {
+		t.Errorf("the polyglot does not open with GIF89a magic: %q", body[:16])
+	}
+	if got := http.DetectContentType([]byte(body)); got != "image/gif" {
+		t.Errorf("a content sniffer reads the polyglot as %q, not image/gif", got)
+	}
+	if !strings.Contains(body, "<!DOCTYPE html>") || !strings.Contains(body, canary) {
+		t.Errorf("the HTML face or the canary is missing from the polyglot: %q", body)
 	}
 }

@@ -20,6 +20,25 @@ package scanner
 //     this check sends is an inert marker string, so nothing it uploads can run, and a server-script
 //     extension being stored says nothing about whether a handler would execute it.
 //
+// # Polyglots
+//
+// A filter that inspects the file's bytes rather than its name asks for a different bypass: the
+// GIF89a HTML polyglot is a valid GIF header followed by an HTML document carrying the script
+// canary, so a content sniffer reads it as image/gif while a browser served it as text/html renders
+// the document. It is probed as its own class (.gif, active), and two further variants carry the
+// bypass in the bytes and the declared type rather than the name: image magic over the class's real
+// content, and an active content type declared over a body that sniffs as an image. An active class
+// that was STORED but is not served as a renderable document keeps probing its remaining variants:
+// "accepted, does not render" and "accepted, renders" are different findings.
+//
+// # Cleaning up
+//
+// Every stored probe file is tracked. After the findings are built the check tries DELETE on each
+// stored URL through the same scope-enforcing gate and verifies the removal by re-fetching; what it
+// removed and what remains - with every stored location named, so the tester can clean up by hand -
+// is appended to each finding. On endpoints with no delete the attempts cost little and the list is
+// the finding's cleanup trail; on endpoints with nothing to report the removal runs silently.
+//
 // # Why "accepted" needs a reference
 //
 // An upload endpoint answers 200 to a rejected file as often as to an accepted one ("Input is
@@ -67,8 +86,10 @@ func fileUploadEnabled(c *ScanConfig) bool { return c != nil && c.CheckFileUploa
 // a reference upload plus up to maxUploadProbesPerPoint more requests.
 const maxUploadPointsPerRequest = 2
 
-// maxUploadProbesPerPoint bounds the requests (uploads and fetches) one file part may cost.
-const maxUploadProbesPerPoint = 60
+// maxUploadProbesPerPoint bounds the requests (uploads, fetches, deletes) one file part may cost.
+// The polyglot class and its keep-probing variants, plus one delete and one verification fetch per
+// stored file, raised the worst case past the original 60.
+const maxUploadProbesPerPoint = 90
 
 // storedXSSOrFileUpload runs the "Cross-site scripting (stored)" row's two techniques, each behind its
 // own switch: the second-order canary check (CheckStored) and the file-upload check (CheckFileUpload).
@@ -171,6 +192,9 @@ type uploadProber struct {
 	sent int
 	// ref is the accepted benign upload every other attempt is compared with.
 	ref *uploadAttempt
+	// stored is every URL a confirmed-stored probe file was read back from or named at, so the
+	// run can try to remove them afterwards.
+	stored []string
 }
 
 // uploadAttempt is one upload and what became of it.
@@ -246,6 +270,11 @@ func (p *uploadProber) upload(ctx context.Context, name, contentType, content, t
 
 // fetch reads one URL back through the scope-enforcing gate.
 func (p *uploadProber) fetch(ctx context.Context, target *url.URL) (ProbeResponse, error) {
+	return p.request(ctx, "GET", target)
+}
+
+// request sends one bare method against a stored-file URL through the scope-enforcing gate.
+func (p *uploadProber) request(ctx context.Context, method string, target *url.URL) (ProbeResponse, error) {
 	if err := p.spend(); err != nil {
 		return ProbeResponse{}, err
 	}
@@ -270,7 +299,7 @@ func (p *uploadProber) fetch(ctx context.Context, target *url.URL) (ProbeRespons
 		path += "?" + target.RawQuery
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "GET %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\n", path, hostPort(host, uint16(port), tls))
+	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\nHost: %s\r\nAccept: */*\r\n", method, path, hostPort(host, uint16(port), tls))
 	// The session the upload was made in, for the same origin only: an upload area is often behind
 	// a login, and a cookie is never carried to another origin.
 	if p.cookie != "" && strings.EqualFold(target.Host, p.origin.Host) && target.Scheme == p.origin.Scheme {
@@ -379,6 +408,8 @@ type fileClass struct {
 	active bool
 	// alt are further extensions of the same class (".htm" for HTML).
 	alt []string
+	// note, when set, says what the class IS in an accepted entry ("image/HTML polyglot").
+	note string
 	// content builds the file body for a token; canary is what a fetch must carry intact.
 	content func(marker string) (body, canary string)
 }
@@ -395,11 +426,23 @@ func svgCanary(marker string) (string, string) {
 
 func plainMarker(marker string) (string, string) { return marker + "\n", marker }
 
+// gifMagic is the header that makes a content sniffer read the file as image/gif: the signature,
+// a 1x1 logical screen descriptor, and a black-only global colour table.
+const gifMagic = "GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00"
+
+// gifHTMLPolyglot is both faces of the classic image/HTML polyglot: GIF89a magic for the sniffer,
+// then an HTML document carrying the script canary for a browser told it is text/html.
+func gifHTMLPolyglot(marker string) (string, string) {
+	c := "<script>/*" + marker + "*/</script>"
+	return gifMagic + "<!DOCTYPE html><html><body>" + c + "<p>" + marker + "</p></body></html>", c
+}
+
 // dangerousFileClasses are probed in this order: the classes a browser runs first, because their
 // fetch-back is the strongest finding this check can make.
 var dangerousFileClasses = []fileClass{
 	{ext: "html", contentType: "text/html", active: true, alt: []string{"htm"}, content: htmlCanary},
 	{ext: "svg", contentType: "image/svg+xml", active: true, content: svgCanary},
+	{ext: "gif", contentType: "image/gif", active: true, note: "image/HTML polyglot", content: gifHTMLPolyglot},
 	{ext: "jsp", contentType: "application/octet-stream", content: plainMarker},
 	{ext: "php", contentType: "application/octet-stream", content: plainMarker},
 }
@@ -409,19 +452,38 @@ type variant struct {
 	label       string
 	name        func(token, ext, safe string) string
 	contentType func(c fileClass, safe string) string
+	// body, when set, rewrites the class's file body: the bypass is in the bytes, not the name.
+	body func(c fileClass, marker string) (string, string)
 }
 
 var uploadVariants = []variant{
-	{"plain extension", func(t, e, _ string) string { return t + "." + e },
-		func(c fileClass, _ string) string { return c.contentType }},
-	{"declared Content-Type of an image", func(t, e, _ string) string { return t + "." + e },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
-	{"double extension", func(t, e, s string) string { return t + "." + s + "." + e },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
-	{"mixed-case extension", func(t, e, _ string) string { return t + "." + mixedCase(e) },
-		func(c fileClass, _ string) string { return c.contentType }},
-	{"null byte before an allowed extension", func(t, e, s string) string { return t + "." + e + "\x00." + s },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
+	{label: "plain extension", name: func(t, e, _ string) string { return t + "." + e },
+		contentType: func(c fileClass, _ string) string { return c.contentType }},
+	{label: "declared Content-Type of an image", name: func(t, e, _ string) string { return t + "." + e },
+		contentType: func(_ fileClass, s string) string { return mimeForExt(s) }},
+	{label: "double extension", name: func(t, e, s string) string { return t + "." + s + "." + e },
+		contentType: func(_ fileClass, s string) string { return mimeForExt(s) }},
+	{label: "mixed-case extension", name: func(t, e, _ string) string { return t + "." + mixedCase(e) },
+		contentType: func(c fileClass, _ string) string { return c.contentType }},
+	{label: "null byte before an allowed extension", name: func(t, e, s string) string { return t + "." + e + "\x00." + s },
+		contentType: func(_ fileClass, s string) string { return mimeForExt(s) }},
+	{label: "GIF89a image magic over the real content", name: func(t, e, _ string) string { return t + "." + e },
+		contentType: func(c fileClass, _ string) string { return c.contentType },
+		body: func(c fileClass, marker string) (string, string) {
+			body, canary := c.content(marker)
+			return gifMagic + body, canary
+		}},
+	{label: "an active Content-Type declared over image-sniffing content", name: func(t, e, _ string) string { return t + "." + e },
+		contentType: func(c fileClass, _ string) string {
+			if c.active && c.contentType == "image/gif" {
+				return "text/html"
+			}
+			return c.contentType
+		},
+		body: func(c fileClass, marker string) (string, string) {
+			body, canary := c.content(marker)
+			return gifMagic + body, canary
+		}},
 }
 
 func mixedCase(s string) string {
@@ -463,14 +525,13 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 		return nil, nil
 	}
 	p.ref = ref
+	p.track(ref)
 
 	var findings []*Finding
 	var accepted []string
 	var xss *uploadAttempt
 	for _, c := range dangerousFileClasses {
 		exts := append([]string{c.ext}, c.alt...)
-		var got *uploadAttempt
-		var how string
 	classLoop:
 		for _, v := range uploadVariants {
 			for _, ext := range exts {
@@ -479,7 +540,11 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 				}
 				token := uploadToken()
 				marker := uploadMarker(token)
-				body, canary := c.content(marker)
+				bodyFn := c.content
+				if v.body != nil {
+					bodyFn = func(marker string) (string, string) { return v.body(c, marker) }
+				}
+				body, canary := bodyFn(marker)
 				a, err := p.upload(ctx, v.name(token, ext, safe), v.contentType(c, safe), body, token, marker)
 				if err != nil {
 					if errors.Is(err, errUploadBudget) {
@@ -490,20 +555,28 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 				if !p.judge(ctx, a, ext) {
 					continue
 				}
-				got, how = a, v.label
+				how := v.label
+				if c.note != "" {
+					how += ", " + c.note
+				}
+				where := "the response names it stored at " + strconv.Quote(a.location)
+				if a.fetched != "" {
+					where = "it is served back from " + a.fetched + " (Content-Type " +
+						strconv.Quote(rawHeaderValue(string(a.fetchedResp.Raw), "Content-Type")) + ")"
+				}
+				accepted = append(accepted, fmt.Sprintf("%q accepted (%s); %s", a.name, how, where))
+				p.track(a)
 				if c.active && xss == nil && servesActive(a, canary) {
 					xss = a
 				}
+				if c.active && xss == nil {
+					// Stored, but not served as a document that renders: keep probing this class's
+					// remaining bypasses - "accepted, does not render" and "accepted, renders" are
+					// different findings.
+					continue
+				}
 				break classLoop
 			}
-		}
-		if got != nil {
-			where := "the response names it stored at " + strconv.Quote(got.location)
-			if got.fetched != "" {
-				where = "it is served back from " + got.fetched + " (Content-Type " +
-					strconv.Quote(rawHeaderValue(string(got.fetchedResp.Raw), "Content-Type")) + ")"
-			}
-			accepted = append(accepted, fmt.Sprintf("%q accepted (%s); %s", got.name, how, where))
 		}
 	}
 
@@ -525,11 +598,13 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 		findings = append(findings, buildHeaderFinding(p.cc, "File upload functionality", "low", "firm",
 			strings.Join(accepted, "\n"),
 			fmt.Sprintf("%s %q accepts files whose extension is active content or a server-side script, "+
-				"and the application reports storing them under that extension. Every file sent was an "+
-				"inert marker string: this shows the extension filter is missing or bypassable, NOT that "+
+				"or an image/HTML polyglot that is an active document under image magic bytes, and the "+
+				"application reports storing them under the name it was sent. Every file sent was an "+
+				"inert marker string: this shows the filter is missing or bypassable, NOT that "+
 				"anything executes - whether a handler would run a stored server-script file was not tested.",
 				p.point.Kind, p.point.Name)))
 	}
+	p.sweep(ctx, findings)
 	return findings, nil
 }
 
@@ -692,6 +767,7 @@ func (p *uploadProber) traversal(ctx context.Context, safe string) *Finding {
 	if !echoed && up.fetched == "" {
 		return nil
 	}
+	p.track(up)
 	confidence, proof := "firm", fmt.Sprintf("the response names the stored location %q", up.location)
 	if up.fetched != "" {
 		confidence, proof = "certain", "the file was read back from "+up.fetched+", outside the upload directory"
@@ -704,6 +780,85 @@ func (p *uploadProber) traversal(ctx context.Context, safe string) *Finding {
 			"resolved rather than stripped (a name under a missing directory fails), and a \"../\" component "+
 			"stores the file outside the upload directory. The file written was an inert marker.",
 			p.point.Kind, p.point.Name))
+}
+
+// track remembers where one confirmed-stored attempt's file lives, for the cleanup pass.
+func (p *uploadProber) track(a *uploadAttempt) {
+	if a.fetched != "" {
+		p.stored = append(p.stored, a.fetched)
+		return
+	}
+	if cs := p.candidates(a.location); len(cs) > 0 && cs[0] != nil {
+		p.stored = append(p.stored, cs[0].String())
+	}
+}
+
+// sweep removes every probe file this run stored, then appends the outcome - what was removed,
+// and every location that remains for the tester to clean up by hand - to each finding. With no
+// findings the removal still runs, silently: a quiet endpoint is not a reason to leave markers.
+func (p *uploadProber) sweep(ctx context.Context, findings []*Finding) {
+	removed, remaining := p.cleanup(ctx)
+	if len(removed) == 0 && len(remaining) == 0 {
+		return
+	}
+	note := uploadCleanupNote(removed, remaining)
+	for _, f := range findings {
+		f.Description += note
+	}
+}
+
+// cleanup tries DELETE on every stored probe URL through the same scope-enforcing gate.
+func (p *uploadProber) cleanup(ctx context.Context) (removed, remaining []string) {
+	seen := map[string]bool{}
+	for _, raw := range p.stored {
+		if seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		target, err := url.Parse(raw)
+		if err != nil {
+			remaining = append(remaining, raw)
+			continue
+		}
+		if p.remove(ctx, target) {
+			removed = append(removed, raw)
+		} else {
+			remaining = append(remaining, raw)
+		}
+	}
+	return removed, remaining
+}
+
+// remove deletes one stored probe file and verifies the removal by re-fetching. A delete the
+// application refuses - most expose none - or a file still served afterwards reports false. When
+// the delete was accepted but the budget ran out before the verification fetch, the removal is
+// taken on the accepted delete.
+func (p *uploadProber) remove(ctx context.Context, target *url.URL) bool {
+	resp, err := p.request(ctx, "DELETE", target)
+	if err != nil || resp.Status < 200 || resp.Status >= 300 {
+		return false
+	}
+	check, err := p.fetch(ctx, target)
+	if err != nil {
+		return true
+	}
+	return check.Status < 200 || check.Status >= 300
+}
+
+// uploadCleanupNote is the finding paragraph reporting the probe-file cleanup.
+func uploadCleanupNote(removed, remaining []string) string {
+	var b strings.Builder
+	b.WriteString("\n\nStored probe files: ")
+	if len(removed) > 0 {
+		fmt.Fprintf(&b, "this check removed %d file(s) it had uploaded, each verified gone by re-fetching: %s. ",
+			len(removed), strings.Join(removed, ", "))
+	}
+	if len(remaining) > 0 {
+		fmt.Fprintf(&b, "the application exposes no delete for %d stored probe file(s), which remain for the tester to clean up: %s. ",
+			len(remaining), strings.Join(remaining, ", "))
+	}
+	b.WriteString("Every file was an inert marker string; none of them can execute.")
+	return b.String()
 }
 
 // storedLike reports whether an attempt was stored the way the reference was.

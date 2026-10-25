@@ -70,6 +70,17 @@ func uploadEndpoints() []Endpoint {
 			"stores only names whose final extension is png/jpg/jpeg/gif/txt (case-insensitive, no NUL, "+
 				"no path separators); a refused file gets HTTP 200 and a message QUOTING the refused path, "+
 				"so only the response-shape comparison tells refusal from acceptance"),
+		// --- a content-sniffing filter: the polyglot is stored, but served by its extension ---
+		up("/fu/sniff/upload", "File upload functionality", false,
+			"requires image magic bytes for an image extension, and the GIF89a HTML polyglot passes; "+
+				"the stored file is served by its extension (image/gif), so nothing renders"),
+		up("/fu/sniff/upload", "Cross-site scripting (stored)", true,
+			"serves every stored file by its extension, so the polyglot comes back as image/gif and "+
+				"no browser renders it as a document"),
+		// --- a sniffer that replays the DECLARED Content-Type when serving ---
+		up("/fu/trustct/upload", "Cross-site scripting (stored)", false,
+			"checks the same magic bytes but serves the stored file with the Content-Type the upload "+
+				"declared, so a GIF89a HTML polyglot sent as text/html renders with its script"),
 	}
 }
 
@@ -80,12 +91,15 @@ const uploadStoreCap = 4096
 type uploadStore struct {
 	mu    sync.Mutex
 	files map[string][]byte
+	// types holds a serving Content-Type stored with the file, for the endpoint that replays the
+	// type the upload declared. Empty means "type it by extension".
+	types map[string]string
 	// dirs are the directories that exist. A write into any other directory fails.
 	dirs map[string]bool
 }
 
 func newUploadStore() *uploadStore {
-	return &uploadStore{files: map[string][]byte{}, dirs: map[string]bool{
+	return &uploadStore{files: map[string][]byte{}, types: map[string]string{}, dirs: map[string]bool{
 		"/fu":                       true,
 		"/fu/files":                 true,
 		"/fu/filtered":              true,
@@ -95,6 +109,10 @@ func newUploadStore() *uploadStore {
 		"/fu/safe/allowlist":        true,
 		"/fu/safe/allowlist/files":  true,
 		"/fu/safe":                  true,
+		"/fu/sniff":                 true,
+		"/fu/sniff/files":           true,
+		"/fu/trustct":               true,
+		"/fu/trustct/files":         true,
 	}}
 }
 
@@ -126,11 +144,41 @@ func (s *uploadStore) put(dir, name string, content []byte) (string, bool) {
 	return target, true
 }
 
+// putTyped is put with a serving Content-Type remembered for the file.
+func (s *uploadStore) putTyped(dir, name, contentType string, content []byte) (string, bool) {
+	target, ok := s.put(dir, name, content)
+	if !ok {
+		return "", false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.types[target] = contentType
+	return target, true
+}
+
 func (s *uploadStore) get(p string) ([]byte, bool) {
+	b, _, ok := s.getTyped(p)
+	return b, ok
+}
+
+// getTyped reads the file and the serving type stored with it, if any.
+func (s *uploadStore) getTyped(p string) ([]byte, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, ok := s.files[p]
-	return b, ok
+	return b, s.types[p], ok
+}
+
+// del removes a stored file, reporting whether it existed.
+func (s *uploadStore) del(p string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.files[p]; !ok {
+		return false
+	}
+	delete(s.files, p)
+	delete(s.types, p)
+	return true
 }
 
 // filenameParam reads a part's filename exactly as sent. mime/multipart's FileName() applies
@@ -139,14 +187,20 @@ var filenameParam = regexp.MustCompile(`(?i);\s*filename="([^"]*)"`)
 
 // readUpload returns the first file part's raw filename and content.
 func readUpload(r *http.Request) (string, []byte, bool) {
+	name, content, _, ok := readUploadTyped(r)
+	return name, content, ok
+}
+
+// readUploadTyped is readUpload with the part's declared Content-Type.
+func readUploadTyped(r *http.Request) (string, []byte, string, bool) {
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return "", nil, false
+		return "", nil, "", false
 	}
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
-			return "", nil, false
+			return "", nil, "", false
 		}
 		m := filenameParam.FindStringSubmatch(part.Header.Get("Content-Disposition"))
 		if m == nil {
@@ -154,9 +208,9 @@ func readUpload(r *http.Request) (string, []byte, bool) {
 		}
 		b, err := io.ReadAll(io.LimitReader(part, 1<<20))
 		if err != nil {
-			return "", nil, false
+			return "", nil, "", false
 		}
-		return m[1], b, true
+		return m[1], b, part.Header.Get("Content-Type"), true
 	}
 }
 
@@ -245,18 +299,85 @@ func registerUpload(mux *http.ServeMux) {
 		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/safe/allowlist/files/" + name})
 	})
 
-	// Serving. The open and filtered stores serve by extension; the safe stores serve downloads.
+	// A filter that checks magic bytes: an image extension must carry image content. The GIF89a
+	// HTML polyglot passes; the stored file is still served by its extension, so nothing renders.
+	mux.HandleFunc("/fu/sniff/upload", func(w http.ResponseWriter, r *http.Request) {
+		name, content, ok := readUpload(r)
+		if r.Method != http.MethodPost || !ok {
+			http.Error(w, "send a multipart file", http.StatusBadRequest)
+			return
+		}
+		ext := strings.ToLower(path.Ext(name))
+		if strings.ContainsAny(name, "\x00/\\") || !allowed[ext] {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file type not allowed"})
+			return
+		}
+		if ext != ".txt" && !strings.HasPrefix(http.DetectContentType(content), "image/") {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file content is not an image"})
+			return
+		}
+		base := path.Base(name)
+		if _, ok := s.put("/fu/sniff/files", base, content); !ok {
+			http.Error(w, "could not store the file", http.StatusInternalServerError)
+			return
+		}
+		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/sniff/files/" + base})
+	})
+
+	// The same sniffing filter, but the stored file is served with the Content-Type the upload
+	// DECLARED: a polyglot sent as text/html is rendered as a document.
+	mux.HandleFunc("/fu/trustct/upload", func(w http.ResponseWriter, r *http.Request) {
+		name, content, ct, ok := readUploadTyped(r)
+		if r.Method != http.MethodPost || !ok {
+			http.Error(w, "send a multipart file", http.StatusBadRequest)
+			return
+		}
+		ext := strings.ToLower(path.Ext(name))
+		if strings.ContainsAny(name, "\x00/\\") || !allowed[ext] {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file type not allowed"})
+			return
+		}
+		if ext != ".txt" && !strings.HasPrefix(http.DetectContentType(content), "image/") {
+			writeUploadJSON(w, map[string]any{"stored": false, "error": "file content is not an image"})
+			return
+		}
+		base := path.Base(name)
+		if _, ok := s.putTyped("/fu/trustct/files", base, ct, content); !ok {
+			http.Error(w, "could not store the file", http.StatusInternalServerError)
+			return
+		}
+		writeUploadJSON(w, map[string]any{"stored": true, "location": "/fu/trustct/files/" + base})
+	})
+
+	// Serving and removal. The open store exposes a DELETE on its files; the rest do not. The
+	// open and filtered stores serve by extension, trustct serves the declared type, and the
+	// safe stores serve downloads.
 	serve := func(w http.ResponseWriter, r *http.Request) {
-		b, ok := s.get(r.URL.Path)
+		if r.Method == http.MethodDelete {
+			if !strings.HasPrefix(r.URL.Path, "/fu/files/") {
+				http.Error(w, "no delete is exposed here", http.StatusMethodNotAllowed)
+				return
+			}
+			if !s.del(r.URL.Path) {
+				http.NotFound(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		b, declared, ok := s.getTyped(r.URL.Path)
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/fu/safe/") {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/fu/safe/"):
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Content-Disposition", "attachment")
-		} else {
+		case declared != "":
+			w.Header().Set("Content-Type", declared)
+		default:
 			w.Header().Set("Content-Type", typeByExtension(r.URL.Path))
 		}
 		_, _ = w.Write(b)
