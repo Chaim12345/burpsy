@@ -1500,13 +1500,10 @@ func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 		_ = tcpConn.SetReadDeadline(time.Time{})
 	}
 
-	parts := strings.Fields(strings.TrimSpace(requestLine))
-	if len(parts) < 2 {
+	method, target, ok := parseRequestLine(requestLine)
+	if !ok {
 		return
 	}
-
-	method := parts[0]
-	target := parts[1]
 
 	// Handle CONNECT requests
 	if strings.ToUpper(method) == "CONNECT" {
@@ -1682,12 +1679,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		if err != nil {
 			return
 		}
-		parts := strings.Fields(strings.TrimSpace(requestLine))
-		if len(parts) < 2 {
+		method, reqTarget, ok := parseRequestLine(requestLine)
+		if !ok {
 			return
 		}
-		method := parts[0]
-		reqTarget := parts[1]
 
 		// Requests inside the tunnel are origin-form: GET /path HTTP/1.1.
 		reqHost, reqPort, path := parseTarget(reqTarget)
@@ -3143,6 +3138,22 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 // be decoded again at each of those. The rewiring is a rewrite of `Content-Length` alone; the
 // original chunk-size and chunk extensions are not preserved, because the head no longer advertises
 // them.
+// parseRequestLine splits a request line into method and target. The split is
+// strings.Fields over the trimmed line: any whitespace separates, leading and
+// trailing whitespace is dropped, and tokens past the second are ignored — so
+// "GET /a b HTTP/1.1" yields method GET and target /a, with the version token
+// never examined. Fewer than two tokens is not a request. This is the split both
+// the plaintext listener and the tunnel loop made inline; it is extracted so the
+// most smuggling-critical parse burpsy owns is a named contract with pins and a
+// fuzz target (ibhs), and it is deliberately behavior-preserving.
+func parseRequestLine(requestLine string) (method, target string, ok bool) {
+	parts := strings.Fields(strings.TrimSpace(requestLine))
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(requestLine)
