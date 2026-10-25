@@ -37,36 +37,8 @@ describe("moveEditorTab", () => {
   });
 });
 
-describe("the editor wires the prefs", () => {
-  // Structural, the same style nonprinting.test.ts uses for its DOM half: the wire runs
-  // between the store and a render, and no unit test of moveEditorTab can see it.
-  const editor = readFileSync(join(import.meta.dir, "..", "ui", "editor.tsx"), "utf8");
-
-  test("the five Burp extra tabs are in the strip's view union", () => {
-    for (const view of ["headers", "queryparams", "bodyparams", "cookies", "attributes"]) {
-      expect(editor, `${view} must be a MessageView or it cannot be a tab`).toMatch(new RegExp(`"${view}"`));
-    }
-  });
-
-  test("hidden tabs are filtered out of the strip, so a Show checkbox can actually hide", () => {
-    expect(editor).toMatch(/editorTabs\.hidden\.includes\(tab as OptionalEditorTab\)/);
-  });
-
-  test("the order array reorders the strip rather than decorating it", () => {
-    expect(editor).toMatch(/rank\(a\) - rank\(b\)/);
-  });
-
-  test("the settings popover offers every optional tab with Show checkboxes and Up/Down moves", () => {
-    expect(editor).toMatch(/editor-tabs-settings/);
-    expect(editor).toMatch(/moveEditorTab\(editorTabs, tab, -1\)/);
-    expect(editor).toMatch(/moveEditorTab\(editorTabs, tab, 1\)/);
-  });
-
-  test("the store persists the prefs, so a curated strip survives a reload", () => {
-    const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
-    expect(store).toMatch(/editorTabs: state\.editorTabs/);
-  });
-});
+// How the editor wires the prefs (the five tabs offered, Show hides, order reorders, prefs persist) is
+// pinned by rendering it: ui/editor-strip.test.tsx (vln1).
 
 describe("the five extra tab views reuse the Inspector's own parsers", () => {
   // The one rule that makes these tabs honest: they read through the same lib/message parsers
