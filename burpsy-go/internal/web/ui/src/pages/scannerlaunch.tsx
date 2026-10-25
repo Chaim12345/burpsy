@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { Play, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { formatDuration } from "../lib/api";
-import { useRunAudit, useScannerConfigs, useScannerCoverage, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import {
+ useRunAudit,
+ useScannerIssueTypes,
+ useScannerConfigs,
+ useScannerCoverage,
+ useScannerLive,
+ useSetScannerLive,
+} from "../lib/data.attack";
 import { useScannerConfig, useSaveScannerConfig } from "../lib/data";
 import { useSecretDetection, useSetSecretDetection } from "../lib/data.secrets";
 import type { ScannerConfig, XssBrowserTarget } from "../lib/types";
@@ -336,13 +343,19 @@ function LinesField({
  value,
  onChange,
  rows = 3,
+ suggestions,
+ suggestionsId,
 }: {
  label: string;
  hint: string;
  value: string[];
  onChange: (lines: string[]) => void;
  rows?: number;
+ /** Names offered through a datalist beside the box. The box stays free text: a name outside the list is still accepted. */
+ suggestions?: string[];
+ suggestionsId?: string;
 }): JSX.Element {
+ const [pick, setPick] = useState("");
  const [text, setText] = useState(value.join("\n"));
  const parse = (t: string) =>
   t
@@ -355,25 +368,62 @@ function LinesField({
   // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [value]);
  return (
-  <Field label={label} hint={hint}>
-   {(id) => (
-    <Textarea
-     id={id}
-     rows={rows}
-     spellCheck={false}
-     value={text}
-     onChange={(event) => {
-      setText(event.target.value);
-      onChange(parse(event.target.value));
-     }}
-    />
-   )}
-  </Field>
+  <>
+   <Field label={label} hint={hint}>
+    {(id) => (
+     <Textarea
+      id={id}
+      rows={rows}
+      spellCheck={false}
+      value={text}
+      onChange={(event) => {
+       setText(event.target.value);
+       onChange(parse(event.target.value));
+      }}
+     />
+    )}
+   </Field>
+   {suggestions && suggestionsId ? (
+    <div style={{ display: "flex", gap: "var(--s2)", alignItems: "center" }}>
+     <Input
+      list={suggestionsId}
+      value={pick}
+      onChange={(event) => setPick(event.target.value)}
+      aria-label="Add an issue row"
+      placeholder="Add an issue row — start typing for the catalogue"
+     />
+     <datalist id={suggestionsId}>
+      {suggestions.map((name) => (
+       <option key={name} value={name} />
+      ))}
+     </datalist>
+     <Button
+      variant="outline"
+      size="small"
+      onClick={() => {
+       const name = pick.trim();
+       setPick("");
+       if (name === "") return;
+       const lines = parse(text);
+       if (lines.includes(name)) return;
+       const next = [...lines, name];
+       setText(next.join("\n"));
+       onChange(next);
+      }}
+     >
+      Add row
+     </Button>
+    </div>
+   ) : null}
+  </>
  );
 }
 
 function AuditChecksSection(): JSX.Element {
  const config = useScannerConfig();
+ const issueTypes = useScannerIssueTypes();
+ // One entry per name: the catalogue lists a type once per row it files under.
+ const rowNames = [...new Set((issueTypes.data?.issue_types ?? []).map((t) => t.name))].sort();
  const save = useSaveScannerConfig();
  const [draft, setDraft] = useState<ScannerConfig | null>(null);
 
@@ -540,6 +590,8 @@ function AuditChecksSection(): JSX.Element {
        <LinesField
         label="Restrict the audit to these issue rows"
         hint="One row name per line, spelled as findings name them. Empty runs every enabled check. The server refuses a name it does not know"
+        suggestions={rowNames}
+        suggestionsId="only-rows-suggestions"
         value={current.only_rows ?? []}
         onChange={(lines) => setDraft({ ...current, only_rows: lines })}
        />
