@@ -72,7 +72,10 @@ def adapt(spec, raw):
 
 def run_class(spec, out_dir, ctx):
     """Run one class end to end. Returns the class's report dict."""
-    cdir = Path(out_dir) / spec["name"]
+    # The output dir is the spec's slug (registry key), not the parity class label: two specs can
+    # share a class label (j1mk.13's Arjun and x8 runs), and keying the dir by the label had the
+    # second run overwrite the first's report (caught live, 2026-10-25).
+    cdir = Path(out_dir) / spec.get("slug", spec["name"])
     cdir.mkdir(parents=True, exist_ok=True)
     burpsy = ctx.collect_burpsy(spec, cdir)
     raw = ctx.run_reference(spec, cdir)
@@ -92,7 +95,8 @@ def run_class(spec, out_dir, ctx):
             totals[k] += len(c[k])
     append_history(out_dir, {
         "date": datetime.date.today().isoformat(),
-        "class": spec["name"], "bead": spec.get("bead", ""), "reference": spec["ref_name"],
+        "class": spec["name"], "spec": spec.get("slug", spec["name"]),
+        "bead": spec.get("bead", ""), "reference": spec["ref_name"],
         "reference_version": parity_tools.TOOLS.get(spec["ref_tool"], {}).get("version", ""),
         **totals})
     return report
@@ -102,7 +106,11 @@ def run_classes(specs_or_names, out_dir, ctx):
     """Run every requested class; 0 when all ran, 1 when any could not (failure named)."""
     rc = 0
     for item in specs_or_names:
-        spec = load_spec(item) if isinstance(item, str) else item
+        if isinstance(item, str):
+            spec = load_spec(item)
+            spec.setdefault("slug", item)
+        else:
+            spec = item
         try:
             run_class(spec, out_dir, ctx)
             print(f"[{spec['name']}] report written under {Path(out_dir) / spec['name']}")

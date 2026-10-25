@@ -171,6 +171,20 @@ class TestReferenceFailureIsLoud(unittest.TestCase):
             self.assertFalse((Path(d) / "crlf-injection" / "parity.json").exists())
 
 
+class TestSlugDirs(unittest.TestCase):
+    def test_two_specs_sharing_a_class_label_do_not_overwrite(self):
+        a = dict(CRLF_SPEC, slug="crlf-vs-a")
+        b = dict(CRLF_SPEC, slug="crlf-vs-b")
+        with tempfile.TemporaryDirectory() as d:
+            rc = parity_run.run_classes([a, b], d, FakeCtx([], ""))
+            self.assertEqual(0, rc)
+            self.assertTrue((Path(d) / "crlf-vs-a" / "parity.json").exists())
+            self.assertTrue((Path(d) / "crlf-vs-b" / "parity.json").exists())
+            hist = (Path(d) / "history.jsonl").read_text()
+            self.assertIn('"spec": "crlf-vs-a"', hist)
+            self.assertIn('"spec": "crlf-vs-b"', hist)
+
+
 class TestRunner(unittest.TestCase):
     def test_run_class_writes_report_and_history(self):
         burpsy = [{"url": "http://127.0.0.1:19090/crlf/r/home", "parameter": "",
