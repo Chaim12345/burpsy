@@ -52,7 +52,8 @@ import {
  serializeAttackConfig,
 } from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
-import { settingsPaletteActions } from "./lib/settings-sections";
+import { requestSettingsSection, settingsPaletteActions } from "./lib/settings-sections";
+import { helpMenuGroups } from "./lib/help-menu";
 import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
 import { THEME_SLOTS, themeTokenVars } from "./lib/theme-import";
 import type { Exchange, MessageView } from "./lib/types";
@@ -1444,15 +1445,15 @@ function App(): JSX.Element {
   },
   {
    label: "Help",
-   groups: [
-    {
-     id: "help",
-     actions: [
-      { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
-      { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: () => setPaletteOpen(true) },
-     ],
+   groups: helpMenuGroups({
+    openShortcuts: () => setShortcutsOpen(true),
+    openPalette: () => setPaletteOpen(true),
+    openDocumentation: () => navigate("discover"),
+    openDiagnostics: () => {
+     requestSettingsSection("diagnostics");
+     navigate("settings");
     },
-   ],
+   }),
   },
  ];
 
