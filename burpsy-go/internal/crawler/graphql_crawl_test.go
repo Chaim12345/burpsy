@@ -19,9 +19,12 @@ package crawler
 // the frontier.
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 )
 
 // graphqlOverlayTarget serves pages on one origin plus a GraphQL endpoint that answers an
@@ -111,5 +114,121 @@ func TestAGuessedPathIsProbedOncePerOrigin(t *testing.T) {
 		t.Errorf("POSTs to /graphql = %d, want exactly 1: the guess probes each path once per origin, "+
 			"and a re-probe per page is a request the operator did not ask for. Fetches: %v",
 			posts, fetchLog(rep))
+	}
+}
+
+// burpsy-react-ui-u4mm: the duration bound holds for the GraphQL requests a visit triggers, not
+// only between visits. MaxDuration was checked in the main loop alone, so one visit that ended
+// after the limit had passed was still followed by up to four guess probes (and an introspection
+// POST for a freshly found endpoint) — requests sent after the operator's time limit, under a
+// report that claims the limit was in force.
+
+// durationLimitedGraphQLSkip reports whether the run recorded a graphql-not-probed skip whose
+// detail names the time limit, as against the request-budget refusal the same reason already
+// carries: the two refusals answer different operator questions and must not blur.
+func durationLimitedGraphQLSkip(rep Report) bool {
+	for _, r := range rep.Skips.Records {
+		if r.Reason == SkipGraphQLIntrospection && strings.Contains(r.Detail, "time limit") {
+			return true
+		}
+	}
+	return false
+}
+
+func stoppedOnDuration(rep Report) bool {
+	for _, s := range rep.Limits.Stops {
+		if s == StopDuration {
+			return true
+		}
+	}
+	return false
+}
+
+// The guess half: a slow first page ends its visit after MaxDuration has passed, and the probe
+// pass that visit triggers must not send. Before the fix this run sent all four probes.
+func TestAGraphQLGuessProbeIsNotSentAfterTheTimeLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			// Slow enough that the visit ends well past the limit below, whatever the machine:
+			// the margin is the whole test, so it is three times the limit, not a shave of it.
+			time.Sleep(300 * time.Millisecond)
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<html><body><p>home</p></body></html>`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.GuessHiddenGraphQLEndpoints = true
+	cfg.Limits = DefaultLimits()
+	cfg.Limits.MaxDuration = 100 * time.Millisecond
+	rep := run(t, cfg)
+
+	if !fetchedAny(rep, "/") {
+		t.Fatalf("the slow seed was never fetched; the test proves nothing. Fetches: %v", fetchLog(rep))
+	}
+	if !stoppedOnDuration(rep) {
+		t.Fatalf("the crawl did not record StopDuration, so the limit never fired and the probes "+
+			"were never at risk. Stops: %v", rep.Limits.Stops)
+	}
+	for _, f := range rep.Fetches {
+		if f.Method == "POST" {
+			t.Errorf("POST %s went out after the crawl's time limit had passed; the guess pass may "+
+				"not send once MaxDuration is spent. Fetches: %v", f.URL, fetchLog(rep))
+		}
+	}
+	if !durationLimitedGraphQLSkip(rep) {
+		t.Errorf("no graphql-not-probed skip names the time limit; an operator cannot tell the "+
+			"probes were refused on time rather than never attempted. Records: %+v", rep.Skips.Records)
+	}
+}
+
+// The introspection half: an endpoint discovered by a GET that itself finished after the limit
+// must not be introspected. One POST rather than four, the same bound, the same reason.
+func TestAnIntrospectionQueryIsNotSentAfterTheTimeLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte(`<html><body><a href="/graphql">gql</a></body></html>`))
+		case "/graphql":
+			time.Sleep(300 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"errors":[{"message":"must provide a query"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.PerformGraphQLIntrospection = true
+	cfg.Limits = DefaultLimits()
+	cfg.Limits.MaxDuration = 100 * time.Millisecond
+	rep := run(t, cfg)
+
+	if !fetchedAny(rep, "/graphql") {
+		t.Fatalf("the endpoint was never fetched; the test proves nothing. Fetches: %v", fetchLog(rep))
+	}
+	// No StopDuration assertion here on purpose: the slow endpoint is the last thing on the
+	// frontier, so the crawl COMPLETES - over its limit, which the between-visits check has
+	// always allowed for one slow fetch. What the limit must still hold back is the request the
+	// visit's own decode step would send next. Elapsed past the limit is what makes this a test
+	// of that refusal rather than of a crawl that never neared it.
+	if rep.Elapsed < cfg.Limits.MaxDuration {
+		t.Fatalf("the crawl finished in %v, under its %v limit; the introspection was never past "+
+			"the limit, so the test proves nothing", rep.Elapsed, cfg.Limits.MaxDuration)
+	}
+	for _, f := range rep.Fetches {
+		if f.Method == "POST" {
+			t.Errorf("an introspection POST to %s went out after the crawl's time limit had passed. "+
+				"Fetches: %v", f.URL, fetchLog(rep))
+		}
+	}
+	if !durationLimitedGraphQLSkip(rep) {
+		t.Errorf("no graphql-not-probed skip names the time limit for the refused introspection. "+
+			"Records: %+v", rep.Skips.Records)
 	}
 }
