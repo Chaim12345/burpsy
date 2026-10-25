@@ -103,6 +103,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/projects": "riskRead",
  "/api/protobuf/decode": "riskLocal",
  "/api/protobuf/encode": "riskLocal",
+ "/api/protobuf/reflect-decode": "riskEgress",
  "/api/protocols": "riskRead",
  "/api/proxy/ca": "riskRead",
  "/api/proxy/ca/export": "riskDestructive",
