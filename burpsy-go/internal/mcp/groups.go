@@ -89,8 +89,16 @@ var groupedTools = []groupSpec{
 		short: "Sends one request (or a group, a WebSocket message — on a new, cloned or attached live connection — an HTTP/2 frame program) to the target and returns the response.",
 		ops: []string{
 			"POST /api/repeater/send", "POST /api/repeater/send-group", "POST /api/repeater/ws-send", "POST /api/repeater/ws-attach",
-			"POST /api/repeater/graphql-query", "POST /api/repeater/graphql-validate",
 			"POST /api/repeater/browser-reissue", "POST /api/http2/program",
+		},
+	},
+	{
+		// Its own tool, not an op of `send`: the send ops are riskEgress and these are riskRead
+		// (text surgery on the operator's own draft), and one tool never spans two classes.
+		name: "repeater-graphql", group: groupRequests,
+		short: "Parses a GraphQL document with the pinned gqlparser, and rewrites one operation's query inside a Repeater draft's carrier (JSON body or URL parameter).",
+		ops: []string{
+			"POST /api/repeater/graphql-query", "POST /api/repeater/graphql-validate",
 		},
 	},
 	{
