@@ -111,7 +111,7 @@ func brokenAccessControlWithAuthLogic(inner CheckRunner) CheckRunner {
 		}
 		var innerF []*Finding
 		var innerErr error
-		if finalChecksEnabled(cc.Config) || idorEnabled(cc.Config) {
+		if finalChecksEnabled(cc.Config) || idorEnabled(cc.Config) || bflaEnabled(cc.Config) {
 			innerF, innerErr = inner(ctx, cc)
 		}
 		var authF []*Finding

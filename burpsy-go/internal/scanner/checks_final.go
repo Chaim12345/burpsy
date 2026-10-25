@@ -510,7 +510,7 @@ func FinalCheckDescriptors() []CheckDescriptor {
 			func(c *ScanConfig) bool {
 				return finalChecksEnabled(c) || idorEnabled(c) || loginRateLimitEnabled(c) ||
 					usernameEnumerationEnabled(c) || sessionMgmtEnabled(c) || clientIPSpoofEnabled(c) ||
-					urlAuthBypassEnabled(c) || raceEnabled(c) || oauthEnabled(c)
+					urlAuthBypassEnabled(c) || raceEnabled(c) || oauthEnabled(c) || bflaEnabled(c)
 			},
 			withOAuth(withRaceConditions(withURLAuthBypass(withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl)))))))),
 		// Cross-site WebSocket hijacking (checks_ws_hijack.go) rides this row behind its own switch: it is

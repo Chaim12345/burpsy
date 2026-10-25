@@ -101,15 +101,21 @@ func brokenAccessControlOrIDOR(bac CheckRunner) CheckRunner {
 		if idorEnabled(cc.Config) {
 			idorF, idorErr = checkIDOR(ctx, cc)
 		}
-		switch {
-		case len(idorF) > 0:
-			return append(bacF, idorF...), nil
-		case bacErr != nil:
-			return bacF, bacErr
-		case idorErr != nil:
-			return nil, idorErr
+		var bflaF []*Finding
+		var bflaErr error
+		if bflaIdentity(cc.Config) != nil {
+			bflaF, bflaErr = checkBFLA(ctx, cc)
 		}
-		return bacF, nil
+		out := append(append(bacF, idorF...), bflaF...)
+		if len(out) > 0 {
+			return out, nil
+		}
+		for _, err := range []error{bacErr, idorErr, bflaErr} {
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
 	}
 }
 

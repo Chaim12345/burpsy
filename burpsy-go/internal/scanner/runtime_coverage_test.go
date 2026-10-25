@@ -795,6 +795,11 @@ func runtimeScanConfig() *ScanConfig {
 		CheckSSRFInBand: true,
 		// The IDOR check (0vzb.12). It only acts on a credentialed read with an object reference.
 		CheckIDOR: true,
+		// The BFLA pass (0vzb.46 slice 2). It only acts on a credentialed GET/HEAD whose path names
+		// an admin operation, replayed under the second configured identity - here bob
+		// (vulnapp.IDORSecondSessionCookie), an ordinary user next to alice's administrator.
+		CheckBFLA:      true,
+		SecondIdentity: SecondIdentity{CookieHeader: vulnapp.IDORSecondSessionCookie},
 		// The login rate-limit and username-enumeration rows (checks_auth_logic.go). They act only on a
 		// request carrying an identity and a password or one-time-code field, and the rate-limit burst
 		// stops after one request unless the answer shows the endpoint evaluates credentials.
