@@ -1,0 +1,16 @@
+# Vulnerabilities govulncheck reports as reachable in burpsy-go today (2026-10-25, Go 1.27.3,
+# govulncheck v1.9.0 package-level scan, a superset of the symbol-level result). The CI gate
+# (scripts/ci-lint.sh vuln) fails only on an id that is NOT listed here. Remove a line when the
+# fix lands; the gate prints entries that no longer fire. Never add a line to get a build green
+# without a bead that owns the fix.
+GO-2026-5841  # github.com/klauspost/compress/s2 OOB read; fixed in v1.18.7
+GO-2026-5932  # x/crypto/openpgp unmaintained (transitive)
+GO-2026-6303  # x/crypto/ssh source-address option (transitive)
+GO-2026-6354  # x/crypto/ssh DoS (transitive)
+GO-2026-6355  # x/crypto/ssh DoS (transitive)
+GO-2026-6603  # net/http HTTP/2 Trailer memory (stdlib; fixed by a Go patch release)
+GO-2026-6610  # net/http HTTP/2 transport framing headers (stdlib)
+GO-2026-6611  # net/http HTTP/2 window-change CPU (stdlib)
+GO-2026-6612  # net/http HTTP/2 flow control refund (stdlib)
+GO-2026-6617  # net/http HTTP/2 HPACK encoder race (stdlib)
+GO-2026-6629  # x/text/secure/precis panic; fixed in a newer x/text

@@ -150,7 +150,11 @@ func (s *Store) Backup(dest string) error {
 	return nil
 }
 
-func (s *Store) migrate() error {
+// migrateAdditive is schema version 1: every CREATE TABLE IF NOT EXISTS and addColumn this package
+// accumulated before versions existed. It is idempotent, so it brings a fresh database, a database
+// from any earlier build, and a database that already has some of it, to the same place. New schema
+// changes do not go here: they are a new entry in the migrations list (migrate.go).
+func (s *Store) migrateAdditive() error {
 	schema := `
 CREATE TABLE IF NOT EXISTS messages (
 	id         INTEGER PRIMARY KEY,
