@@ -87,6 +87,12 @@ func (r *TokenRule) validate() error {
 	if strings.TrimSpace(r.Extract.Name) == "" {
 		return fmt.Errorf("token rule %q: the extraction needs a name, so the template can reference it", r.Name)
 	}
+	// "body" and "header" are the only sources an extraction reads; anything else is a rule that
+	// can never capture, refused at the door rather than carried as an inert placeholder - the
+	// refusal ValidateRule gives a session rule's extraction, for the same reason.
+	if r.Extract.From != "body" && r.Extract.From != "header" {
+		return fmt.Errorf("token rule %q: the extraction source must be \"body\" or \"header\", not %q", r.Name, r.Extract.From)
+	}
 	if (r.InjectHeader == "") != (r.InjectValue == "") {
 		return fmt.Errorf("token rule %q: inject_header and inject_value come as a pair", r.Name)
 	}

@@ -107,3 +107,52 @@ func TestRepeaterTokenCaptureIgnoresTheCookieMonitorToggle(t *testing.T) {
 		t.Errorf("the cookie monitor toggle silenced a token rule: %q, %v", got, ok)
 	}
 }
+
+// The bead's acceptance test (burpsy-react-ui-xe82), end to end over real HTTP: a rule is added
+// through the API, a login response the repeater fetches carries the token, and a LATER repeater
+// request - the operator's own bytes, carrying no token - arrives at the origin with the token
+// injected. Nothing is pasted anywhere.
+func TestAcceptanceLoginTokenFlowsIntoALaterRepeaterRequest(t *testing.T) {
+	var got []string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			_, _ = fmt.Fprint(w, `<form><input name="csrf" value="tok-acceptance"></form>`)
+		case "/transfer":
+			got = append(got, r.Header.Get("X-CSRF-Token"))
+			_, _ = fmt.Fprint(w, "ok")
+		}
+	}))
+	defer origin.Close()
+	authority := strings.TrimPrefix(origin.URL, "http://")
+	host, portStr, _ := strings.Cut(authority, ":")
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("test origin port: %v", err)
+	}
+
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/session/token-rules", map[string]any{
+		"name": "acceptance", "enabled": true, "scope_tools": []string{"repeater"},
+		"extract": map[string]any{
+			"name": "csrf", "from": "body", "pattern": `name="csrf" value="([^"]+)"`, "group": 1,
+		},
+		"inject_header": "X-CSRF-Token", "inject_value": "{{csrf}}",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("add the rule over the API: %d %s", rec.Code, rec.Body)
+	}
+
+	// The login fetch, then the operator's own transfer request - which names no token.
+	sendOneRaw(t, s, host, uint16(port), "/login")
+	transfer := fmt.Sprintf("POST /transfer HTTP/1.1\r\nHost: %s\r\nContent-Length: 9\r\n\r\namount=10", authority)
+	if _, err := s.sendOneRepeaterRequest(context.Background(), repeaterSendSpec{
+		Host: host, Port: uint16(port), Raw: []byte(transfer), AsWritten: transfer,
+	}); err != nil {
+		t.Fatalf("the transfer send: %v", err)
+	}
+
+	if len(got) != 1 || got[0] != "tok-acceptance" {
+		t.Fatalf("the origin saw X-CSRF-Token %v, want [tok-acceptance] injected without pasting", got)
+	}
+}

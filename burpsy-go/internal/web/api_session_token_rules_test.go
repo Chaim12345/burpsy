@@ -15,7 +15,7 @@ func tokenRuleBody(name, header string) map[string]any {
 	return map[string]any{
 		"name": name, "enabled": true,
 		"extract": map[string]any{
-			"name": "csrf", "source": "body", "pattern": `name="csrf" value="([^"]+)"`, "group": 1,
+			"name": "csrf", "from": "body", "pattern": `name="csrf" value="([^"]+)"`, "group": 1,
 		},
 		"inject_header": header, "inject_value": "Bearer {{csrf}}",
 	}
@@ -91,6 +91,13 @@ func TestSessionTokenRuleValidationAndNotFound(t *testing.T) {
 	rec := postJSON(t, s, "/api/session/token-rules", bad)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("a nameless rule was not refused: %d %s", rec.Code, rec.Body)
+	}
+	// An extraction that can never resolve is refused too, rather than carried inert.
+	inert := tokenRuleBody("inert", "X-Inert")
+	inert["extract"].(map[string]any)["from"] = "nowhere"
+	rec = postJSON(t, s, "/api/session/token-rules", inert)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an extraction with no readable source was not refused: %d %s", rec.Code, rec.Body)
 	}
 
 	// Editing or deleting a rule that is not there is a 404, distinct from a bad edit.
