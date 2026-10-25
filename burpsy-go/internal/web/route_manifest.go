@@ -824,6 +824,15 @@ var manifest = map[string]route{
 			"with a captured connection's own handshake), recording the handshake exchange and the reply " +
 			"frames; to-client is refused with its reason",
 	},
+	"/api/repeater/ws-handshake-preview": {
+		// riskRead: it dials nothing and returns only what the operator can already read - a
+		// captured handshake from the store, or the synthetic head a new connection would send.
+		// The send it prepares an edit for is gated on ws-send, not here.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "preview the negotiation request a Repeater WS send would dial with - a captured " +
+			"connection's refreshed head (socket) or a new connection's synthetic one (target) - " +
+			"for the edit-before-connect editor (ws3e)",
+	},
 	"/api/repeater/ws-attach": {
 		// riskEgress, the same class as ws-send: one operator-authored frame, into one connection. It
 		// dials nothing — the socket must be one the proxy is relaying right now, looked up by its

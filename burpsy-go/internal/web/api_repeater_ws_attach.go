@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -230,4 +231,77 @@ func (s *Server) prepareWsEditedHandshake(req repeaterWsSendReq, opcode core.WsO
 	}
 	return wsSendPlan{host: host, port: port, tls: tls, path: path, handshake: handshake,
 		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
+}
+
+// repeaterWsHandshakePreviewResp is the reply of GET /api/repeater/ws-handshake-preview.
+type repeaterWsHandshakePreviewResp struct {
+	// Handshake is the exact head a send would dial with right now - clone-refreshed for a
+	// socket, synthetic for a target - so the negotiation-request editor opens on what WILL be
+	// sent, not on a client-side reconstruction that could drift from it.
+	Handshake string `json:"handshake"`
+	// Source is "clone" (a captured connection's head, refreshed) or "new" (the synthetic head).
+	Source string `json:"source"`
+}
+
+// handleRepeaterWsHandshakePreview serves GET /api/repeater/ws-handshake-preview (burpsy-react-ui-ws3e).
+// It dials nothing and reveals nothing the operator cannot already read in WebSockets history - a
+// captured handshake, or the synthetic one a new connection would send - so it is a read, and the
+// send it prepares for carries its own two scope gates.
+func (s *Server) handleRepeaterWsHandshakePreview(w http.ResponseWriter, r *http.Request) {
+	socketRaw := r.URL.Query().Get("socket")
+	target := r.URL.Query().Get("target")
+	if (socketRaw == "") == (target == "") {
+		http.Error(w, "give socket (a captured connection to preview the clone of) or target "+
+			"(to preview a new connection's head), not both and not neither", http.StatusBadRequest)
+		return
+	}
+	if socketRaw != "" {
+		id64, err := strconv.ParseUint(socketRaw, 10, 63)
+		if err != nil {
+			http.Error(w, "socket must be a WebSocket ID", http.StatusBadRequest)
+			return
+		}
+		ex, err := s.store.GetExchange(core.ExchangeID(id64))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("no WebSocket #%d: %v", id64, err), http.StatusNotFound)
+			return
+		}
+		msg, err := s.store.Get(core.MsgOrZero(ex.Request))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("WebSocket #%d's handshake request could not be read: %v", id64, err),
+				http.StatusNotFound)
+			return
+		}
+		handshake, err := wsclient.CloneHandshake(msg.Raw())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("WebSocket #%d's handshake cannot be replayed: %v", id64, err),
+				http.StatusUnprocessableEntity)
+			return
+		}
+		writeJSON(w, http.StatusOK, repeaterWsHandshakePreviewResp{Handshake: string(handshake), Source: "clone"})
+		return
+	}
+	wsTarget, wsTLS, err := wsSchemeTarget(target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	host, port, tls, err := targetParts(wsTarget)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if wsTLS {
+		tls = true
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = "/"
+	}
+	handshake, err := wsclient.HandshakeRequest(host, port, tls, path, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, repeaterWsHandshakePreviewResp{Handshake: string(handshake), Source: "new"})
 }
