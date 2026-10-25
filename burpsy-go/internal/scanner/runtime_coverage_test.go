@@ -800,6 +800,12 @@ func runtimeScanConfig() *ScanConfig {
 		// (vulnapp.IDORSecondSessionCookie), an ordinary user next to alice's administrator.
 		CheckBFLA:      true,
 		SecondIdentity: SecondIdentity{CookieHeader: vulnapp.IDORSecondSessionCookie},
+		// The mass-assignment pass (0vzb.46 slice 3) plus the writes opt-in it requires. It only
+		// acts on a credentialed JSON create/update whose own answer names a privileged field, so
+		// every other endpoint costs it nothing; the corpus is disposable, which is exactly what
+		// the writes opt-in is for.
+		CheckMassAssignment: true,
+		CheckAPIWrites:      true,
 		// The login rate-limit and username-enumeration rows (checks_auth_logic.go). They act only on a
 		// request carrying an identity and a password or one-time-code field, and the rate-limit burst
 		// stops after one request unless the answer shows the endpoint evaluates credentials.

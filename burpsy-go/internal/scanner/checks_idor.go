@@ -106,11 +106,16 @@ func brokenAccessControlOrIDOR(bac CheckRunner) CheckRunner {
 		if bflaIdentity(cc.Config) != nil {
 			bflaF, bflaErr = checkBFLA(ctx, cc)
 		}
-		out := append(append(bacF, idorF...), bflaF...)
+		var maF []*Finding
+		var maErr error
+		if maEnabled(cc.Config) {
+			maF, maErr = checkMassAssignment(ctx, cc)
+		}
+		out := append(append(append(bacF, idorF...), bflaF...), maF...)
 		if len(out) > 0 {
 			return out, nil
 		}
-		for _, err := range []error{bacErr, idorErr, bflaErr} {
+		for _, err := range []error{bacErr, idorErr, bflaErr, maErr} {
 			if err != nil {
 				return nil, err
 			}
