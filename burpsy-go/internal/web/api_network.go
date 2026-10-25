@@ -187,6 +187,17 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			return nil
 		},
 	},
+	// burpsy's own section (no Burp panel to mirror): the proxy h3 Alt-Svc kill switch (kidb).
+	"http3": {
+		"enable_http3_alt_svc": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			v := sender.HTTP3Settings{EnableHTTP3AltSvc: n.RideHTTP3AltSvc()}
+			if err := patchBool(raw, &v.EnableHTTP3AltSvc); err != nil {
+				return err
+			}
+			n.HTTP3 = &v
+			return nil
+		},
+	},
 	"continue": {
 		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchBool(raw, &n.Continue.Understand100)
@@ -399,6 +410,10 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 	}
 
 	if s.proxyServer != nil {
+		// The h3 Alt-Svc kill switch, pushed to the proxy leg for the same reason as the streaming
+		// and TLS settings above: one console edit, both legs (kidb). The proxy's own holder is
+		// where the learn and ride decisions read it.
+		s.proxyServer.Network().SetHTTP3AltSvc(next.RideHTTP3AltSvc())
 		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))
 		}

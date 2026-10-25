@@ -340,6 +340,39 @@ func TestStreamingResponseSwitchesReachTheProxy(t *testing.T) {
 	}
 }
 
+// burpsy-react-ui-kidb: the proxy's h3 Alt-Svc kill switch (vln3, ruling C) is settable through the
+// endpoint and reaches the proxy leg, whose NetworkSettings is where the learn and ride decisions
+// read it. Asserted through the proxy's own accessors - a field dropped on the way through would
+// still pass a struct comparison.
+func TestTheHTTP3AltSvcSwitchReachesTheProxy(t *testing.T) {
+	s := newTestServer()
+	px := proxy.NewServer(proxy.NewProxyConfig(core.NewTrafficStore()).WithLogger(zap.NewNop()))
+	s.WithProxyServer(px)
+
+	// Default ON (ruling C): a settings document that never names http3 rides advertisements.
+	if !px.Network().HTTP3AltSvcEnabled() {
+		t.Fatal("the Alt-Svc leg should default on")
+	}
+	rec := putNetworkSettings(t, s, `{"http3":{"enable_http3_alt_svc":false}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT off = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if px.Network().HTTP3AltSvcEnabled() {
+		t.Error("enable_http3_alt_svc:false did not reach the proxy; the operator cannot turn the leg off")
+	}
+	// The GET view carries it back so the console can render the switch.
+	if got := getNetworkSettings(t, s); got.RideHTTP3AltSvc() {
+		t.Error("the settings view reported the leg on after it was switched off")
+	}
+	rec = putNetworkSettings(t, s, `{"http3":{"enable_http3_alt_svc":true}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT on = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !px.Network().HTTP3AltSvcEnabled() {
+		t.Error("enable_http3_alt_svc:true did not re-enable the proxy leg")
+	}
+}
+
 // A PUT that touches an unrelated streaming field must not clobber the three switches: the patch is
 // merged onto the live document, so an omitted key keeps its value. This is the failure that would
 // turn any routine streaming edit into a silent reset of the switches.

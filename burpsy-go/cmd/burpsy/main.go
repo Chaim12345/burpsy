@@ -658,6 +658,9 @@ func main() {
 				// split-horizon override works in Repeater and not in the browser they browse
 				// through the proxy with (burpsy-react-ui-o1eu).
 				proxyNetwork.Set(applied.Resolution, applied.Continue)
+				// The h3 Alt-Svc switch restored on the same pass (kidb): a restart must honour
+				// the operator's off, or the leg rides again while the console says it cannot.
+				proxyNetwork.SetHTTP3AltSvc(applied.RideHTTP3AltSvc())
 				// The TLS policy is restored on the same pass and for the same reason: a verification
 				// setting that only reached the sender would leave every intercepted connection
 				// verifying while the operator believed they had turned it off for a self-signed lab
