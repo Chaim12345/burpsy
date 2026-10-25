@@ -198,6 +198,19 @@ FAMILY_BODIES = {
 }
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the seed exchange is the audit input, and following a 3xx can
+    only hurt. An open-redirect endpoint answers the seed with a Location built FROM the seed's
+    own parameter (VulnerableApp LEVEL_6 prefixes the request origin, yielding a Location like
+    "http://<host>:<port>https://example.org/" that no client can open); urllib's default
+    redirect-follow turned that answer into a transport error and the case scored untestable
+    even though the proxy had captured the seed (burpsy-react-ui-j1mk.36). A surfaced 3xx is an
+    HTTPError, which proxied_through already treats as the target's answer."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def proxied_through(proxy, url, method="GET", body=None, content_type=None, headers=None):
     """Send url through burpsy's own proxy so the exchange is captured.
 
@@ -208,7 +221,8 @@ def proxied_through(proxy, url, method="GET", body=None, content_type=None, head
     vulnerability is IN the body (FAMILY_BODIES), in which case the scanner needs a body point to
     rewrite and an empty one leaves it nothing to test."""
     opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+        _NoRedirect,
     )
     if method == "POST":
         data = body.encode() if body else b""
