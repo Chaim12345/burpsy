@@ -58,7 +58,11 @@ export function ProtobufView({
   setError(null);
   setDirty(false);
   setReflected(null);
-  const schema = protoSchema ? { proto: protoSchema.text, message: chosen || undefined, rpc_path: rpcPath, direction } : {};
+  const schema = protoSchema
+   ? protoSchema.files
+    ? { proto_entry: protoSchema.entry, proto_files: protoSchema.files, message: chosen || undefined, rpc_path: rpcPath, direction }
+    : { proto: protoSchema.text, message: chosen || undefined, rpc_path: rpcPath, direction }
+   : {};
   decodeProtobuf(bodyBase64, grpc, schema)
    .then((res) => {
     if (!live) return;
@@ -328,25 +332,38 @@ function SchemaBar({
  const setProtoSchema = useApp((state) => state.setProtoSchema);
  const chosen = useApp((state) => state.protoMessages[direction]) ?? "";
  const setProtoMessage = useApp((state) => state.setProtoMessage);
+ const setProtoSchemaEntry = useApp((state) => state.setProtoSchemaEntry);
  const [pasting, setPasting] = useState(false);
  const [draft, setDraft] = useState("");
  const fileRef = useRef<HTMLInputElement>(null);
 
+ // One file is the single-file schema form; several are the rsu2 file SET, whose imports resolve
+ // across the set. The entry point defaults to the first file and is re-pickable below.
  const fileInput = (
   <input
    ref={fileRef}
    type="file"
    accept=".proto,text/plain"
+   multiple
    className="sr-only"
    aria-hidden="true"
    tabIndex={-1}
    onChange={(event) => {
-    const file = event.target.files?.[0];
+    const picked = [...(event.target.files ?? [])];
     event.target.value = "";
-    if (!file) return;
-    void file.text().then((text) => {
-     setProtoSchema({ name: file.name, text });
-     toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
+    if (picked.length === 0) return;
+    if (picked.length === 1) {
+     const file = picked[0]!;
+     void file.text().then((text) => {
+      setProtoSchema({ name: file.name, text });
+      toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
+     });
+     return;
+    }
+    void Promise.all(picked.map(async (f) => [f.name, await f.text()] as const)).then((entries) => {
+     const files = Object.fromEntries(entries);
+     setProtoSchema({ name: `${picked.length} .proto files`, text: entries[0]![1], files, entry: entries[0]![0] });
+     toast.success(`Loaded ${picked.length} .proto files — imports between them resolve`);
     });
    }}
   />
@@ -388,6 +405,19 @@ function SchemaBar({
    {protoSchema ? (
     <>
      <span className="cell-dim">Schema:</span> <code>{protoSchema.name}</code>
+     {protoSchema.files ? (
+      <Select
+       aria-label="Entry point of the .proto file set"
+       value={protoSchema.entry ?? ""}
+       onChange={(e) => setProtoSchemaEntry(e.target.value)}
+      >
+       {Object.keys(protoSchema.files).map((path) => (
+        <option key={path} value={path}>
+         entry: {path}
+        </option>
+       ))}
+      </Select>
+     ) : null}
      <Select aria-label={`Message type for the ${direction}`} value={chosen} onChange={(e) => setProtoMessage(direction, e.target.value)}>
       <option value="">
        {resolved ? `Automatic (${resolved})` : rpcPath ? "Automatic — no rpc matches this call" : "Automatic — choose a message"}
@@ -409,7 +439,7 @@ function SchemaBar({
     <>
      <span className="cell-dim">No schema — fields are shown by number and wire type.</span>
      <Button size="small" variant="outline" onClick={() => fileRef.current?.click()}>
-      Load .proto
+      Load .proto file(s)
      </Button>
      <Button size="small" variant="outline" onClick={() => setPasting(true)}>
       Paste .proto

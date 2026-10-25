@@ -702,7 +702,14 @@ interface AppState {
   * names fields in History, Repeater, Intercept and the rest alike. Persisted: it is the operator's
   * description of the target's API, which outlives a reload. null = schemaless view.
   */
- protoSchema: { name: string; text: string } | null;
+ protoSchema: {
+  name: string;
+  text: string;
+  /** The multi-file form (rsu2): every file of the set (path -> source) and the entry point's
+   *  path. Absent on a single-file schema, which `text` carries. */
+  files?: Record<string, string>;
+  entry?: string;
+ } | null;
  /**
   * The message type each direction is read as, when the operator chose one. Empty = automatic: the
   * gRPC call path's rpc signature, or the schema's only message. Per direction because a request and
@@ -850,7 +857,9 @@ interface AppState {
  setCustomTheme: (theme: ImportedTheme | null) => void;
  /** Preview a theme live without keeping it; null ends the preview (burpsy-react-ui-fpew). */
  setThemePreview: (theme: ImportedTheme | null) => void;
- setProtoSchema: (schema: { name: string; text: string } | null) => void;
+ setProtoSchema: (schema: { name: string; text: string; files?: Record<string, string>; entry?: string } | null) => void;
+ /** Repoint a loaded file SET at another entry file (rsu2). No-op on a single-file schema. */
+ setProtoSchemaEntry: (entry: string) => void;
  setProtoMessage: (direction: "request" | "response", message: string) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
@@ -1072,6 +1081,8 @@ export const useApp = create<AppState>()(
    setThemePreview: (themePreview) => set({ themePreview }),
    // A new schema clears the per-direction choices: they named messages of the old one.
    setProtoSchema: (protoSchema) => set({ protoSchema, protoMessages: {} }),
+   setProtoSchemaEntry: (entry) =>
+    set((state) => (state.protoSchema ? { protoSchema: { ...state.protoSchema, entry } } : {})),
    setProtoMessage: (direction, message) =>
     set((state) => ({ protoMessages: { ...state.protoMessages, [direction]: message || undefined } })),
    setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
