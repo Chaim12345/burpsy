@@ -39,6 +39,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -49,6 +50,40 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
+
+// loginFunctionsKeyRows are the three login-switches of Burp's crawl-key vocabulary
+// (burpsy-react-ui-uzil): the two login_functions keys Burp's shipped CrawlDefaults carry (both
+// true there; opt-in here, writes-are-opt-in) and crawl_optimization's
+// crawl_using_provided_logins_only. Registered through the cross-file seam rather than added to
+// burpconfig.go's table, on the errorhandling.go precedent: the family lives beside the
+// behaviour it switches, and the merge it avoids is the point of the seam.
+func init() {
+	for _, r := range []burpCrawlConfigKey{
+		{burpKey: "crawler/login_functions/attempt_to_self_register_a_user", loginField: "AttemptSelfRegister"},
+		{burpKey: "crawler/login_functions/trigger_login_failures", loginField: "TriggerLoginFailures"},
+		{burpKey: "crawler/crawl_optimization/crawl_using_provided_logins_only", loginField: "ProvidedLoginsOnly"},
+	} {
+		registerBurpCrawlKey(r)
+	}
+}
+
+// applyLoginKey decodes one login-functions switch: a bool, refused rather than coerced, on the
+// same rule the customization switches follow.
+func (c *CrawlConfig) applyLoginKey(row burpCrawlConfigKey, raw json.RawMessage) error {
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+	}
+	switch row.loginField {
+	case "AttemptSelfRegister":
+		c.AttemptSelfRegister = b
+	case "TriggerLoginFailures":
+		c.TriggerLoginFailures = b
+	case "ProvidedLoginsOnly":
+		c.ProvidedLoginsOnly = b
+	}
+	return nil
+}
 
 // maskedPlaceholder is what the stored exchange carries in place of each credential value. The
 // tool's own name, like the form filler: an operator who finds it in history knows what wrote it.
