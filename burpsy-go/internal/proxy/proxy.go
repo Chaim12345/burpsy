@@ -2403,11 +2403,11 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	scheme := spec.ForceTLS
 	requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, host, port, path, scheme)
 	reqStages.auto = requestData
-	// The extension traffic hook, in the slot traffic_hook.go states. A drop answers
-	// the client the way the operator's hold-drop below does.
+	// The extension traffic hook, in the slot traffic_hook.go states. A drop closes
+	// the connection without a byte — Burp drop semantics: the request vanishes; a
+	// fabricated 403 is bytes no server sent. The tunnel path drops the same way.
 	var hookIntercept *bool
 	if res := s.applyTrafficHook(context.Background(), "request", requestData); res.Dropped {
-		clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
 		return
 	} else {
 		requestData = res.Raw

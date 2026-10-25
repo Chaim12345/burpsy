@@ -95,7 +95,7 @@ func TestTrafficHookReplacementFlowsThroughProxy(t *testing.T) {
 	}
 }
 
-func TestTrafficHookDropRequestAnswers403AndReachesNoOrigin(t *testing.T) {
+func TestTrafficHookDropRequestClosesSilentlyAndReachesNoOrigin(t *testing.T) {
 	var originHits atomic.Int64
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		originHits.Add(1)
@@ -116,12 +116,9 @@ func TestTrafficHookDropRequestAnswers403AndReachesNoOrigin(t *testing.T) {
 	proxyAddr := startProxy(t, NewServer(cfg))
 
 	resp, err := hookClient(proxyAddr).Get(origin.URL)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("a request drop must answer the client the way the operator's drop does: %d", resp.StatusCode)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatalf("a request drop must close the connection without a byte - Burp drop semantics, the request vanishes; got status %d", resp.StatusCode)
 	}
 	if originHits.Load() != 0 {
 		t.Fatalf("dropped request reached the origin %d times", originHits.Load())
