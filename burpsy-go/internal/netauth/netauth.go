@@ -44,6 +44,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/hashicorp/golang-lru/v2"
 	"strings"
 	"sync"
 )
@@ -284,12 +285,17 @@ type Credentials struct {
 	ntlm map[string]*ntlmSession
 	// prompt and failures are Burp's "Prompt for credentials on platform authentication failure"
 	// (prompt.go): whether failures are recorded, and the recorded ones keyed by lower-cased host.
+	// The failures sit in an LRU cache carrying the maxAuthFailures bound and the eviction order
+	// (burpsy-react-ui-z5l6) - recording touches the entry, so LRU order IS least-recently-seen.
+	// lru.Cache is internally locked; mu exists for what the cache cannot guard - AuthFailure
+	// field updates through a returned pointer and the check-then-act of record-then-list. Nil
+	// until the first failure is recorded, exactly as the map was.
 	prompt   bool
-	failures map[string]*AuthFailure
+	failures *lru.Cache[string, *AuthFailure]
 	// warnings are the weak-authentication handshakes performed (every NTLMv1 one), keyed by
-	// lower-cased host. Recorded whatever the prompt setting: a downgrade the operator opted into
-	// is still one they must be able to see happening.
-	warnings map[string]*AuthWarning
+	// lower-cased host, bounded and ordered the same way. Recorded whatever the prompt setting: a
+	// downgrade the operator opted into is still one they must be able to see happening.
+	warnings *lru.Cache[string, *AuthWarning]
 	// negotiateHosts are the hosts that answered an NTLM NEGOTIATE by offering only Negotiate, so
 	// their next handshake starts in the Negotiate header and saves the round trip. A fact about a
 	// server, not a secret.
