@@ -17,7 +17,7 @@
 #   scanner-rest-0/1  internal/scanner: the other scanner tests, split by measured time
 #   rest              every package except internal/scanner and internal/web
 #   race-web-0/1      internal/web under -race, its tests split in two by index
-#   race-core         internal/proxy and internal/dash under -race, always (bead burpsy-react-ui-8pki:
+#   race-core         internal/proxy, internal/dash and internal/pool under -race, always (bead burpsy-react-ui-8pki:
 #                     the race gate widens one package at a time; add a package here only after it
 #                     has been run clean under -race, and watch this shard's time)
 #
@@ -75,7 +75,8 @@ scanner="$mod/internal/scanner"
 web="$mod/internal/web"
 # The packages the race-core shard owns, one per line; every other shard leaves them alone.
 core="$mod/internal/proxy
-$mod/internal/dash"
+$mod/internal/dash
+$mod/internal/pool"
 budget=TestAnAuditSendsProbesAndStaysWithinARequestBudget
 detect=TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
 
@@ -159,7 +160,7 @@ scanner_bin() {
       }'
 }
 
-rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" || true; }
+rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" || true; }
 
 if [ "$verb" = verify ]; then
   # Recompute every shard's selection and compare the union with the module's tests. Compiles the
@@ -210,8 +211,8 @@ reason=""
 if [ -n "${CI_AFFECTED_BASE:-}" ]; then
   affected=$("$repo/scripts/affected-go-tests.sh" "$CI_AFFECTED_BASE") || { echo "ci-shard: affected-go-tests.sh failed" >&2; exit 1; }
   if [ -z "$own" ]; then
-    selected=$(grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" <<<"$affected" || true)
-    reason="no package outside internal/scanner, internal/web, internal/proxy and internal/dash is affected by $CI_AFFECTED_BASE...HEAD"
+    selected=$(grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" <<<"$affected" || true)
+    reason="no package outside internal/scanner, internal/web, internal/proxy, internal/dash and internal/pool is affected by $CI_AFFECTED_BASE...HEAD"
   else
     selected=$(grep -xF "$own" <<<"$affected" || true)
     reason="$(tr '\n' ' ' <<<"${own//"$mod"\//}")is not affected by $CI_AFFECTED_BASE...HEAD (neither changed nor importing a changed package)"
