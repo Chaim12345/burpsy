@@ -8,7 +8,7 @@ description: >
 inputs:
   cache-flavor:
     description: >
-      Which Go build cache to restore: one per distinct build (lint, scanner, rest, race-web,
+      Which Go build cache to restore: one per distinct build (lint, scanner, rest, race-web, race-core,
       race-scanner, race-rest). Jobs of one flavor compile the same packages the same way.
     required: true
   shard:

@@ -202,6 +202,9 @@ jobs:
           - { shard: rest, flavor: rest, save: true }
           - { shard: race-web-0, flavor: race-web, save: true }
           - { shard: race-web-1, flavor: race-web, save: false }
+          # internal/proxy and internal/dash under -race (bead 8pki); the next packages join it once
+          # shown race-clean, watching this job's time.
+          - { shard: race-core, flavor: race-core, save: true }
     name: test (${{ matrix.shard }})
     env:
       CI_AFFECTED_BASE: ${{ needs.changes.outputs.mode == 'affected' && needs.changes.outputs.base || '' }}

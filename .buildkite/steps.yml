@@ -39,6 +39,7 @@ steps:
       - rest
       - race-web-0
       - race-web-1
+      - race-core
     command: |
       scripts/ci-install-tools.sh
       export PATH="$$HOME/.local/bin:$$PATH"  # $$: kept for the job, not interpolated at upload
