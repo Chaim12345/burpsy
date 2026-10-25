@@ -147,8 +147,8 @@ func Test_a_plugin_loads_invokes_and_unloads_over_the_api(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &loaded); err != nil {
 		t.Fatalf("decode load: %v", err)
 	}
-	if loaded.Extension.State != extension.StateLoaded || len(loaded.Extension.Registrations) != 1 {
-		t.Fatalf("loaded row = %+v, want one registration in state loaded", loaded.Extension)
+	if loaded.Extension.State != extension.StateLoaded || len(loaded.Extension.Registrations) != 2 {
+		t.Fatalf("loaded row = %+v, want the menu action and the hotkey in state loaded", loaded.Extension)
 	}
 
 	// A second load is a conflict, not a second process.
@@ -258,6 +258,7 @@ func runWebHelperPlugin() {
 		var msg struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
 		}
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
 			os.Exit(70)
@@ -268,10 +269,16 @@ func runWebHelperPlugin() {
 				"params": map[string]any{"stream": "output", "message": "the plugin is up"}})
 			emit(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{
 				"name": "probe", "version": "1.0", "type": "go-test", "protocol": extension.ProtocolVersion,
-				"registrations": []map[string]any{{"id": "act", "kind": "menu", "label": "Run the action"}},
+				"registrations": []map[string]any{
+					{"id": "act", "kind": "menu", "label": "Run the action"},
+					{"id": "hk", "kind": "hotkey", "label": "Hotkey probe", "chord": "Ctrl+Shift+G"},
+				},
 			}})
 		case "menu.invoke":
 			emit(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"output": "ran act"}})
+		case "hotkey.invoke":
+			// Echo the params verbatim so the test can see exactly what the host was handed.
+			emit(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"output": string(msg.Params)}})
 		case "shutdown":
 			emit(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
 			os.Exit(0)
@@ -281,4 +288,63 @@ func runWebHelperPlugin() {
 		}
 	}
 	os.Exit(0)
+}
+
+// gqvg: a hotkey invocation carries the operator's selection and open editor message through
+// to the plugin. The host enforces the cap and strips the fields on other kinds (pinned in
+// internal/extension); the edge repeats the cap so an oversized selection is a 400, not a 502.
+func Test_a_hotkey_invoke_carries_the_selection_and_editor(t *testing.T) {
+	host := extension.NewHost(extension.Config{
+		Plugins:       map[string]extension.PluginSpec{"probe": webHelperPlugin()},
+		LoadTimeout:   10 * time.Second,
+		ShutdownGrace: 2 * time.Second,
+	})
+	t.Cleanup(host.Close)
+	s := newTestServer().WithExtensions(host)
+	if rec := postJSON(t, s, "/api/extensions/load", map[string]any{"name": "probe"}); rec.Code != http.StatusOK {
+		t.Fatalf("load = %d: %s", rec.Code, rec.Body.String())
+	}
+	defer postJSON(t, s, "/api/extensions/unload", map[string]any{"name": "probe"})
+
+	invoke := postJSON(t, s, "/api/extensions/invoke", map[string]any{
+		"name": "probe", "registration": "hk",
+		"selected": []map[string]any{
+			{"exchange": 0},
+			{"exchange": 4, "raw": "GET /x HTTP/1.1\r\n\r\n"},
+		},
+		"editor": map[string]any{"message": 7, "raw": "GET /e HTTP/1.1\r\n\r\n"},
+	})
+	if invoke.Code != http.StatusOK {
+		t.Fatalf("invoke = %d: %s", invoke.Code, invoke.Body.String())
+	}
+	var result struct {
+		Result extension.InvokeResult `json:"result"`
+	}
+	if err := json.Unmarshal(invoke.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	out := result.Result.Output
+	for _, want := range []string{`"exchange":4`, `"message":7`, "GET /x", "GET /e"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plugin saw no %s in %s", want, out)
+		}
+	}
+	// Exchange 0 is a real id and must arrive as 0, not be dropped as empty.
+	if !strings.Contains(out, `"exchange":0`) {
+		t.Errorf("the zero-id row did not arrive: %s", out)
+	}
+}
+
+func Test_a_hotkey_invoke_over_the_selection_cap_is_a_400(t *testing.T) {
+	s := newTestServer()
+	rows := make([]map[string]any, 0, extension.MaxHotkeySelection+1)
+	for i := 0; i <= extension.MaxHotkeySelection; i++ {
+		rows = append(rows, map[string]any{"exchange": i})
+	}
+	rec := postJSON(t, s, "/api/extensions/invoke", map[string]any{
+		"name": "probe", "registration": "hk", "selected": rows,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("over-cap invoke = %d, want 400", rec.Code)
+	}
 }

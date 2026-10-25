@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -174,6 +175,14 @@ type extensionInvokeRequest struct {
 	Message      *int   `json:"message,omitempty"`
 	Raw          string `json:"raw,omitempty"`
 	Selection    string `json:"selection,omitempty"`
+	// Selected and Editor are hotkey.invoke's context (burpsy-react-ui-gqvg): the rows the
+	// operator had highlighted and the message open in the editor when the chord fired. The
+	// caller supplies both — this route still does not read the traffic store, so a hotkey
+	// plugin sees exactly what the operator's screen was already showing. The host strips
+	// them for every non-hotkey kind and enforces MaxHotkeySelection; the edge repeats the
+	// cap so an oversized selection is a 400 here, not a 502 from the invoke path.
+	Selected []extension.SelectedExchange `json:"selected,omitempty"`
+	Editor   *extension.EditorMessage     `json:"editor,omitempty"`
 }
 
 // handleExtensionInvoke serves POST /api/extensions/invoke: run one registration the plugin declared.
@@ -201,12 +210,19 @@ func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "an invocation needs a plugin name and a registration id", http.StatusBadRequest)
 		return
 	}
+	if len(req.Selected) > extension.MaxHotkeySelection {
+		http.Error(w, fmt.Sprintf("a hotkey invocation carries at most %d selected rows, got %d",
+			extension.MaxHotkeySelection, len(req.Selected)), http.StatusBadRequest)
+		return
+	}
 	result, err := s.extensionHost().Invoke(r.Context(), req.Name, extension.InvokeParams{
 		Registration: req.Registration,
 		Exchange:     req.Exchange,
 		Message:      req.Message,
 		Raw:          req.Raw,
 		Selection:    req.Selection,
+		Selected:     req.Selected,
+		Editor:       req.Editor,
 	})
 	if err != nil {
 		// The plugin's own error text, verbatim, and the row beside it: an invocation that failed
