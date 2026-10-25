@@ -190,11 +190,19 @@ func (a *AuthorisedSender) SendAs(ctx context.Context, raw []byte, pref Protocol
 		return AuthorisedResult{}, err
 	}
 	defer release()
+	// The traffic hook runs after scope and pacing: a plugin sees only requests that were
+	// already allowed to exist, and its replacement must pass the same scope gate before it
+	// may leave (http_hook.go).
+	raw, err = a.hookRequest(ctx, raw)
+	if err != nil {
+		return AuthorisedResult{}, err
+	}
 	start := time.Now()
 	resp, outcome, err := a.net.SendRawOutcome(ctx, a.host, a.port, a.tls, raw, pref)
 	if err != nil {
 		return AuthorisedResult{}, err
 	}
+	resp = a.hookResponse(ctx, resp)
 	a.sent.Add(1)
 	return AuthorisedResult{
 		Raw:      resp,

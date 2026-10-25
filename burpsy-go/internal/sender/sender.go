@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -56,6 +57,13 @@ type Sender struct {
 	// A marked authority's next request carries Connection: close and skips the pool, so the EOF
 	// that frames its response arrives with the body instead of one keep-alive period later.
 	closeDelimitedAuthorities sync.Map
+	// httpHook is the optional extension traffic-hook seam (http_hook.go); nil means no hook and
+	// a byte-identical send path. Set once at boot via WithHTTPHook.
+	httpHook HTTPHook
+	// httpHook* are the running hook totals the tool-log surface reads via HTTPHookCounts.
+	httpHookRequestsChanged  atomic.Int64
+	httpHookResponsesChanged atomic.Int64
+	httpHookFailures         atomic.Int64
 	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
 	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
 	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
