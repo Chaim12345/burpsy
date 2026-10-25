@@ -599,6 +599,14 @@ func main() {
 	senderConfig.ServerCerts = serverCertStore
 	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
+	// Extension HTTP traffic handlers see every tool send at the authorised chokepoint (the
+	// sender re-scope-checks any replacement - a hook can never widen scope or move hosts).
+	// The adapter keeps internal/sender free of the extension package.
+	httpSender.WithHTTPHook(sender.HTTPHookFunc(func(ctx context.Context, phase string, raw []byte) sender.HTTPHookResult {
+		res := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindHTTPHandler, Phase: phase, Raw: raw})
+		return sender.HTTPHookResult{Raw: res.Raw, Changed: res.Changed, Applied: res.Applied, Failures: len(res.Failures)}
+	}))
+
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
 	// as the scan-config restore below: what the operator set through the API in a previous run is a
 	// later decision than this process's compiled-in defaults. A refusal is logged and the defaults

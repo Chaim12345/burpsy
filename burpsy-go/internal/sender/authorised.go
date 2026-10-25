@@ -232,6 +232,21 @@ func (a *AuthorisedSender) SendSynchronizedGroup(ctx context.Context, raws [][]b
 	if len(raws) == 0 {
 		return nil, errors.New("refused: a synchronized group has no members")
 	}
+	// Traffic hooks rewrite members before the scope gate, so the gate authorises the bytes that
+	// will actually race; a hook replacement that fails scope refuses the whole group, never a
+	// part of it. Response hooks are deliberately not applied to group members: a race
+	// measurement compares what the target did, not what a plugin made of it.
+	if a.net.hook() != nil {
+		hooked := make([][]byte, len(raws))
+		for i, raw := range raws {
+			hr, err := a.hookRequest(ctx, raw)
+			if err != nil {
+				return nil, err
+			}
+			hooked[i] = hr
+		}
+		raws = hooked
+	}
 	for _, raw := range raws {
 		if err := a.scope.AuthoriseRaw(a.host, a.port, a.tls, raw); err != nil {
 			a.refused.Add(1)
