@@ -510,9 +510,9 @@ func FinalCheckDescriptors() []CheckDescriptor {
 			func(c *ScanConfig) bool {
 				return finalChecksEnabled(c) || idorEnabled(c) || loginRateLimitEnabled(c) ||
 					usernameEnumerationEnabled(c) || sessionMgmtEnabled(c) || clientIPSpoofEnabled(c) ||
-					urlAuthBypassEnabled(c)
+					urlAuthBypassEnabled(c) || raceEnabled(c)
 			},
-			withURLAuthBypass(withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl)))))),
+			withRaceConditions(withURLAuthBypass(withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl))))))),
 		// Cross-site WebSocket hijacking (checks_ws_hijack.go) rides this row behind its own switch: it is
 		// a cross-site request forgery of the WebSocket handshake, reported as burpsy's own row (CWE-1385).
 		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest,

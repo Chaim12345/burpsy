@@ -272,6 +272,16 @@ func BurpsyNativeRows() []BurpsyRow {
 			"or with the server-side prototype pollution BApp, filed under the generic extension-generated " +
 			"type. It rides the client-side row whose server-side counterpart it is (CWE-1321 covers both).",
 	}, {
+		Name:      IssueRaceConditionSinglePacket,
+		TypeIndex: 0xb5002c40,
+		CWE:       362,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no race-condition row: PortSwigger ships the single-packet attack " +
+			"as the Turbo Intruder BApp, whose issues carry the generic extension-generated type. It rides " +
+			"'Broken access control' because what the attack defeats — one redemption per coupon, one " +
+			"transfer per authorisation, one vote per ballot — is a one-per-actor business limit, the " +
+			"access-control class's business-logic edge (CWE-362 beside CWE-284).",
+	}, {
 		Name:      IssueLLMPromptInjection,
 		TypeIndex: 0xb5003000,
 		CWE:       1427,

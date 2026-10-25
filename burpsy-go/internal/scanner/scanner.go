@@ -412,6 +412,12 @@ type ScanConfig struct {
 	// answers. Off by default: the probe replays the application's own POST, which on a
 	// state-changing endpoint is the operator's call.
 	CheckServerSidePrototypePollution bool
+	// CheckRaceConditions admits the single-packet race check (checks_race.go, 0vzb.8): on a
+	// state-changing endpoint whose path or body carries single-use semantics (redeem, coupon,
+	// transfer, vote...), a sequential control pair then one synchronized group racing a fresh
+	// token; a finding stands only when the group wins more than the control's one. Off by
+	// default: it replays a state-changing request several times in one burst.
+	CheckRaceConditions bool
 	// CheckURLAuthBypass admits the URL-interpretation access-bypass check (checks_url_bypass.go,
 	// 0vzb.4): on a safe-method request refused with 401/403, normalised spellings of the path
 	// (/%2e/admin, ..;/, trailing %20/%09) and the X-Original-URL / X-Rewrite-URL override headers on
