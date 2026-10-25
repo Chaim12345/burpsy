@@ -9,6 +9,7 @@
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { useExtensions, useInvokeExtension } from "./data.extensions";
+import { hotkeyContextFields } from "./hotkey-context";
 import { pluginInvocations } from "./plugin-registrations";
 import type { ExtensionList } from "./types.extensions";
 
@@ -68,12 +69,15 @@ export function usePluginHotkeys(): void {
   chord,
   (event, handler) => {
    if (event.repeat) return;
-   const pressed = handler.keys?.join("+");
+   // `hotkey` is the whole chord that matched ("mod+shift+k"). `keys` is only the non-modifier
+   // keys (["k"]), so comparing it to a binding never matched any chord with a modifier, which is
+   // every chord the host accepts: a loaded plugin's hotkey installed and then did nothing.
+   const pressed = handler.hotkey;
    const binding = bindings.find((b) => b.chord === pressed);
    if (!binding) return;
    event.preventDefault();
    invoke.mutate(
-    { name: binding.plugin, registration: binding.registration },
+    { name: binding.plugin, registration: binding.registration, ...hotkeyContextFields() },
     {
      onSuccess: (answer) => {
       const said = answer.result.text ?? answer.result.output;

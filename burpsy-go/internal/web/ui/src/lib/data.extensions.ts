@@ -98,8 +98,16 @@ export function useMoveExtension() {
 export function useInvokeExtension() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (body: { name: string; registration: string; exchange?: number; message?: number; raw?: string; selection?: string }) =>
-   api<{ result: InvokeResult }>("/api/extensions/invoke", json("POST", body)),
+  mutationFn: (body: {
+   name: string;
+   registration: string;
+   exchange?: number;
+   message?: number;
+   raw?: string;
+   selection?: string;
+   selected?: { exchange: number; raw?: string }[];
+   editor?: { message?: number; raw?: string };
+  }) => api<{ result: InvokeResult }>("/api/extensions/invoke", json("POST", body)),
   // The invocation counters live on the row, and anything the plugin logged is on its console;
   // both sit under the ["extensions"] prefix.
   onSettled: () => invalidate([keys.extensions]),
