@@ -39,6 +39,14 @@ w=$!
 wait_for "$tmp/up3"; kill -TERM "$w"; reap "$w"
 check "signalled wrapper exits 143" 143 "$status"
 
+# 3b. The run is sent TERM (whatever arrived; INT would be ignored by a background job) and gets to clean up with it:
+# a run that handles TERM leaves its marker, so this fails if the wrapper forwards anything else or
+# goes straight to KILL.
+"$cr" -- bash -c "trap 'touch $tmp/got-term; exit 0' TERM; touch $tmp/up3b; while :; do sleep 0.1; done" 2>/dev/null &
+w=$!
+wait_for "$tmp/up3b"; kill -HUP "$w"; reap "$w"
+check "the run is forwarded TERM, whatever signal the wrapper got (HUP here)" present "$([ -e "$tmp/got-term" ] && echo present || echo absent)"
+
 # 4. A signal while the wrapper waits for a slot: the run never starts.
 flock "$tmp/burpsy-heavy.0.lock" sleep 6.123 &
 holder=$!
@@ -50,6 +58,15 @@ check "early signal exits 143" 143 "$status"
 sleep 0.3
 check "early signal: the run did not start" absent "$([ -e "$tmp/started4" ] && echo started || echo absent)"
 pkill -f "sleep 6.123"; wait "$holder" 2>/dev/null
+
+# 4b. A signal after the trap is installed but before the run starts (the window the pre-start hook
+# widens): the run never starts, and the wrapper exits 143.
+BURPSY_RUN_TEST_PRESTART_SLEEP=2 "$cr" -- bash -c "touch $tmp/started4b" 2>/dev/null &
+w=$!
+sleep 0.7; kill -TERM "$w"; reap "$w"
+check "signal before the run starts exits 143" 143 "$status"
+sleep 0.3
+check "signal before the run starts: the run did not start" absent "$([ -e "$tmp/started4b" ] && echo started || echo absent)"
 
 # 5. Without cgroups the whole process group is signalled, not only the direct child.
 "$cr" -- bash -c "sleep 60 & echo \$! > $tmp/gc5; touch $tmp/up5; wait" 2>/dev/null &

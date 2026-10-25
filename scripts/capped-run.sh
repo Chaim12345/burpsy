@@ -158,6 +158,9 @@ elif [ -d /sys/fs/cgroup/memory ] && [ -d /sys/fs/cgroup/cpu ]; then
 fi
 
 echo "capped-run: slot $slot/$slots, $cpus CPU, $(( mem_bytes / 1024 / 1024 )) MiB, hard limits: $hard" >&2
+# Test hook (capped-run_test.sh): widen the window between installing the signal trap and starting the
+# run, so a test can signal inside it. Unset in normal use.
+if [ -n "${BURPSY_RUN_TEST_PRESTART_SLEEP:-}" ]; then sleep "$BURPSY_RUN_TEST_PRESTART_SLEEP"; fi
 
 export GOMAXPROCS=$cpus
 export GOMEMLIMIT=$(( mem_bytes * 8 / 10 ))
