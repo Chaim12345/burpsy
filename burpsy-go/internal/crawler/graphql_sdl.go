@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -14,21 +15,38 @@ import (
 // off a target.
 const graphQLSDLTokenLimit = 1 << 18
 
-// looksLikeSDLDocument is the sniff half of SDL recognition: the line openings of a schema
-// document's root operation types, "type Query {" and friends. Line-anchored so prose that
-// mentions the shape ("the type Query { ...") and TypeScript aliases ("type Query = {...")
-// do not announce themselves; the validity call belongs to the parser, the same division of
+// sdlRootOpening matches the opening line of a root operation type declaration in the
+// shapes gqlparser parses in conventional SDL: spaces or tabs before the brace, an
+// implements-clause, applied directives, and the minified brace-adjacent form. The accepted
+// subset, stated exactly:
+//
+//	accept:  "type Query {", "type Query\t{", "type Query   {", "type Query{...}",
+//	         "type Query implements Node {", "type Query @key(...) {", and the Mutation /
+//	         Subscription spellings
+//	decline: "extend type Query {" (an extension is not a standalone schema),
+//	         "type Query = {...}" (a TypeScript alias; "=" is no SDL continuation),
+//	         prose that mentions the shape, and root types under unconventional names
+//
+// Line-anchored, lowercased; the validity call belongs to the parser, the same division of
 // labour every other sniff branch uses.
+var sdlRootOpening = regexp.MustCompile(`^type\s+(query|mutation|subscription)\s*(\{|implements\s|@)`)
+
 func looksLikeSDLDocument(head string) bool {
 	for _, line := range strings.Split(head, "\n") {
-		l := strings.TrimSpace(strings.ToLower(line))
-		for _, root := range []string{"type query", "type mutation", "type subscription"} {
-			if strings.HasPrefix(l, root+" {") || strings.HasPrefix(l, root+"{") {
-				return true
-			}
+		if sdlRootOpening.MatchString(strings.TrimSpace(strings.ToLower(line))) {
+			return true
 		}
 	}
 	return false
+}
+
+// sdlContentTypes is the media-type allowlist that announces a GraphQL schema document. An
+// allowlist, not a substring: application/graphql-response+json announces an introspection
+// ANSWER (JSON), and routing it to the SDL reader would misjudge the body's own format.
+var sdlContentTypes = map[string]bool{
+	"application/graphql":        true,
+	"application/graphql-schema": true,
+	"text/graphql":               true,
 }
 
 // parseGraphQLSDL reads a GraphQL schema document - SDL, as servers publish it at

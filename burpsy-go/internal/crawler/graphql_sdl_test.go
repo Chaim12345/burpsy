@@ -141,7 +141,7 @@ func TestConventionalRootDeclarationsAreRecognised(t *testing.T) {
 		"tab before brace":  "type Query\t{\n\tbook: Book\n}\n\ntype Book {\n\ttitle: String\n}\n",
 		"multi-space":       "type Query   {\n  book: Book\n}\n\ntype Book {\n  title: String\n}\n",
 		"implements clause": "interface Node {\n  id: ID\n}\n\ntype Query implements Node {\n  id: ID\n  book: Book\n}\n\ntype Book {\n  title: String\n}\n",
-		"directive":         "type Query @key(fields: \"id\") {\n  id: ID\n}\n",
+		"directive":         "directive @key(fields: String!) on OBJECT\n\ntype Query @key(fields: \"id\") {\n  id: ID\n}\n",
 		"minified":          "type Query{book:Book} type Book{title:String}",
 	} {
 		format, eps, failure := ParseAPIDocument("text/plain", []byte(doc))

@@ -196,12 +196,13 @@ func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
 		// schema does not match, and the loader's named failure, not the sniffer, sorts the
 		// body that carries the marker without being a result.
 		return APIDocGraphQLIntrospection
-	case strings.Contains(lowerCT, "graphql"), looksLikeSDLDocument(string(head)):
-		// A schema document in SDL form. The content-type hint is the whole story for the
-		// content types servers use ("application/graphql", "application/graphql-response");
-		// the body marker is the line opening of a root operation type, which prose and
-		// TypeScript aliases do not carry (looksLikeSDLDocument). An introspection result
-		// served under a graphql content-type sorts first: the "__schema" case above wins.
+	case sdlContentTypes[strings.TrimSpace(strings.SplitN(lowerCT, ";", 2)[0])], looksLikeSDLDocument(string(head)):
+		// A schema document in SDL form. The content-type hint is a media-type allowlist
+		// (sdlContentTypes): application/graphql-response+json announces an introspection
+		// ANSWER and never reaches the SDL reader - with a result the "__schema" case above
+		// claims it, without one it is not an API document. The body marker is the line
+		// opening of a root operation type (looksLikeSDLDocument), which prose, TypeScript
+		// aliases and extensions do not carry.
 		return APIDocGraphQLSDL
 	default:
 		return APIDocNone
