@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1236,7 +1237,9 @@ func validityName(v session.ValidityState) string {
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	// Normalise before encoding: a nil slice would otherwise leave the process as null, and the
+	// UI types these collections as arrays (burpsy-react-ui-j0s2). See json_nil_slice.go.
+	json.NewEncoder(w).Encode(normalizeNilSlices(reflect.ValueOf(body)).Interface())
 }
 
 // stepDtoToMacroStep converts one wire step into the coordinator's shape. Headers arrive as an ordered

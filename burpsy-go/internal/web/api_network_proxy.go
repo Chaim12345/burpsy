@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -220,8 +219,9 @@ func (s *Server) writeNetworkProxy(w http.ResponseWriter) {
 			})
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(view)
+	// writeJSON, not a bare Encode: an unused policy carries nil attached/limits/bypass lists,
+	// and null is not a shape this endpoint emits anymore (burpsy-react-ui-j0s2).
+	writeJSON(w, http.StatusOK, view)
 }
 
 // updateNetworkProxy upserts a rule and/or replaces the default.

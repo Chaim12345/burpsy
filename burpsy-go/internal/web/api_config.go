@@ -207,6 +207,10 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 			Response: s.uninteresting.headers(true),
 		}
 	}
+	// NOT writeJSON: on a bundle, null is the load-bearing "section absent, do not touch this
+	// surface" signal the importer gates on (handleConfigImport), where [] would mean "present
+	// but empty - wipe it". The nil-slice normaliser must never touch this response
+	// (burpsy-react-ui-j0s2 names the exception).
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(bundle)
 }
