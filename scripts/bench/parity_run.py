@@ -122,7 +122,7 @@ class LiveCtx:
         row_to_class = spec.get("burpsy_rows", {})
         findings = []
         for t in spec["targets"]:
-            proxied_through(self.proxy, t["url"], t.get("method", "GET"))
+            proxied_through(self.proxy, t["url"], t.get("method", "GET"), headers=t.get("headers"))
             time.sleep(0.05)
             ex = _latest_exchange(self.web)
             if ex is None:

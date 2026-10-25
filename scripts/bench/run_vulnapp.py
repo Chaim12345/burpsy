@@ -198,7 +198,7 @@ FAMILY_BODIES = {
 }
 
 
-def proxied_through(proxy, url, method="GET", body=None, content_type=None):
+def proxied_through(proxy, url, method="GET", body=None, content_type=None, headers=None):
     """Send url through burpsy's own proxy so the exchange is captured.
 
     urllib with an http proxy set sends the absolute-form request the proxy expects; an https
@@ -217,6 +217,8 @@ def proxied_through(proxy, url, method="GET", body=None, content_type=None):
     req = urllib.request.Request(url, data=data, method=method)
     if content_type:
         req.add_header("Content-Type", content_type)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with opener.open(req, timeout=60) as resp:
             resp.read()
