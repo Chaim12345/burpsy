@@ -8,13 +8,24 @@
  * operator types. Kept as data so the card renders a list rather than a paragraph to parse.
  */
 export const SCRIPT_REFERENCE: readonly { name: string; detail: string }[] = [
- { name: "request", detail: "{ method, url, headers (object), body } — the request as the actions before this one left it. Mutable: what you assign is what is sent." },
- { name: "response", detail: "{ status, headers, body } — the last response this rule observed. Read-only, and null before the first one." },
- { name: "store.get(k) / store.set(k, v) / store.delete(k)", detail: "Per-rule values kept across requests — where a captured token lives." },
+ {
+  name: "request",
+  detail:
+   "{ method, url, headers (object), body } — the request as the actions before this one left it. Mutable: what you assign is what is sent.",
+ },
+ {
+  name: "response",
+  detail: "{ status, headers, body } — the last response this rule observed. Read-only, and null before the first one.",
+ },
+ {
+  name: "store.get(k) / store.set(k, v) / store.delete(k)",
+  detail: "Per-rule values kept across requests — where a captured token lives.",
+ },
  { name: "log(...)", detail: "Writes a line to the session trace." },
  {
   name: "burpsy.*",
-  detail: "hmacSha256Hex(key, msg), hmacSha256Base64(key, msg), sha256Hex(s), base64Encode(s), base64UrlEncode(s), base64Decode(s), randomHex(n).",
+  detail:
+   "hmacSha256Hex(key, msg), hmacSha256Base64(key, msg), sha256Hex(s), base64Encode(s), base64UrlEncode(s), base64Decode(s), randomHex(n).",
  },
 ];
 

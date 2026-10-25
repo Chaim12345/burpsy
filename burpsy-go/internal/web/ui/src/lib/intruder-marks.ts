@@ -29,18 +29,16 @@ export const MARK_CHAR = "\u00a7";
 
 /** A manual marker, as sent to the server. Offsets index the raw base request. */
 export interface ManualSpan {
-  start: number;
-  end: number;
+ start: number;
+ end: number;
 }
 
 /** A marker plus the text it covers, so the positions list can show what was marked. */
 export interface ManualSpanView extends ManualSpan {
-  text: string;
+ text: string;
 }
 
-export type AddSpanResult =
-  | { ok: true; spans: ManualSpanView[] }
-  | { ok: false; reason: string };
+export type AddSpanResult = { ok: true; spans: ManualSpanView[] } | { ok: false; reason: string };
 
 /**
  * Insert one marker. Empty selections are refused (there is nothing to payload), spans are kept
@@ -49,23 +47,23 @@ export type AddSpanResult =
  * splice rule would silently drop one of them.
  */
 export function addManualSpan(existing: ManualSpanView[], start: number, end: number, text: string): AddSpanResult {
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
-    return { ok: false, reason: "Select a non-empty range of the request to mark" };
+ if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
+  return { ok: false, reason: "Select a non-empty range of the request to mark" };
+ }
+ for (const span of existing) {
+  if (start < span.end && span.start < end) {
+   return { ok: false, reason: `That range overlaps an existing marker around "${span.text}"` };
   }
-  for (const span of existing) {
-    if (start < span.end && span.start < end) {
-      return { ok: false, reason: `That range overlaps an existing marker around "${span.text}"` };
-    }
-  }
-  const spans = [...existing, { start, end, text }].sort((a, b) => a.start - b.start);
-  return { ok: true, spans };
+ }
+ const spans = [...existing, { start, end, text }].sort((a, b) => a.start - b.start);
+ return { ok: true, spans };
 }
 
 /** The spans with their wire byte offsets turned into raw-string (UTF-16) indices. */
 function spansInChars(raw: string, spans: ManualSpan[]): ManualSpan[] {
-  return [...spans]
-    .sort((a, b) => a.start - b.start)
-    .map((span) => ({ start: byteOffsetToCharIndex(raw, span.start), end: byteOffsetToCharIndex(raw, span.end) }));
+ return [...spans]
+  .sort((a, b) => a.start - b.start)
+  .map((span) => ({ start: byteOffsetToCharIndex(raw, span.start), end: byteOffsetToCharIndex(raw, span.end) }));
 }
 
 /**
@@ -76,24 +74,24 @@ function spansInChars(raw: string, spans: ManualSpan[]): ManualSpan[] {
  * exactly two characters per marker.
  */
 export function displayText(raw: string, spans: ManualSpan[]): string {
-  let out = "";
-  let cursor = 0;
-  for (const span of spansInChars(raw, spans)) {
-    out += raw.slice(cursor, span.start) + MARK_CHAR + raw.slice(span.start, span.end) + MARK_CHAR;
-    cursor = span.end;
-  }
-  out += raw.slice(cursor);
-  return out;
+ let out = "";
+ let cursor = 0;
+ for (const span of spansInChars(raw, spans)) {
+  out += raw.slice(cursor, span.start) + MARK_CHAR + raw.slice(span.start, span.end) + MARK_CHAR;
+  cursor = span.end;
+ }
+ out += raw.slice(cursor);
+ return out;
 }
 
 /** The display offsets at which "§" characters appear, for the sorted span list. */
 function markDisplayPositions(sorted: ManualSpan[]): number[] {
-  const positions: number[] = [];
-  sorted.forEach((span, i) => {
-    const inserted = 2 * i;
-    positions.push(span.start + inserted, span.end + inserted + 1);
-  });
-  return positions;
+ const positions: number[] = [];
+ sorted.forEach((span, i) => {
+  const inserted = 2 * i;
+  positions.push(span.start + inserted, span.end + inserted + 1);
+ });
+ return positions;
 }
 
 /**
@@ -101,14 +99,12 @@ function markDisplayPositions(sorted: ManualSpan[]): number[] {
  * spans passed here must be in raw-string space too (identical to wire bytes for ASCII).
  */
 export function displayToRaw(spans: ManualSpan[], displayOffset: number): number {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
-  const marks = markDisplayPositions(sorted);
-  return displayOffset - marks.filter((position) => position < displayOffset).length;
+ const sorted = [...spans].sort((a, b) => a.start - b.start);
+ const marks = markDisplayPositions(sorted);
+ return displayOffset - marks.filter((position) => position < displayOffset).length;
 }
 
-export type RawSpanResult =
-  | { ok: true; start: number; end: number; text: string }
-  | { ok: false; reason: string };
+export type RawSpanResult = { ok: true; start: number; end: number; text: string } | { ok: false; reason: string };
 
 /**
  * Map a selection of the display text (string indices into `displayText(raw, spans)`, CRLF
@@ -123,29 +119,23 @@ export type RawSpanResult =
  * the first U+FFFD on, a string index no longer names a byte, and a marker there is refused
  * rather than sent at an offset that would splice the payload somewhere else.
  */
-export function selectionToRawSpan(
-  raw: string,
-  spans: ManualSpan[],
-  from: number,
-  to: number,
-  wireLength?: number,
-): RawSpanResult {
-  const charSpans = spansInChars(raw, spans);
-  const rawFrom = Math.min(displayToRaw(charSpans, Math.min(from, to)), raw.length);
-  const rawTo = Math.min(displayToRaw(charSpans, Math.max(from, to)), raw.length);
-  if (wireLength !== undefined && charIndexToByteOffset(raw, raw.length) !== wireLength) {
-    const firstLossy = raw.indexOf("\uFFFD");
-    if (firstLossy >= 0 && rawTo > firstLossy) {
-      return {
-        ok: false,
-        reason: "That range reaches bytes that are not valid UTF-8, so the text shown cannot name their offsets — mark only before them",
-      };
-    }
+export function selectionToRawSpan(raw: string, spans: ManualSpan[], from: number, to: number, wireLength?: number): RawSpanResult {
+ const charSpans = spansInChars(raw, spans);
+ const rawFrom = Math.min(displayToRaw(charSpans, Math.min(from, to)), raw.length);
+ const rawTo = Math.min(displayToRaw(charSpans, Math.max(from, to)), raw.length);
+ if (wireLength !== undefined && charIndexToByteOffset(raw, raw.length) !== wireLength) {
+  const firstLossy = raw.indexOf("\uFFFD");
+  if (firstLossy >= 0 && rawTo > firstLossy) {
+   return {
+    ok: false,
+    reason: "That range reaches bytes that are not valid UTF-8, so the text shown cannot name their offsets — mark only before them",
+   };
   }
-  return {
-    ok: true,
-    start: charIndexToByteOffset(raw, rawFrom),
-    end: charIndexToByteOffset(raw, rawTo),
-    text: raw.slice(rawFrom, rawTo),
-  };
+ }
+ return {
+  ok: true,
+  start: charIndexToByteOffset(raw, rawFrom),
+  end: charIndexToByteOffset(raw, rawTo),
+  text: raw.slice(rawFrom, rawTo),
+ };
 }

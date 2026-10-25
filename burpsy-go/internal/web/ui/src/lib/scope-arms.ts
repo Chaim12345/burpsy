@@ -135,8 +135,10 @@ export function hostArmProblem(mode: HostArmMode, value: string): string | null 
  const body = value.trim();
  if (mode === "wildcard") {
   if (body === "") return "A host pattern is required.";
-  if (body.startsWith(REGEX_ARM_TAG)) return `"${REGEX_ARM_TAG}" is how a rule says its host is a regular expression. Choose the Regular expression mode instead of typing the prefix.`;
-  if (body.startsWith(RANGE_ARM_TAG)) return `"${RANGE_ARM_TAG}" is how a rule says its host is an IP range. Choose the IP range mode instead of typing the prefix.`;
+  if (body.startsWith(REGEX_ARM_TAG))
+   return `"${REGEX_ARM_TAG}" is how a rule says its host is a regular expression. Choose the Regular expression mode instead of typing the prefix.`;
+  if (body.startsWith(RANGE_ARM_TAG))
+   return `"${RANGE_ARM_TAG}" is how a rule says its host is an IP range. Choose the IP range mode instead of typing the prefix.`;
   return null;
  }
  if (mode === "regex") {
@@ -156,7 +158,8 @@ export function pathArmProblem(mode: PathArmMode, value: string): string | null 
  const body = value.trim();
  if (mode === "prefix") {
   if (body === "") return null;
-  if (body.startsWith(REGEX_ARM_TAG)) return `"${REGEX_ARM_TAG}" is how a rule says its path is a regular expression. Choose the Regular expression mode instead of typing the prefix.`;
+  if (body.startsWith(REGEX_ARM_TAG))
+   return `"${REGEX_ARM_TAG}" is how a rule says its path is a regular expression. Choose the Regular expression mode instead of typing the prefix.`;
   if (!body.startsWith("/")) return "A path prefix must start with /, so it can match a request path.";
   return null;
  }

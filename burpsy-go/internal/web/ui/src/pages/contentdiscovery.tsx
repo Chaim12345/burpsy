@@ -6,31 +6,18 @@ import { copyToClipboard, formatBytes, formatCount, templateRequest } from "../l
 import { takeSeed } from "../lib/page-seed";
 import { useApp } from "../lib/store";
 import {
-  useDiscoveryRuns,
-  useStartDiscovery,
-  type Discovery,
-  type DiscoveryListEntry,
-  type DiscoveryRun,
-  type DiscoveryToolState,
+ useDiscoveryRuns,
+ useStartDiscovery,
+ type Discovery,
+ type DiscoveryListEntry,
+ type DiscoveryRun,
+ type DiscoveryToolState,
 } from "../lib/data.discovery";
 import { useWordlists } from "../lib/data.tools";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { MenuRow, SimpleTable } from "../ui/table";
 import type { MenuGroup } from "../ui/menu";
-import {
-  Badge,
-  Button,
-  Card,
-  Checkbox,
-  Empty,
-  ErrorNotice,
-  Field,
-  Input,
-  Metric,
-  Toolbar,
-  type Tone,
-  Select,
-} from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Metric, Toolbar, type Tone, Select } from "../ui/primitives";
 
 /**
  * Content discovery — Burp's "Discover content" engagement tool.
@@ -77,10 +64,10 @@ import {
 
 /** Run state to a badge tone. `stopped` is warn rather than bad: it was cancelled, not broken. */
 const STATE_TONE: Record<string, Tone> = {
-  running: "info",
-  done: "good",
-  stopped: "warn",
-  failed: "bad",
+ running: "info",
+ done: "good",
+ stopped: "warn",
+ failed: "bad",
 };
 
 /**
@@ -91,16 +78,16 @@ const STATE_TONE: Record<string, Tone> = {
  * refusing you — and colouring it as a failure buries the find.
  */
 function statusTone(status: number): Tone {
-  if (status >= 500) return "bad";
-  if (status === 401 || status === 403) return "warn";
-  if (status >= 400) return "neutral";
-  if (status >= 300) return "info";
-  return "good";
+ if (status >= 500) return "bad";
+ if (status === 401 || status === 403) return "warn";
+ if (status >= 400) return "neutral";
+ if (status >= 300) return "info";
+ return "good";
 }
 
 function startedAt(run: DiscoveryRun): string {
-  const at = new Date(run.started);
-  return Number.isNaN(at.getTime()) ? run.started : at.toLocaleTimeString();
+ const at = new Date(run.started);
+ return Number.isNaN(at.getTime()) ? run.started : at.toLocaleTimeString();
 }
 
 /**
@@ -111,240 +98,235 @@ function startedAt(run: DiscoveryRun): string {
  * and then failed would waste the operator's typing to say what is already known.
  */
 function ToolUnavailable({ tool }: { tool: DiscoveryToolState }): JSX.Element {
-  return (
-    <Card className="stack">
-      <div className="notice-row">
-        <AlertTriangle size={15} aria-hidden="true" />
-        <div>
-          <strong>Content discovery is not available on this server</strong>
-          <p className="cell-dim">
-            {tool.reason ??
-              `${tool.name} is not allowlisted. Pass -tools ${tool.name}=/path/to/${tool.name} when starting burpsy.`}
-          </p>
-          <p className="cell-dim">
-            Which binary may be executed is operator policy set on the command line, never by this
-            page — a console that could name its own executable would make the flag decorative.
-          </p>
-        </div>
-      </div>
-    </Card>
-  );
+ return (
+  <Card className="stack">
+   <div className="notice-row">
+    <AlertTriangle size={15} aria-hidden="true" />
+    <div>
+     <strong>Content discovery is not available on this server</strong>
+     <p className="cell-dim">
+      {tool.reason ?? `${tool.name} is not allowlisted. Pass -tools ${tool.name}=/path/to/${tool.name} when starting burpsy.`}
+     </p>
+     <p className="cell-dim">
+      Which binary may be executed is operator policy set on the command line, never by this page — a console that could name its own
+      executable would make the flag decorative.
+     </p>
+    </div>
+   </div>
+  </Card>
+ );
 }
 
 /** The launch form. Only target and wordlist are required; the rest fall through to ffuf's defaults. */
 function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
-  const start = useStartDiscovery();
-  // Seeded when this page was opened from the site map's Engagement tools › Discover content
-  // (burpsy-react-ui-gupj), blank otherwise. Read once at mount and cleared, so the seed cannot
-  // overwrite a target the operator has since typed — see lib/page-seed.ts.
-  const [target, setTarget] = useState(() => takeSeed("discovery-target") ?? "");
-  const [wordlist, setWordlist] = useState("");
-  // The wordlist inventory (kal): the bundled corpus plus uploads, so the operator picks a
-  // list once here too — ffuf reads the stored path, and the builtin entries are extractable
-  // to a real path via the extraction route rather than the builtin: shorthand ffuf cannot
-  // read. The select fills the path field; the path stays editable for any local list.
-  const wordlistsQuery = useWordlists();
-  const [extensions, setExtensions] = useState("");
-  const [matchCodes, setMatchCodes] = useState("");
-  const [rate, setRate] = useState("");
-  // The session controls (dgbi) — Burp's content-discovery Config tab: the
-  // built-in lists, the recursion depth, the observed-name and derivation
-  // toggles, and the backup-file variant extensions.
-  const runsQuery = useDiscoveryRuns();
-  const [selectedLists, setSelectedLists] = useState<Set<string>>(new Set());
-  const [recurseDepth, setRecurseDepth] = useState("0");
-  const [observedNames, setObservedNames] = useState(false);
-  const [derivations, setDerivations] = useState(false);
-  const [variantExtensions, setVariantExtensions] = useState("");
+ const start = useStartDiscovery();
+ // Seeded when this page was opened from the site map's Engagement tools › Discover content
+ // (burpsy-react-ui-gupj), blank otherwise. Read once at mount and cleared, so the seed cannot
+ // overwrite a target the operator has since typed — see lib/page-seed.ts.
+ const [target, setTarget] = useState(() => takeSeed("discovery-target") ?? "");
+ const [wordlist, setWordlist] = useState("");
+ // The wordlist inventory (kal): the bundled corpus plus uploads, so the operator picks a
+ // list once here too — ffuf reads the stored path, and the builtin entries are extractable
+ // to a real path via the extraction route rather than the builtin: shorthand ffuf cannot
+ // read. The select fills the path field; the path stays editable for any local list.
+ const wordlistsQuery = useWordlists();
+ const [extensions, setExtensions] = useState("");
+ const [matchCodes, setMatchCodes] = useState("");
+ const [rate, setRate] = useState("");
+ // The session controls (dgbi) — Burp's content-discovery Config tab: the
+ // built-in lists, the recursion depth, the observed-name and derivation
+ // toggles, and the backup-file variant extensions.
+ const runsQuery = useDiscoveryRuns();
+ const [selectedLists, setSelectedLists] = useState<Set<string>>(new Set());
+ const [recurseDepth, setRecurseDepth] = useState("0");
+ const [observedNames, setObservedNames] = useState(false);
+ const [derivations, setDerivations] = useState(false);
+ const [variantExtensions, setVariantExtensions] = useState("");
 
-  const ready = target.trim() !== "" && (wordlist.trim() !== "" || selectedLists.size > 0);
+ const ready = target.trim() !== "" && (wordlist.trim() !== "" || selectedLists.size > 0);
 
-  const submit = () => {
-    if (!ready) return;
-    const parsedRate = Number.parseInt(rate, 10);
-    const parsedDepth = Number.parseInt(recurseDepth, 10);
-    start.mutate(
-      {
-        target: target.trim(),
-        wordlist: wordlist.trim() || undefined,
-        lists: selectedLists.size > 0 ? [...selectedLists] : undefined,
-        recurse_depth: Number.isFinite(parsedDepth) && parsedDepth > 0 ? parsedDepth : undefined,
-        observed_names: observedNames || undefined,
-        derivations: derivations || undefined,
-        variant_extensions: variantExtensions.trim() || undefined,
-        extensions: extensions.trim() || undefined,
-        match_codes: matchCodes.trim() || undefined,
-        // Only sent when it parses to a positive number. Zero is ffuf's uncapped
-        // default, and sending 0 for an unparseable field would silently mean
-        // "no limit" on an engagement that asked for one.
-        rate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : undefined,
-      },
-      {
-        onSuccess: (response) => toast.success(`Sweep #${response.task_id} started against ${response.target}`),
-        // The server refuses an out-of-scope or partly-in-scope target with 403 and
-        // explains which check failed; surface that text rather than a generic failure.
-        onError: (failure) => toast.error(failure instanceof Error ? failure.message : "Starting the sweep failed"),
-      },
-    );
-  };
-
-  return (
-    <Card className="stack">
-      <SectionHeading
-        title="New sweep"
-        detail={`Delegated to ${tool.name}. FUZZ is appended to the target path, so point it at the directory to sweep.`}
-      />
-      <div className="field-grid">
-        <Field label="Target URL" hint="e.g. https://target.test/app/ — the path space swept beneath it">
-          {(id) => (
-            <Input
-              id={id}
-              value={target}
-              placeholder="https://target.test/app/"
-              onChange={(event) => setTarget(event.target.value)}
-            />
-          )}
-        </Field>
-        <Field label="Wordlist path" hint="A path on the burpsy host. Required: ffuf with no wordlist is no sweep.">
-          {(id) => (
-            <div className="stack">
-              <Input
-                id={id}
-                value={wordlist}
-                placeholder="/usr/share/wordlists/dirb/common.txt"
-                onChange={(event) => setWordlist(event.target.value)}
-              />
-              <Select
-                aria-label="Available wordlists"
-                value=""
-                onChange={(event) => {
-                  if (!event.target.value) return;
-                  // Uploads are real paths ffuf can read; bundled lists need the extraction
-                  // route, so only upload entries fill the field directly.
-                  const picked = (wordlistsQuery.data?.wordlists ?? []).find((w) => w.ref === event.target.value);
-                  if (picked && picked.kind === "upload") setWordlist(picked.ref);
-                }}
-              >
-                <option value="">Choose an uploaded list…</option>
-                {(wordlistsQuery.data?.wordlists ?? [])
-                  .filter((w) => w.kind === "upload")
-                  .map((w) => (
-                    <option key={w.ref} value={w.ref}>
-                      {w.name} ({w.lines} lines)
-                    </option>
-                  ))}
-              </Select>
-            </div>
-          )}
-        </Field>
-        <Field label="Extensions" hint="Optional. Extends every word, e.g. php,bak">
-          {(id) => (
-            <Input id={id} value={extensions} placeholder="php,bak" onChange={(event) => setExtensions(event.target.value)} />
-          )}
-        </Field>
-        <Field label="Match status codes" hint={`Optional. Empty takes ${tool.name}'s own default, which already excludes 404.`}>
-          {(id) => (
-            <Input id={id} value={matchCodes} placeholder="200,204,301,302,401,403" onChange={(event) => setMatchCodes(event.target.value)} />
-          )}
-        </Field>
-        <Field label="Rate limit" hint="Optional, requests per second. Empty is uncapped; set it if the engagement agreed a rate.">
-          {(id) => (
-            <Input id={id} value={rate} inputMode="numeric" placeholder="uncapped" onChange={(event) => setRate(event.target.value)} />
-          )}
-        </Field>
-        <Field label="Subdirectory levels" hint="Burp's 'how many levels of subdirectory to look for'. Each level is a separate sweep per discovered directory, scope-checked before it runs.">
-          {(id) => (
-            <Select id={id} value={recurseDepth} onChange={(event) => setRecurseDepth(event.target.value)}>
-              <option value="0">No recursion (one flat sweep)</option>
-              <option value="1">1 level</option>
-              <option value="2">2 levels</option>
-              <option value="3">3 levels</option>
-            </Select>
-          )}
-        </Field>
-        <Field label="Variant extensions" hint="Burp's 'Test these variant extensions on discovered files': retest discovered files' stems, e.g. bak,old — the backup-copy check.">
-          {(id) => (
-            <Input id={id} value={variantExtensions} placeholder="bak,old" onChange={(event) => setVariantExtensions(event.target.value)} />
-          )}
-        </Field>
-      </div>
-      <Field label="Built-in lists" hint="Burp's Filenames settings: the lists PortSwigger bundles with Burp itself, merged with any wordlist path above.">
-       {() => (
-        <div className="stack-tight">
-          {(runsQuery.data?.lists ?? []).map((list: DiscoveryListEntry) => (
-           <Checkbox
-            key={list.name}
-            checked={selectedLists.has(list.name)}
-            label={`${list.name} (${list.words.toLocaleString()} words)`}
-            onCheckedChange={(on) =>
-             setSelectedLists((current) => {
-              const next = new Set(current);
-              if (on) next.add(list.name);
-              else next.delete(list.name);
-              return next;
-             })
-            }
-           />
-          ))}
-          <Checkbox
-           checked={observedNames}
-           label="Names observed in use on target site — directory names and filename stems the capture store has seen on this host"
-           onCheckedChange={setObservedNames}
-          />
-          <Checkbox
-           checked={derivations}
-           label="Derivations based on discovered items — numeric suffix (+1, +2), _old, .bak and case variants of what each sweep finds"
-           onCheckedChange={setDerivations}
-          />
-        </div>
-       )}
-      </Field>
-      <Toolbar>
-        <Button onClick={submit} disabled={!ready || start.isPending}>
-          <Play size={13} />
-          {start.isPending ? "Starting…" : "Start sweep"}
-        </Button>
-        <span className="cell-dim">
-          Scope is checked before the run and again on every result. A host whose subtree is only
-          partly in scope is refused outright, because a wordlist picks its own paths.
-        </span>
-      </Toolbar>
-      {start.error ? <ErrorNotice title="Could not start the sweep" error={start.error} /> : null}
-    </Card>
+ const submit = () => {
+  if (!ready) return;
+  const parsedRate = Number.parseInt(rate, 10);
+  const parsedDepth = Number.parseInt(recurseDepth, 10);
+  start.mutate(
+   {
+    target: target.trim(),
+    wordlist: wordlist.trim() || undefined,
+    lists: selectedLists.size > 0 ? [...selectedLists] : undefined,
+    recurse_depth: Number.isFinite(parsedDepth) && parsedDepth > 0 ? parsedDepth : undefined,
+    observed_names: observedNames || undefined,
+    derivations: derivations || undefined,
+    variant_extensions: variantExtensions.trim() || undefined,
+    extensions: extensions.trim() || undefined,
+    match_codes: matchCodes.trim() || undefined,
+    // Only sent when it parses to a positive number. Zero is ffuf's uncapped
+    // default, and sending 0 for an unparseable field would silently mean
+    // "no limit" on an engagement that asked for one.
+    rate: Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : undefined,
+   },
+   {
+    onSuccess: (response) => toast.success(`Sweep #${response.task_id} started against ${response.target}`),
+    // The server refuses an out-of-scope or partly-in-scope target with 403 and
+    // explains which check failed; surface that text rather than a generic failure.
+    onError: (failure) => toast.error(failure instanceof Error ? failure.message : "Starting the sweep failed"),
+   },
   );
+ };
+
+ return (
+  <Card className="stack">
+   <SectionHeading
+    title="New sweep"
+    detail={`Delegated to ${tool.name}. FUZZ is appended to the target path, so point it at the directory to sweep.`}
+   />
+   <div className="field-grid">
+    <Field label="Target URL" hint="e.g. https://target.test/app/ — the path space swept beneath it">
+     {(id) => <Input id={id} value={target} placeholder="https://target.test/app/" onChange={(event) => setTarget(event.target.value)} />}
+    </Field>
+    <Field label="Wordlist path" hint="A path on the burpsy host. Required: ffuf with no wordlist is no sweep.">
+     {(id) => (
+      <div className="stack">
+       <Input
+        id={id}
+        value={wordlist}
+        placeholder="/usr/share/wordlists/dirb/common.txt"
+        onChange={(event) => setWordlist(event.target.value)}
+       />
+       <Select
+        aria-label="Available wordlists"
+        value=""
+        onChange={(event) => {
+         if (!event.target.value) return;
+         // Uploads are real paths ffuf can read; bundled lists need the extraction
+         // route, so only upload entries fill the field directly.
+         const picked = (wordlistsQuery.data?.wordlists ?? []).find((w) => w.ref === event.target.value);
+         if (picked && picked.kind === "upload") setWordlist(picked.ref);
+        }}
+       >
+        <option value="">Choose an uploaded list…</option>
+        {(wordlistsQuery.data?.wordlists ?? [])
+         .filter((w) => w.kind === "upload")
+         .map((w) => (
+          <option key={w.ref} value={w.ref}>
+           {w.name} ({w.lines} lines)
+          </option>
+         ))}
+       </Select>
+      </div>
+     )}
+    </Field>
+    <Field label="Extensions" hint="Optional. Extends every word, e.g. php,bak">
+     {(id) => <Input id={id} value={extensions} placeholder="php,bak" onChange={(event) => setExtensions(event.target.value)} />}
+    </Field>
+    <Field label="Match status codes" hint={`Optional. Empty takes ${tool.name}'s own default, which already excludes 404.`}>
+     {(id) => (
+      <Input id={id} value={matchCodes} placeholder="200,204,301,302,401,403" onChange={(event) => setMatchCodes(event.target.value)} />
+     )}
+    </Field>
+    <Field label="Rate limit" hint="Optional, requests per second. Empty is uncapped; set it if the engagement agreed a rate.">
+     {(id) => <Input id={id} value={rate} inputMode="numeric" placeholder="uncapped" onChange={(event) => setRate(event.target.value)} />}
+    </Field>
+    <Field
+     label="Subdirectory levels"
+     hint="Burp's 'how many levels of subdirectory to look for'. Each level is a separate sweep per discovered directory, scope-checked before it runs."
+    >
+     {(id) => (
+      <Select id={id} value={recurseDepth} onChange={(event) => setRecurseDepth(event.target.value)}>
+       <option value="0">No recursion (one flat sweep)</option>
+       <option value="1">1 level</option>
+       <option value="2">2 levels</option>
+       <option value="3">3 levels</option>
+      </Select>
+     )}
+    </Field>
+    <Field
+     label="Variant extensions"
+     hint="Burp's 'Test these variant extensions on discovered files': retest discovered files' stems, e.g. bak,old — the backup-copy check."
+    >
+     {(id) => (
+      <Input id={id} value={variantExtensions} placeholder="bak,old" onChange={(event) => setVariantExtensions(event.target.value)} />
+     )}
+    </Field>
+   </div>
+   <Field
+    label="Built-in lists"
+    hint="Burp's Filenames settings: the lists PortSwigger bundles with Burp itself, merged with any wordlist path above."
+   >
+    {() => (
+     <div className="stack-tight">
+      {(runsQuery.data?.lists ?? []).map((list: DiscoveryListEntry) => (
+       <Checkbox
+        key={list.name}
+        checked={selectedLists.has(list.name)}
+        label={`${list.name} (${list.words.toLocaleString()} words)`}
+        onCheckedChange={(on) =>
+         setSelectedLists((current) => {
+          const next = new Set(current);
+          if (on) next.add(list.name);
+          else next.delete(list.name);
+          return next;
+         })
+        }
+       />
+      ))}
+      <Checkbox
+       checked={observedNames}
+       label="Names observed in use on target site — directory names and filename stems the capture store has seen on this host"
+       onCheckedChange={setObservedNames}
+      />
+      <Checkbox
+       checked={derivations}
+       label="Derivations based on discovered items — numeric suffix (+1, +2), _old, .bak and case variants of what each sweep finds"
+       onCheckedChange={setDerivations}
+      />
+     </div>
+    )}
+   </Field>
+   <Toolbar>
+    <Button onClick={submit} disabled={!ready || start.isPending}>
+     <Play size={13} />
+     {start.isPending ? "Starting…" : "Start sweep"}
+    </Button>
+    <span className="cell-dim">
+     Scope is checked before the run and again on every result. A host whose subtree is only partly in scope is refused outright, because a
+     wordlist picks its own paths.
+    </span>
+   </Toolbar>
+   {start.error ? <ErrorNotice title="Could not start the sweep" error={start.error} /> : null}
+  </Card>
+ );
 }
 
 /** The honest-counting strip for one run: what is shown, what was dropped, and whether it looked. */
 function RunCounts({ run }: { run: DiscoveryRun }): JSX.Element {
-  return (
-    <div className="metric-row">
-      <Metric label="Paths reported" value={formatCount(run.counts.discovered)} />
-      <Metric
-        label="Dropped: out of scope"
-        value={formatCount(run.counts.out_of_scope)}
-        tone={run.counts.out_of_scope > 0 ? "warn" : undefined}
-        detail={run.counts.out_of_scope > 0 ? "reported by the tool, refused by the engagement scope" : undefined}
-      />
-      <Metric
-        label="Examined the target"
-        value={run.looked ? "yes" : "no"}
-        tone={run.looked ? "good" : "bad"}
-        detail={run.looked ? undefined : "an empty result here means nothing was checked, not that nothing is there"}
-      />
-      <Metric label="Outcome" value={run.outcome} detail={run.exit_code >= 0 ? `exit ${run.exit_code}` : undefined} />
-      {(run.levels ?? []).length > 0 ? (
-        <Metric
-          label="Recursion levels"
-          value={String(run.levels.length)}
-          detail={run.levels
-            .map((level) =>
-              `level ${level.level}: ${level.discovered} found, ${level.skipped} skipped (out of scope), ${level.runs} run(s)`,
-            )
-            .join("; ")}
-        />
-      ) : null}
-    </div>
-  );
+ return (
+  <div className="metric-row">
+   <Metric label="Paths reported" value={formatCount(run.counts.discovered)} />
+   <Metric
+    label="Dropped: out of scope"
+    value={formatCount(run.counts.out_of_scope)}
+    tone={run.counts.out_of_scope > 0 ? "warn" : undefined}
+    detail={run.counts.out_of_scope > 0 ? "reported by the tool, refused by the engagement scope" : undefined}
+   />
+   <Metric
+    label="Examined the target"
+    value={run.looked ? "yes" : "no"}
+    tone={run.looked ? "good" : "bad"}
+    detail={run.looked ? undefined : "an empty result here means nothing was checked, not that nothing is there"}
+   />
+   <Metric label="Outcome" value={run.outcome} detail={run.exit_code >= 0 ? `exit ${run.exit_code}` : undefined} />
+   {(run.levels ?? []).length > 0 ? (
+    <Metric
+     label="Recursion levels"
+     value={String(run.levels.length)}
+     detail={run.levels
+      .map((level) => `level ${level.level}: ${level.discovered} found, ${level.skipped} skipped (out of scope), ${level.runs} run(s)`)
+      .join("; ")}
+    />
+   ) : null}
+  </div>
+ );
 }
 
 /**
@@ -362,223 +344,220 @@ function RunCounts({ run }: { run: DiscoveryRun }): JSX.Element {
  * from captured traffic, and there is no endpoint that injects a path into it.
  */
 function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
-  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
-  const setRoute = useApp((state) => state.setRoute);
-  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
+ const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+ const setRoute = useApp((state) => state.setRoute);
+ const setHistoryQuery = useApp((state) => state.setHistoryQuery);
 
-  const menuFor = (row: Discovery): MenuGroup[] => [
+ const menuFor = (row: Discovery): MenuGroup[] => [
+  {
+   id: "send",
+   actions: [
     {
-      id: "send",
-      actions: [
-        {
-          id: "repeater",
-          label: "Send to Repeater (built from this URL)",
-          icon: Repeat2,
-          onSelect: () => {
-            const scheme = row.url.startsWith("http://") ? "http" : "https";
-            openRepeaterTab({
-              name: `discovered ${row.path || "/"}`.slice(0, 42),
-              target: `${scheme}://${row.host}`,
-              protocol: scheme,
-              request: templateRequest(row.host, row.path || "/"),
-            });
-            setRoute("repeater");
-            toast.success("A GET for this path was built and opened in Repeater — the sweep captured no request bytes");
-          },
-        },
-        {
-          id: "browser",
-          label: "Open URL in browser",
-          icon: Globe,
-          // The burpsy browser, proxied (bufa); a refusal is shown and offers this browser instead.
-          onSelect: () => void openUrlInBrowser(row.url),
-        },
-      ],
+     id: "repeater",
+     label: "Send to Repeater (built from this URL)",
+     icon: Repeat2,
+     onSelect: () => {
+      const scheme = row.url.startsWith("http://") ? "http" : "https";
+      openRepeaterTab({
+       name: `discovered ${row.path || "/"}`.slice(0, 42),
+       target: `${scheme}://${row.host}`,
+       protocol: scheme,
+       request: templateRequest(row.host, row.path || "/"),
+      });
+      setRoute("repeater");
+      toast.success("A GET for this path was built and opened in Repeater — the sweep captured no request bytes");
+     },
     },
     {
-      id: "copy",
-      actions: [
-        {
-          id: "url",
-          label: "Copy URL",
-          icon: Link2,
-          onSelect: () => {
-            void copyToClipboard(row.url);
-            toast.success("URL copied");
-          },
-        },
-        {
-          id: "path",
-          label: "Copy path",
-          icon: Copy,
-          onSelect: () => void copyToClipboard(row.path || "/"),
-        },
-        ...(row.redirect
-          ? [
-              {
-                id: "redirect",
-                label: "Copy redirect target",
-                icon: ExternalLink,
-                onSelect: () => void copyToClipboard(row.redirect ?? ""),
-              },
-            ]
-          : []),
-      ],
+     id: "browser",
+     label: "Open URL in browser",
+     icon: Globe,
+     // The burpsy browser, proxied (bufa); a refusal is shown and offers this browser instead.
+     onSelect: () => void openUrlInBrowser(row.url),
+    },
+   ],
+  },
+  {
+   id: "copy",
+   actions: [
+    {
+     id: "url",
+     label: "Copy URL",
+     icon: Link2,
+     onSelect: () => {
+      void copyToClipboard(row.url);
+      toast.success("URL copied");
+     },
     },
     {
-      id: "history",
-      actions: [
-        {
-          id: "filter",
-          label: `Filter history by ${row.path || "/"}`,
-          icon: FolderTree,
-          onSelect: () => {
-            setHistoryQuery(`host = ${row.host} AND path ~ "${(row.path || "/").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
-            setRoute("history");
-          },
-        },
-      ],
+     id: "path",
+     label: "Copy path",
+     icon: Copy,
+     onSelect: () => void copyToClipboard(row.path || "/"),
     },
-  ];
+    ...(row.redirect
+     ? [
+        {
+         id: "redirect",
+         label: "Copy redirect target",
+         icon: ExternalLink,
+         onSelect: () => void copyToClipboard(row.redirect ?? ""),
+        },
+       ]
+     : []),
+   ],
+  },
+  {
+   id: "history",
+   actions: [
+    {
+     id: "filter",
+     label: `Filter history by ${row.path || "/"}`,
+     icon: FolderTree,
+     onSelect: () => {
+      setHistoryQuery(`host = ${row.host} AND path ~ "${(row.path || "/").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`);
+      setRoute("history");
+     },
+    },
+   ],
+  },
+ ];
 
-  return (
-    <SimpleTable headers={["Status", "Path", "Length", "Words", "Lines", "Type", "Redirects to"]}>
-      {rows.map((row) => (
-        <MenuRow key={row.url} groups={menuFor(row)}>
-          <td>
-            <Badge tone={statusTone(row.status)}>{row.status}</Badge>
-          </td>
-          <td>
-            <code title={row.url}>{row.path || "/"}</code>
-          </td>
-          <td className="cell-num">{formatBytes(row.length)}</td>
-          <td className="cell-num">{formatCount(row.words)}</td>
-          <td className="cell-num">{formatCount(row.lines)}</td>
-          <td className="cell-dim">{row.content_type ?? "—"}</td>
-          <td className="cell-dim">
-            {row.redirect ? (
-              <span className="chip-row">
-                <ExternalLink size={12} aria-hidden="true" />
-                <code>{row.redirect}</code>
-              </span>
-            ) : (
-              "—"
-            )}
-          </td>
-        </MenuRow>
-      ))}
-    </SimpleTable>
-  );
+ return (
+  <SimpleTable headers={["Status", "Path", "Length", "Words", "Lines", "Type", "Redirects to"]}>
+   {rows.map((row) => (
+    <MenuRow key={row.url} groups={menuFor(row)}>
+     <td>
+      <Badge tone={statusTone(row.status)}>{row.status}</Badge>
+     </td>
+     <td>
+      <code title={row.url}>{row.path || "/"}</code>
+     </td>
+     <td className="cell-num">{formatBytes(row.length)}</td>
+     <td className="cell-num">{formatCount(row.words)}</td>
+     <td className="cell-num">{formatCount(row.lines)}</td>
+     <td className="cell-dim">{row.content_type ?? "—"}</td>
+     <td className="cell-dim">
+      {row.redirect ? (
+       <span className="chip-row">
+        <ExternalLink size={12} aria-hidden="true" />
+        <code>{row.redirect}</code>
+       </span>
+      ) : (
+       "—"
+      )}
+     </td>
+    </MenuRow>
+   ))}
+  </SimpleTable>
+ );
 }
 
 function RunCard({ run }: { run: DiscoveryRun }): JSX.Element {
-  // ?? [] : the server has serialised by_status as [] since the first e2e sweep
-  // caught a running run crashing here on null (dgbi); the guard stays so an
-  // older server's wire shape cannot take the whole page down.
-  const byStatus = useMemo(
-    () => (run.counts.by_status ?? []).slice().sort((a, b) => a.status - b.status),
-    [run.counts.by_status],
-  );
+ // ?? [] : the server has serialised by_status as [] since the first e2e sweep
+ // caught a running run crashing here on null (dgbi); the guard stays so an
+ // older server's wire shape cannot take the whole page down.
+ const byStatus = useMemo(() => (run.counts.by_status ?? []).slice().sort((a, b) => a.status - b.status), [run.counts.by_status]);
 
-  return (
-    <Card className="stack">
-      <SectionHeading
-        title={`#${run.task_id} — ${run.target}`}
-        detail={`started ${startedAt(run)} · wordlist ${run.wordlist}${run.extensions ? ` · extensions ${run.extensions}` : ""}${
-          run.match_codes ? ` · match ${run.match_codes}` : ""
-        }`}
-        actions={<Badge tone={STATE_TONE[run.state] ?? "neutral"}>{run.state}</Badge>}
-      />
+ return (
+  <Card className="stack">
+   <SectionHeading
+    title={`#${run.task_id} — ${run.target}`}
+    detail={`started ${startedAt(run)} · wordlist ${run.wordlist}${run.extensions ? ` · extensions ${run.extensions}` : ""}${
+     run.match_codes ? ` · match ${run.match_codes}` : ""
+    }`}
+    actions={<Badge tone={STATE_TONE[run.state] ?? "neutral"}>{run.state}</Badge>}
+   />
 
-      {/* The server's own sentence, verbatim. It is the one place the caveats are worded. */}
-      <p className="cell-dim">{run.summary}</p>
+   {/* The server's own sentence, verbatim. It is the one place the caveats are worded. */}
+   <p className="cell-dim">{run.summary}</p>
 
-      {run.error ? <ErrorNotice title="The sweep reported an error" error={run.error} /> : null}
+   {run.error ? <ErrorNotice title="The sweep reported an error" error={run.error} /> : null}
 
-      <RunCounts run={run} />
+   <RunCounts run={run} />
 
-      {byStatus.length > 0 ? (
-        <div className="chip-row">
-          {byStatus.map((group) => (
-            <Badge key={group.status} tone={statusTone(group.status)}>
-              {group.count} × {group.status}
-            </Badge>
-          ))}
-        </div>
-      ) : null}
+   {byStatus.length > 0 ? (
+    <div className="chip-row">
+     {byStatus.map((group) => (
+      <Badge key={group.status} tone={statusTone(group.status)}>
+       {group.count} × {group.status}
+      </Badge>
+     ))}
+    </div>
+   ) : null}
 
-      {run.command && run.command.length > 0 ? (
-        <details>
-          <summary className="cell-dim">
-            <Terminal size={12} aria-hidden="true" /> Command that ran
-          </summary>
-          {/* These requests never passed through burpsy, so they are in no history row and no
+   {run.command && run.command.length > 0 ? (
+    <details>
+     <summary className="cell-dim">
+      <Terminal size={12} aria-hidden="true" /> Command that ran
+     </summary>
+     {/* These requests never passed through burpsy, so they are in no history row and no
               site-map node. This argv is the only record of what reached the target. */}
-          <pre className="code-block">{run.command.join(" ")}</pre>
-        </details>
-      ) : null}
+     <pre className="code-block">{run.command.join(" ")}</pre>
+    </details>
+   ) : null}
 
-      {run.discoveries.length > 0 ? (
-        <DiscoveryRows rows={run.discoveries} />
-      ) : run.state === "running" ? (
-        <Empty title="Sweeping" detail="Nothing has been reported yet. An empty list here means not-yet, not nothing." />
-      ) : run.looked ? (
-        <Empty
-          title="No paths matched"
-          detail={`${run.outcome}: the wordlist was swept and nothing matched. This is a result about the target.`}
-        />
-      ) : (
-        <Empty
-          title="Nothing was examined"
-          detail={`${run.outcome}: this run never checked the target, so it says nothing about what is there.`}
-        />
-      )}
-    </Card>
-  );
+   {run.discoveries.length > 0 ? (
+    <DiscoveryRows rows={run.discoveries} />
+   ) : run.state === "running" ? (
+    <Empty title="Sweeping" detail="Nothing has been reported yet. An empty list here means not-yet, not nothing." />
+   ) : run.looked ? (
+    <Empty
+     title="No paths matched"
+     detail={`${run.outcome}: the wordlist was swept and nothing matched. This is a result about the target.`}
+    />
+   ) : (
+    <Empty
+     title="Nothing was examined"
+     detail={`${run.outcome}: this run never checked the target, so it says nothing about what is there.`}
+    />
+   )}
+  </Card>
+ );
 }
 
 export function ContentDiscoveryPage(): JSX.Element {
-  const { data, error, isLoading, isFetching, refetch } = useDiscoveryRuns();
+ const { data, error, isLoading, isFetching, refetch } = useDiscoveryRuns();
 
-  if (isLoading) return <LoadingPanel label="Loading content discovery" />;
+ if (isLoading) return <LoadingPanel label="Loading content discovery" />;
 
-  return (
-    <div className="page stack">
-      <PageHeader
-        title="Content discovery"
-        eyebrow="Target"
-        description="Burp's Discover content, delegated to ffuf. These requests do not pass through burpsy, so they appear in no history row and no site-map node — the command and the run record are the whole account of them."
-        actions={<RefreshButton onClick={() => void refetch()} loading={isFetching} label="Refresh runs" />}
+ return (
+  <div className="page stack">
+   <PageHeader
+    title="Content discovery"
+    eyebrow="Target"
+    description="Burp's Discover content, delegated to ffuf. These requests do not pass through burpsy, so they appear in no history row and no site-map node — the command and the run record are the whole account of them."
+    actions={<RefreshButton onClick={() => void refetch()} loading={isFetching} label="Refresh runs" />}
+   />
+
+   {error ? <ErrorNotice title="Could not load content-discovery runs" error={error} onRetry={() => void refetch()} /> : null}
+
+   {data ? (
+    <>
+     {data.tool.available ? <StartSweep tool={data.tool} /> : <ToolUnavailable tool={data.tool} />}
+
+     {data.runs.length === 0 ? (
+      <Empty
+       title="No sweeps recorded"
+       detail={
+        data.tool.available
+         ? `The server retains the last ${data.retained} runs. Nothing has been started yet.`
+         : "No sweep can be started until the tool is allowlisted, so there is nothing to show."
+       }
       />
-
-      {error ? <ErrorNotice title="Could not load content-discovery runs" error={error} onRetry={() => void refetch()} /> : null}
-
-      {data ? (
-        <>
-          {data.tool.available ? <StartSweep tool={data.tool} /> : <ToolUnavailable tool={data.tool} />}
-
-          {data.runs.length === 0 ? (
-            <Empty
-              title="No sweeps recorded"
-              detail={
-                data.tool.available
-                  ? `The server retains the last ${data.retained} runs. Nothing has been started yet.`
-                  : "No sweep can be started until the tool is allowlisted, so there is nothing to show."
-              }
-            />
-          ) : (
-            <>
-              <SectionHeading
-                title="Runs"
-                detail={`Most recent first. The server retains ${data.retained}; older runs are gone rather than hidden.`}
-              />
-              {data.runs.map((run) => (
-                <RunCard key={run.task_id} run={run} />
-              ))}
-            </>
-          )}
-        </>
-      ) : null}
-    </div>
-  );
+     ) : (
+      <>
+       <SectionHeading
+        title="Runs"
+        detail={`Most recent first. The server retains ${data.retained}; older runs are gone rather than hidden.`}
+       />
+       {data.runs.map((run) => (
+        <RunCard key={run.task_id} run={run} />
+       ))}
+      </>
+     )}
+    </>
+   ) : null}
+  </div>
+ );
 }

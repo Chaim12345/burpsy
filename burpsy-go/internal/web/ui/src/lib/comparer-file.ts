@@ -13,51 +13,48 @@
 export const COMPARER_FILE_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface BinarySide {
-  /** The file's real bytes, compared byte-for-byte. */
-  bytes: Uint8Array;
-  /** What the editor was given to show them; the bytes are valid only while the text equals this. */
-  shownAs: string;
+ /** The file's real bytes, compared byte-for-byte. */
+ bytes: Uint8Array;
+ /** What the editor was given to show them; the bytes are valid only while the text equals this. */
+ shownAs: string;
 }
 
-export type LoadedFile =
-  | { kind: "text"; text: string }
-  | { kind: "binary"; binary: BinarySide }
-  | { kind: "refused"; reason: string };
+export type LoadedFile = { kind: "text"; text: string } | { kind: "binary"; binary: BinarySide } | { kind: "refused"; reason: string };
 
 /** One character per byte (U+0000–U+00FF), so the editor shows every byte and the length matches. */
 export function byteRendering(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 8192) {
-    out += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  }
-  return out;
+ let out = "";
+ for (let i = 0; i < bytes.length; i += 8192) {
+  out += String.fromCharCode(...bytes.subarray(i, i + 8192));
+ }
+ return out;
 }
 
 export function classifyFileBytes(bytes: Uint8Array): LoadedFile {
-  if (bytes.length > COMPARER_FILE_MAX_BYTES) {
-    return {
-      kind: "refused",
-      reason: `the file is ${bytes.length} bytes; the Comparer loads files up to ${COMPARER_FILE_MAX_BYTES} bytes`,
-    };
-  }
-  try {
-    return { kind: "text", text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
-  } catch {
-    return { kind: "binary", binary: { bytes, shownAs: byteRendering(bytes) } };
-  }
+ if (bytes.length > COMPARER_FILE_MAX_BYTES) {
+  return {
+   kind: "refused",
+   reason: `the file is ${bytes.length} bytes; the Comparer loads files up to ${COMPARER_FILE_MAX_BYTES} bytes`,
+  };
+ }
+ try {
+  return { kind: "text", text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+ } catch {
+  return { kind: "binary", binary: { bytes, shownAs: byteRendering(bytes) } };
+ }
 }
 
 /** The binary side's bytes if they still describe what the editor shows, else null (use the text). */
 export function liveBytes(side: BinarySide | null, editorText: string): Uint8Array | null {
-  return side && side.shownAs === editorText ? side.bytes : null;
+ return side && side.shownAs === editorText ? side.bytes : null;
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += 8192) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
-  }
-  return btoa(bin);
+ let bin = "";
+ for (let i = 0; i < bytes.length; i += 8192) {
+  bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+ }
+ return btoa(bin);
 }
 
 /**
@@ -65,6 +62,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
  * — never both, which the server refuses.
  */
 export function sideField(name: "a" | "b", text: string, binary: BinarySide | null): Record<string, string> {
-  const bytes = liveBytes(binary, text);
-  return bytes ? { [`${name}_base64`]: bytesToBase64(bytes) } : { [name]: text };
+ const bytes = liveBytes(binary, text);
+ return bytes ? { [`${name}_base64`]: bytesToBase64(bytes) } : { [name]: text };
 }

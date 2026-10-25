@@ -21,10 +21,10 @@ export type StorageConfig = Pick<IntruderConfig, "storeRequests" | "storeRespons
  * the switches existed keeps storing.
  */
 export function storageFields(config: StorageConfig): { store_requests?: false; store_responses?: false } {
-  return {
-    ...(config.storeRequests === false ? { store_requests: false as const } : {}),
-    ...(config.storeResponses === false ? { store_responses: false as const } : {}),
-  };
+ return {
+  ...(config.storeRequests === false ? { store_requests: false as const } : {}),
+  ...(config.storeResponses === false ? { store_responses: false as const } : {}),
+ };
 }
 
 /** Why a row has no request or response to act on, when the attack itself chose not to store it. */
@@ -35,18 +35,18 @@ export const NOT_STORED = "Not stored (attack setting): this attack ran with sto
  * otherwise the row-specific fallback the caller gives (a failed send, a row that did not open its bucket).
  */
 export function missingReason(stored: boolean | undefined, fallback: string): string {
-  return stored === false ? NOT_STORED : fallback;
+ return stored === false ? NOT_STORED : fallback;
 }
 
 export type CaptureConfig = Pick<
-  IntruderConfig,
-  | "captureFilterEnabled"
-  | "captureDiscardNoResponse"
-  | "captureTerm"
-  | "captureRegex"
-  | "captureCaseSensitive"
-  | "captureNegate"
-  | "captureStatuses"
+ IntruderConfig,
+ | "captureFilterEnabled"
+ | "captureDiscardNoResponse"
+ | "captureTerm"
+ | "captureRegex"
+ | "captureCaseSensitive"
+ | "captureNegate"
+ | "captureStatuses"
 >;
 
 /**
@@ -56,18 +56,18 @@ export type CaptureConfig = Pick<
  * second spelling of it.
  */
 export function captureFilterField(config: CaptureConfig): { capture_filter?: CaptureFilterSpec } {
-  if (!config.captureFilterEnabled) return {};
-  const statuses = STATUS_CLASSES.filter((c) => (config.captureStatuses ?? [...STATUS_CLASSES]).includes(c));
-  return {
-    capture_filter: {
-      discard_no_response: config.captureDiscardNoResponse === true,
-      term: config.captureTerm ?? "",
-      regex: config.captureRegex === true,
-      case_sensitive: config.captureCaseSensitive === true,
-      negate: config.captureNegate === true,
-      ...(statuses.length < STATUS_CLASSES.length ? { statuses } : {}),
-    },
-  };
+ if (!config.captureFilterEnabled) return {};
+ const statuses = STATUS_CLASSES.filter((c) => (config.captureStatuses ?? [...STATUS_CLASSES]).includes(c));
+ return {
+  capture_filter: {
+   discard_no_response: config.captureDiscardNoResponse === true,
+   term: config.captureTerm ?? "",
+   regex: config.captureRegex === true,
+   case_sensitive: config.captureCaseSensitive === true,
+   negate: config.captureNegate === true,
+   ...(statuses.length < STATUS_CLASSES.length ? { statuses } : {}),
+  },
+ };
 }
 
 /**
@@ -75,16 +75,18 @@ export function captureFilterField(config: CaptureConfig): { capture_filter?: Ca
  * captured, or "Capturing all items".
  */
 export function describeCaptureFilter(spec: CaptureFilterSpec | null | undefined): string {
-  if (!spec) return "Capturing all items";
-  const parts: string[] = [];
-  if (spec.discard_no_response) parts.push("discarding items without responses");
-  const statuses = spec.statuses ?? [...STATUS_CLASSES];
-  const dropped = STATUS_CLASSES.filter((c) => !statuses.includes(c));
-  if (dropped.length) parts.push(`discarding ${dropped.join(", ")}`);
-  if (spec.term) {
-    parts.push(`${spec.negate ? "not " : ""}matching ${spec.regex ? "regex" : "expression"} ${spec.term}${spec.case_sensitive ? " (case sensitive)" : ""}`);
-  }
-  if (!parts.length) return "Capturing all items";
-  const text = parts.join("; ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
+ if (!spec) return "Capturing all items";
+ const parts: string[] = [];
+ if (spec.discard_no_response) parts.push("discarding items without responses");
+ const statuses = spec.statuses ?? [...STATUS_CLASSES];
+ const dropped = STATUS_CLASSES.filter((c) => !statuses.includes(c));
+ if (dropped.length) parts.push(`discarding ${dropped.join(", ")}`);
+ if (spec.term) {
+  parts.push(
+   `${spec.negate ? "not " : ""}matching ${spec.regex ? "regex" : "expression"} ${spec.term}${spec.case_sensitive ? " (case sensitive)" : ""}`,
+  );
+ }
+ if (!parts.length) return "Capturing all items";
+ const text = parts.join("; ");
+ return text.charAt(0).toUpperCase() + text.slice(1);
 }

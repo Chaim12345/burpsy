@@ -57,8 +57,7 @@ export const useCrawls = () => {
 export function useCompareSitemaps() {
  return useMutation<SitemapDiffResponse, Error, { taskA: number; taskB: number }>({
   // camelCase at the hook boundary, snake_case on the wire the same mutation body spells.
-  mutationFn: ({ taskA, taskB }) =>
-   api<SitemapDiffResponse>("/api/tools/compare-sitemaps", json("POST", { task_a: taskA, task_b: taskB })),
+  mutationFn: ({ taskA, taskB }) => api<SitemapDiffResponse>("/api/tools/compare-sitemaps", json("POST", { task_a: taskA, task_b: taskB })),
  });
 }
 
@@ -246,8 +245,7 @@ export function useAPIScanReviewCheck(definition: string, baseUrl: string, field
  */
 export function useFetchAPIDefinition() {
  return useMutation({
-  mutationFn: (body: { url: string; auth?: Record<string, string> }) =>
-   api<FetchedDefinition>("/api/apiscan/fetch", json("POST", body)),
+  mutationFn: (body: { url: string; auth?: Record<string, string> }) => api<FetchedDefinition>("/api/apiscan/fetch", json("POST", body)),
   // The mutation's variables hold the credential. gcTime 0 drops the finished mutation from the
   // MutationCache at once instead of keeping the password, token or client secret there for the
   // default five minutes (the same convention as useExportCa).
@@ -258,14 +256,16 @@ export function useFetchAPIDefinition() {
 export function useStartAPIScan() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (body: {
-   definition: string;
-   base_url?: string;
-   audit?: boolean;
-   max_requests?: number;
-   requests_per_second?: number;
-   pool?: string;
-  } & ReviewFields) => api<APIScanAccepted>("/api/apiscan", json("POST", body)),
+  mutationFn: (
+   body: {
+    definition: string;
+    base_url?: string;
+    audit?: boolean;
+    max_requests?: number;
+    requests_per_second?: number;
+    pool?: string;
+   } & ReviewFields,
+  ) => api<APIScanAccepted>("/api/apiscan", json("POST", body)),
   // The same three keys a crawl-and-audit invalidates: the sweep writes history, its audit half writes
   // findings, and both move the dashboard's counters and the site map.
   onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap, ["issues"]]),
@@ -296,22 +296,22 @@ export function useStartCrawl() {
    /** A saved recorded login sequence by id (burpsy-react-ui-xhtk): replayed before the crawl and on
     *  session loss. An unknown id, an empty scope or no browser is refused before any task exists. */
    recorded_login?: string;
-    /**
-     * The eight bounds the engine had but the wire did not (burpsy-react-ui-qzzy).
-     *
-     * Omitted means the engine's documented default. A 0 is sent as 0 and means the operator's answer
-     * — zero locations, zero links per page — which is why the console omits a BLANK field rather than
-     * sending 0 for it. That distinction is the server's pointer-typed fields; here it is `undefined`
-     * versus 0, which `Number(x) || undefined` cannot express.
-     */
-    max_locations?: number;
-    max_frontier?: number;
-    max_links_per_page?: number;
-    max_parse_bytes?: number;
-    max_template_visits?: number;
-    max_capture_bytes?: number;
-    max_fingerprints?: number;
-    max_relogins?: number;
+   /**
+    * The eight bounds the engine had but the wire did not (burpsy-react-ui-qzzy).
+    *
+    * Omitted means the engine's documented default. A 0 is sent as 0 and means the operator's answer
+    * — zero locations, zero links per page — which is why the console omits a BLANK field rather than
+    * sending 0 for it. That distinction is the server's pointer-typed fields; here it is `undefined`
+    * versus 0, which `Number(x) || undefined` cannot express.
+    */
+   max_locations?: number;
+   max_frontier?: number;
+   max_links_per_page?: number;
+   max_parse_bytes?: number;
+   max_template_visits?: number;
+   max_capture_bytes?: number;
+   max_fingerprints?: number;
+   max_relogins?: number;
    requests_per_second?: number;
    submit_forms?: boolean;
    /**
@@ -337,7 +337,7 @@ export function useStartCrawl() {
    number_of_follow_up_passes?: number;
    query?: string;
    retention_query?: string;
-  // riskAttack: api() mints the gate's confirmation on the operator's Start click (p1uz).
+   // riskAttack: api() mints the gate's confirmation on the operator's Start click (p1uz).
   }) =>
    api<{ task_id: number; seeds: string[]; state: string; kind: string; out_of_scope_seeds?: { url: string; reason: string }[] }>(
     "/api/crawl",

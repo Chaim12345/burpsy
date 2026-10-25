@@ -29,7 +29,13 @@ describe("a stored message's reading", () => {
 
  test("an uncompressed message is just its text, with nothing to mark", () => {
   const reading = messageReading({ text: "GET / HTTP/1.1\r\n\r\n" }, false);
-  expect(reading).toEqual({ text: "GET / HTTP/1.1\r\n\r\n", decoded: false, canDecode: false, encoding: undefined, decodeError: undefined });
+  expect(reading).toEqual({
+   text: "GET / HTTP/1.1\r\n\r\n",
+   decoded: false,
+   canDecode: false,
+   encoding: undefined,
+   decodeError: undefined,
+  });
  });
 
  test("an empty decoded body is still a decoded rendering, not an absence", () => {

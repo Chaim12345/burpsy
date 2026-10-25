@@ -13,7 +13,7 @@ export type Visibility = Record<string, boolean>;
 
 /** The columns of `ids` currently shown. */
 export function visibleColumnIds(ids: readonly string[], visibility: Visibility): string[] {
-  return ids.filter((id) => visibility[id] !== false);
+ return ids.filter((id) => visibility[id] !== false);
 }
 
 /**
@@ -21,8 +21,8 @@ export function visibleColumnIds(ids: readonly string[], visibility: Visibility)
  * own header menu — Burp greys "Hide column" out on the last one, and so does this.
  */
 export function canHideColumn(ids: readonly string[], visibility: Visibility, id: string): boolean {
-  if (visibility[id] === false) return false;
-  return visibleColumnIds(ids, visibility).length > 1;
+ if (visibility[id] === false) return false;
+ return visibleColumnIds(ids, visibility).length > 1;
 }
 
 /**
@@ -31,16 +31,16 @@ export function canHideColumn(ids: readonly string[], visibility: Visibility, id
  * every column is discarded whole rather than restoring an empty table.
  */
 export function reconcileVisibility(stored: unknown, ids: readonly string[]): Visibility {
-  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return {};
-  const known = new Set(ids);
-  const out: Visibility = {};
-  for (const [id, value] of Object.entries(stored as Record<string, unknown>)) {
-    if (known.has(id) && typeof value === "boolean") out[id] = value;
-  }
-  return visibleColumnIds(ids, out).length === 0 ? {} : out;
+ if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return {};
+ const known = new Set(ids);
+ const out: Visibility = {};
+ for (const [id, value] of Object.entries(stored as Record<string, unknown>)) {
+  if (known.has(id) && typeof value === "boolean") out[id] = value;
+ }
+ return visibleColumnIds(ids, out).length === 0 ? {} : out;
 }
 
 /** The localStorage key for a table shape — the same fingerprint VirtualTable's column order uses. */
 export function visibilityStorageKey(ids: readonly string[]): string {
-  return `burpsy.table-column-visibility.${[...ids].sort().join("|")}`;
+ return `burpsy.table-column-visibility.${[...ids].sort().join("|")}`;
 }

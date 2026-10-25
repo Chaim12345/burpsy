@@ -95,7 +95,13 @@ function LinkedBytes({ exchangeId, rowId }: { exchangeId: number; rowId: number 
    : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."));
  return (
   <div className="editor-grid" style={{ minHeight: 240 }}>
-   <HttpEditor label="Request" readOnly value={requestText} bodyBase64={request.data?.body_base64} filename={`toollog-${rowId}-request.txt`} />
+   <HttpEditor
+    label="Request"
+    readOnly
+    value={requestText}
+    bodyBase64={request.data?.body_base64}
+    filename={`toollog-${rowId}-request.txt`}
+   />
    <HttpEditor
     label="Response"
     readOnly
@@ -190,10 +196,7 @@ export function LoggerPage(): JSX.Element {
  // needs no frontend change — the same trick the tool list uses.
  const [method, setMethod] = useState("");
  const [statusClass, setStatusClass] = useState("");
- const methods = useMemo(
-  () => [...new Set(rows.map((row) => row.method))].sort(),
-  [rows],
- );
+ const methods = useMemo(() => [...new Set(rows.map((row) => row.method))].sort(), [rows]);
  const filteredRows = useMemo(
   () =>
    rows.filter((row) => {
@@ -243,10 +246,21 @@ export function LoggerPage(): JSX.Element {
  // never fight. A bad regex comes back 400 with the old filter still in force.
  const saveCaptureFilter = () => {
   const body: {
-   filter?: { status: number[]; term: string; regex: boolean; case_sensitive: boolean; negate: boolean; scope_only: boolean; mime: string[] };
+   filter?: {
+    status: number[];
+    term: string;
+    regex: boolean;
+    case_sensitive: boolean;
+    negate: boolean;
+    scope_only: boolean;
+    mime: string[];
+   };
    capacity?: number;
   } = {};
-  const mimeList = capMime.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const mimeList = capMime
+   .split(",")
+   .map((t) => t.trim().toLowerCase())
+   .filter(Boolean);
   if (capStatus.length || capTerm || capScopeOnly || mimeList.length) {
    body.filter = {
     status: capStatus.map(Number),
@@ -316,8 +330,7 @@ export function LoggerPage(): JSX.Element {
  );
  const extractValues = useHistoryExtractValues(extractIds, extractorSig, savedExtractors.length > 0);
  const extractValuesMap: ExtractValues | undefined = extractValues.data;
- const extractLoading =
-  savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+ const extractLoading = savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
  const extractFailed = extractValues.isError;
 
  const columns = useMemo<Column<ToolLogRow>[]>(
@@ -476,10 +489,10 @@ export function LoggerPage(): JSX.Element {
      {
       label: "Highlight",
       value: highlightName(selected.highlight) ? (
-        <Badge tone={HIGHLIGHT_TONE[highlightName(selected.highlight)] ?? "neutral"}>{highlightName(selected.highlight)}</Badge>
-       ) : (
-        "none"
-       ),
+       <Badge tone={HIGHLIGHT_TONE[highlightName(selected.highlight)] ?? "neutral"}>{highlightName(selected.highlight)}</Badge>
+      ) : (
+       "none"
+      ),
      },
     ]}
    />
@@ -529,17 +542,11 @@ export function LoggerPage(): JSX.Element {
        </Badge>
        {/* A log that silently truncates is misleading, so the discard count is
                   always on screen — not only when someone opens a detail pane. */}
-       <Badge tone={data && data.dropped > 0 ? "warn" : "neutral"}>
-        {(data?.dropped ?? 0).toLocaleString()} dropped
-       </Badge>
+       <Badge tone={data && data.dropped > 0 ? "warn" : "neutral"}>{(data?.dropped ?? 0).toLocaleString()} dropped</Badge>
        {/* The honest-counting half of the capture axis: requests that were sent
                   and deliberately not kept read as a real number here, never as a short
                   log. Shown whenever any tool has capture off. */}
-       {uncapturedTotal > 0 ? (
-        <Badge tone="bad">
-         {uncapturedTotal.toLocaleString()} sent, not captured
-        </Badge>
-       ) : null}
+       {uncapturedTotal > 0 ? <Badge tone="bad">{uncapturedTotal.toLocaleString()} sent, not captured</Badge> : null}
        <Button
         variant="outline"
         onClick={() => {
@@ -585,7 +592,12 @@ export function LoggerPage(): JSX.Element {
        </option>
       ))}
      </Select>
-     <Select aria-label="Method filter" value={method} onChange={(event) => setMethod(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+     <Select
+      aria-label="Method filter"
+      value={method}
+      onChange={(event) => setMethod(event.target.value)}
+      style={{ maxWidth: "var(--w-xs)" }}
+     >
       <option value="">Any method</option>
       {methods.map((name) => (
        <option key={name} value={name}>
@@ -593,7 +605,12 @@ export function LoggerPage(): JSX.Element {
        </option>
       ))}
      </Select>
-     <Select aria-label="Status class filter" value={statusClass} onChange={(event) => setStatusClass(event.target.value)} style={{ maxWidth: "var(--w-xs)" }}>
+     <Select
+      aria-label="Status class filter"
+      value={statusClass}
+      onChange={(event) => setStatusClass(event.target.value)}
+      style={{ maxWidth: "var(--w-xs)" }}
+     >
       <option value="">Any status</option>
       <option value="2">2xx</option>
       <option value="3">3xx</option>
@@ -662,9 +679,7 @@ export function LoggerPage(): JSX.Element {
       Filter settings
       {inForce && (inForce.status.length > 0 || inForce.term || inForce.scope_only) ? " (active)" : ""}
      </Button>
-     {filteredTotal > 0 ? (
-      <Badge tone="warn">{filteredTotal.toLocaleString()} refused by filter</Badge>
-     ) : null}
+     {filteredTotal > 0 ? <Badge tone="warn">{filteredTotal.toLocaleString()} refused by filter</Badge> : null}
      {tools.map(([name]) => {
       const on = capturing[name] !== false;
       return (
@@ -695,12 +710,22 @@ export function LoggerPage(): JSX.Element {
       />
       <div className="search-field">
        <Search size={15} />
-       <Input aria-label="Capture filter search term" value={capTerm} onChange={(event) => setCapTerm(event.target.value)} placeholder="capture only matching (method, host, path)" style={{ minWidth: 220 }} />
+       <Input
+        aria-label="Capture filter search term"
+        value={capTerm}
+        onChange={(event) => setCapTerm(event.target.value)}
+        placeholder="capture only matching (method, host, path)"
+        style={{ minWidth: 220 }}
+       />
       </div>
       <Checkbox checked={capRegex} onCheckedChange={setCapRegex} label="Regex" />
       <Checkbox checked={capCase} onCheckedChange={setCapCase} label="Case sensitive" />
       <Checkbox checked={capNegate} onCheckedChange={setCapNegate} label="Negative" />
-      <Checkbox checked={capScopeOnly} onCheckedChange={setCapScopeOnly} label={scopeAttached ? "In-scope only" : "In-scope only (no scope loaded — inert)"} />
+      <Checkbox
+       checked={capScopeOnly}
+       onCheckedChange={setCapScopeOnly}
+       label={scopeAttached ? "In-scope only" : "In-scope only (no scope loaded — inert)"}
+      />
       <Field
        label="Exclude MIME types"
        hint="Comma-separated media types to refuse: an exact type/subtype, or type/* for a whole family — e.g. image/*, font/woff2. Empty captures everything. A pattern that is neither shape is refused with the reason rather than quietly kept, and a row whose response declared no type is never refused by this."
@@ -820,7 +845,8 @@ export function LoggerPage(): JSX.Element {
           label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
           icon: HIGHLIGHT_ICONS[name],
           disabled: highlightName(row.highlight) === wire,
-          onSelect: () => annotate(row, row.comment, wire, wire === "" ? `Highlight cleared on #${row.id}` : `#${row.id} highlighted ${wire}`),
+          onSelect: () =>
+           annotate(row, row.comment, wire, wire === "" ? `Highlight cleared on #${row.id}` : `#${row.id} highlighted ${wire}`),
          };
         }),
        },
@@ -882,11 +908,7 @@ export function LoggerPage(): JSX.Element {
       ]}
       rowClassName={(row) =>
        cn(
-        row.error !== null || row.status === null || row.status >= 500
-         ? "row-flag-bad"
-         : row.status >= 400
-          ? "row-flag-warn"
-          : undefined,
+        row.error !== null || row.status === null || row.status >= 500 ? "row-flag-bad" : row.status >= 400 ? "row-flag-warn" : undefined,
         // Same per-colour tint classes the history and site-map tables use, so a
         // highlighted row looks the same in every tool (see styles.css Task 5).
         highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined,
