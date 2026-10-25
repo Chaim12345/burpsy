@@ -20,7 +20,56 @@ import json
 import re
 from urllib.parse import parse_qsl, urlsplit
 
+
+def from_katana_jsonl(text, class_name):
+    """katana v1.8.0 `-jsonl`: one JSON object per line, {"request": {"method", "endpoint",
+    "tag", "attribute", "source"}, "response": {...}} — verified against the pinned release
+    (2026-10-25). Each line is one fetched URL; the tag/attribute pair is the discovery
+    mechanism ("a.href", "form.action"), kept as the technique. The seed line carries no tag.
+    Duplicate endpoints collapse (a page linked from two pages is one discovery)."""
+    out = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # katana prints no non-JSON lines in -jsonl mode; tolerate, never invent
+        req = row.get("request") or {}
+        url = req.get("endpoint")
+        if not url:
+            continue
+        tag, attr = req.get("tag") or "", req.get("attribute") or ""
+        technique = f"{tag}.{attr}" if tag or attr else ""
+        out.setdefault(url, _finding(url, "", class_name, technique))
+    return list(out.values())
+
+
+def from_burpsy_crawl_history(rows, class_name):
+    """burpsy's side of a crawl-coverage run: the /api/history rows the crawl's capture path
+    added (CRAWL-02: crawled traffic travels the same store). Each row is one fetched URL,
+    rebuilt as scheme://host:port+path; the comparison normalises default ports away."""
+    out = {}
+    for r in rows:
+        path = r["path"]
+        # burpsy-nf-<12 hex>[.ext] as the LAST path segment is the crawler's own soft-404
+        # calibration probe (internal/crawler/notfound.go: rand.Read 6 bytes, hex-encoded,
+        # joined under the probed item's directory): a request burpsy generated to baseline the
+        # target's missing-page response, never a URL the target offered. The match is the
+        # exact probe shape, never a substring - a real page whose name merely carries the
+        # marker (crawlfix's /guide/burpsy-nf-notes) is coverage and MUST stay counted.
+        if _NF_PROBE.match(path.rsplit("/", 1)[-1]):
+            continue
+        scheme = "https" if r.get("tls") else "http"
+        url = f"{scheme}://{r['host']}:{r['port']}{path}"
+        out.setdefault(url, _finding(url, "", class_name))
+    return list(out.values())
+
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# The soft-404 calibration probe's exact name shape (see from_burpsy_crawl_history).
+_NF_PROBE = re.compile(r"^burpsy-nf-[0-9a-f]{12}(\.[^/]*)?$")
 
 
 def _finding(url, parameter, class_name, technique=""):
