@@ -53,11 +53,13 @@ def from_burpsy_crawl_history(rows, class_name):
     out = {}
     for r in rows:
         path = r["path"]
-        # burpsy-nf-* is the crawler's own soft-404 calibration probe (internal/crawler/
-        # notfound.go): a request burpsy generated to baseline the target's missing-page
-        # response, never a URL the target offered. Counting it as a discovered URL would be
-        # the harness grading burpsy's instrumentation as coverage.
-        if "/burpsy-nf-" in path:
+        # burpsy-nf-<12 hex>[.ext] as the LAST path segment is the crawler's own soft-404
+        # calibration probe (internal/crawler/notfound.go: rand.Read 6 bytes, hex-encoded,
+        # joined under the probed item's directory): a request burpsy generated to baseline the
+        # target's missing-page response, never a URL the target offered. The match is the
+        # exact probe shape, never a substring - a real page whose name merely carries the
+        # marker (crawlfix's /guide/burpsy-nf-notes) is coverage and MUST stay counted.
+        if _NF_PROBE.match(path.rsplit("/", 1)[-1]):
             continue
         scheme = "https" if r.get("tls") else "http"
         url = f"{scheme}://{r['host']}:{r['port']}{path}"
@@ -65,6 +67,9 @@ def from_burpsy_crawl_history(rows, class_name):
     return list(out.values())
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+# The soft-404 calibration probe's exact name shape (see from_burpsy_crawl_history).
+_NF_PROBE = re.compile(r"^burpsy-nf-[0-9a-f]{12}(\.[^/]*)?$")
 
 
 def _finding(url, parameter, class_name, technique=""):

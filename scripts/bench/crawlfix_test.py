@@ -47,7 +47,9 @@ class FixtureCase(unittest.TestCase):
         self.assertIn(f"http://127.0.0.2:{self.port}/outside", body)
         self.assertIn("mailto:", body)          # non-http scheme trap
         self.assertIn('href="#section"', body)  # fragment trap: no new location
-        self.assertIn('content="0; url=/meta"', body)  # meta refresh
+        self.assertNotIn('http-equiv="refresh"', body)  # the refresh is isolated on /meta-start
+        _, meta_start = self.get("/meta-start")
+        self.assertIn('content="0; url=/meta"', meta_start)
 
     def test_outside_is_actually_served_on_the_other_loopback(self):
         with urllib.request.urlopen(f"http://127.0.0.2:{self.port}/outside", timeout=5) as r:
@@ -59,6 +61,47 @@ class FixtureCase(unittest.TestCase):
         rows = json.loads(body)
         self.assertEqual(len(crawlfix.TRUTH), len(rows))
         self.assertEqual({r["path"] for r in crawlfix.TRUTH}, {r["path"] for r in rows})
+
+    def test_every_declared_mechanism_is_present_and_resolvable(self):
+        # Truth-pin: a mechanism that is table-present but broken in the bytes would
+        # masquerade as a crawler miss. Each row's exposing mechanism is checked in what the
+        # fixture actually serves.
+        _, index = self.get("/")
+        for href in ("/a", "b", f"{self.base}/abs", "/meta-start", "/guide/burpsy-nf-notes"):
+            self.assertIn(f'href="{href}"', index)
+        self.assertIn('action="/search"', index)
+        self.assertIn('action="/submit"', index)
+        self.assertIn('name="q"', index)
+        _, b = self.get("/b")
+        self.assertIn('action="/b/next"', b)
+        _, meta_start = self.get("/meta-start")
+        self.assertIn('content="0; url=/meta"', meta_start)
+        self.assertIn("<!-- the archived export moved to /comment-link -->", index)
+        self.assertIn('var nextPage = "/js-inline";', index)
+        self.assertIn('a.href = "/js-rendered";', index)
+        _, robots = self.get("/robots.txt")
+        self.assertIn("Disallow: /robots-only", robots)
+        self.assertIn(f"Sitemap: {self.base}/sitemap.xml", robots)
+        import xml.etree.ElementTree as ET
+        _, sitemap = self.get("/sitemap.xml")
+        locs = [e.text for e in ET.fromstring(sitemap).iter()
+                if e.tag.endswith("loc")]
+        self.assertEqual([f"{self.base}/sitemap-only"], locs)
+
+    def test_js_dom_append_is_real_in_a_browser(self):
+        # The js-dom-append mechanism is only discoverable if a browser's DOM actually gains the
+        # link. Pinned with the same browser family the crawl renders with; skips cleanly where
+        # no chrome exists (the CI runner carries one).
+        import shutil
+        import subprocess
+        chrome = shutil.which("google-chrome") or shutil.which("chromium")
+        if not chrome:
+            self.skipTest("no chrome on PATH")
+        dom = subprocess.run(
+            [chrome, "--headless", "--disable-gpu", "--no-sandbox", "--dump-dom",
+             "--virtual-time-budget=3000", self.base + "/"],
+            capture_output=True, text=True, timeout=60).stdout
+        self.assertIn('href="/js-rendered"', dom)
 
     def test_spec_truth_matches_the_fixture_declaration(self):
         # The parity spec's ground truth and the fixture's own table are two copies of one fact;

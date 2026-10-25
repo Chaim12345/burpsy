@@ -188,13 +188,19 @@ CLASSES["hidden-parameter-discovery-x8"] = {
 # own declaration (crawlfix.py TRUTH; crawlfix_test.py pins the two copies together), with the
 # exposing mechanism riding in `technique` so it never splits a match key.
 #
-# Both sides run their DEFAULT discovery posture, recorded so the diff reads honestly: katana
-# without -aff (no automatic form fill), burpsy's crawl with SubmitForms/Interact off (the house
-# rule: a no-config crawl never writes). Form actions are therefore measured as DISCOVERED-or-
-# not, never as submitted — /submit in the truth set is exactly the case that separates "found
-# the form's action" from "sent the form". katana runs -jc (JavaScript endpoint parsing) and
-# -kf all (robots.txt + sitemap.xml as known files), matching what burpsy's crawl does by default
-# (JavaScriptLocationsFound, robots/sitemap discovery); -fs rdn is katana's default scope.
+# Both sides run an EXPLICIT, matched discovery posture — the ruling's symmetry call is "both
+# explicit": every switch that steers discovery is named, per side, and the request/argv are the
+# artifacts that prove it.
+#   burpsy (crawl_request): submit_forms/interact off (the house rule: a no-config crawl never
+#     writes), request_speculative off (the engine's shipped default, named so the report shows
+#     the choice), robots/sitemap discovery and JavaScript-file mining are engine defaults that
+#     stay on; rendering is a SERVER capability (-dom), recorded per run below.
+#   katana (tool_args): -jc (JavaScript endpoint parsing, katana's default is off) and -kf all
+#     (robots.txt+sitemap.xml as known files, default off) are switched ON to match burpsy's
+#     shipped defaults; -aff stays off to match submit_forms off; -fs rdn is katana's default
+#     scope. Form actions are therefore measured as DISCOVERED-or-not, never as submitted —
+#     /submit in the truth set is exactly the case that separates "found the form's action"
+#     from "sent the form".
 
 CRAWLFIX_BASE = "http://127.0.0.1:19091"
 
@@ -216,7 +222,8 @@ def _crawlfix_truth():
     rows = [("/", "seed"), ("/a", "href"), ("/b", "href-relative"), ("/abs", "href-absolute"),
             ("/a/child", "href-depth-2"), ("/search", "form-action-get"),
             ("/submit", "form-action-post"), ("/b/next", "form-action-depth-2"),
-            ("/meta", "meta-refresh"), ("/comment-link", "html-comment"),
+            ("/meta-start", "href"), ("/meta", "meta-refresh"),
+            ("/guide/burpsy-nf-notes", "href-negative-control"), ("/comment-link", "html-comment"),
             ("/js-inline", "js-inline-string"), ("/js-rendered", "js-dom-append"),
             ("/robots.txt", "known-file"), ("/robots-only", "robots-disallow"),
             ("/sitemap.xml", "robots-sitemap-directive"), ("/sitemap-only", "sitemap")]
@@ -232,6 +239,7 @@ CLASSES["crawl-coverage"] = {
     "adapter": "katana",
     "burpsy_collect": "crawl",
     "targets": [{"url": CRAWLFIX_BASE + "/", "method": "GET", "parameter": ""}],
+    "crawl_request": {"submit_forms": False, "interact": False, "request_speculative": False},
     "truth": _crawlfix_truth(),
     "tool_args": _katana_args,
 }
@@ -245,6 +253,7 @@ CLASSES["crawl-coverage-headless"] = {
     "adapter": "katana",
     "burpsy_collect": "crawl",
     "targets": [{"url": CRAWLFIX_BASE + "/", "method": "GET", "parameter": ""}],
+    "crawl_request": {"submit_forms": False, "interact": False, "request_speculative": False},
     "truth": _crawlfix_truth(),
     "tool_args": _katana_headless_args,
 }
@@ -259,5 +268,6 @@ CLASSES["crawl-coverage-vulnapp"] = {
     "adapter": "katana",
     "burpsy_collect": "crawl",
     "targets": [{"url": TARGET_BASE + "/", "method": "GET", "parameter": ""}],
+    "crawl_request": {"submit_forms": False, "interact": False, "request_speculative": False},
     "tool_args": _katana_args,
 }

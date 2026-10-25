@@ -9,9 +9,10 @@ reachable set with the mechanism that exposes it, so the parity class (parity_sp
 same fact. WIVET (sourceforge.net/projects/wivet) is the inspiration, not the source: it is a
 PHP app last released in 2015, and a fixture we declare is a fixture we can check.
 
-Two loopback binds, one port: 127.0.0.1 serves the app; 127.0.0.2 serves ONLY /outside — the
-scope trap must be fetchable-if-tried so that not fetching it is a crawler's scope decision,
-never a connection failure (127.0.0.0/8 is all loopback on Linux).
+Two loopback binds, one port: 127.0.0.1 serves the app; 127.0.0.2 answers the same handler (the
+bind cannot be told apart per path), but the app LINKS only its /outside there — the scope trap
+must be fetchable-if-tried so that not fetching it is a crawler's scope decision, never a
+connection failure (127.0.0.0/8 is all loopback on Linux).
 
   python3 scripts/bench/crawlfix.py [-addr 127.0.0.1:19091]
 """
@@ -33,7 +34,9 @@ TRUTH = [
     {"path": "/search", "mechanism": "form-action-get"},
     {"path": "/submit", "mechanism": "form-action-post"},
     {"path": "/b/next", "mechanism": "form-action-depth-2"},
+    {"path": "/meta-start", "mechanism": "href"},
     {"path": "/meta", "mechanism": "meta-refresh"},
+    {"path": "/guide/burpsy-nf-notes", "mechanism": "href-negative-control"},
     {"path": "/comment-link", "mechanism": "html-comment"},
     {"path": "/js-inline", "mechanism": "js-inline-string"},
     {"path": "/js-rendered", "mechanism": "js-dom-append"},
@@ -47,11 +50,11 @@ _LEAF = "<!DOCTYPE html><html><body><h1>{title}</h1><a href=\"/\">home</a></body
 
 # The index carries every mechanism. {self} and {outside} are filled per request so the fixture
 # is port-agnostic.
-_INDEX = """<!DOCTYPE html><html><head>
-<meta http-equiv="refresh" content="0; url=/meta">
-</head><body>
+_INDEX = """<!DOCTYPE html><html><head></head><body>
 <h1>crawlfix</h1>
 <a href="/a">plain href</a>
+<a href="/meta-start">meta refresh lives here</a>
+<a href="/guide/burpsy-nf-notes">notes page whose name carries the probe marker</a>
 <a href="b">relative href</a>
 <a href="@SELF@/abs">absolute href</a>
 <a href="#section">fragment only, not a location</a>
@@ -70,6 +73,10 @@ document.addEventListener("DOMContentLoaded", function () {
 });
 </script>
 </body></html>"""
+
+_META_START = ("<!DOCTYPE html><html><head>"
+               "<meta http-equiv=\"refresh\" content=\"0; url=/meta\">"
+               "</head><body><h1>meta-start</h1></body></html>")
 
 _A = ("<!DOCTYPE html><html><body><h1>a</h1>"
       "<a href=\"/a/child\">child</a><a href=\"/\">home</a></body></html>")
@@ -91,6 +98,8 @@ def _page(path, self_url, outside_url):
         return "text/html", _INDEX.replace("@SELF@", self_url).replace("@OUTSIDE@", outside_url)
     if path == "/a":
         return "text/html", _A
+    if path == "/meta-start":
+        return "text/html", _META_START
     if path == "/b":
         return "text/html", _B
     if path == "/robots.txt":
@@ -102,7 +111,8 @@ def _page(path, self_url, outside_url):
     if path == "/outside":
         return "text/html", _LEAF.format(title="outside the engagement scope")
     leaves = {"/a/child", "/abs", "/search", "/submit", "/b/next", "/meta", "/comment-link",
-              "/js-inline", "/js-rendered", "/robots-only", "/sitemap-only"}
+              "/js-inline", "/js-rendered", "/robots-only", "/sitemap-only",
+              "/guide/burpsy-nf-notes"}
     if path in leaves:
         return "text/html", _LEAF.format(title=path)
     return None

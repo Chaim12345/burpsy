@@ -334,11 +334,19 @@ class TestCrawlHistoryAdapter(unittest.TestCase):
              "method": "GET", "path": "/tls-page"},
             {"id": 12, "host": "127.0.0.1", "port": 19091, "tls": False,
              "method": "GET", "path": "/a/burpsy-nf-03ed818a94a8"},
+            {"id": 13, "host": "127.0.0.1", "port": 19091, "tls": False,
+             "method": "GET", "path": "/guide/burpsy-nf-notes"},
+            {"id": 14, "host": "127.0.0.1", "port": 19091, "tls": False,
+             "method": "GET", "path": "/search?q=burpsy-nf-03ed818a94a8"},
         ]
         got = parity_adapters.from_burpsy_crawl_history(rows, "crawl-coverage")
+        # The probe row is filtered by its exact shape; the two negative controls — a real page
+        # whose name carries the marker, and the marker in a QUERY — must stay counted.
         self.assertEqual(
             {"http://127.0.0.1:19091/a", "http://127.0.0.1:19091/",
-             "https://127.0.0.1:19091/tls-page"},
+             "https://127.0.0.1:19091/tls-page",
+             "http://127.0.0.1:19091/guide/burpsy-nf-notes",
+             "http://127.0.0.1:19091/search?q=burpsy-nf-03ed818a94a8"},
             {f["url"] for f in got})
         for f in got:
             self.assertEqual("crawl-coverage", f["class"])
@@ -362,6 +370,78 @@ CRAWL_SPEC = {
     "truth": [{"url": "http://127.0.0.1:19091/a", "parameter": "",
                "class": "crawl-coverage"}],
 }
+
+
+class _FakeHTTP:
+    """The _collect_crawl seams scripted: a history that gains rows, a crawl that walks the
+    given states, and a confirm that hands back a token."""
+
+    def __init__(self, states, rows_before, rows_after):
+        self.states = list(states)
+        self.rows_before = rows_before
+        self.rows_after = rows_after
+        self.cancelled = False
+        self.confirmed_body = None
+
+    def http_json(self, method, url, body=None, headers=None, timeout=60):
+        if url.endswith("/api/history?limit=1000000"):
+            # While crawl states remain the crawl is still running: the "before" snapshot.
+            return self.rows_before if self.states else self.rows_after
+        if url.endswith("/api/crawl") and method == "POST":
+            self.confirmed_body = body
+            self.headers = headers
+            return {"task_id": 42, "state": "running"}
+        if "/api/crawl?task=42" in url:
+            st = self.states.pop(0) if self.states else "done"
+            return {"state": st, "report": {"fetched": 1}, "error": ""}
+        if "/api/tasks/42/cancel" in url:
+            self.cancelled = True
+            return {}
+        raise AssertionError(url)
+
+    def confirm(self, web, method, path, body, confirm_route=""):
+        self.confirm_route = confirm_route
+        return "tok"
+
+
+def _crawl_row(i, path, host="127.0.0.1", port=19091, source="crawl"):
+    return {"id": i, "host": host, "port": port, "tls": False, "method": "GET",
+            "path": path, "source": source}
+
+
+class TestCollectCrawlLoop(unittest.TestCase):
+    SPEC = {"name": "crawl-coverage", "targets": [{"url": "http://127.0.0.1:19091/"}]}
+
+    def test_running_then_done_collects_only_the_crawls_own_rows(self):
+        after = [_crawl_row(2, "/a"),
+                 _crawl_row(3, "/x", source="proxy"),       # someone else's traffic in the window
+                 _crawl_row(4, "/y", host="10.9.9.9"),      # another host entirely
+                 _crawl_row(5, "/z", port=19090)]           # the vulnapp class's own crawl
+        fx = _FakeHTTP(["running", "done"], [_crawl_row(1, "/seeded-earlier")], after)
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            got = parity_run._collect_crawl(dict(self.SPEC), d, "http://web", 30,
+                                            fx.http_json, fx.confirm, lambda s: None)
+            self.assertEqual(["http://127.0.0.1:19091/a"], [f["url"] for f in got])
+            self.assertTrue((Path(d) / "burpsy_crawl_report.json").exists())
+            self.assertEqual("tok", fx.headers.get("X-Burpsy-Confirm"))
+            self.assertEqual("/api/crawl/confirm", fx.confirm_route)
+
+    def test_timeout_cancels_the_crawl(self):
+        fx = _FakeHTTP(["running", "running", "running"], [], [])
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(TimeoutError) as cm:
+                parity_run._collect_crawl(dict(self.SPEC), d, "http://web", 0,
+                                          fx.http_json, fx.confirm, lambda s: None)
+            self.assertTrue(fx.cancelled)
+            self.assertIn("cancelled", str(cm.exception))
+
+    def test_failed_state_is_loud(self):
+        fx = _FakeHTTP(["failed"], [], [])
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(RuntimeError):
+                parity_run._collect_crawl(dict(self.SPEC), d, "http://web", 30,
+                                            fx.http_json, fx.confirm, lambda s: None)
 
 
 class TestCrawlSpecOrchestration(unittest.TestCase):
