@@ -760,6 +760,11 @@ type ProxyConfig struct {
 	// tlsFingerprints selects the ClientHello the upstream leg presents per target host.
 	// Nil — the default — presents Go's own hello everywhere. See WithTLSFingerprints.
 	tlsFingerprints *sender.TLSFingerprints
+	// altSvc is the proxy's record of origin h3 advertisements (burpsy-react-ui-vln3), learned
+	// from responses burpsy itself forwarded. It lives here rather than on the Server because an
+	// origin's advertisement is a fact about the origin, not about which port burpsy listened on
+	// (integrator ruling D). Never nil after NewProxyConfig.
+	altSvc *altSvcTable
 	// options is the live, operator-editable option set: the response modification
 	// rules, the Accept-Encoding strip and the WebSocket handshake strip. Never nil
 	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
@@ -911,6 +916,7 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		scope:   core.NewScopeAllowEverything(),
 		options: NewOptions(),
 		logger:  zap.NewNop(), // Default to nop logger
+		altSvc:  newAltSvcTable(),
 		// Never nil, so the console can push a Network-panel edit without a nil check and the
 		// dial paths can read it unconditionally. The zero value is every previous behaviour:
 		// no override, dial the name as given, and forward interim bytes verbatim
