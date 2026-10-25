@@ -213,6 +213,15 @@ type Host struct {
 // keeps "burpsy was started with -plugins" from meaning "burpsy executed three
 // binaries on boot" — the load is an act the operator performs and the route
 // classifies accordingly.
+// SetServices injects what the host methods reach (hostapi.go's Services). It
+// exists for the composition root: NewHost runs before the web server and the
+// sender exist, and plugins load later still, so the services are assembled
+// between the two. Call before the first Load — a write after one is a data
+// race against the load reading cfg.Services, not a late binding.
+func (h *Host) SetServices(s Services) {
+	h.cfg.Services = s
+}
+
 func NewHost(cfg Config) *Host {
 	cfg = cfg.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())

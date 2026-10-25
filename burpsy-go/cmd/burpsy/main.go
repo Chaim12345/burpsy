@@ -818,6 +818,7 @@ func main() {
 		// The Extender's plugin host. Attached rather than built by the web server because which
 		// executables may run is operator policy, exactly like -tools.
 		WithExtensions(pluginHost).
+
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
@@ -847,6 +848,15 @@ func main() {
 		WithFileLog(fileLogger)
 	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
 	// site-map items. Installed into the slot the proxy was built with, which is safe while it serves.
+	// Extension host services (burpsy-react-ui-wiwh slice 6): event.raise lands on the dashboard,
+	// http.send leaves through the SCOPED sender (the egress fence a plugin never bypasses),
+	// storage persists beside the project, traffic.query reads the same store history serves.
+	// ai.prompt stays unwired until an operator-configured AI endpoint exists - CodeNotWired is
+	// the honest answer, and xpuh closes when W4's agent.LLM lane lands one. Injected now and not
+	// at NewHost because the services are built from this server, which did not exist then; every
+	// plugin load happens after this line.
+	pluginHost.SetServices(webServer.ExtensionServices())
+
 	pageObserver.Set(webServer.ObserveProxiedPage)
 	// The skill library (burpsy-react-ui-ulsy). An unreadable directory refuses to start: the operator
 	// named it, and a console that came up without it would serve an empty library as though it were
