@@ -395,8 +395,11 @@ func (s *Server) recordWsSend(
 		}, ev.Payload)
 	}
 
+	// Messages starts as the empty slice, never nil: a target that answers with no data frames is
+	// a clean send, and the wire must say "messages":[] for it — null throws in the pane, which
+	// declares the field non-nullable (repeater_ws_wire_arrays_test.go pins the bytes).
 	resp := repeaterWsSendResp{ExchangeID: ex.ID, ClosedByPeer: reply.ClosedByPeer,
-		CloseCode: reply.CloseCode, CloseReason: reply.CloseReason}
+		CloseCode: reply.CloseCode, CloseReason: reply.CloseReason, Messages: []repeaterWsMessage{}}
 	resp.Handshake = strings.TrimSpace(strings.SplitN(string(reply.RawHandshake), "\r\n", 2)[0])
 	for _, ev := range reply.Messages {
 		resp.Messages = append(resp.Messages, repeaterWsMessage{
