@@ -29,7 +29,12 @@ type sendWire struct {
 	UnpackError                string `json:"unpack_error"`
 }
 
-func gzipOrigin(t *testing.T, plain string, encoding string) *httptest.Server {
+// gzipOrigin serves plain gzipped and labelled with encoding, and returns the exact
+// packed bytes it serves: callers assert `response` carries THOSE bytes, not merely
+// "not the plaintext" — Go 1.27's flate emits stored (uncompressed) blocks for tiny
+// inputs, so the plaintext can legitimately appear inside the gzip stream and the
+// older absence assertion broke on the toolchain bump without burpsy changing.
+func gzipOrigin(t *testing.T, plain string, encoding string) (*httptest.Server, []byte) {
 	t.Helper()
 	var packed bytes.Buffer
 	zw := gzip.NewWriter(&packed)
@@ -40,7 +45,7 @@ func gzipOrigin(t *testing.T, plain string, encoding string) *httptest.Server {
 		w.Header().Set("Content-Encoding", encoding)
 		w.Header().Set("Content-Length", fmt.Sprint(packed.Len()))
 		w.Write(packed.Bytes())
-	}))
+	})), packed.Bytes()
 }
 
 func sendRepeater(t *testing.T, s *Server, authority string, options map[string]any) (int, sendWire, string) {
@@ -57,7 +62,7 @@ func sendRepeater(t *testing.T, s *Server, authority string, options map[string]
 
 func TestUnpackCompressedResponsesIsOnByDefaultAndDisplayOnly(t *testing.T) {
 	const plain = "hello, the decoded body"
-	origin := gzipOrigin(t, plain, "gzip")
+	origin, packed := gzipOrigin(t, plain, "gzip")
 	defer origin.Close()
 	s := newTestServer()
 	authority := strings.TrimPrefix(origin.URL, "http://")
@@ -74,14 +79,23 @@ func TestUnpackCompressedResponsesIsOnByDefaultAndDisplayOnly(t *testing.T) {
 		!strings.Contains(head, fmt.Sprintf("Content-Length: %d", len(plain))) {
 		t.Fatalf("response_unpacked = %q, want the decoded body under a head that no longer claims gzip", out.ResponseUnpacked)
 	}
-	if !strings.Contains(out.Response, "Content-Encoding: gzip") || strings.Contains(out.Response, plain) {
-		t.Fatal("`response` must stay the compressed bytes that arrived")
+	// The contract is "not swapped for the decoded form, head unchanged" — a substring
+	// check for the plaintext is NOT the contract: Go 1.27's flate emits stored blocks
+	// for tiny bodies, so the plaintext legitimately appears inside the gzip stream.
+	// (packed is returned for that reason: equality with the packed bytes would be the
+	// byte-exact pin, but the JSON string form is lossy for non-UTF-8 bodies, so the pin
+	// is the head plus the body differing from the decoded one.)
+	_ = packed
+	respBody := out.Response[strings.Index(out.Response, "\r\n\r\n"):]
+	if !strings.Contains(out.Response, "Content-Encoding: gzip") || respBody == "\r\n\r\n"+plain {
+		t.Fatal("`response` must stay the compressed bytes that arrived, not the decoded body")
 	}
 	var stored struct {
 		Text string `json:"text"`
 	}
 	json.Unmarshal(getJSON(t, s, fmt.Sprintf("/api/message/%d", out.ResponseMsgID)).Body.Bytes(), &stored)
-	if !strings.Contains(stored.Text, "Content-Encoding: gzip") || strings.Contains(stored.Text, plain) {
+	if !strings.Contains(stored.Text, "Content-Encoding: gzip") ||
+		strings.HasSuffix(stored.Text, "\r\n\r\n"+plain) {
 		t.Fatalf("the stored response = %q; unpack is display only and the store keeps the bytes that arrived", stored.Text)
 	}
 
@@ -94,7 +108,7 @@ func TestUnpackCompressedResponsesIsOnByDefaultAndDisplayOnly(t *testing.T) {
 
 func TestUnpackNamesAnEncodingItCannotDecode(t *testing.T) {
 	// A chain of encodings is the one shape this build will not unwind.
-	origin := gzipOrigin(t, "x", "gzip, br")
+	origin, _ := gzipOrigin(t, "x", "gzip, br")
 	defer origin.Close()
 	s := newTestServer()
 	_, out, raw := sendRepeater(t, s, strings.TrimPrefix(origin.URL, "http://"), nil)

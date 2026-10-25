@@ -1078,6 +1078,10 @@ var manifest = map[string]route{
 		// test drives verbs the manifest lists — POST here is the Test-macro dry-run plus the
 		// /run and /move actions that already lived under it.
 		methods: []string{"PUT", "DELETE", "POST"}, risk: riskCredential, subPath: "1",
+		// Named per action so the 405 fallback can answer Allow for the action the caller
+		// actually hit (TestSessionRuleMoveRejectsOtherMethods pins "POST" for /move), and so
+		// the sweep reaches each action with its own verb set rather than the subtree union.
+		actionPaths: map[string][]string{"1/run": {"POST"}, "1/test": {"POST"}, "1/move": {"POST"}},
 		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it; " +
 			"POST {id}/run replays the macro through the sender, POST {id}/test is Burp's Test macro — a " +
 			"dry-run reporting each step's sent form, response, set cookies and extraction outcomes " +
