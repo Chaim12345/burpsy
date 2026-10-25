@@ -348,3 +348,68 @@ func Test_a_hotkey_invoke_over_the_selection_cap_is_a_400(t *testing.T) {
 		t.Errorf("over-cap invoke = %d, want 400", rec.Code)
 	}
 }
+
+// gqvg hardening at the edge: exactly the cap passes, a row without an id or a negative id is a 400
+// (not null on the wire, not a 502), and `editor: {}` is a 400 while an absent editor is fine.
+// Row cap: MaxHotkeySelection rows. The request body has its own, separate line/body cap (1 MiB on
+// the plugin's stdio line); a 100-row selection with large raws is bounded by that, not by this.
+func Test_a_hotkey_invoke_of_exactly_the_cap_is_served_with_first_raw_and_second_id_3(t *testing.T) {
+	host := extension.NewHost(extension.Config{
+		Plugins:       map[string]extension.PluginSpec{"probe": webHelperPlugin()},
+		LoadTimeout:   10 * time.Second,
+		ShutdownGrace: 2 * time.Second,
+	})
+	t.Cleanup(host.Close)
+	s := newTestServer().WithExtensions(host)
+	if rec := postJSON(t, s, "/api/extensions/load", map[string]any{"name": "probe"}); rec.Code != http.StatusOK {
+		t.Fatalf("load = %d: %s", rec.Code, rec.Body.String())
+	}
+	defer postJSON(t, s, "/api/extensions/unload", map[string]any{"name": "probe"})
+	rows := make([]map[string]any, 0, extension.MaxHotkeySelection)
+	for i := 0; i < extension.MaxHotkeySelection; i++ {
+		rows = append(rows, map[string]any{"exchange": i})
+	}
+	rows[0]["raw"] = "GET /first HTTP/1.1\r\n\r\n"
+	rows[1] = map[string]any{"exchange": 3, "raw": "GET /second HTTP/1.1\r\n\r\n"}
+	rec := postJSON(t, s, "/api/extensions/invoke", map[string]any{"name": "probe", "registration": "hk", "selected": rows})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exactly-cap invoke = %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		Result extension.InvokeResult `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	out := result.Result.Output
+	for _, want := range []string{"GET /first", "GET /second", `"exchange":3`, `"exchange":99`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plugin saw no %s", want)
+		}
+	}
+}
+
+func Test_a_hotkey_invoke_with_a_malformed_context_is_a_400(t *testing.T) {
+	host := extension.NewHost(extension.Config{
+		Plugins:       map[string]extension.PluginSpec{"probe": webHelperPlugin()},
+		LoadTimeout:   10 * time.Second,
+		ShutdownGrace: 2 * time.Second,
+	})
+	t.Cleanup(host.Close)
+	s := newTestServer().WithExtensions(host)
+	if rec := postJSON(t, s, "/api/extensions/load", map[string]any{"name": "probe"}); rec.Code != http.StatusOK {
+		t.Fatalf("load = %d: %s", rec.Code, rec.Body.String())
+	}
+	defer postJSON(t, s, "/api/extensions/unload", map[string]any{"name": "probe"})
+	for name, body := range map[string]map[string]any{
+		"row without id":  {"selected": []map[string]any{{"raw": "x"}}},
+		"negative id":     {"selected": []map[string]any{{"exchange": -1}}},
+		"empty editor":    {"editor": map[string]any{}},
+		"negative editor": {"editor": map[string]any{"message": -3}},
+	} {
+		body["name"], body["registration"] = "probe", "hk"
+		if rec := postJSON(t, s, "/api/extensions/invoke", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400: %s", name, rec.Code, rec.Body.String())
+		}
+	}
+}
