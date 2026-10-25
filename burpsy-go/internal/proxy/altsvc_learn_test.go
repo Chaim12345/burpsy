@@ -29,7 +29,7 @@ func TestAForwardedResponseTeachesTheH3Advertisement(t *testing.T) {
 
 	srv := NewServer(NewProxyConfig(nil).WithScope(testScope()).WithUpstreamTLS(NewTLSPolicy().WithVerify(false)))
 	raw := []byte(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host))
-	if _, _, _, err := srv.forwardRequest(raw, host, port, true); err != nil {
+	if _, err := srv.forwardRequest(raw, host, port, true); err != nil {
 		t.Fatalf("forwardRequest: %v", err)
 	}
 	if _, ok := srv.config.altSvc.h3Endpoint(host, port, time.Now()); !ok {
@@ -52,7 +52,7 @@ func TestTheKillSwitchOffLearnsNothing(t *testing.T) {
 	srv := NewServer(NewProxyConfig(nil).WithScope(testScope()).WithUpstreamTLS(NewTLSPolicy().WithVerify(false)))
 	srv.config.network.SetHTTP3AltSvc(false)
 	raw := []byte(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", host))
-	if _, _, _, err := srv.forwardRequest(raw, host, port, true); err != nil {
+	if _, err := srv.forwardRequest(raw, host, port, true); err != nil {
 		t.Fatalf("forwardRequest: %v", err)
 	}
 	if _, ok := srv.config.altSvc.h3Endpoint(host, port, time.Now()); ok {
