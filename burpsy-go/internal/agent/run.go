@@ -190,8 +190,10 @@ type Supervisor struct {
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 	// Limits for sub-tasks; zero values take the defaults in subtask.go.
-	MaxDepth    int
-	MaxChildren int
+	MaxDepth int
+	// ChildPlanner builds the planner for a sub-task; nil reuses the parent's.
+	ChildPlanner func(parent Task, req SpawnRequest) Planner
+	MaxChildren  int
 }
 
 func (s *Supervisor) now() time.Time {

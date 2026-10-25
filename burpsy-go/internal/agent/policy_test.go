@@ -108,7 +108,7 @@ func TestTightenedBy(t *testing.T) {
 	if got.Mode != ModeManual {
 		t.Errorf("mode %s, want manual", got.Mode)
 	}
-	if got.Tools["a"] != SettingDisabled || got.Tools["b"] != SettingAsk || got.Tools["c"] != SettingAct {
+	if got.Tools["a"] != SettingDisabled || got.Tools["b"] != SettingAsk || got.Tools["c"] != "" {
 		t.Errorf("tools %+v", got.Tools)
 	}
 }

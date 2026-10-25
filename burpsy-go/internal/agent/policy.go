@@ -158,8 +158,13 @@ func (p Policy) TightenedBy(parent Policy) Policy {
 			out.Tools[k] = SettingDisabled
 		case v == SettingAsk && cur != SettingDisabled:
 			out.Tools[k] = SettingAsk
-		case cur == "":
-			// An Act the parent holds is not inherited: the child states its own.
+		}
+	}
+	// An always-approve the parent does not itself hold is dropped: a child may not be more
+	// permissive than the run that spawned it, and falls back to the (stricter) mode.
+	for k, v := range out.Tools {
+		if v == SettingAct && parent.Tools[k] != SettingAct {
+			delete(out.Tools, k)
 		}
 	}
 	return out
