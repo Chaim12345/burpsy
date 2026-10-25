@@ -1,21 +1,22 @@
 package grpcproto
 
-// Name and type resolution from a .proto (burpsy-react-ui-3pco).
+// Name and type resolution from a .proto (burpsy-react-ui-3pco, descriptors since 0rrb).
 //
 // The schemaless walk in grpcproto.go shows `#1 varint 150`; given the message's .proto it can show
-// `user_id (int32) 150`. This file is the schema half: a small .proto parser — enough of proto2/proto3
-// to name the fields of messages, including nested messages, oneofs, maps and enums — and Annotate,
-// which labels a decoded field tree with it.
+// `user_id (int32) 150`. This file is the schema half: the Schema model Annotate labels a decoded
+// field tree with. ParseProto itself lives in descriptor_schema.go and is protocompile since 0rrb:
+// imports resolve against the well-known types (an unresolved import is a hard fail naming its
+// import string - rsu2, the multi-file upload bead, is the planned way to bring the rest of an
+// import graph), groups read, and type references are the linked answer protoc would give.
 //
 // # What is deliberately not here
 //
 //   - gRPC server reflection. It needs a client that connects to the target and asks, which is an
 //     egress surface with its own scoping decision; a pasted .proto is what an operator holding the
-//     API's definition (or a captured copy of it) already has. Reflection is a separate bead.
-//   - imports. An `import` is skipped, so a field whose type lives in another file keeps its declared
-//     type name and the schemaless guess for its contents — named, not expanded.
-//   - extensions and proto2 groups. A group field is refused rather than half-read. Services ARE read,
-//     but only for their rpc signatures: a gRPC call's path (/pkg.Service/Method) then names the
+//     API's definition (or a captured copy of it) already has. Reflection is a separate bead (47id).
+//   - recursion into messages declared outside the parsed file. An imported type keeps its declared
+//     type name and the schemaless guess for its contents - named, not expanded.
+//   - services beyond their rpc signatures: a gRPC call's path (/pkg.Service/Method) names the
 //     request and response message types, so the operator does not have to pick them.
 //
 // # Annotation never changes the bytes
@@ -28,10 +29,13 @@ package grpcproto
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // scalarTypes are the proto scalar type names; anything else a field names is a message or enum.
@@ -221,6 +225,14 @@ func lenBytes(f Field) []byte {
 func reclassify(f Field, fd *fieldDesc) Field {
 	payload := lenBytes(f)
 	switch {
+	case fd.repeated && fd.msg == nil && packedKind(fd) != "":
+		// A proto3 repeated numeric scalar rides packed: one length-delimited
+		// field holding the values back to back. The values are read into
+		// Packed as presentation; the field's own bytes are untouched, so the
+		// tree encodes to exactly what it was.
+		if values, ok := decodePacked(payload, fd); ok {
+			f.Packed = values
+		}
 	case fd.msg != nil:
 		if sub, n, err := decodeMessage(payload); err == nil && n == len(payload) {
 			f.LenKind, f.String, f.BytesHex = LenMessage, "", ""
@@ -236,4 +248,69 @@ func reclassify(f Field, fd *fieldDesc) Field {
 		f.BytesHex = hex.EncodeToString(payload)
 	}
 	return f
+}
+
+// packedKind classifies a declared repeated field's element for packed reading:
+// "varint", "fixed32", "fixed64", or "" for a kind that never packs (string,
+// bytes, message).
+func packedKind(fd *fieldDesc) string {
+	if fd.enum != nil {
+		return "varint"
+	}
+	switch fd.typeName {
+	case "int32", "int64", "uint32", "uint64", "sint32", "sint64", "bool":
+		return "varint"
+	case "fixed32", "sfixed32", "float":
+		return "fixed32"
+	case "fixed64", "sfixed64", "double":
+		return "fixed64"
+	}
+	return ""
+}
+
+// decodePacked reads a packed payload into the element values as decimal (or
+// enum-named, or float) strings. It returns false on any truncation: a partial
+// element means the payload is not what the schema declares, and the schemaless
+// guess stands - the same honesty rule reclassify's other branches follow.
+func decodePacked(payload []byte, fd *fieldDesc) ([]string, bool) {
+	var values []string
+	format := func(v uint64) string {
+		switch {
+		case fd.enum != nil:
+			if name, ok := fd.enum.values[int64(v)]; ok {
+				return name
+			}
+			return strconv.FormatUint(v, 10)
+		case fd.typeName == "sint32" || fd.typeName == "sint64":
+			return strconv.FormatInt(protowire.DecodeZigZag(v), 10)
+		case fd.typeName == "bool":
+			return strconv.FormatBool(protowire.DecodeBool(v))
+		case fd.typeName == "float":
+			return strconv.FormatFloat(float64(math.Float32frombits(uint32(v))), 'g', -1, 32)
+		case fd.typeName == "double":
+			return strconv.FormatFloat(math.Float64frombits(v), 'g', -1, 64)
+		default:
+			return strconv.FormatUint(v, 10)
+		}
+	}
+	for len(payload) > 0 {
+		var v uint64
+		var n int
+		switch packedKind(fd) {
+		case "varint":
+			v, n = protowire.ConsumeVarint(payload)
+		case "fixed32":
+			var u32 uint32
+			u32, n = protowire.ConsumeFixed32(payload)
+			v = uint64(u32)
+		case "fixed64":
+			v, n = protowire.ConsumeFixed64(payload)
+		}
+		if n < 0 {
+			return nil, false
+		}
+		values = append(values, format(v))
+		payload = payload[n:]
+	}
+	return values, true
 }

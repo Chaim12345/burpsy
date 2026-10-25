@@ -68,6 +68,11 @@ type Field struct {
 	Name     string `json:"name,omitempty"`      // declared field name
 	Type     string `json:"type,omitempty"`      // declared type, e.g. "int32", "repeated string"
 	EnumName string `json:"enum_name,omitempty"` // for an enum-typed varint, the value's name
+	// Packed lists the values of a declared repeated numeric scalar riding the
+	// wire as one packed length-delimited field (0rrb). Presentation only, like
+	// Name/Type/EnumName: Encode ignores it, and the length-delimited field's
+	// own bytes carry the values on re-encode.
+	Packed []string `json:"packed,omitempty"`
 }
 
 // Decode walks raw as a protobuf message into a flat, ordered list of fields (nested messages recurse
