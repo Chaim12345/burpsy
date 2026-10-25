@@ -243,6 +243,8 @@ func runHelperPlugin(behaviour string) {
 				reply(msg.ID, map[string]any{"action": "continue", "raw": "/wCA", "encoding": "base64"})
 			case "noop":
 				reply(msg.ID, map[string]any{"action": "continue"})
+			case "echo":
+				reply(msg.ID, map[string]any{"action": "continue", "raw": in.Raw})
 			default:
 				reply(msg.ID, map[string]any{"action": "continue", "raw": in.Raw + "[" + name + ":" + in.Phase + "]"})
 			}

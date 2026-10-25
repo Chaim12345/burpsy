@@ -215,3 +215,12 @@ func Test_each_hook_kind_reaches_its_documented_method(t *testing.T) {
 		t.Errorf("hook kinds without a method: %v", want)
 	}
 }
+
+// A plugin that hands back exactly the bytes it was given changed nothing, however it says so.
+func Test_a_replacement_identical_to_the_input_is_not_a_change(t *testing.T) {
+	h := hookHost(t)
+	res := h.Hook(context.Background(), HookCall{Kind: KindHTTPHandler, Phase: "request", Raw: []byte("echo")})
+	if res.Changed || string(res.Raw) != "echo" || len(res.Applied) != 2 {
+		t.Errorf("result = %q changed=%v applied=%v", res.Raw, res.Changed, res.Applied)
+	}
+}
