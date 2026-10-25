@@ -7,7 +7,7 @@
 # scripts/ci-install-tools.sh, which skips every tool already at its pin, so an image built before a
 # pin changed still tests against the newly pinned release. Rebuild the image when the script
 # changes to get that time back.
-FROM golang:1.26.2-bookworm
+FROM golang:1.27.3-bookworm
 
 # Buildkite hosted agents need git, ca-certificates and bash in the image (they add the agent and
 # docker themselves) and run it as its own user; this image stays root. pipefail so a failed
