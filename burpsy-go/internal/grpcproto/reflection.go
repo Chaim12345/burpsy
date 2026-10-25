@@ -63,6 +63,22 @@ func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface,
 	}); err != nil {
 		return nil, err
 	}
+	// The entry file is whichever file the symbol answer named that is not a
+	// dependency of another file in the same answer; in practice it is the
+	// file declaring the symbol, and the graph walk below reaches the rest.
+	entryPath := ""
+	for path := range byPath {
+		entryPath = path
+		break
+	}
+	for path, fdp := range byPath {
+		for _, dep := range fdp.GetDependency() {
+			if dep == entryPath && path != entryPath {
+				// entryPath is itself imported by a sibling; prefer the sibling.
+				entryPath = path
+			}
+		}
+	}
 	// BFS the import graph: every dependency the graph names that we do not
 	// already hold gets its own FileByFilename request.
 	for {
@@ -95,13 +111,37 @@ func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface,
 	for _, fdp := range byPath {
 		set.File = append(set.File, fdp)
 	}
-	files, err := protodesc.NewFiles(set)
+	registry, err := protodesc.NewFiles(set)
 	if err != nil {
 		return nil, fmt.Errorf("reflection: linking the fetched graph: %w", err)
 	}
+	// Order the result entry-first (SchemaFromFiles takes the package from
+	// index 0), then the import graph breadth-first. The entry is the first
+	// file the FileContainingSymbol answer brought back.
+	entry, err := registry.FindFileByPath(entryPath)
+	if err != nil {
+		return nil, fmt.Errorf("reflection: the linked graph lost the entry file: %w", err)
+	}
 	var out []protoreflect.FileDescriptor
-	files.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+	seen := map[string]bool{}
+	var walk func(fd protoreflect.FileDescriptor)
+	walk = func(fd protoreflect.FileDescriptor) {
+		if seen[fd.Path()] {
+			return
+		}
+		seen[fd.Path()] = true
 		out = append(out, fd)
+		for i := 0; i < fd.Imports().Len(); i++ {
+			walk(fd.Imports().Get(i).FileDescriptor)
+		}
+	}
+	walk(entry)
+	// Any file the entry's graph does not reach (a public import's sibling)
+	// still ships, after the reachable ones.
+	registry.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		if !seen[fd.Path()] {
+			out = append(out, fd)
+		}
 		return true
 	})
 	return out, nil
