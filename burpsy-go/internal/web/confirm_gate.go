@@ -334,17 +334,83 @@ func routeRiskFor(path string) (string, riskClass, bool) {
 		if pattern == "/" || !patternMatches(pattern, path) {
 			continue
 		}
-		if !found || len(pattern) > len(best) {
+		switch {
+		case !found, literalLen(pattern) > literalLen(best):
 			best, bestRisk, found = pattern, r.risk, true
+		case literalLen(pattern) == literalLen(best):
+			// Equal specificity is a conflict the mux would not have let through. Fail closed: the
+			// more severe risk class wins, then the pattern string, so the answer is stable.
+			if rs, bs := riskSeverity(r.risk), riskSeverity(bestRisk); rs > bs || rs == bs && pattern < best {
+				best, bestRisk = pattern, r.risk
+			}
 		}
 	}
 	return best, bestRisk, found
+}
+
+// riskSeverity orders risk classes for the fail-closed tie-break. An unknown class ranks highest.
+func riskSeverity(r riskClass) int {
+	switch r {
+	case riskAsset:
+		return 0
+	case riskRead:
+		return 1
+	case riskLocal:
+		return 2
+	case riskEgress:
+		return 3
+	case riskScope:
+		return 4
+	case riskAttack, riskExecute:
+		return 5
+	case riskCredential:
+		return 6
+	case riskDestructive:
+		return 7
+	}
+	return 8
+}
+
+// literalLen is a pattern's literal text: its length with every {wildcard} removed. It is the
+// specificity routeRiskFor ranks matches by, so "/api/skills/disabled" beats "/api/skills/{rest...}"
+// the way the mux's literal-beats-wildcard rule does for the current manifest (a plain length
+// compare would let the longer wildcard spelling win). This is verified against the production mux
+// for every path the manifest generates (TestRouteRiskForAgreesWithTheProductionMux); it is not a
+// claim that literal-text length is Go's general precedence rule.
+func literalLen(pattern string) int {
+	n, depth := 0, 0
+	for _, r := range pattern {
+		switch {
+		case r == '{':
+			depth++
+		case r == '}':
+			if depth > 0 {
+				depth--
+			}
+		case depth == 0:
+			n++
+		}
+	}
+	return n
 }
 
 // patternMatches reports whether path falls under pattern: a subtree pattern (trailing slash) by
 // segment-bounded prefix, a {param} pattern by shape - same segment count, literals equal, every
 // wildcard segment non-empty - and anything else exactly.
 func patternMatches(pattern, path string) bool {
+	// A trailing "{name...}" is the mux's remainder wildcard: everything after the literal prefix,
+	// empty and nested included, exactly what the old "prefix/" subtree pattern matched. It resolves
+	// as that subtree (the prefix up to and including its last slash), so a gated or classified route
+	// keeps its risk class for every path the mux hands to its handler (burpsy-react-ui-fxxm).
+	if i := strings.LastIndex(pattern, "/"); i >= 0 && strings.HasSuffix(pattern, "...}") && strings.HasPrefix(pattern[i+1:], "{") {
+		pattern = pattern[:i+1]
+	}
+	// "{$}" anchors the pattern: "/api/x/{$}" is the one path "/api/x/", not the subtree below it.
+	if strings.HasSuffix(pattern, "/{$}") {
+		pSegs := strings.Split(strings.TrimSuffix(pattern, "{$}"), "/")
+		aSegs := strings.Split(path, "/")
+		return len(aSegs) == len(pSegs) && segmentsMatch(pSegs, aSegs)
+	}
 	if !strings.Contains(pattern, "{") {
 		return pathHasPrefix(path, pattern)
 	}

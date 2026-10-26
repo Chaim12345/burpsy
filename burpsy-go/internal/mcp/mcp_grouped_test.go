@@ -344,7 +344,7 @@ func TestEachGroupedSchemaOffersExactlyItsOperations(t *testing.T) {
 		}
 		subtree := false
 		for _, o := range tl.Annotations.Operations {
-			if strings.HasSuffix(o, "/") {
+			if isSubtreePattern(o) {
 				subtree = true
 			}
 		}
@@ -362,4 +362,14 @@ func toAny(ss []string) []any {
 		out[i] = s
 	}
 	return out
+}
+
+// fxxm batch 7: the old trailing-slash op spelling still names the remainder-keyed operation.
+func TestRemainderSpellingMapsTheOldSubtreeOpName(t *testing.T) {
+	if got := remainderSpelling("GET /api/datasets/"); got != "GET /api/datasets/{rest...}" {
+		t.Errorf("remainderSpelling = %q", got)
+	}
+	if got := remainderSpelling("GET /api/history"); got != "GET /api/history" {
+		t.Errorf("a non-subtree name changed: %q", got)
+	}
 }

@@ -77,7 +77,7 @@ var uiRouteExempt = map[string]string{
 	"/api/sitemap/record": "agent-facing (Burp's add_to_sitemap MCP tool, served as sitemap_record, " +
 		"burpsy-react-ui-4bfp): the console's history rows are already on the map because the map " +
 		"follows the store, and the console's own Add to site map uses POST /api/sitemap",
-	"/api/datasets/": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
+	"/api/datasets/{rest...}": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
 		"datasets MCP tool, burpsy-react-ui-co88); the console pages each list through its own route",
 	"/api/skills/{rest...}": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
 		"console's Skills card lists and switches skills through /api/skills and /api/skills/disabled",

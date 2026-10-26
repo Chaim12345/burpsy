@@ -54,7 +54,7 @@ var routeSchemas = map[string]opSchema{
 		response: typeOf[[]wsConnectionView](),
 	},
 	"GET /api/crawl": {query: []queryParam{{name: "task", kind: "integer", desc: "a crawl or API-scan task id; omitted means the latest"}}},
-	"GET /api/datasets/": {query: []queryParam{
+	"GET /api/datasets/{rest...}": {query: []queryParam{
 		{name: "pattern", kind: "string", desc: "RE2 regex a row must match (in any column, or in columns)"},
 		{name: "case_insensitive", kind: "boolean"},
 		{name: "columns", kind: "string", desc: "comma-separated columns the pattern is matched against"},
@@ -102,7 +102,7 @@ var routeSchemas = map[string]opSchema{
 	}},
 	"GET /api/network/auth":         {query: []queryParam{{name: "host", kind: "string"}, {name: "scheme", kind: "string"}}},
 	"GET /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string"}}},
-	"GET /api/report/": {query: []queryParam{
+	"GET /api/report/{rest...}": {query: []queryParam{
 		{name: "severity", kind: "string", desc: "minimum severity to include"},
 		{name: "host", kind: "string", desc: "only issues on this host"},
 		{name: "exclude_false_positives", kind: "boolean"},
@@ -327,7 +327,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/authz/test":                        {body: typeOf[authzTestReq]()},
 	"POST /api/sequencer/analyse":                 {body: typeOf[sequencerAnalyseReq]()},
 	"POST /api/sequencer/capture":                 {body: typeOf[sequencerCaptureReq]()},
-	"POST /api/sequencer/capture/":                noBody,
+	"POST /api/sequencer/capture/{rest...}":       noBody,
 	"PUT /api/sequencer/settings":                 {body: typeOf[sequencer.SettingsEdit]()},
 
 	// ---- Collaborator -------------------------------------------------------------------------

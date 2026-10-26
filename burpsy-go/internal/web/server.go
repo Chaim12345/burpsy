@@ -1061,7 +1061,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/skills/{rest...}", s.handleSkill)
 	s.route("/api/skills/disabled", s.handleSkillsDisabled)
 	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
-	s.route("/api/datasets/", s.handleDatasets)
+	s.route("/api/datasets/{rest...}", s.handleDatasets)
 	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
 	s.route("/ca.crt", s.handleCACert)
@@ -1219,7 +1219,7 @@ func (s *Server) setupRoutes() {
 	// reads one and stops one. Registered exact-first for readability only — ServeMux picks the
 	// longest matching pattern regardless of registration order.
 	s.route("/api/sequencer/capture", s.handleSequencerCaptureStart)
-	s.route("/api/sequencer/capture/", s.handleSequencerCapture)
+	s.route("/api/sequencer/capture/{rest...}", s.handleSequencerCapture)
 
 	// Collaborator: the out-of-band interaction channel. Five routes rather than one because the
 	// index/detail split applies here too — the table is rows, and an interaction's raw bytes are
@@ -1421,7 +1421,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/extensions/unload", s.handleExtensionUnload)
 
 	// Scanner report export: /api/report/{json|sarif|html}
-	s.route("/api/report/", s.handleReport)
+	s.route("/api/report/{rest...}", s.handleReport)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

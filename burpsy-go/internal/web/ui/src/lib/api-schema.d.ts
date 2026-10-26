@@ -611,7 +611,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/datasets/history": {
+    "/api/datasets/{rest...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -619,7 +619,7 @@ export type paths = {
             cookie?: never;
         };
         /** one table view over a list — history, issues, sitemap, tool-log, ws-history, intruder/{task}: regex over columns, sort, offset/limit paging, facet counts, and a long-poll for new rows */
-        get: operations["getApiDatasetsHistory"];
+        get: operations["getApiDatasetsByRest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2506,7 +2506,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/report/json": {
+    "/api/report/{rest...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -2514,7 +2514,7 @@ export type paths = {
             cookie?: never;
         };
         /** export findings as json, sarif, html or Burp-XML (m7dk) */
-        get: operations["getApiReportJson"];
+        get: operations["getApiReportByRest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3040,7 +3040,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/sequencer/capture/{id}": {
+    "/api/sequencer/capture/{rest...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -3048,10 +3048,10 @@ export type paths = {
             cookie?: never;
         };
         /** GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture */
-        get: operations["getApiSequencerCaptureById"];
+        get: operations["getApiSequencerCaptureByRest"];
         put?: never;
         /** GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture */
-        post: operations["postApiSequencerCaptureById"];
+        post: operations["postApiSequencerCaptureByRest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5679,7 +5679,7 @@ export interface operations {
             };
         };
     };
-    getApiDatasetsHistory: {
+    getApiDatasetsByRest: {
         parameters: {
             query?: {
                 case_insensitive?: "true" | "false" | "1" | "0";
@@ -5706,7 +5706,9 @@ export interface operations {
                 wait_seconds?: string;
             };
             header?: never;
-            path?: never;
+            path: {
+                "rest...": string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -10287,7 +10289,7 @@ export interface operations {
             };
         };
     };
-    getApiReportJson: {
+    getApiReportByRest: {
         parameters: {
             query?: {
                 exclude_false_positives?: "true" | "false" | "1" | "0";
@@ -10297,7 +10299,9 @@ export interface operations {
                 severity?: string;
             };
             header?: never;
-            path?: never;
+            path: {
+                "rest...": string;
+            };
             cookie?: never;
         };
         requestBody?: never;
@@ -11750,12 +11754,12 @@ export interface operations {
             };
         };
     };
-    getApiSequencerCaptureById: {
+    getApiSequencerCaptureByRest: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                "rest...": string;
             };
             cookie?: never;
         };
@@ -11779,12 +11783,12 @@ export interface operations {
             };
         };
     };
-    postApiSequencerCaptureById: {
+    postApiSequencerCaptureByRest: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                "rest...": string;
             };
             cookie?: never;
         };
