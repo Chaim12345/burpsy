@@ -62,10 +62,17 @@ def boundary_identity():
     """Facts about the namespace the caller is IN, recorded verbatim. Nothing here assumes
     /proc/1, a host, or 'loopback only': the caller compares the captured value against a
     baseline it captured OUTSIDE the boundary before launch and reads the interface list."""
+    # /proc/net/dev is resolved per the READER's netns; /sys/class/net is not trustworthy
+    # here: --dev-bind / / bind-mounts the outer /sys and would show the OUTER namespace's
+    # interfaces (measured 2026-10-26: eth0 + kernel stubs visible inside the boundary).
+    ifs = []
+    for line in Path("/proc/net/dev").read_text().splitlines()[2:]:
+        ifs.append(line.split(":", 1)[0].strip())
     return {
         "net_ns": os.readlink("/proc/self/ns/net"),
         "pid_ns": os.readlink("/proc/self/ns/pid"),
-        "interfaces": sorted(os.listdir("/sys/class/net")),
+        "interfaces": sorted(ifs),
+        "interfaces_source": "/proc/net/dev (per-netns; /sys/class/net is bind-mount-frozen)",
     }
 
 
