@@ -72,3 +72,58 @@ func TestBFLASkipsNonAdminPaths(t *testing.T) {
 		t.Fatalf("non-admin path reported: %+v", f)
 	}
 }
+
+// Slice 3b: a state-changing admin operation replayed as the low-privilege identity. It changes
+// state on the target, so it needs the explicit writes opt-in on top of the BFLA switch.
+
+func bflaWriteAudit(t *testing.T, path string, writes bool) []*Finding {
+	t.Helper()
+	return bflaAudit(t, path, func(c *ScanConfig) { c.CheckAPIWrites = writes })
+}
+
+const bobUID = 2 // the fixture's low-privilege user (vulnapp.IDORSecondSessionCookie)
+
+func TestBFLAWriteReportsLowPrivilegeWriteToAnAdminOperation(t *testing.T) {
+	before := vulnapp.APIAuthSettingWritesBy(bobUID)
+	f := bflaFindingIn(bflaWriteAudit(t, "/api/admin/settings", true))
+	if f == nil {
+		t.Fatal("no Broken access control finding on the vulnerable settings write")
+	}
+	if !strings.Contains(f.Description, "POST /api/admin/settings") {
+		t.Errorf("the finding does not name the operation: %s", f.Description)
+	}
+	if vulnapp.APIAuthSettingWritesBy(bobUID) <= before {
+		t.Error("the finding claims a second-identity write but the target recorded none")
+	}
+}
+
+func TestBFLAWriteStaysQuietWhenTheOperationEnforcesTheRole(t *testing.T) {
+	before := vulnapp.APIAuthSettingWritesBy(bobUID)
+	if f := bflaFindingIn(bflaWriteAudit(t, "/api/safe/admin/settings", true)); f != nil {
+		t.Fatalf("finding on the role-enforcing twin: %s", f.Description)
+	}
+	if vulnapp.APIAuthSettingWritesBy(bobUID) != before {
+		t.Error("the safe twin accepted a write from the low-privilege identity")
+	}
+}
+
+// Without the writes opt-in the pass must send no write at all: this pins the side effect, not only
+// the absence of a finding.
+func TestBFLAWriteNeedsTheWritesOptIn(t *testing.T) {
+	before := vulnapp.APIAuthSettingWritesBy(bobUID)
+	if f := bflaFindingIn(bflaWriteAudit(t, "/api/admin/settings", false)); f != nil {
+		t.Fatalf("a write finding without CheckAPIWrites: %s", f.Description)
+	}
+	if vulnapp.APIAuthSettingWritesBy(bobUID) != before {
+		t.Error("a write reached the target as the low-privilege identity without the writes opt-in")
+	}
+}
+
+// DELETE is never replayed: a destructive probe is not a role check worth the damage.
+func TestBFLAWriteMethods(t *testing.T) {
+	for m, want := range map[string]bool{"POST": true, "PUT": true, "PATCH": true, "DELETE": false, "GET": false, "OPTIONS": false} {
+		if got := bflaWriteMethod(m); got != want {
+			t.Errorf("bflaWriteMethod(%s) = %v, want %v", m, got, want)
+		}
+	}
+}
