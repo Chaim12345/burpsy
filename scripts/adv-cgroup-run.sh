@@ -57,6 +57,7 @@ COMPILE_MIB=${COMPILE_MIB:-3072}
 run_capped() {
   local name=$1 mib=$2 tmo=$3; shift 3
   local inner='cg=$(cut -d: -f3 /proc/self/cgroup); echo "$cg" >"$OUT_DIR/$NAME.cgroup"
+         case "$cg" in ""|/) echo "CAP NOT IN EFFECT: own cgroup is root/empty"; exit 97;; esac
          m=$(cat "/sys/fs/cgroup$cg/memory.max" 2>&1); echo "memory.max in effect: $m"
          [ "$m" = "$(( MIB * 1024 * 1024 ))" ] || { echo "CAP NOT IN EFFECT"; exit 97; }
          exec "$@"'
@@ -76,12 +77,23 @@ run_capped() {
   if [ -z "$cgp" ]; then echo "   -> no own-cgroup path recorded for $name"; CAPPED_OK=0
   elif [ "$cgp" = / ]; then echo "   -> own cgroup is the root: cap not in effect"; CAPPED_OK=0
   elif [ -d "/sys/fs/cgroup$cgp" ]; then
-    if [ -n "$(cat "/sys/fs/cgroup$cgp/cgroup.procs" 2>/dev/null)" ] || grep -q '^populated 1' "/sys/fs/cgroup$cgp/cgroup.events" 2>/dev/null; then
+    # A read error is UNKNOWN, never clean.
+    local procs events
+    if ! procs=$(cat "/sys/fs/cgroup$cgp/cgroup.procs" 2>&1) || ! events=$(cat "/sys/fs/cgroup$cgp/cgroup.events" 2>&1); then
+      echo "   -> cleanup UNKNOWN: cannot read cgroup.procs/events of $cgp after $name"; CLEAN=0; CAPPED_OK=0
+    elif [ -n "$procs" ] || printf '%s\n' "$events" | grep -q '^populated 1'; then
       echo "   -> LEFTOVER: own cgroup $cgp still has processes after $name"; CLEAN=0; CAPPED_OK=0
     fi
   fi
   pgrep -f -- "$BIN_DIR" >/dev/null && { echo "   -> LEFTOVER process matching $BIN_DIR after $name"; CLEAN=0; CAPPED_OK=0; }
-  { echo "$name: exit=$rc capped_ok=$CAPPED_OK clean=$CLEAN own_cgroup=${cgp:-none}"; } >>"$OUT_DIR/host.txt"
+  # Outcome is a separate axis from "the cap held and cleanup is proven". A nonzero case exit can be expected.
+  # Nothing is labelled "memory exceeded": that needs structured evidence this script does not collect.
+  if [ "$rc" = 0 ] && grep -q '^--- PASS' "$OUT_DIR/$name.log"; then outcome=test-passed
+  elif [ "$rc" = 97 ]; then outcome=control-failed
+  elif [ "$rc" = 124 ] || [ "$rc" = 137 ] || [ "$rc" = 143 ]; then outcome="timeout-or-killed(rc=$rc, cause unproven)"
+  else outcome="runtime-failure(rc=$rc, cause unproven)"; fi
+  echo "   outcome: $outcome (cap/cleanup proof is separate: capped_ok=$CAPPED_OK)"
+  { echo "$name: exit=$rc outcome=$outcome capped_ok=$CAPPED_OK clean=$CLEAN own_cgroup=${cgp:-none}"; } >>"$OUT_DIR/host.txt"
 }
 CLEAN=1; valid=1
 
