@@ -165,13 +165,12 @@ func TestInjectionUnderLoadNeverCorruptsTheStream(t *testing.T) {
 			t.Fatalf("message %d corrupted: %q", next, s[:min(len(s), 40)])
 		}
 		next++
-		mu.Lock()
-		done := injected
-		mu.Unlock()
 		if next == n {
 			wg.Wait()
+			// Read the injected count AFTER the wait: it can still grow while the
+			// senders drain, and the snapshot before the wait would under-count.
 			mu.Lock()
-			done = injected
+			done := injected
 			mu.Unlock()
 			if seenInj >= done {
 				break
@@ -319,13 +318,12 @@ func TestInjectionUnderInterceptionNeverCorruptsTheStream(t *testing.T) {
 			t.Fatalf("message %d corrupted: %q", next, s[:min(len(s), 40)])
 		}
 		next++
-		mu.Lock()
-		done := injected
-		mu.Unlock()
 		if next == n {
 			wg.Wait()
+			// Read the injected count AFTER the wait: it can still grow while the
+			// senders drain, and the snapshot before the wait would under-count.
 			mu.Lock()
-			done = injected
+			done := injected
 			mu.Unlock()
 			if seenInj >= done {
 				break

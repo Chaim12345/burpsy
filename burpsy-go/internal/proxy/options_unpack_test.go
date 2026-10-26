@@ -28,7 +28,7 @@ func gzipResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip: %v", err)
 	}
@@ -39,7 +39,7 @@ func deflateResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("zlib: %v", err)
 	}
@@ -60,7 +60,7 @@ func chunkedGzipResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip: %v", err)
 	}
@@ -136,8 +136,8 @@ func TestUnpackingWorksOnDeflateAndOnChunkedFraming(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := NewOptions()
-			o.Set(OptUnpackCompressedResponses, true)
-			o.Set(OptRemoveAllJavaScript, true)
+			_ = o.Set(OptUnpackCompressedResponses, true)
+			_ = o.Set(OptRemoveAllJavaScript, true)
 			text := string(o.ApplyResponse(tc.resp))
 			if strings.Contains(text, "<script>") {
 				t.Errorf("the script survived\n%q", text)
@@ -156,7 +156,7 @@ func TestUnpackingWorksOnDeflateAndOnChunkedFraming(t *testing.T) {
 // that is decompressed and matched by no rule has still been changed for the better.
 func TestUnpackingAloneDecompressesTheBody(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	text := string(o.ApplyResponse(gzipResponse(t, scriptedPage)))
 	if !strings.Contains(text, scriptedPage) {
@@ -169,7 +169,7 @@ func TestUnpackingAloneDecompressesTheBody(t *testing.T) {
 
 func TestWithUnpackingOffACompressedResponseIsUntouchedAndCounted(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
 	in := gzipResponse(t, scriptedPage)
 	out := o.ApplyResponse(in)
@@ -245,8 +245,8 @@ func TestAResponseRuleReachesBrotliAndZstdBodiesWhenUnpackingIsOn(t *testing.T) 
 
 func TestAnUndecodableEncodingIsLeftAloneAndSaysWhy(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
 	// A body labelled br that is not brotli: corrupt streams are refused by name, never partly
 	// rewritten. (A body that IS brotli unpacks — the case below it.)
@@ -266,8 +266,8 @@ func TestAnUndecodableEncodingIsLeftAloneAndSaysWhy(t *testing.T) {
 
 func TestACorruptCompressedBodyIsLeftWhollyAlone(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
 	// A body labelled gzip that is not. Half a document is worse than none: a rule would rewrite the
 	// part it could see and the browser would receive a page cut in the middle.
@@ -283,7 +283,7 @@ func TestACorruptCompressedBodyIsLeftWhollyAlone(t *testing.T) {
 
 func TestAnUncompressedResponseIsNotCountedAsASkip(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	in := htmlResponse(scriptedPage)
 	out := o.ApplyResponse(in)
@@ -299,11 +299,11 @@ func TestAnUncompressedResponseIsNotCountedAsASkip(t *testing.T) {
 
 func TestUnpackingARequestBody(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedRequests, true)
+	_ = o.Set(OptUnpackCompressedRequests, true)
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(`{"q":"alpha"}`))
+	_, _ = zw.Write([]byte(`{"q":"alpha"}`)) // a bytes.Buffer cannot refuse
 	zw.Close()
 	packed := buf.Bytes()
 	in := []byte("POST /search HTTP/1.1\r\nHost: shop.test\r\nContent-Encoding: gzip\r\n" +
@@ -332,11 +332,11 @@ func TestUnpackingARequestBody(t *testing.T) {
 // silently start rewriting request bodies the origin expects compressed.
 func TestTheTwoUnpackSwitchesAreIndependent(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(`{"q":"alpha"}`))
+	_, _ = zw.Write([]byte(`{"q":"alpha"}`)) // a bytes.Buffer cannot refuse
 	zw.Close()
 	packed := buf.Bytes()
 	in := []byte("POST /search HTTP/1.1\r\nHost: shop.test\r\nContent-Encoding: gzip\r\n" +
@@ -355,7 +355,7 @@ func gzippedBytes(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip: %v", err)
 	}

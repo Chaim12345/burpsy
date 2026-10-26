@@ -41,9 +41,9 @@ func (l *countingListener) Accept() (net.Conn, error) {
 func serveOkOver(t *testing.T, ln net.Listener) {
 	t.Helper()
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})}
-	go srv.Serve(ln)
+	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Close() })
 }
 
@@ -149,15 +149,15 @@ func Test_a_synchronized_group_holds_every_final_byte_until_all_members_are_read
 		// The big member is still blocked mid-write: nothing has drained its body, so its
 		// readiness signal cannot have fired and the barrier must still hold the small
 		// member's final byte. A read that finds it proves an early release.
-		conns[small].SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		_ = conns[small].SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 		if _, err := brs[small].ReadByte(); err == nil {
 			releasedEarly <- true
 			return
 		}
-		conns[small].SetReadDeadline(time.Time{})
+		_ = conns[small].SetReadDeadline(time.Time{})
 
 		// Drain the big member: head to the blank line, then the body, then its held byte.
-		conns[big].SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = conns[big].SetReadDeadline(time.Now().Add(30 * time.Second))
 		var head []byte
 		for !bytes.HasSuffix(head, []byte("\r\n\r\n")) {
 			b, err := brs[big].ReadByte()
@@ -174,13 +174,13 @@ func Test_a_synchronized_group_holds_every_final_byte_until_all_members_are_read
 		}
 
 		// Drained: the barrier must have released, so the small member's final byte arrives.
-		conns[small].SetReadDeadline(time.Now().Add(5 * time.Second))
+		_ = conns[small].SetReadDeadline(time.Now().Add(5 * time.Second))
 		if _, err := brs[small].ReadByte(); err != nil {
 			return
 		}
 		releasedEarly <- false
 		for i := range conns {
-			conns[i].Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+			_, _ = conns[i].Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"))
 		}
 	}()
 
@@ -214,13 +214,13 @@ func Test_a_synchronized_group_beats_a_check_then_set_endpoint_that_sequential_s
 		// simultaneity decides a synchronized one.
 		time.Sleep(50 * time.Millisecond)
 		if already {
-			w.Write([]byte("LOSE"))
+			_, _ = w.Write([]byte("LOSE"))
 			return
 		}
 		mu.Lock()
 		taken = true
 		mu.Unlock()
-		w.Write([]byte("WIN"))
+		_, _ = w.Write([]byte("WIN"))
 	}))
 	defer srv.Close()
 

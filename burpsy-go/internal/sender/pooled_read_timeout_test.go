@@ -62,7 +62,7 @@ func startAnswerOnceThenSilentServer(t *testing.T) (addr string, accepted *atomi
 				fmt.Fprint(c, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst")
 				// Nothing after the first answer: the second request on this connection is read
 				// and never answered.
-				io.Copy(io.Discard, br)
+				_, _ = io.Copy(io.Discard, br)
 			}(conn)
 		}
 	}()

@@ -215,7 +215,7 @@ func Test_the_invisible_tick_is_per_listener_and_overrides_the_global_switch(t *
 	}
 
 	// And the other direction: global off, one listener ticked on.
-	srv.config.options.Set(OptInvisibleProxy, false)
+	_ = srv.config.options.Set(OptInvisibleProxy, false)
 	if got := proxiedGetWithHostHeader(t, boot, host, port); !strings.Contains(got, "400 Bad Request") {
 		t.Errorf("the boot listener served an origin-form request with the global switch off: %q", got)
 	}

@@ -365,6 +365,7 @@ func TestStripChunkedMetadataKeepsAChunkedStreamReadable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a strict client could not parse the forwarded response: %v", err)
 			}
+			defer func() { _ = resp.Body.Close() }()
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatalf("a strict client could not read the forwarded body — the framing and the body disagreed: %v", err)
