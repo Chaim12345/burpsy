@@ -85,4 +85,14 @@ describe("Network Revert with a blanked number field", () => {
   expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   expect(puts).toEqual([]);
  });
+ test("a blanked field alone (draft still clean) can be reverted", async () => {
+  renderWithProviders(<NetworkSection />);
+  const input = await field();
+  fireEvent.change(input, { target: { value: "" } });
+  const revert = screen.getByRole("button", { name: "Revert" }) as HTMLButtonElement;
+  expect(revert.disabled).toBe(false);
+  fireEvent.click(revert);
+  await waitFor(() => expect((screen.getByLabelText("Connect (ms)") as HTMLInputElement).value).toBe("1000"));
+  expect(puts).toEqual([]);
+ });
 });

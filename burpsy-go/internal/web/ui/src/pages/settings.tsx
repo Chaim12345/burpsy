@@ -1174,7 +1174,9 @@ export function NetworkSection(): JSX.Element {
     actions={
      <>
       {dirty ? <Badge tone="warn">unsaved changes</Badge> : <Badge tone="good">saved</Badge>}
-      <Button variant="outline" size="small" onClick={onRevert} disabled={!dirty}>
+      {/* Enabled whenever there is a baseline: a blank or half-typed number never reaches the draft, so a
+          clean draft can still have a field showing something the draft does not hold. */}
+      <Button variant="outline" size="small" onClick={onRevert} disabled={!baseline}>
        <RotateCcw size={13} />
        Revert
       </Button>
