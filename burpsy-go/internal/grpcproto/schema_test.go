@@ -2,6 +2,7 @@ package grpcproto
 
 import (
 	"bytes"
+	"encoding/hex"
 	"strings"
 	"testing"
 )
@@ -298,5 +299,65 @@ func TestParseProtoNamesTheUnresolvedImport(t *testing.T) {
 	_, err := ParseProto("syntax = \"proto3\";\nimport \"acme/missing.proto\";\nmessage M { int32 a = 1; }")
 	if err == nil || !strings.Contains(err.Error(), "acme/missing.proto") {
 		t.Fatalf("the error must name the unresolved import: %v", err)
+	}
+}
+
+// The scalar enum conversion's contract at its boundaries: name exactly the
+// values conformant encoders produce, invent nothing, refuse nothing the walk
+// accepted - and the walk itself refuses what uint64 cannot hold.
+func TestAnnotateEnumConversionBoundaries(t *testing.T) {
+	s := mustParse(t, `syntax = "proto3"; message M { E e = 1; } enum E { A = 0; NEG = -1; }`)
+
+	// Canonical negative: a conformant encoder writes NEG=-1 as its int32 number
+	// sign-extended to 64 bits - the ten-byte varint of 0xFFFFFFFFFFFFFFFF - and
+	// int64(v) is the exact inverse.
+	raw, _ := hex.DecodeString("08" + "ffffffffffffffffff01")
+	fields, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Annotate(fields, "M")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := find(out, 1).EnumName; got != "NEG" {
+		t.Fatalf("canonical negative enum named %q, want NEG", got)
+	}
+	assertSameBytes(t, raw, out)
+
+	// A value the enum does not declare names nothing; the raw decimal stands.
+	raw, _ = hex.DecodeString("08" + "2a") // 42
+	fields, _ = Decode(raw)
+	out, _ = s.Annotate(fields, "M")
+	if got := find(out, 1); got.EnumName != "" || got.Varint != "42" {
+		t.Fatalf("undeclared enum value must stand unnamed: %+v", got)
+	}
+
+	// A NON-canonical five-byte encoding of the 32-bit two's complement
+	// (4294967295) must NOT alias onto NEG: the wire carried 4294967295, not -1.
+	// protobuf-go's decoder truncates uint64 to int32 and would alias; this
+	// presentation layer deliberately names only the exact sign-extended value,
+	// so a hand-crafted over-long encoding can never borrow a declared name.
+	raw, _ = hex.DecodeString("08" + "ffffffff0f")
+	fields, _ = Decode(raw)
+	out, _ = s.Annotate(fields, "M")
+	if got := find(out, 1); got.EnumName != "" || got.Varint != "4294967295" {
+		t.Fatalf("non-canonical enum encoding must not alias: %+v", got)
+	}
+
+	// The defensive ParseUint branch: a Varint string outside uint64 names nothing.
+	out, err = s.Annotate([]Field{{Number: 1, WireType: wireVarint, Varint: "18446744073709551616"}}, "M")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out[0]; got.EnumName != "" || got.Varint != "18446744073709551616" {
+		t.Fatalf("out-of-range varint string must stand unnamed: %+v", got)
+	}
+
+	// An over-64-bit varint on the wire is not silently truncated: the walk
+	// refuses the whole body.
+	raw, _ = hex.DecodeString("08" + "ffffffffffffffffffff01")
+	if _, err := Decode(raw); err == nil {
+		t.Fatal("over-wide varint must refuse the body")
 	}
 }
