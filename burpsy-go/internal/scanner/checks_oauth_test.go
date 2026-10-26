@@ -4,6 +4,7 @@ package scanner
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,62 @@ func TestOAuthRedirectVariantsSpellTheBypasses(t *testing.T) {
 	vs := oauthRedirectVariants("https://client.example/callback")
 	if len(vs) != 4 {
 		t.Fatalf("got %d variants: %v", len(vs), vs)
+	}
+}
+
+// The redirect_uri pair is found by name whatever spelling the client used for its value; a
+// request without one reports that nothing could be substituted instead of resending it unchanged.
+func TestOAuthWithRedirectURIFindsAnyValueSpelling(t *testing.T) {
+	for _, spelled := range []string{"https://app.example/cb", "https%3a%2f%2fapp.example%2fcb", "https%3A%2F%2Fapp.example%2Fcb"} {
+		raw := "GET /oauth/authorize?response_type=code&client_id=c&redirect_uri=" + spelled + "&scope=a HTTP/1.1\r\nHost: idp\r\n\r\n"
+		out, ok := oauthWithRedirectURI(raw, "https://attacker.burpsy.invalid/cb", false)
+		if !ok || !strings.Contains(out, "redirect_uri=https%3A%2F%2Fattacker.burpsy.invalid%2Fcb&scope=a HTTP/1.1") {
+			t.Errorf("%s: ok=%v out=%q", spelled, ok, out)
+		}
+		dup, ok := oauthWithRedirectURI(raw, "https://attacker.burpsy.invalid/cb", true)
+		if !ok || !strings.Contains(dup, "redirect_uri="+spelled+"&redirect_uri=https%3A%2F%2Fattacker") {
+			t.Errorf("%s duplicate: ok=%v out=%q", spelled, ok, dup)
+		}
+	}
+	if _, ok := oauthWithRedirectURI("GET /oauth/authorize?client_id=c HTTP/1.1\r\n\r\n", "x", false); ok {
+		t.Error("substituted a redirect_uri the request does not carry")
+	}
+}
+
+// Only a redirect TO the manipulated URI counts: a login bounce or an error redirect that echoes
+// the canary inside its own query is not one.
+func TestOAuthLocationTargetsTheVariantOnly(t *testing.T) {
+	resp := func(loc string) string { return "HTTP/1.1 302 Found\r\nLocation: " + loc + "\r\n\r\n" }
+	v := "https://attacker.burpsy.invalid/cb"
+	if !oauthLocationTargets(resp(v+"?code=abc"), v) {
+		t.Error("the redirect to the canary itself was not recognised")
+	}
+	for _, loc := range []string{
+		"/login?return_to=%2Foauth%2Fauthorize%3Fredirect_uri%3Dhttps%253A%252F%252Fattacker.burpsy.invalid%252Fcb",
+		"https://app.example/cb?error=invalid_request&redirect_uri=https%3A%2F%2Fattacker.burpsy.invalid%2Fcb",
+	} {
+		if oauthLocationTargets(resp(loc), v) {
+			t.Errorf("counted as a bypass: %s", loc)
+		}
+	}
+	trav := "https://app.example/cb/../cb-burpsy-canary"
+	if !oauthLocationTargets(resp("https://app.example/cb-burpsy-canary?code=1"), trav) ||
+		oauthLocationTargets(resp("https://app.example/cb?code=1"), trav) {
+		t.Error("traversal variant judged wrongly")
+	}
+}
+
+// RFC 6749 4.1.2.1: rejecting a request without state is a 302 carrying error=, not a grant.
+func TestOAuthLocationGrant(t *testing.T) {
+	for loc, want := range map[string]bool{
+		"https://app.example/cb?code=abc":                         true,
+		"https://app.example/cb#access_token=t&token_type=bearer": true,
+		"https://app.example/cb?error=invalid_request&state=":     false,
+		"/login?next=%2Foauth%2Fauthorize":                        false,
+		"https://app.example/cb?code=abc&error=access_denied":     false,
+	} {
+		if got := oauthLocationGrant(loc); got != want {
+			t.Errorf("oauthLocationGrant(%q) = %v, want %v", loc, got, want)
+		}
 	}
 }
