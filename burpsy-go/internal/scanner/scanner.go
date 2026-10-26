@@ -299,7 +299,10 @@ type ScanConfig struct {
 	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go and
 	// checks_final.go: GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy
 	// files, XXE and entity expansion, file-upload and OpenAPI discovery, React2Shell
-	// fingerprinting, the SQL-in-parameter heuristic, and the final sixteen. Off by default.
+	// fingerprinting, the SQL-in-parameter heuristic, and the final sixteen. It also admits the
+	// CL.0 smuggled-prefix probe (the smuggling row's CL.0 technique and "Client-side desync"),
+	// which behind a pooling front end can leave a response queued on a shared back-end connection.
+	// Off by default.
 	CheckExtendedActive bool
 	// CheckOutOfBand narrows CheckExtendedActive to also admit the five rows that cannot reach
 	// a verdict without something outside this process: the four collaborator rows (out-of-band
