@@ -163,21 +163,19 @@ describe("Repeater tab close surfaces a failed action cleanup (1944 correction)"
   expect(calls.filter((c) => c.method === "DELETE").length).toBe(deletesBefore);
  });
 
- test("a bulk close lists each failed cleanup by tab name, and retry clears only its own", async () => {
-  openOnlyTab("https://one.test:443", { name: "alpha" });
+ test("a bulk close lists one notice per failed cleanup, and retry clears only its own", async () => {
+  const alpha = openOnlyTab("https://one.test:443", { name: "alpha" });
   useApp.getState().openRepeaterTab({ name: "bravo", target: "https://two.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
   const charlie = useApp.getState().openRepeaterTab({ name: "charlie", target: "https://three.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
   deleteStatuses = [500];
   renderRepeater();
   fireEvent.contextMenu(await screen.findByText("bravo"));
   fireEvent.click(await screen.findByText("Close other tabs"));
-  const alert = await screen.findByRole("alert", { name: "Failed action cleanups" });
-  await waitFor(() => {
-   expect(alert.textContent).toContain('tab "alpha"');
-   expect(alert.textContent).toContain('tab "charlie"');
-  });
-  expect(useApp.getState().failedActionCleanups).toHaveLength(2);
-  // The kept tab was never asked to forget anything.
+  await screen.findByRole("alert", { name: "Failed action cleanups" });
+  // One listed failure per orphaned tab, keyed by tab id - the kept tab was never asked to forget.
+  await waitFor(() => expect(useApp.getState().failedActionCleanups).toHaveLength(2));
+  expect(useApp.getState().failedActionCleanups.map((entry) => entry.tabId).sort()).toEqual([alpha, charlie].sort());
+  expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
   expect(calls.some((c) => c.method === "DELETE" && c.path.includes("/bravo/"))).toBe(false);
   // Retry the first listed failure; the other stays put.
   deleteStatuses = [200];
@@ -189,8 +187,7 @@ describe("Repeater tab close surfaces a failed action cleanup (1944 correction)"
   });
   expect(useApp.getState().failedActionCleanups).toHaveLength(1);
   expect(useApp.getState().failedActionCleanups[0]!.tabId).toBe(charlie);
-  expect(screen.getByRole("alert", { name: "Failed action cleanups" }).textContent).toContain('tab "charlie"');
-  expect(screen.getByRole("alert", { name: "Failed action cleanups" }).textContent).not.toContain('tab "alpha"');
+  expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
  });
 
  test("the confirmation token is minted for exactly the tab-action DELETE it then carries", async () => {
