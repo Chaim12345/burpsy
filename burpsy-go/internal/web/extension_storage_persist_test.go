@@ -236,7 +236,7 @@ func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadl
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	var bad atomic.Int32
+	var bad, getsOK, setsOK atomic.Int32
 	for w := 0; w < 4; w++ {
 		wg.Add(1)
 		go func(w int) {
@@ -250,9 +250,13 @@ func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadl
 				v, found, err := st.Get("plug", extension.ScopeProject, "marker")
 				if err != nil || !found || (string(v) != `"A"` && string(v) != `"B"`) {
 					bad.Add(1)
+				} else {
+					getsOK.Add(1)
 				}
 				if err := st.Set("plug", extension.ScopeProject, "w"+string(rune('0'+w)), json.RawMessage(`1`)); err != nil {
 					bad.Add(1)
+				} else {
+					setsOK.Add(1)
 				}
 			}
 		}(w)
@@ -261,6 +265,16 @@ func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadl
 	go func() {
 		defer close(done)
 		for i := 0; i < 6; i++ {
+			// Let the writers get through before each switch, so every switch lands in the middle
+			// of live traffic and a run cannot pass with the writers starved.
+			deadline := time.Now().Add(30 * time.Second)
+			for setsOK.Load() < int32((i+1)*10) {
+				if time.Now().After(deadline) {
+					t.Errorf("writers made no progress before switch %d", i)
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
 			next := bPath
 			if i%2 == 1 {
 				next = aPath
@@ -278,6 +292,10 @@ func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadl
 	}
 	close(stop)
 	wg.Wait()
+	// Progress, so a run in which the writers never got a turn cannot pass on the final markers alone.
+	if getsOK.Load() < 50 || setsOK.Load() < 60 {
+		t.Fatalf("writers made too little progress to prove anything: %d gets, %d sets", getsOK.Load(), setsOK.Load())
+	}
 	if n := bad.Load(); n != 0 {
 		t.Fatalf("%d storage operations errored or read a torn marker during switches", n)
 	}
@@ -285,6 +303,22 @@ func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadl
 		rows := readStorageFile(t, name+".extensions.json")
 		if got := string(rows[extensionStorageKey("plug", extension.ScopeProject, "marker")]); got != want {
 			t.Errorf("%s marker = %q, want %q", filepath.Base(name), got, want)
+		}
+		// Writes landed in this project's file (the switches alternate, so both were open while the
+		// writers ran) and nothing foreign is in it: only the marker and the four writer keys.
+		wrote := 0
+		for k := range rows {
+			switch k {
+			case extensionStorageKey("plug", extension.ScopeProject, "marker"):
+			case extensionStorageKey("plug", extension.ScopeProject, "w0"), extensionStorageKey("plug", extension.ScopeProject, "w1"),
+				extensionStorageKey("plug", extension.ScopeProject, "w2"), extensionStorageKey("plug", extension.ScopeProject, "w3"):
+				wrote++
+			default:
+				t.Errorf("%s holds a row nobody wrote: %q", filepath.Base(name), k)
+			}
+		}
+		if wrote == 0 {
+			t.Errorf("%s received no writer rows although it was open during the run", filepath.Base(name))
 		}
 	}
 }
