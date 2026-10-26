@@ -69,9 +69,23 @@ PY
 [ "$XID" != none ] && ok "the exchange is in history (id $XID)" || { no "no /search exchange in history"; echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
 
 echo "=== 3. scan the exchange ==="
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$XID")
-[ "$code" = 428 ] && ok "an unconfirmed audit is refused (428)" || no "unconfirmed audit -> HTTP $code, want 428"
-token=$(python3 - "$WEB_PORT" "$XID" <<'PY'
+# history_id PREFIX -> the id of the first history exchange whose path starts with PREFIX, or "none".
+history_id() {
+  python3 - "$WEB_PORT" "$1" <<'PY'
+import json,sys,urllib.request
+rows=json.load(urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/history",timeout=10))
+rows=rows if isinstance(rows,list) else (rows.get("exchanges") or [])
+row=next((r for r in rows if r.get("path","").startswith(sys.argv[2])),None)
+print(row["id"] if row else "none")
+PY
+}
+# audit_exchange ID LABEL -> audits one exchange through the confirmation gate (refused unconfirmed
+# first), returning non-zero when it could not run.
+audit_exchange() {
+  local id="$1" label="$2" code token res
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$id")
+  [ "$code" = 428 ] && ok "an unconfirmed audit of $label is refused (428)" || no "unconfirmed audit of $label -> HTTP $code, want 428"
+  token=$(python3 - "$WEB_PORT" "$id" <<'PY'
 import json,sys,urllib.request
 web,xid=sys.argv[1:3]
 d={"method":"POST","url":f"/api/audit/{xid}"}
@@ -79,15 +93,77 @@ r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{web}/api/aud
 print(json.load(r).get("token",""))
 PY
 )
-[ -n "$token" ] || { no "could not mint a confirmation for the audit"; echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
-res=$(curl -s -m 300 -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$XID" -H "X-Burpsy-Confirm: $token")
-echo "$res" | grep -q "\"exchange_id\":$XID" && ok "the audit ran" || no "audit response: ${res:0:160}"
-n=$(curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c '
+  [ -n "$token" ] || { no "could not mint a confirmation for the audit of $label"; return 1; }
+  res=$(curl -s -m 300 -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$id" -H "X-Burpsy-Confirm: $token")
+  echo "$res" | grep -q "\"exchange_id\":$id" && ok "the audit of $label ran" || { no "audit of $label response: ${res:0:160}"; return 1; }
+  LAST_FOUND=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1]).get("outcome",{}).get("findings",-1))' "$res")
+  # Coverage: an audit that ran no active checks, or errored on some, proves nothing about a clean result.
+  python3 -c '
+import json,sys
+d=json.loads(sys.argv[1]); b=(d.get("breakdown") or {}).get("breakdown") or {}
+sys.exit(0 if d.get("active_checks",0)>0 and b.get("errored",1)==0 else 1)' "$res" && ok "the audit of $label ran active checks with none errored" || no "audit of $label ran no active checks or some errored: ${res:0:200}"
+}
+# xss_on ID -> reflected cross-site scripting issues that carry an occurrence on exchange ID. /api/issues
+# lists every occurrence of an issue with its exchange_id, so this is per exchange: unlike the totals it is
+# not collapsed by the de-duplication across exchanges.
+xss_on() {
+  curl -s "http://127.0.0.1:$WEB_PORT/api/issues" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+want=int(sys.argv[1])
+print(sum(1 for f in d.get("findings",[]) if "cross-site scripting" in (f.get("check_name") or f.get("issue_name") or "").lower() and any(o.get("exchange_id")==want for o in f.get("occurrences",[]))))' "$1"
+}
+# xss_count [PATH] -> cross-site scripting findings, optionally only those naming PATH.
+xss_count() {
+  curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 rows=d if isinstance(d,list) else (d.get("findings") or [])
-print(sum(1 for f in rows if "cross-site scripting" in json.dumps(f).lower()))')
+want=sys.argv[1] if len(sys.argv)>1 else ""
+print(sum(1 for f in rows if "cross-site scripting" in json.dumps(f).lower() and want in json.dumps(f)))' "${1:-}"
+}
+audit_exchange "$XID" "/search" || { echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
+n=$(xss_count)
+FOUND_VULN=$LAST_FOUND
+v_named=$(xss_on "$XID")
+[ "${v_named:-0}" -ge 1 ] && ok "the vulnerable exchange ($XID) carries a named cross-site scripting issue" || no "no named cross-site scripting issue on exchange $XID"
 [ "${n:-0}" -ge 1 ] && ok "a cross-site scripting finding was reported ($n)" || no "no cross-site scripting finding after auditing /search"
 
+echo "=== 4. the safe twin stays clean ==="
+# UAT_TWIN_PATH exists for the red control: pointing it at the vulnerable /search must make this section fail.
+TWIN=${UAT_TWIN_PATH:-/safe/search}
+# /safe/search is the same endpoint with the reflection escaped (internal/vulnapp declares it Safe).
+# Findings carry no path, so the assertion is a count: the vulnerable audit above produced n cross-site
+# scripting findings (the positive control, n >= 1), and auditing the twin must add none.
+body=$(env -u NO_PROXY -u no_proxy curl -s -x "http://127.0.0.1:$PROXY_PORT" "http://127.0.0.1:$TARGET_PORT${TWIN}?q=twin")
+echo "$body" | grep -q 'twin' && ok "the safe twin's response reached the client" || no "safe twin body: ${body:0:120}"
+sleep 0.5
+SID=$(history_id "${TWIN}?q=twin")
+if [ "$SID" = none ]; then
+  no "no /safe/search exchange in history"
+elif audit_exchange "$SID" "$TWIN"; then
+  FOUND_TWIN=$LAST_FOUND
+  t_named=$(xss_on "$SID")
+  [ "${t_named:-9}" -eq 0 ] && ok "no cross-site scripting issue is attributed to the safe twin exchange ($SID)" || no "cross-site scripting issue attributed to the twin exchange $SID (${t_named})"
+  total_after=$(xss_count)
+  [ "${total_after:-0}" -eq "${n:-0}" ] && ok "auditing the safe twin added no cross-site scripting finding ($n -> $total_after)" || no "cross-site scripting findings changed $n -> $total_after after the safe twin audit"
+fi
+
+echo "=== 5. the per-audit finding counts have teeth ==="
+# The findings list de-duplicates by name across exchanges, so its total cannot show a second vulnerable
+# exchange (or a vulnerable twin) adding anything. The named checks above use each issue's occurrences (exchange_id).
+# Supplementary: each audit's own outcome.findings is per exchange: a
+# second vulnerable exchange must report the same count as the first (control: the count is stable), and
+# the safe twin must report strictly fewer (the reflected-XSS finding is missing). Pointing UAT_TWIN_PATH
+# at /search makes the twin vulnerable and this last check must then fail.
+env -u NO_PROXY -u no_proxy curl -s -o /dev/null -x "http://127.0.0.1:$PROXY_PORT" "http://127.0.0.1:$TARGET_PORT/search?q=control"
+sleep 0.5
+CID=$(history_id "/search?q=control")
+if [ "$CID" = none ]; then no "no control exchange in history"; elif audit_exchange "$CID" "/search?q=control"; then
+  c_named=$(xss_on "$CID")
+  [ "${c_named:-0}" -ge 1 ] && ok "the second vulnerable exchange ($CID) carries the named issue too (the per-exchange check can see a second one)" || no "no named cross-site scripting issue on the second vulnerable exchange $CID"
+  [ "$LAST_FOUND" -eq "$FOUND_VULN" ] && ok "a second vulnerable exchange reports the same finding count ($FOUND_VULN)" || no "vulnerable audits disagree ($FOUND_VULN vs $LAST_FOUND): the comparison below is not trustworthy"
+  [ "${FOUND_TWIN:--1}" -ge 0 ] && [ "$FOUND_TWIN" -lt "$FOUND_VULN" ] && ok "the safe twin's audit found fewer than the vulnerable one ($FOUND_TWIN < $FOUND_VULN)" || no "the twin's audit found ${FOUND_TWIN:-none}, not fewer than the vulnerable audit's $FOUND_VULN"
+fi
 echo; echo "############ $PASS passed, $FAIL failed ############"
 [ "$FAIL" -eq 0 ]

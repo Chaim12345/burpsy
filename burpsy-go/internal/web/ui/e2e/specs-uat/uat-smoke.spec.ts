@@ -6,12 +6,15 @@
 // "does the product work for a user" gate a pipeline can run on every change. A failure here means
 // the console cannot do its basic job.
 //
-// "View the exchange in history": a Repeater send is NOT proxy traffic, so it is recorded in the Tool
+// "View the exchange in history": the flow sends one real request THROUGH THE PROXY (a unique path) and
+// finds that exchange in Proxy > HTTP history, and separately sends one from Repeater and finds it in the
+// Tool log. A Repeater send is NOT proxy traffic, so it is recorded in the Tool
 // log (Logger), never in Proxy > HTTP history (behaviour.spec.ts pins that split). The flow therefore
 // checks both places for what each one owns: history lists the seeded proxy traffic, the Tool log
 // lists the Repeater send, with the response the origin gave.
 
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
+import http from "node:http";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
 
@@ -22,6 +25,19 @@ const route = (id: string) => {
 };
 
 const UAT_PATH = "/uat-smoke-send";
+const PROXIED_PATH = "/uat-smoke-proxied";
+
+/** One real request through burpsy's proxy listener (absolute-form target), as a browser or curl would send it. */
+function viaProxy(proxyPort: number, url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: new URL(url).host } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 test("UAT: load the console, send from Repeater, see the exchange in history", async ({ page, consoleErrors, failedRequests }) => {
   const { targetPort } = readHarness();
@@ -56,6 +72,16 @@ test("UAT: load the console, send from Repeater, see the exchange in history", a
   await test.step("the Repeater send is in the Tool log", async () => {
     await gotoRoute(page, route("logger"));
     await expect(page.locator("tr.data-row", { hasText: UAT_PATH })).toHaveCount(1);
+  });
+
+  await test.step("a request sent through the proxy appears in HTTP history", async () => {
+    const { proxyPort } = readHarness();
+    expect(await viaProxy(proxyPort, `${origin}${PROXIED_PATH}`)).toBe(200);
+    await gotoRoute(page, route("history"));
+    await expect(page.locator("tr.data-row", { hasText: PROXIED_PATH })).toHaveCount(1);
+    const proxied = page.locator("tr.data-row", { hasText: PROXIED_PATH });
+    await proxied.click();
+    await expect(proxied).toHaveAttribute("aria-selected", "true");
   });
 
   await test.step("HTTP history lists the proxied traffic and not the Repeater send", async () => {
