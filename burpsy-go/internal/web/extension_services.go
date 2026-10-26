@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -126,11 +127,11 @@ func (s *Server) extensionSend(ctx context.Context, plugin string, req extension
 		Body:    []byte(req.Body),
 	})
 	if err != nil {
-		s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, 0, nil, uint64(time.Since(start).Milliseconds()), err.Error(), nil)
+		s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, 0, nil, elapsedMillis(start), err.Error(), nil)
 		return extension.SessionResponse{}, err
 	}
 	respLen := len(resp.Body)
-	s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, resp.StatusCode, &respLen, uint64(time.Since(start).Milliseconds()), "", nil)
+	s.toolLog.Record(toollog.ToolExtension, host, port, tls, method, path, resp.StatusCode, &respLen, elapsedMillis(start), "", nil)
 	out := extension.SessionResponse{Status: resp.StatusCode, Body: string(resp.Body)}
 	for k, v := range resp.Headers {
 		out.Headers = append(out.Headers, []string{k, v})
@@ -166,6 +167,9 @@ func (t extensionTraffic) Query(_ context.Context, _ string, q extension.Traffic
 		// are skipped here rather than carried as empty rows: a plugin paged for
 		// traffic, and a note-only row answers a question it did not ask.
 		for _, item := range t.srv.organizer.List() {
+			if item.Exchange < 0 {
+				continue // not an id the store can hold; skipped like an evicted exchange
+			}
 			ex, err := t.srv.store.GetExchange(core.ExchangeID(item.Exchange))
 			if err != nil || ex == nil {
 				continue
@@ -202,11 +206,14 @@ func (t extensionTraffic) addIfMatch(page *extension.TrafficPage, ex *core.Excha
 		if q.Contains != "" && !strings.Contains(url, q.Contains) {
 			return
 		}
+		if uint64(ex.ID) > math.MaxInt {
+			return // the protocol's id is an int; an id past it is left out, never wrapped negative
+		}
 		page.Total++
 		if page.Total <= offset || len(page.Items) >= limit {
 			return
 		}
-		item := extension.TrafficItem{ID: int(ex.ID), Method: ex.Method, URL: url, Status: status}
+		item := extension.TrafficItem{ID: int(uint64(ex.ID) & math.MaxInt), Method: ex.Method, URL: url, Status: status}
 		if q.IncludeBodies {
 			if ex.Request != nil {
 				if m, err := t.srv.store.Get(*ex.Request); err == nil {
@@ -240,6 +247,16 @@ func (t extensionTraffic) InScope(_ context.Context, rawurl string) (bool, error
 		return false, errors.New("no engagement scope is wired")
 	}
 	return t.srv.scope.Contains(host, port, path, tls), nil
+}
+
+// elapsedMillis is the whole milliseconds since start, never negative: a clock that steps back
+// must not turn a duration into a huge unsigned value in the tool log.
+func elapsedMillis(start time.Time) uint64 {
+	ms := time.Since(start).Milliseconds()
+	if ms < 0 {
+		return 0
+	}
+	return uint64(ms)
 }
 
 // extensionStoragePath is the storage document of the project open now, "" when none is.
