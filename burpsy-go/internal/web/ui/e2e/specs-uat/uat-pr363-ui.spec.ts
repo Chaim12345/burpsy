@@ -9,10 +9,23 @@
 //   3. Settings > Network: Revert restores a blanked number field. Screenshots of the form before and after
 //      go to e2e/artifacts/uat-pr363 (uploaded by CI as uat-ui-artifacts) and onto the test report.
 
+import * as http from "node:http";
 import * as path from "node:path";
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
+
+/** One request through burpsy's proxy listener (absolute-form target), as curl -x sends it. */
+function viaProxy(proxyPort: number, url: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port: proxyPort, method: "GET", path: url, headers: { Host: new URL(url).host } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 const route = (id: string) => {
   const found = ROUTES.find((entry) => entry.id === id);
@@ -25,16 +38,20 @@ test("UAT: Sequencer capture can be paused, resumed and stopped from the console
   const origin = `http://127.0.0.1:${targetPort}`;
 
   await gotoApp(page);
-  await gotoRoute(page, route("sequencer"));
+  // The real operator path: a request through the proxy lands in HTTP history, and its row menu hands it
+  // to the Sequencer with its CRLF request line and its response (a request typed into the empty editor
+  // would carry bare LFs, which the origin rejects). The harness origin sets E2E_SESSION on every response.
+  const { proxyPort } = readHarness();
+  const status = await viaProxy(proxyPort, `${origin}/uat-sequencer`);
+  expect(status).toBe(200);
+  await gotoRoute(page, route("history"));
+  const row = page.locator("tr.data-row", { hasText: "/uat-sequencer" }).first();
+  await expect(row).toBeVisible();
+  await row.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Send to Sequencer" }).click();
+  await expect(page.locator("main h1")).toHaveText(/^Sequencer/);
   await page.getByRole("tab", { name: "Capture from a live exchange" }).click();
-
-  // The harness origin sets E2E_SESSION=tokNNNN on every response, which is the token to capture.
-  const raw = `GET /uat-sequencer HTTP/1.1\nHost: 127.0.0.1:${targetPort}\nConnection: close\n\n`;
-  await page.getByRole("textbox", { name: "Request to repeat" }).click();
-  await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.type(raw);
-  await page.getByLabel("Target", { exact: true }).fill(origin);
-  await page.getByLabel("Cookie name").fill("E2E_SESSION");
+  await page.getByLabel("Cookie name").selectOption("E2E_SESSION");
   // 100 requests 300 ms apart keeps the capture running for about 30 s, long enough to act on it.
   await page.getByLabel("Requests", { exact: true }).fill("100");
   await page.getByLabel("Delay (ms)").fill("300");
@@ -49,26 +66,29 @@ test("UAT: Sequencer capture can be paused, resumed and stopped from the console
   await page.getByRole("button", { name: "Resume", exact: true }).click();
   await expect(page.getByRole("button", { name: "Pause", exact: true })).toBeVisible();
 
+  await page.screenshot({ path: path.join("artifacts", "uat-pr363", "sequencer-running.png") });
   await stop.click();
   // The capture really ended: the progress card says finished and Stop is disabled again.
   await expect(page.getByText(/Capture \d+ finished/)).toBeVisible();
   await expect(stop).toBeDisabled();
+  await page.screenshot({ path: path.join("artifacts", "uat-pr363", "sequencer-stopped.png") });
 
   expect(consoleErrors, "the console logged errors during the flow").toEqual([]);
   expect(failedRequests, "the console made failing API requests during the flow").toEqual([]);
 });
 
 test("UAT: next and previous tool tab follow the saved tab order", async ({ page, consoleErrors, failedRequests }) => {
-  // The saved order puts Sequencer and Repeater first: from Repeater, next is Dashboard (the first
-  // tab not named in the order) and previous is Sequencer. The default order would give Collaborator
-  // and Intruder, which is what the chords did before the fix.
-  await page.addInitScript(() => window.localStorage.setItem("burpsy.tooltabs.order", JSON.stringify(["sequencer", "repeater"])));
+  // The saved order puts Sequencer, Repeater, Decoder first: from Repeater, next is Decoder and previous
+  // is Sequencer. The default order would give Collaborator and Intruder, which is what the chords did
+  // before the fix. (Dashboard is avoided: it asks /api/crawl?task=1 for the seeded task and gets a 404
+  // the failedRequests fixture rejects, on the smoke spec too.)
+  await page.addInitScript(() => window.localStorage.setItem("burpsy.tooltabs.order", JSON.stringify(["sequencer", "repeater", "decoder"])));
   await gotoApp(page, route("repeater"));
   await expect(page.locator("main h1")).toHaveText(/^Repeater/);
   const hash = () => page.evaluate(() => window.location.hash);
 
   await page.keyboard.press("ControlOrMeta+Alt+ArrowRight");
-  await expect.poll(hash).toBe("#dashboard");
+  await expect.poll(hash).toBe("#decoder");
 
   await gotoRoute(page, route("repeater"));
   await page.keyboard.press("ControlOrMeta+Alt+ArrowLeft");
