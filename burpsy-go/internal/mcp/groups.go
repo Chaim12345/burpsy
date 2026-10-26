@@ -365,7 +365,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "intruder_control", group: groupFuzzing,
 		short: "Pauses, resumes or stops an attack, and uploads a payload file.",
-		ops:   []string{"POST /api/intruder/attacks/{id}/{action...}", "POST /api/intruder/attacks/{id}", "POST /api/intruder/attacks/{$}", "POST /api/intruder/payload-files"},
+		ops:   []string{"POST /api/intruder/attacks/{id}/{action...}", "POST /api/intruder/attacks/{$}", "POST /api/intruder/payload-files"},
 	},
 	{
 		name: "authz", group: groupFuzzing,
@@ -496,6 +496,8 @@ var groupedTools = []groupSpec{
 //
 // The route surface (-surface routes) still lists all of them, for debugging.
 var notExposed = map[string]string{
+	"POST /api/intruder/attacks/{id}": "the no-action 404 shape of the control route; an agent's /api/intruder/attacks/7 resolves to " +
+		"the {id}/{action...} route (the gate's own longest-prefix rule), so this key could never be the one a call reaches",
 	"GET /":       "the console's own index.html and SPA catch-all — an asset, not an operation",
 	"GET /ca.crt": "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
 	"GET /api/engagement/clickbandit.js": "the Clickbandit script served as text/javascript for the operator to paste into a " +
