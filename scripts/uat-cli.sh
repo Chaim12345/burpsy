@@ -69,9 +69,23 @@ PY
 [ "$XID" != none ] && ok "the exchange is in history (id $XID)" || { no "no /search exchange in history"; echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
 
 echo "=== 3. scan the exchange ==="
-code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$XID")
-[ "$code" = 428 ] && ok "an unconfirmed audit is refused (428)" || no "unconfirmed audit -> HTTP $code, want 428"
-token=$(python3 - "$WEB_PORT" "$XID" <<'PY'
+# history_id PREFIX -> the id of the first history exchange whose path starts with PREFIX, or "none".
+history_id() {
+  python3 - "$WEB_PORT" "$1" <<'PY'
+import json,sys,urllib.request
+rows=json.load(urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/history",timeout=10))
+rows=rows if isinstance(rows,list) else (rows.get("exchanges") or [])
+row=next((r for r in rows if r.get("path","").startswith(sys.argv[2])),None)
+print(row["id"] if row else "none")
+PY
+}
+# audit_exchange ID LABEL -> audits one exchange through the confirmation gate (refused unconfirmed
+# first), returning non-zero when it could not run.
+audit_exchange() {
+  local id="$1" label="$2" code token res
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$id")
+  [ "$code" = 428 ] && ok "an unconfirmed audit of $label is refused (428)" || no "unconfirmed audit of $label -> HTTP $code, want 428"
+  token=$(python3 - "$WEB_PORT" "$id" <<'PY'
 import json,sys,urllib.request
 web,xid=sys.argv[1:3]
 d={"method":"POST","url":f"/api/audit/{xid}"}
@@ -79,15 +93,38 @@ r=urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{web}/api/aud
 print(json.load(r).get("token",""))
 PY
 )
-[ -n "$token" ] || { no "could not mint a confirmation for the audit"; echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
-res=$(curl -s -m 300 -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$XID" -H "X-Burpsy-Confirm: $token")
-echo "$res" | grep -q "\"exchange_id\":$XID" && ok "the audit ran" || no "audit response: ${res:0:160}"
-n=$(curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c '
+  [ -n "$token" ] || { no "could not mint a confirmation for the audit of $label"; return 1; }
+  res=$(curl -s -m 300 -X POST "http://127.0.0.1:$WEB_PORT/api/audit/$id" -H "X-Burpsy-Confirm: $token")
+  echo "$res" | grep -q "\"exchange_id\":$id" && ok "the audit of $label ran" || { no "audit of $label response: ${res:0:160}"; return 1; }
+}
+# xss_count [PATH] -> cross-site scripting findings, optionally only those naming PATH.
+xss_count() {
+  curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 rows=d if isinstance(d,list) else (d.get("findings") or [])
-print(sum(1 for f in rows if "cross-site scripting" in json.dumps(f).lower()))')
+want=sys.argv[1] if len(sys.argv)>1 else ""
+print(sum(1 for f in rows if "cross-site scripting" in json.dumps(f).lower() and want in json.dumps(f)))' "${1:-}"
+}
+audit_exchange "$XID" "/search" || { echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
+n=$(xss_count)
 [ "${n:-0}" -ge 1 ] && ok "a cross-site scripting finding was reported ($n)" || no "no cross-site scripting finding after auditing /search"
 
+echo "=== 4. the safe twin stays clean ==="
+# /safe/search is the same endpoint with the reflection escaped (internal/vulnapp declares it Safe).
+# Findings carry no path, so the assertion is a count: the vulnerable audit above produced n cross-site
+# scripting findings (the positive control, n >= 1), and auditing the twin must add none.
+body=$(env -u NO_PROXY -u no_proxy curl -s -x "http://127.0.0.1:$PROXY_PORT" "http://127.0.0.1:$TARGET_PORT/safe/search?q=seed")
+echo "$body" | grep -q 'seed' && ok "the safe twin's response reached the client" || no "safe twin body: ${body:0:120}"
+sleep 0.5
+SID=$(history_id /safe/search)
+if [ "$SID" = none ]; then
+  no "no /safe/search exchange in history"
+elif audit_exchange "$SID" "/safe/search"; then
+  total_after=$(xss_count)
+  [ "${total_after:-0}" -eq "${n:-0}" ] && ok "auditing the safe twin added no cross-site scripting finding ($n -> $total_after)" || no "cross-site scripting findings changed $n -> $total_after after the safe twin audit"
+fi
+
+if [ -n "${UAT_DUMP_FINDINGS:-}" ]; then curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c "import json,sys;d=json.load(sys.stdin);print([f for f in d[\"findings\"] if \"cross-site\" in json.dumps(f).lower()])"; fi
 echo; echo "############ $PASS passed, $FAIL failed ############"
 [ "$FAIL" -eq 0 ]
