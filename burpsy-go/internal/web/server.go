@@ -1179,7 +1179,7 @@ func (s *Server) setupRoutes() {
 	// is running, the prefix carries the per-attack action. Before these an attack could not be paused,
 	// resumed or stopped from anywhere — see api_intruder_control.go.
 	s.route("/api/intruder/attacks", s.handleIntruderAttacks)
-	s.route("/api/intruder/attacks/", s.handleIntruderAttackAction)
+	s.route("/api/intruder/attacks/{id}/{action}", s.handleIntruderAttackAction)
 	s.route("/api/intruder/again", s.handleIntruderAgain)
 	s.route("/api/scanner/live", s.handleScannerLive)
 	s.route("/api/scanner/coverage", s.handleScannerCoverage)

@@ -80,7 +80,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/intercept/startup": false,
  "/api/intruder/again": true,
  "/api/intruder/attacks": false,
- "/api/intruder/attacks/": false,
+ "/api/intruder/attacks/{id}/{action}": false,
  "/api/intruder/payload-files": false,
  "/api/intruder/points": false,
  "/api/intruder/run": true,

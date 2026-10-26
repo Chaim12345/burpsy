@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -170,12 +169,7 @@ func (s *Server) handleIntruderAttacks(w http.ResponseWriter, r *http.Request) {
 // success — the shape /api/sequencer/stop used to have before it grew a real loop to stop — is how a
 // stop button that does nothing reads as a stop button that worked.
 func (s *Server) handleIntruderAttackAction(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/intruder/attacks/")
-	idStr, action, ok := strings.Cut(rest, "/")
-	if !ok {
-		http.Error(w, "Expected /api/intruder/attacks/{task_id}/{pause|resume|stop}", http.StatusNotFound)
-		return
-	}
+	idStr, action := r.PathValue("id"), r.PathValue("action")
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid task id", http.StatusNotFound)

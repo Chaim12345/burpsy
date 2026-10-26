@@ -79,7 +79,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/intercept/startup": "riskLocal",
  "/api/intruder/again": "riskAttack",
  "/api/intruder/attacks": "riskRead",
- "/api/intruder/attacks/": "riskLocal",
+ "/api/intruder/attacks/{id}/{action}": "riskLocal",
  "/api/intruder/payload-files": "riskLocal",
  "/api/intruder/points": "riskRead",
  "/api/intruder/run": "riskAttack",

@@ -250,6 +250,9 @@ func TestIntruderAttackActionRefusals(t *testing.T) {
 		{"/api/intruder/attacks/9999/stop", http.StatusNotFound, "an unknown task id"},
 		{"/api/intruder/attacks/notanumber/stop", http.StatusNotFound, "a non-numeric id"},
 		{"/api/intruder/attacks/1", http.StatusNotFound, "no action segment"},
+		{"/api/intruder/attacks/1/frobnicate", http.StatusNotFound, "an unknown action"},
+		{"/api/intruder/attacks/1/stop/extra", http.StatusNotFound, "a segment after the action"},
+		{"/api/intruder/attacks/1/stop/", http.StatusNotFound, "a trailing slash after the action"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodPost, tc.path, nil)

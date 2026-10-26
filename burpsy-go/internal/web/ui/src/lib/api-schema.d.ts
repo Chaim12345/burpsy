@@ -1502,7 +1502,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/intruder/attacks/{id}/stop": {
+    "/api/intruder/attacks/{id}/{action}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1515,7 +1515,7 @@ export type paths = {
          * POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, an attack past acting on answers 409
          * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
-        post: operations["postApiIntruderAttacksByIdStop"];
+        post: operations["postApiIntruderAttacksByIdByAction"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7494,11 +7494,12 @@ export interface operations {
             };
         };
     };
-    postApiIntruderAttacksByIdStop: {
+    postApiIntruderAttacksByIdByAction: {
         parameters: {
             query?: never;
             header?: never;
             path: {
+                action: string;
                 id: string;
             };
             cookie?: never;

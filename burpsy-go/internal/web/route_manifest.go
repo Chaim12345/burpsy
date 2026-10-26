@@ -95,7 +95,7 @@ func concretePath(pattern, subPath string) string {
 	// "{$}" anchors a pattern to its exact trailing slash and is not part of a URL.
 	pattern = strings.TrimSuffix(pattern, "{$}")
 	if i := strings.Index(pattern, "{"); i >= 0 {
-		return pattern[:i] + subPath + pattern[strings.Index(pattern, "}")+1:]
+		return pattern[:i] + subPath + pattern[strings.LastIndex(pattern, "}")+1:]
 	}
 	return pattern + subPath
 }
@@ -549,7 +549,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "every intruder attack this process is running, with its status; sends nothing",
 	},
-	"/api/intruder/attacks/": {
+	"/api/intruder/attacks/{id}/{action}": {
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1/stop",
 		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
 			"an attack past acting on answers 409",
