@@ -32,6 +32,14 @@ func apiAuthEndpoints() []Endpoint {
 		{Path: "/api/safe/admin/users", Row: row, Safe: true, RequestHeaders: cookie,
 			Note: "the same operation enforcing the admin role: a non-admin session is 403, " +
 				"anonymous is 401"},
+		{Path: "/api/admin/settings", Row: row, Method: "POST", ContentType: "application/json",
+			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
+			Note: "state-changing admin operation (a settings write) accepted from ANY authenticated " +
+				"session, whatever its role; anonymous is 401"},
+		{Path: "/api/safe/admin/settings", Row: row, Safe: true, Method: "POST", ContentType: "application/json",
+			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
+			Note: "the same write enforcing the admin role: a non-admin session is 403 and nothing is " +
+				"written, anonymous is 401"},
 		{Path: "/api/users/2", Row: row, Method: "POST", ContentType: "application/json",
 			Body:           `{"username":"bob","email":"bob@example.test"}`,
 			RequestHeaders: map[string]string{"Cookie": IDORSecondSessionCookie},
@@ -72,7 +80,54 @@ func apiAuthSafeAdminUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiAuthSettingWrites counts the settings writes each user id got through, so a test can pin that a
+// check did (or did not) change state as the low-privilege identity.
+var (
+	apiAuthSettingsMu    sync.Mutex
+	apiAuthSettingWrites = map[int]int{}
+)
+
+// APIAuthSettingWritesBy reports how many admin-settings writes (vulnerable twin only: the safe twin
+// refuses non-admins) were accepted from user id uid.
+func APIAuthSettingWritesBy(uid int) int {
+	apiAuthSettingsMu.Lock()
+	defer apiAuthSettingsMu.Unlock()
+	return apiAuthSettingWrites[uid]
+}
+
+// apiAuthAdminSettings is a state-changing admin operation: POST writes a setting. The vulnerable
+// twin accepts any authenticated session; the safe twin requires the admin (user 1).
+func apiAuthAdminSettings(safe bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid := idorSession(r)
+		if uid == 0 {
+			idorJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if safe && uid != 1 {
+			idorJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			idorJSON(w, http.StatusBadRequest, map[string]string{"error": "json body required"})
+			return
+		}
+		apiAuthSettingsMu.Lock()
+		apiAuthSettingWrites[uid]++
+		apiAuthSettingsMu.Unlock()
+		idorJSON(w, http.StatusOK, map[string]any{"updated": true, "setting": body["setting"]})
+	}
+}
+
 func registerAPIAuth(mux *http.ServeMux) {
+	mux.HandleFunc("/api/admin/settings", apiAuthAdminSettings(false))
+	mux.HandleFunc("/api/safe/admin/settings", apiAuthAdminSettings(true))
 	mux.HandleFunc("/api/admin/users", apiAuthAdminUsers)
 	mux.HandleFunc("/api/safe/admin/users", apiAuthSafeAdminUsers)
 	mux.HandleFunc("/api/users/", apiAuthProfile(false))

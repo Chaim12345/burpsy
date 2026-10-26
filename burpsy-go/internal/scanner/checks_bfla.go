@@ -5,8 +5,12 @@ package scanner
 // configured second, low-privilege identity. Being served the operation proves the function is
 // not role-enforced, with no object-reference ambiguity: B asked for exactly what A asked for.
 //
-// Slice 2 is read-only: only GET/HEAD exchanges are replayed. Escalation to a state-changing
-// method is a write probe and belongs to slice 3 behind CheckAPIWrites.
+// GET/HEAD exchanges are replayed under CheckBFLA alone. A state-changing admin operation (POST, PUT
+// or PATCH) is replayed too, but that is a WRITE on the target, so it needs the explicit writes
+// opt-in CheckAPIWrites on top. DELETE is never replayed: a destructive probe is not worth the
+// damage a role check could do. A write replay is sent once, not repeated for stability: a second
+// write would apply the change twice, and the anonymous control plus the identical-shape check carry
+// the evidence.
 
 import (
 	"context"
@@ -26,6 +30,15 @@ func bflaAdminPath(path string) bool {
 		if bflaAdminWords[seg] {
 			return true
 		}
+	}
+	return false
+}
+
+// bflaWriteMethod reports the state-changing methods the pass may replay under the writes opt-in.
+func bflaWriteMethod(m string) bool {
+	switch strings.ToUpper(m) {
+	case "POST", "PUT", "PATCH":
+		return true
 	}
 	return false
 }
@@ -53,10 +66,12 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if sec == nil {
 		return nil, nil
 	}
-	if !strings.EqualFold(cc.Exchange.Method, "GET") && !strings.EqualFold(cc.Exchange.Method, "HEAD") {
-		// Read-only slice: replaying a state-changing method is a write probe, slice 3's
-		// CheckAPIWrites gate.
+	write := bflaWriteMethod(cc.Exchange.Method)
+	if !write && !strings.EqualFold(cc.Exchange.Method, "GET") && !strings.EqualFold(cc.Exchange.Method, "HEAD") {
 		return nil, nil
+	}
+	if write && !cc.Config.CheckAPIWrites {
+		return nil, nil // a write probe needs the explicit writes opt-in; without it, send nothing
 	}
 	raw := requestRaw(cc.Scanner, cc.Exchange)
 	if raw == "" || !idorHasCredentials(raw) {
@@ -97,20 +112,34 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if nr.Status >= 200 && nr.Status <= 299 && ashape.same(idorShapeOf(nr.Body)) {
 		return nil, nil
 	}
-	// Stability: the cross-read repeated must answer the same way.
-	again, err := h.send(ctx, []byte(braw))
-	if err != nil {
-		return nil, err
-	}
-	if again.Status != br.Status || !ashape.same(idorShapeOf(again.Body)) {
-		return nil, nil
+	// Stability: the cross-read repeated must answer the same way. Never for a write: repeating it
+	// would apply the change a second time.
+	againStatus := br.Status
+	if !write {
+		again, err := h.send(ctx, []byte(braw))
+		if err != nil {
+			return nil, err
+		}
+		if again.Status != br.Status || !ashape.same(idorShapeOf(again.Body)) {
+			return nil, nil
+		}
+		againStatus = again.Status
 	}
 	detail := fmt.Sprintf("The request as captured invokes a privileged operation (%s %s) as the "+
 		"audited identity. Replayed under a second configured identity - a low-privilege account on "+
 		"the same application - it returned HTTP %d with the same response structure: the operation "+
 		"is served regardless of role. Controls: the same request with every credential removed "+
 		"returned HTTP %d, and the second-identity replay repeated returned HTTP %d again.",
-		cc.Exchange.Method, cc.Exchange.Path, br.Status, nr.Status, again.Status)
+		cc.Exchange.Method, cc.Exchange.Path, br.Status, nr.Status, againStatus)
+	if write {
+		detail = fmt.Sprintf("The request as captured is a state-changing call to a privileged operation "+
+			"(%s %s) made as the audited identity. Replayed once under a second configured identity - a "+
+			"low-privilege account on the same application - it returned HTTP %d with the same response "+
+			"structure: the operation accepted the write regardless of role, and that write was applied to "+
+			"the target. Control: the same request with every credential removed returned HTTP %d. "+
+			"Not repeated for stability, because a second write would change state again.",
+			cc.Exchange.Method, cc.Exchange.Path, br.Status, nr.Status)
+	}
 	f := buildHeaderFinding(cc, "Broken access control", "high", "firm",
 		fmt.Sprintf("second identity replay of %s -> HTTP %d, %s", cc.Exchange.Path, br.Status,
 			excerpt(br.Body, 0, 160)), detail)
