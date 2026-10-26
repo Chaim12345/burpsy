@@ -226,7 +226,7 @@ func Test_an_invisible_listener_ignores_a_padded_host_header(t *testing.T) {
 	if _, err := conn.Write([]byte(req)); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := io.ReadAll(bufio.NewReader(conn))
 	if err != nil {
 		t.Fatalf("read response: %v", err)

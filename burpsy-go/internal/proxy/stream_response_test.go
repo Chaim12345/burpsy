@@ -605,7 +605,7 @@ func TestATruncatedContentLengthResponseIsSalvagedNotDropped(t *testing.T) {
 					}
 				}
 				fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\n\r\n", declared)
-				c.Write([]byte(body))
+				_, _ = c.Write([]byte(body))
 				// Close short of the declaration: that is the defect under test.
 			}(conn)
 		}
@@ -621,7 +621,7 @@ func TestATruncatedContentLengthResponseIsSalvagedNotDropped(t *testing.T) {
 	}
 	defer conn.Close()
 	fmt.Fprintf(conn, "GET /ftp/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	var got bytes.Buffer
 	_, _ = got.ReadFrom(conn) // ends when the proxy closes the salvaged response
 	received := got.String()

@@ -103,11 +103,9 @@ func checkServerSidePrototypePollution(ctx context.Context, cc *CheckContext) ([
 			}
 			wasIndented = sppjIndented(after.Body)
 		}
-		reverted, rerr := send(sppjWithProto(body, `{"json spaces":null}`))
+		_, rerr := send(sppjWithProto(body, `{"json spaces":null}`))
 		if !wasIndented {
-			if rerr == nil && sppjIndented(reverted.Body) != sppjIndented(base.Body) {
-				// The revert moved the shape but the pollution never showed: noise, not evidence.
-			}
+			// The pollution never showed; a revert that moved the shape anyway is noise, not evidence.
 			return nil, nil
 		}
 		if rerr != nil {
@@ -122,7 +120,7 @@ func checkServerSidePrototypePollution(ctx context.Context, cc *CheckContext) ([
 			// or the shape was never the pollution's doing. Neither is a clean finding.
 			return nil, nil
 		}
-		evidence := fmt.Sprintf("baseline: compact JSON\nPOST with __proto__ json spaces=10: indented with 10 spaces\nPOST with __proto__ json spaces=null: compact again")
+		evidence := "baseline: compact JSON\nPOST with __proto__ json spaces=10: indented with 10 spaces\nPOST with __proto__ json spaces=null: compact again"
 		detail := "The endpoint merges a posted JSON body into server-side settings without dropping " +
 			"__proto__: a {\"__proto__\":{\"json spaces\":10}} member re-serialised this endpoint's JSON " +
 			"responses with ten-space indentation, and a null member reverted it. The property reached " +

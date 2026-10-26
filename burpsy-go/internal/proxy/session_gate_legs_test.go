@@ -87,7 +87,7 @@ func newGatedLegFixtureWithCertDir(t *testing.T, nextProtos []string, certDir st
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { oln.Close(); origin.Close() })
-	go origin.Serve(oln)
+	go func() { _ = origin.Serve(oln) }()
 
 	thost, tportStr, _ := net.SplitHostPort(oln.Addr().String())
 	tport, _ := strconv.Atoi(tportStr)

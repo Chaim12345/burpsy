@@ -29,7 +29,7 @@ const (
 	IssueOAuthImplicitFlow      = "OAuth implicit flow"
 	IssueOAuthStateMissing      = "OAuth state parameter missing"
 	IssueOAuthPKCEAbsentOrPlain = "OAuth PKCE absent or downgraded"
-	IssueOAuthRedirectURIBypass = "OAuth redirect_uri validation bypass"
+	IssueOAuthRedirectURIBypass = "OAuth redirect_uri validation bypass" //nolint:gosec // G101: an issue name, not a credential
 )
 
 // oauthEnabled is the bundle's own switch.

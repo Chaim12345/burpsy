@@ -105,7 +105,9 @@ func urlBypassAudit(t *testing.T, handler http.Handler, mod func(*ScanConfig)) [
 	t.Cleanup(srv.Close)
 	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("test server port %q: %v", portStr, err)
+	}
 	rt := &runtimeTarget{srv: srv, host: host, port: port, store: core.NewTrafficStore(), exchanges: map[string]core.ExchangeID{}}
 	client := &http.Client{Timeout: 10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

@@ -48,7 +48,7 @@ func TestATruncatedTLSContentLengthResponseIsSalvagedNotDropped(t *testing.T) {
 		}
 		defer conn.Close()
 		fmt.Fprintf(bw, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\n\r\n", declared)
-		bw.WriteString(body)
+		_, _ = bw.WriteString(body)
 		bw.Flush()
 		// Close short of the declaration: the defect under test.
 	}))

@@ -91,7 +91,7 @@ func TestInjectionUnderLoadNeverCorruptsTheStream(t *testing.T) {
 					break
 				}
 			}
-			f.client.Write(stream[off:end])
+			_, _ = f.client.Write(stream[off:end])
 			off = end
 			if pauseAt[off] {
 				time.Sleep(3 * time.Millisecond)
@@ -195,7 +195,7 @@ func TestInjectionUnderInterceptionNeverCorruptsTheStream(t *testing.T) {
 		t.Fatalf("SetRules: %v", err)
 	}
 	f := openLiveWsWith(t, engine)
-	f.client.SetReadDeadline(time.Time{})
+	_ = f.client.SetReadDeadline(time.Time{})
 
 	// The operator: forward every held frame the moment it appears. A hold whose poll loses to a
 	// sibling poll is already resolved, so Forward's error is ignored.
@@ -245,7 +245,7 @@ func TestInjectionUnderInterceptionNeverCorruptsTheStream(t *testing.T) {
 					break
 				}
 			}
-			f.client.Write(stream[off:end])
+			_, _ = f.client.Write(stream[off:end])
 			off = end
 			if pauseAt[off] {
 				time.Sleep(3 * time.Millisecond)
@@ -273,7 +273,7 @@ func TestInjectionUnderInterceptionNeverCorruptsTheStream(t *testing.T) {
 			}
 		}(g)
 	}
-	f.origin.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = f.origin.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 	next := 0
 	var frag []byte
 	open := false

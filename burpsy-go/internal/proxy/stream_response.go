@@ -418,7 +418,7 @@ func (s *Server) streamPlainResponse(
 		// head is already in hand, so this is ReadResponseBody and the rest of handleHTTP unchanged.
 		body, err := httputil.ReadResponseBody(br, head)
 		var truncated *httputil.TruncatedBodyError
-		if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+		if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 			s.config.logger.Warn("forward failed: reading response body", zap.String("path", path), zap.Error(err))
 			return
 		}

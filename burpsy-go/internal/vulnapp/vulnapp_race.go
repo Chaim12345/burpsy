@@ -61,10 +61,10 @@ func raceRedeemAnswer(w http.ResponseWriter, coupon string, already bool) {
 	w.Header().Set("Content-Type", "application/json")
 	if already {
 		w.WriteHeader(http.StatusConflict)
-		_, _ = fmt.Fprintf(w, `{"coupon":%q,"redeemed":false,"error":"already redeemed"}`, coupon)
+		_, _ = fmt.Fprintf(w, `{"coupon":%q,"redeemed":false,"error":"already redeemed"}`, coupon) //nolint:gosec // G705: application/json, the coupon %q-quoted
 		return
 	}
-	_, _ = fmt.Fprintf(w, `{"coupon":%q,"redeemed":true}`, coupon)
+	_, _ = fmt.Fprintf(w, `{"coupon":%q,"redeemed":true}`, coupon) //nolint:gosec // G705: application/json, the coupon %q-quoted
 }
 
 func raceEndpoints() []Endpoint {

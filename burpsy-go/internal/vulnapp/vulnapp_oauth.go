@@ -83,7 +83,7 @@ func oauthError(w http.ResponseWriter, msg string) {
 	// fixture that 400s every weak request by design trips it. The scanner checks read the
 	// redirect, not the refusal status, so the refusal carries no signal either way.
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
+	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`)) //nolint:gosec // G705: application/json naming a fixed refusal reason; the fixture is deliberately weak, not this line
 }
 
 func oauthEndpoints() []Endpoint {
