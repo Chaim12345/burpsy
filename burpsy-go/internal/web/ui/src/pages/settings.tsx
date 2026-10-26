@@ -1090,6 +1090,12 @@ export function NetworkSection(): JSX.Element {
  const [baseline, setBaseline] = useState("");
  const [newHost, setNewHost] = useState("");
  const [newAddress, setNewAddress] = useState("");
+ /**
+  * Bumped when the draft is replaced wholesale (Revert, adopting fresh server state). It keys the
+  * form so each WholeNumberInput remounts from the draft: a blank or half-typed number never reached
+  * the draft, so the draft's number can equal the restored one and the input would not re-sync.
+  */
+ const [revision, setRevision] = useState(0);
 
  const dirty = draft !== null && JSON.stringify(draft) !== baseline;
 
@@ -1110,6 +1116,7 @@ export function NetworkSection(): JSX.Element {
   if (draft !== null && JSON.stringify(draft) !== baseline) return;
   setDraft(normalised);
   setBaseline(next);
+  setRevision((current) => current + 1);
  }, [data, baseline, draft]);
 
  const overrides = draft?.resolution.overrides ?? [];
@@ -1132,6 +1139,7 @@ export function NetworkSection(): JSX.Element {
  const onRevert = () => {
   if (!baseline) return;
   setDraft(JSON.parse(baseline) as NetworkSettings);
+  setRevision((current) => current + 1);
  };
 
  // Only the sections that changed are sent. A full-document PUT would work, but it would also
@@ -1159,7 +1167,7 @@ export function NetworkSection(): JSX.Element {
  const redirectTypes = draft?.redirects.types ?? DEFAULT_REDIRECT_TYPES;
 
  return (
-  <Card>
+  <Card key={revision}>
    <SectionHeading
     title="Network"
     detail="Hostname resolution, DNS lookup, timeouts, redirections and open-ended responses. These bind every request this process sends — Repeater, Intruder, scanner probes and the crawler alike."
