@@ -194,4 +194,43 @@ describe("reflect-decode on the Protobuf tab", () => {
   expect(name.getAttribute("data-name-source")).toBe("reflection");
   expect(screen.getByRole("note", { name: "Schema provenance" })).toBeTruthy();
  });
+ test("a reflect answer that lands after the body changed is dropped, and the fetch state resets", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+   release = resolve;
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+   if (new URL(String(input), "http://localhost").pathname === "/api/protobuf/reflect-decode") {
+    await gate;
+    return json(REFLECTED);
+   }
+   return realFetch(input, init);
+  }) as typeof fetch;
+  function Harness() {
+   const [body, setBody] = useState("CJYB");
+   return (
+    <>
+     <button type="button" onClick={() => setBody("CJYC")}>
+      next body
+     </button>
+     <ProtobufView bodyBase64={body} grpc={true} direction="response" />
+    </>
+   );
+  }
+  renderWithProviders(<Harness />);
+  await openForm();
+  fill("Reflection target (host:port)", "api.test:443");
+  fill("gRPC service", "acme.v1.Users");
+  fetchNow();
+  await screen.findByRole("button", { name: "Fetching…" });
+  fireEvent.click(screen.getByRole("button", { name: "next body" }));
+  // the busy state of the cancelled fetch is gone
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Fetching…" }) === null).toBe(true));
+  release();
+  await new Promise((r) => setTimeout(r, 100));
+  // the old body's decode did not land on the new body
+  expect(screen.queryByText("user_id") === null).toBe(true);
+  expect(screen.queryByRole("note", { name: "Schema provenance" }) === null).toBe(true);
+ });
 });
