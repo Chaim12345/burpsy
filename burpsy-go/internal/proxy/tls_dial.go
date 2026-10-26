@@ -141,7 +141,7 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (n
 	conn, negotiated, err := dialer.Dial(context.Background(), serverName, addr, alpnOffer)
 	if err == nil && s.config.serverCerts != nil {
 		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
-			if port, cerr := strconv.Atoi(portText); cerr == nil {
+			if port, cerr := strconv.ParseUint(portText, 10, 16); cerr == nil {
 				s.config.serverCerts.Record(serverName, uint16(port), alpn.PeerCertificates(conn))
 			}
 		}

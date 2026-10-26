@@ -28,8 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/net/http2"
-
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/session"
@@ -77,7 +75,11 @@ func newGatedLegFixtureWithCertDir(t *testing.T, nextProtos []string, certDir st
 	}
 	for _, p := range nextProtos {
 		if p == "h2" {
-			_ = http2.ConfigureServer(origin, &http2.Server{})
+			// The stdlib Protocols switch is ConfigureServer's successor: with h2 in
+			// NextProtos, the TLS server answers h2 when ALPN negotiates it. The h2 leg
+			// of this test fails loudly if that stops being true.
+			origin.Protocols = new(http.Protocols)
+			origin.Protocols.SetHTTP2(true)
 		}
 	}
 	oln, err := tls.Listen("tcp", "127.0.0.1:0", origin.TLSConfig)

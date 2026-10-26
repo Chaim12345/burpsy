@@ -49,6 +49,7 @@ type H2Sessions struct {
 }
 
 type h2Session struct {
+	//nolint:staticcheck // see newClientConn: no stdlib API wraps an existing (fingerprinted) conn
 	cc   *http2.ClientConn
 	conn net.Conn
 	ip   string
@@ -157,7 +158,14 @@ func (p *H2Sessions) evictLocked(now time.Time) {
 // newClientConn wraps a negotiated h2 connection for pooling. The connection is net.Conn
 // rather than *tls.Conn because a fingerprinted dial (63pf) is a utls conn: http2 speaks
 // frames over the record layer either way.
-func (p *H2Sessions) newClientConn(conn net.Conn) (*http2.ClientConn, error) {
+//
+// SA1019 wants net/http's successors, but http.Transport.NewClientConn DIALS the address
+// itself - it cannot wrap an already-negotiated connection, so migrating would silently
+// drop the fingerprinted dial on every pooled h2 session. The deprecated API is the only
+// one that takes the conn; the annotations below are that reason, per line.
+func (p *H2Sessions) newClientConn(conn net.Conn) (*http2.ClientConn, error) { //nolint:staticcheck // no stdlib API wraps an existing conn
+	//nolint:staticcheck // no stdlib API wraps an existing conn
 	tr := &http2.Transport{IdleConnTimeout: p.ttl}
+	//nolint:staticcheck // no stdlib API wraps an existing conn
 	return tr.NewClientConn(conn)
 }
