@@ -3,8 +3,8 @@
 // keeps the retained-run list (GET /api/crawl), and the server answers ?task= from the same registry, so
 // the detail is requested only for a task that list names. Run with `bun run test:components`.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, screen } from "@testing-library/react";
-import { renderWithProviders } from "../../test/render";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders, testQueryClient } from "../../test/render";
 import { DashboardPage } from "./dashboard";
 
 const originalFetch = globalThis.fetch;
@@ -73,5 +73,16 @@ describe("Dashboard task detail and /api/crawl?task=", () => {
   await screen.findAllByText(/scan/i);
   await new Promise((r) => setTimeout(r, 300));
   expect(urls.filter((u) => u.startsWith("/api/crawl?task=1"))).not.toEqual([]);
+ });
+ test("a run that appears after the first load is fetched once the list refreshes", async () => {
+  const client = testQueryClient();
+  renderWithProviders(<DashboardPage />, client);
+  await screen.findAllByText(/scan/i);
+  await new Promise((r) => setTimeout(r, 150));
+  expect(urls.filter((u) => u.startsWith("/api/crawl?task="))).toEqual([]);
+  // The run registers; the next list refresh (a task event invalidates ["crawls"]) names it.
+  retained = [{ task_id: 1, state: "running", kind: "crawl" }];
+  await client.invalidateQueries({ queryKey: ["crawls"] });
+  await waitFor(() => expect(urls.filter((u) => u.startsWith("/api/crawl?task=1")).length > 0).toBe(true));
  });
 });
