@@ -20,6 +20,7 @@ import (
 	"github.com/quic-go/quic-go/http3"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
 // startH3Server brings up a real HTTP/3 server on a loopback UDP port and returns its address
@@ -208,5 +209,70 @@ func TestH3SendRefusesARawSpaceInTheRequestLine(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "request line") {
 		t.Fatalf("the refusal must name the request line, got %v", err)
+	}
+}
+
+// PR #363 review: the h3 pin dials the origin directly over QUIC, so egress policy it cannot
+// honor is a refusal naming the cause - never a silent bypass while the record implies the
+// policy was in force.
+func TestSendRawOutcomeHTTP3RefusesWhenAnUpstreamProxyIsConfigured(t *testing.T) {
+	policy := upstream.NewPolicy()
+	if _, err := policy.Set("*", "http://127.0.0.1:8081"); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultSenderConfig()
+	config.Upstream = policy
+	s := NewSender(config)
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := s.SendRawOutcome(ctx, "127.0.0.1", 443, true, raw, ProtocolPreferenceHTTP3)
+	if err == nil || !strings.Contains(err.Error(), "upstream proxy") {
+		t.Fatalf("want a refusal naming the upstream proxy, got %v", err)
+	}
+}
+
+func TestSendRawOutcomeHTTP3RefusesWhenACarrierIsConfigured(t *testing.T) {
+	s := NewSender(DefaultSenderConfig())
+	carrier := upstream.NewCarrier()
+	if err := carrier.SetSocks("socks5://127.0.0.1:1", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	s.WithUpstreamCarrier(carrier)
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := s.SendRawOutcome(ctx, "127.0.0.1", 443, true, raw, ProtocolPreferenceHTTP3)
+	if err == nil || !strings.Contains(err.Error(), "SOCKS carrier") {
+		t.Fatalf("want a refusal naming the SOCKS carrier, got %v", err)
+	}
+}
+
+func TestSendRawOutcomeHTTP3RefusesWhenAResolutionOverrideApplies(t *testing.T) {
+	s := NewSender(DefaultSenderConfig())
+	n := s.Network()
+	n.Resolution.Overrides = []HostOverride{{Host: "example.test", Address: "127.0.0.1", Enabled: true}}
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := s.SendRawOutcome(ctx, "example.test", 443, true, raw, ProtocolPreferenceHTTP3)
+	if err == nil || !strings.Contains(err.Error(), "host-resolution override") {
+		t.Fatalf("want a refusal naming the host-resolution override, got %v", err)
+	}
+}
+
+// A bare NewCarrier with no SOCKS set is no carrier: the pin must not refuse it.
+func TestSendRawOutcomeHTTP3AllowsAnEmptyCarrier(t *testing.T) {
+	host, port, _ := startH3Server(t)
+	s := NewSender(&SenderConfig{TLSVerify: false})
+	s.WithUpstreamCarrier(upstream.NewCarrier())
+	raw := []byte("GET /h3 HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, _, err := s.SendRawOutcome(ctx, host, port, true, raw, ProtocolPreferenceHTTP3); err != nil {
+		t.Fatalf("an empty carrier is no carrier; the pin refused or failed: %v", err)
 	}
 }
