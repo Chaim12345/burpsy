@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import { history, undo, undoDepth } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
-import { documentText, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "./editor-eol";
+import { documentText, hasMixedLineEndings, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "./editor-eol";
 import { selectedText, transformSelectionIn } from "./palette-selection";
 import { base64Decode, base64Encode, urlEncodeAllChars } from "./transforms";
 
@@ -209,5 +209,21 @@ describe("pasted and Pretty line endings (PR 363 review)", () => {
   const next = state.update({ changes: { from: 0, insert: state.facet(EditorView.clipboardInputFilter)[0]!("a\nb", state) } }).state;
   expect(next.doc.line(1).text).toBe("a");
   expect(next.doc.line(2).text.startsWith("b")).toBe(true);
+ });
+});
+
+describe("mixed line endings (PR 363 review, notice only)", () => {
+ const MIXED = 'POST /x HTTP/1.1\r\nHost: h\r\n\r\n{\n  "a": 1\n}';
+ test("detects a CRLF head over an LF body, and nothing else", () => {
+  expect(hasMixedLineEndings(MIXED)).toBe(true);
+  expect(hasMixedLineEndings(REQUEST.replace(/\n  "user": "a"\n/, ""))).toBe(false);
+  expect(hasMixedLineEndings("a\nb\nc")).toBe(false);
+  expect(hasMixedLineEndings("a\r\nb\r\n")).toBe(false);
+  expect(hasMixedLineEndings("")).toBe(false);
+ });
+ test("the document still holds a mixed message's bytes exactly, and an edit keeps them", () => {
+  const state = editorFor(MIXED);
+  expect(documentText(state)).toBe(MIXED);
+  expect(written(state, { changes: { from: 0, insert: "!" } })).toBe(`!${MIXED}`);
  });
 });

@@ -75,3 +75,14 @@ export function selectionTransformSpec(state: EditorState, transform: (input: st
  * LF body gets CRLF when the head is CRLF.
  */
 export const pasteLineBreaks: Extension = EditorView.clipboardInputFilter.of((text, state) => text.replace(/\r\n|\r|\n/g, state.lineBreak));
+
+/**
+ * True when the message mixes CRLF breaks with bare LF (or bare CR) breaks, for example a CRLF head
+ * over an LF body. The editor splits on one separator per document, so in such a message the breaks of
+ * the other kind stay characters inside a line and show as one long line. The bytes are untouched.
+ */
+export function hasMixedLineEndings(text: string): boolean {
+ const crlf = (text.match(/\r\n/g) ?? []).length;
+ const breaks = (text.match(/\r\n|\r|\n/g) ?? []).length;
+ return crlf > 0 && crlf < breaks;
+}

@@ -10,7 +10,14 @@ import {
 } from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { EditorState, Prec, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
-import { documentText, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "../lib/editor-eol";
+import {
+ documentText,
+ hasMixedLineEndings,
+ lineSeparatorFor,
+ pasteLineBreaks,
+ selectionText,
+ selectionTransformSpec,
+} from "../lib/editor-eol";
 import CodeMirror, { ExternalChange } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import {
@@ -1864,6 +1871,14 @@ export function HttpEditor({
           controls keep the browser's menu, and the Render view keeps it too — that iframe is
           sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
+   {active === "raw" && !charsetActive && hasMixedLineEndings(shown) ? (
+    <div className="notice" role="note" aria-label="Mixed line endings">
+     <span>
+      Mixed line endings: this message has CRLF and bare LF breaks. Lines of the other kind show joined on one line here. The bytes are
+      unchanged and are sent exactly as they are.
+     </span>
+    </div>
+   ) : null}
    <ContextMenu groups={active === "render" ? [] : allGroups} docTopic="message-editor">
     <div className="editor-body" style={{ height }}>
      {pluginTabs.openKey !== null && pluginTabs.content ? (
