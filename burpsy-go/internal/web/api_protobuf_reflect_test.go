@@ -13,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/grpcproto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -50,7 +51,7 @@ func startReflectFixture(t *testing.T, serveReflection bool) (dialTo func(target
 			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 				return lis.DialContext(ctx)
 			}),
-			grpc.WithInsecure())
+			grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}, dials
 }
 
