@@ -120,7 +120,7 @@ func (d Dialer) dialFingerprinted(ctx context.Context, serverName, addr string, 
 	// the hello the operator's offer demands is the hello that goes on the wire.
 	uconn := utls.UClient(carrier, ucfg, utls.HelloCustom)
 	if err := uconn.ApplyPreset(&spec); err != nil {
-		carrier.Close()
+		_ = carrier.Close()
 		return nil, "", fmt.Errorf("TLS fingerprint %q: %w", string(d.Fingerprint), err)
 	}
 	handshakeCtx := ctx
@@ -130,7 +130,7 @@ func (d Dialer) dialFingerprinted(ctx context.Context, serverName, addr string, 
 		defer cancel()
 	}
 	if err := uconn.HandshakeContext(handshakeCtx); err != nil {
-		carrier.Close()
+		_ = carrier.Close()
 		return nil, "", err
 	}
 	// The preset, not the config, owns the offered version range: ApplyPreset overwrites
@@ -139,7 +139,7 @@ func (d Dialer) dialFingerprinted(ctx context.Context, serverName, addr string, 
 	// configured floor is therefore enforced here, after the handshake and before a single
 	// byte of data: a connection that negotiated below it is refused, never used.
 	if version := uconn.ConnectionState().Version; d.MinVersion != 0 && version < d.MinVersion {
-		uconn.Close()
+		_ = uconn.Close()
 		return nil, "", fmt.Errorf("tls: the fingerprinted dial negotiated version 0x%04x, below the configured floor 0x%04x", version, d.MinVersion)
 	}
 	return uconn, uconn.ConnectionState().NegotiatedProtocol, nil

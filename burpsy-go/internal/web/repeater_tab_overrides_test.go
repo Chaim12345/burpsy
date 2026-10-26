@@ -44,7 +44,7 @@ func gzipOrigin(t *testing.T, plain string, encoding string) (*httptest.Server, 
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Content-Encoding", encoding)
 		w.Header().Set("Content-Length", fmt.Sprint(packed.Len()))
-		w.Write(packed.Bytes())
+		_, _ = w.Write(packed.Bytes())
 	})), packed.Bytes()
 }
 
@@ -143,7 +143,7 @@ func brotliOrigin(t *testing.T, plain string) *httptest.Server {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Length", fmt.Sprint(packed.Len()))
-		w.Write(packed.Bytes())
+		_, _ = w.Write(packed.Bytes())
 	}))
 }
 

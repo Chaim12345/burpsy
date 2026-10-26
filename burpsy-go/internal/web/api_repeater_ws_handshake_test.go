@@ -43,7 +43,9 @@ func TestRepeaterWsSendDialsTheEditedHandshake(t *testing.T) {
 		t.Fatalf("edited-handshake send: %d %s", rec.Code, rec.Body.String())
 	}
 	var resp repeaterWsSendResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode send reply: %v", err)
+	}
 	if len(resp.Messages) != 1 || resp.Messages[0].Payload != "echo: edited frame" {
 		t.Fatalf("reply = %+v", resp.Messages)
 	}
@@ -139,7 +141,9 @@ func TestRepeaterWsHandshakePreviewBuildsANewConnectionsHead(t *testing.T) {
 		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
 	}
 	var resp repeaterWsHandshakePreviewResp
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode preview reply: %v", err)
+	}
 	if resp.Source != "new" {
 		t.Errorf("source = %q, want new", resp.Source)
 	}

@@ -261,7 +261,7 @@ func openAPIQueryParams(query []queryParam) []any {
 // action path, so each gets the exact branch.
 func openAPIRequestBody(method, pattern, path string, spec opSchema) map[string]any {
 	body := map[string]any{"required": !spec.optional}
-	content := map[string]any{}
+	var content map[string]any
 	media := func(schema map[string]any) map[string]any {
 		return map[string]any{"application/json": map[string]any{"schema": schema}}
 	}

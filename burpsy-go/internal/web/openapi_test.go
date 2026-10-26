@@ -297,11 +297,10 @@ func TestOpenAPIActionVariantsPublishTheirOwnBody(t *testing.T) {
 			branches, _ := published["anyOf"].([]any)
 			found := false
 			for _, branch := range branches {
-				gotBranch, _ := json.Marshal(branch)
 				// A published branch carries a title the reflected schema does not; compare without it.
 				branchMap, _ := branch.(map[string]any)
 				delete(branchMap, "title")
-				gotBranch, _ = json.Marshal(branchMap)
+				gotBranch, _ := json.Marshal(branchMap)
 				if bytes.Equal(gotBranch, want) {
 					found = true
 					break
