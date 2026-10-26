@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,12 +42,28 @@ func startWsOriginAccepting(t *testing.T, afterUpgrade []byte, handshakes int) (
 	t.Cleanup(func() { ln.Close() })
 
 	received = make(chan []byte, handshakes)
+	// u5jf: the held connection and the hold itself end at test cleanup, so the fake origin
+	// and the relay it feeds cannot outlive the test.
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	var connMu sync.Mutex
+	var open []net.Conn
+	t.Cleanup(func() {
+		connMu.Lock()
+		defer connMu.Unlock()
+		for _, c := range open {
+			c.Close()
+		}
+	})
 	go func() {
 		for i := 0; i < handshakes; i++ {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			connMu.Lock()
+			open = append(open, conn)
+			connMu.Unlock()
 			br := bufio.NewReader(conn)
 			var raw []byte
 			for {
@@ -70,7 +87,10 @@ func startWsOriginAccepting(t *testing.T, afterUpgrade []byte, handshakes int) (
 			}
 			// Held open so the relay's two goroutines are still pumping when the
 			// test reads; the origin closing immediately would race the capture.
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-done:
+			}
 			conn.Close()
 		}
 	}()
@@ -88,12 +108,26 @@ func startProxy(t *testing.T, srv *Server) string {
 		t.Fatalf("proxy listen: %v", err)
 	}
 	t.Cleanup(func() { ln.Close() })
+	// u5jf: accepted client connections are closed at test cleanup, so handler goroutines
+	// cannot outlive the test when the test's client end stays open.
+	var connMu sync.Mutex
+	var open []net.Conn
+	t.Cleanup(func() {
+		connMu.Lock()
+		defer connMu.Unlock()
+		for _, c := range open {
+			c.Close()
+		}
+	})
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			connMu.Lock()
+			open = append(open, conn)
+			connMu.Unlock()
 			go srv.handleConnection(conn)
 		}
 	}()

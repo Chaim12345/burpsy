@@ -204,6 +204,9 @@ func TestSessionGateAppliesOnTheTLSTunnelLeg(t *testing.T) {
 			},
 		},
 	}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 
 	for i := 0; i < 2; i++ {
 		resp, err := client.Get("https://" + f.originAddr + "/protected")
@@ -246,6 +249,9 @@ func TestSessionGateAppliesOnTheH2RelayLeg(t *testing.T) {
 			ForceAttemptHTTP2: true,
 		},
 	}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 
 	var protoMajor int
 	for i := 0; i < 2; i++ {

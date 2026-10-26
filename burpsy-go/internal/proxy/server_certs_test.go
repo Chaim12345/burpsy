@@ -74,6 +74,9 @@ func TestTheProxyRecordsTheOriginsCertificateOnAnInterceptedConnection(t *testin
 		Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: ln.Addr().String()}),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 	resp, err := client.Get("https://" + net.JoinHostPort(thost, tport) + "/")
 	if err != nil {
 		t.Fatalf("https through proxy: %v", err)
