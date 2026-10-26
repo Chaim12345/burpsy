@@ -165,7 +165,7 @@ describe("Repeater tab close surfaces a failed action cleanup (1944 correction)"
 
  test("a bulk close lists one notice per failed cleanup, and retry clears only its own", async () => {
   const alpha = openOnlyTab("https://one.test:443", { name: "alpha" });
-  useApp.getState().openRepeaterTab({ name: "bravo", target: "https://two.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
+  const bravo = useApp.getState().openRepeaterTab({ name: "bravo", target: "https://two.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
   const charlie = useApp.getState().openRepeaterTab({ name: "charlie", target: "https://three.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
   deleteStatuses = [500];
   renderRepeater();
@@ -176,7 +176,7 @@ describe("Repeater tab close surfaces a failed action cleanup (1944 correction)"
   await waitFor(() => expect(useApp.getState().failedActionCleanups).toHaveLength(2));
   expect(useApp.getState().failedActionCleanups.map((entry) => entry.tabId).sort()).toEqual([alpha, charlie].sort());
   expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
-  expect(calls.some((c) => c.method === "DELETE" && c.path.includes("/bravo/"))).toBe(false);
+  expect(calls.some((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${bravo}/action`)).toBe(false);
   // Retry the first listed failure; the other stays put.
   deleteStatuses = [200];
   fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]!);
