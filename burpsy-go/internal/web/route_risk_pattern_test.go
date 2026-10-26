@@ -6,6 +6,7 @@ package web
 // the gate cannot see.
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -100,7 +101,11 @@ func TestRouteRiskForAgreesWithTheProductionMux(t *testing.T) {
 				mp = mp[i+1:]
 			}
 			mr, mok := manifest[mp]
-			if mp == "" || mp == "/" || !mok {
+			if mp == "" || mp == "/" {
+				continue
+			}
+			if !mok {
+				t.Errorf("%s %s: the mux matched %q, which has no manifest entry, so the gate cannot classify it", m, path, mp)
 				continue
 			}
 			if strings.HasSuffix(mp, "/") && !strings.HasSuffix(path, "/") && !strings.Contains(mp, "{") {
@@ -112,4 +117,69 @@ func TestRouteRiskForAgreesWithTheProductionMux(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The gate runs on the raw request path BEFORE the mux cleans it. A mutation on a confirmation-worthy
+// route must therefore never execute through a path spelling the gate classifies differently from
+// the mux: double slashes, dot segments and a missing trailing slash. For every such spelling the
+// answer without a token must be a refusal (428), a redirect (the mux never runs the handler), or
+// a 404/405; and a redirect, when followed with the same verb, must land on a 428.
+func TestCanonicalisedSpellingsOfGatedRoutesNeverExecuteUnconfirmed(t *testing.T) {
+	s := newTestServer()
+	checked := 0
+	for p, r := range manifest {
+		if !needsConfirmation(r.risk) {
+			continue
+		}
+		base := concretePath(p, "1")
+		if strings.HasSuffix(p, "/{$}") {
+			base = strings.TrimSuffix(p, "{$}")
+		}
+		if base == "" || !strings.HasPrefix(base, "/api/") {
+			continue
+		}
+		spellings := []string{
+			strings.Replace(base, "/api/", "/api//", 1),
+			strings.Replace(base, "/api/", "/api/./", 1),
+			strings.Replace(base, "/api/", "/api/x/../", 1),
+			strings.TrimSuffix(base, "/"),
+			base + "/",
+		}
+		for _, sp := range spellings {
+			if sp == "" || sp == base {
+				continue
+			}
+			for _, m := range []string{"POST", "PUT", "DELETE"} {
+				rec := httptest.NewRecorder()
+				s.guarded.ServeHTTP(rec, sameOriginRequest(m, sp))
+				checked++
+				switch {
+				case rec.Code == 428 || rec.Code == 404 || rec.Code == 405:
+				case rec.Code >= 300 && rec.Code < 400:
+					loc := rec.Header().Get("Location")
+					if loc == "" {
+						t.Errorf("%s %s: redirect %d with no Location", m, sp, rec.Code)
+						continue
+					}
+					rec2 := httptest.NewRecorder()
+					s.guarded.ServeHTTP(rec2, sameOriginRequest(m, loc))
+					if rec2.Code >= 200 && rec2.Code < 300 {
+						t.Errorf("%s %s -> %s: a redirect target executed unconfirmed (%d)", m, sp, loc, rec2.Code)
+					}
+				default:
+					t.Errorf("%s %s (spelling of gated %q, %s): unconfirmed answer %d, want 428/redirect/404/405", m, sp, p, r.risk, rec.Code)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no gated spelling was exercised")
+	}
+}
+
+func sameOriginRequest(method, target string) *http.Request {
+	req := httptest.NewRequest(method, target, nil)
+	req.Host = "127.0.0.1:8081"
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	return req
 }

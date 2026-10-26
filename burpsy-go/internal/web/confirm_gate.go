@@ -373,8 +373,10 @@ func riskSeverity(r riskClass) int {
 
 // literalLen is a pattern's literal text: its length with every {wildcard} removed. It is the
 // specificity routeRiskFor ranks matches by, so "/api/skills/disabled" beats "/api/skills/{rest...}"
-// the way the mux's literal-beats-wildcard rule does (a plain length compare would let the longer
-// wildcard spelling win).
+// the way the mux's literal-beats-wildcard rule does for the current manifest (a plain length
+// compare would let the longer wildcard spelling win). This is verified against the production mux
+// for every path the manifest generates (TestRouteRiskForAgreesWithTheProductionMux); it is not a
+// claim that literal-text length is Go's general precedence rule.
 func literalLen(pattern string) int {
 	n, depth := 0, 0
 	for _, r := range pattern {
