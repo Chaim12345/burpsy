@@ -38,9 +38,17 @@ func operatorEngine(t *testing.T, edit func(raw string) *string) *intercept.Engi
 	if err := engine.SetRules(intercept.DirectionRequest, true, nil); err != nil {
 		t.Fatalf("SetRules: %v", err)
 	}
+	// u5jf: the pump stops when the test ends, not only at its 10s deadline.
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
 	go func() {
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
+			select {
+			case <-done:
+				return
+			default:
+			}
 			for _, held := range engine.Held() {
 				if held.Direction != intercept.DirectionRequest {
 					continue
@@ -50,7 +58,11 @@ func operatorEngine(t *testing.T, edit func(raw string) *string) *intercept.Engi
 				// message the operator did not touch.
 				_ = engine.Forward(held.ID, edit(string(held.Raw)), true, nil)
 			}
-			time.Sleep(5 * time.Millisecond)
+			select {
+			case <-done:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
 		}
 	}()
 	return engine
