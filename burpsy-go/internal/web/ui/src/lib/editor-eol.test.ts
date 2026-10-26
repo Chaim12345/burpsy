@@ -10,8 +10,8 @@
 import { describe, expect, test } from "bun:test";
 import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
 import { history, undo, undoDepth } from "@codemirror/commands";
-import type { EditorView } from "@codemirror/view";
-import { documentText, lineSeparatorFor, selectionText, selectionTransformSpec } from "./editor-eol";
+import { EditorView } from "@codemirror/view";
+import { documentText, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "./editor-eol";
 import { selectedText, transformSelectionIn } from "./palette-selection";
 import { base64Decode, base64Encode, urlEncodeAllChars } from "./transforms";
 
@@ -187,5 +187,27 @@ describe("palette codecs (selectedText / transformSelectionIn)", () => {
   const reported = transformSelectionIn(view as unknown as EditorView, (input) => input.replace("\r\n", "<CRLF>"));
   expect(reported).toBe("1.1<CRLF>Host");
   expect(view.writes).toEqual([REQUEST.replace("1.1\r\nHost", "1.1<CRLF>Host")]);
+ });
+});
+
+describe("pasted and Pretty line endings (PR 363 review)", () => {
+ const paste = (state: EditorState, text: string) => {
+  const filtered = state.facet(EditorView.clipboardInputFilter).reduce((t, f) => f(t, state), text);
+  return written(state, { changes: { from: 0, insert: filtered } });
+ };
+ const withFilter = (real: string) =>
+  EditorState.create({ doc: real, extensions: [EditorState.lineSeparator.of(lineSeparatorFor(real)), pasteLineBreaks] });
+
+ test("LF text pasted into a CRLF request takes CRLF", () => {
+  expect(paste(withFilter(REQUEST), "a\nb\rc\r\nd")).toBe(`a\r\nb\r\nc\r\nd${REQUEST}`);
+ });
+ test("CRLF text pasted into an LF message takes LF", () => {
+  expect(paste(withFilter("x\ny"), "a\r\nb")).toBe("a\nb" + "x\ny");
+ });
+ test("the pasted breaks are real line breaks of the document", () => {
+  const state = withFilter(REQUEST);
+  const next = state.update({ changes: { from: 0, insert: state.facet(EditorView.clipboardInputFilter)[0]!("a\nb", state) } }).state;
+  expect(next.doc.line(1).text).toBe("a");
+  expect(next.doc.line(2).text.startsWith("b")).toBe(true);
  });
 });

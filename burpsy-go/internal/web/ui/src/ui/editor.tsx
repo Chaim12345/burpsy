@@ -10,7 +10,7 @@ import {
 } from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { EditorState, Prec, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
-import { documentText, lineSeparatorFor, selectionText, selectionTransformSpec } from "../lib/editor-eol";
+import { documentText, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "../lib/editor-eol";
 import CodeMirror, { ExternalChange } from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import {
@@ -1235,7 +1235,7 @@ export function HttpEditor({
  // The change marks join the extensions only on the unconverted Raw text, where `value` and the
  // document are the same characters (CRLF aside, which changeDecorations maps).
  const markedExtensions = useMemo(() => {
-  const withSeparator = [...extensions, EditorState.lineSeparator.of(separator)];
+  const withSeparator = [...extensions, EditorState.lineSeparator.of(separator), pasteLineBreaks];
   if (compareWith != null && active === "raw" && !charsetActive) return [...withSeparator, inlineDiffExtension(compareWith, separator)];
   if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return withSeparator;
   const docLength = value.length - (separator === "\r\n" ? (value.match(/\r\n/g)?.length ?? 0) : 0);

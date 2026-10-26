@@ -605,3 +605,24 @@ describe("moveItem — Inspector reorder (burpsy-react-ui-ybmd)", () => {
   expect(moveItem(raw, "body", 1, -1)).toBe('POST / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"b": "two", "a": 1}');
  });
 });
+
+describe("Pretty keeps one line separator under a CRLF head (PR 363 review)", () => {
+ const MIXED = 'POST /api HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\n\r\n{"a":1,"b":[1,2]}';
+ test("the pretty body uses the head's CRLF, so the editor shows it as lines", () => {
+  const pretty = prettyMessage(MIXED);
+  expect(pretty).not.toBe(MIXED);
+  expect(pretty.replace(/\r\n/g, "")).not.toContain("\n");
+  expect(pretty.split("\r\n").length).toBeGreaterThan(5);
+ });
+ test("it still compacts back to the original bytes", () => {
+  expect(compactMessage(prettyMessage(MIXED))).toBe(MIXED);
+ });
+ test("markup keeps LF so text nodes round-trip (known limit: a CRLF head shows it on one line)", () => {
+  const xml = "POST /x HTTP/1.1\r\nContent-Type: text/xml\r\n\r\n<a><b>1</b></a>";
+  expect(compactMessage(prettyMessage(xml))).toBe(xml);
+ });
+ test("an all-LF message stays LF", () => {
+  const lf = 'POST /api HTTP/1.1\nContent-Type: application/json\n\n{"a":1}';
+  expect(prettyMessage(lf)).not.toContain("\r");
+ });
+});
