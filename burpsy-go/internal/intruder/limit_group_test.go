@@ -7,6 +7,7 @@ package intruder
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -141,5 +142,32 @@ func TestPaceNGroupsDoNotDeadlockAPoolTheyShare(t *testing.T) {
 			t.Fatalf("round %d: the pool did not drain after both groups released: %v", round, err)
 		}
 		release()
+	}
+}
+
+// A group queued BEHIND another group's acquisition turn must still honor its own context:
+// a plain mutex wait cannot be cancelled, so with a slot-blocked leader (a full pool and a
+// long-lived ctx) a queued group would outlive its own deadline by the leader's whole wait.
+func TestPaceNWaitingForAnotherGroupStillHonorsContext(t *testing.T) {
+	l := groupLimiter(2)
+	a, b := l.Acquire(), l.Acquire() // the pool is full; no group can take a slot
+	defer a.Release()
+	defer b.Release()
+	// The leader blocks on slots for far longer than the queued group's deadline.
+	slow, stopSlow := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopSlow()
+	leader := make(chan error, 1)
+	go func() { _, err := l.PaceN(slow, 2); leader <- err }()
+	time.Sleep(100 * time.Millisecond) // the leader is inside its acquisition turn
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := l.PaceN(ctx, 2)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the queued group ended with %v, want its own deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("the queued group outlived its context by %v waiting on the leader's turn", elapsed)
 	}
 }
