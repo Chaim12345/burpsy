@@ -49,9 +49,13 @@ type H2Sessions struct {
 }
 
 type h2Session struct {
-	cc       *http2.ClientConn
-	conn     net.Conn
-	ip       string
+	cc   *http2.ClientConn
+	conn net.Conn
+	ip   string
+	// route fingerprints the upstream rule and client certificate captured immediately before
+	// the session's dial (Sender.routeState). A session whose route no longer matches the live
+	// configuration is never reusable again (burpsy-react-ui-h2sess-stamp).
+	route    string
 	lastUsed time.Time
 }
 
@@ -84,8 +88,10 @@ func (p *H2Sessions) Close() {
 	}
 }
 
-// take removes and returns the live session for key, or nil. Expired and unusable sessions are closed.
-func (p *H2Sessions) take(key string) *h2Session {
+// take removes and returns the live session for key, or nil. Expired and unusable sessions are
+// closed. So is a session whose dial consumed a different route or client identity than the
+// live configuration asks for: keeping it would resurrect it the moment the route flipped back.
+func (p *H2Sessions) take(key string, route string) *h2Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.evictLocked(time.Now())
@@ -94,7 +100,7 @@ func (p *H2Sessions) take(key string) *h2Session {
 		return nil
 	}
 	delete(p.sessions, key)
-	if !sess.cc.CanTakeNewRequest() {
+	if sess.route != route || !sess.cc.CanTakeNewRequest() {
 		sess.cc.Close()
 		return nil
 	}
