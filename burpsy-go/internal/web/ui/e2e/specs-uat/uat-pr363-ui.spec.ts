@@ -6,7 +6,10 @@
 //      the capture kept running. The failedRequests fixture records every >=400 response, so a 400
 //      here fails the test by name.
 //   2. Next/previous tool tab chords follow the saved tab order, not the default one.
+//   3. Settings > Network: Revert restores a blanked number field. Screenshots of the form before and after
+//      go to e2e/artifacts/uat-pr363 (uploaded by CI as uat-ui-artifacts) and onto the test report.
 
+import * as path from "node:path";
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
@@ -73,4 +76,40 @@ test("UAT: next and previous tool tab follow the saved tab order", async ({ page
 
   expect(consoleErrors, "the console logged errors during the flow").toEqual([]);
   expect(failedRequests, "the console made failing API requests during the flow").toEqual([]);
+});
+
+test("UAT: Network settings Revert restores a blanked number field", async ({ page }, testInfo) => {
+  await gotoApp(page);
+  await gotoRoute(page, route("settings"));
+  const section = page.getByRole("region", { name: "Network" });
+  await section.scrollIntoViewIfNeeded();
+  const connect = section.getByLabel("Connect (ms)");
+  await expect(connect).toBeVisible();
+  const saved = await connect.inputValue();
+  expect(saved).toMatch(/^\d+$/);
+
+  const shot = async (name: string) => {
+    const file = path.join("artifacts", "uat-pr363", `${name}.png`);
+    await section.screenshot({ path: file });
+    await testInfo.attach(name, { path: file, contentType: "image/png" });
+  };
+
+  // Blank a number (it never reaches the draft), and make the form dirty with an unrelated edit.
+  await connect.fill("");
+  await expect(connect).toHaveAttribute("aria-invalid", "true");
+  await section.getByLabel("Default to HTTP/2 if the server supports it").click();
+  await shot("network-blank-and-dirty");
+
+  await section.getByRole("button", { name: "Revert" }).click();
+  await expect(section.getByLabel("Connect (ms)")).toHaveValue(saved);
+  await expect(section.getByLabel("Connect (ms)")).not.toHaveAttribute("aria-invalid", "true");
+  await shot("network-after-revert");
+
+  // Blank only (nothing else edited): Revert is still offered and restores the field.
+  await section.getByLabel("Connect (ms)").fill("");
+  await expect(section.getByRole("button", { name: "Revert" })).toBeEnabled();
+  await section.getByRole("button", { name: "Revert" }).click();
+  await expect(section.getByLabel("Connect (ms)")).toHaveValue(saved);
+  // Nothing was saved: the form is clean again.
+  await expect(section.getByRole("button", { name: "Save" })).toBeDisabled();
 });
