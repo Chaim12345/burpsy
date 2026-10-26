@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -334,6 +335,17 @@ func startPathEchoServer(t *testing.T, delay time.Duration) (string, uint16, *at
 	}
 	t.Cleanup(func() { ln.Close() })
 	conns := &atomic.Int64{}
+	// u5jf: the accepted connections are closed at test cleanup, not only the listener, so a
+	// peer that holds its end open (a kept-alive pool) cannot strand the read goroutine.
+	var openMu sync.Mutex
+	var open []net.Conn
+	t.Cleanup(func() {
+		openMu.Lock()
+		defer openMu.Unlock()
+		for _, c := range open {
+			c.Close()
+		}
+	})
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -341,6 +353,9 @@ func startPathEchoServer(t *testing.T, delay time.Duration) (string, uint16, *at
 				return
 			}
 			conns.Add(1)
+			openMu.Lock()
+			open = append(open, c)
+			openMu.Unlock()
 			go func(c net.Conn) {
 				defer c.Close()
 				br := bufio.NewReader(c)

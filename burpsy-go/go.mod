@@ -20,6 +20,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.64
 	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/zricethezav/gitleaks/v8 v8.30.1
+	go.uber.org/goleak v1.2.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.60.0

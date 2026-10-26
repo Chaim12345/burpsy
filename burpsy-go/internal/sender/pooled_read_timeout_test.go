@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,13 +26,27 @@ func startAnswerOnceThenSilentServer(t *testing.T) (addr string, accepted *atomi
 		t.Fatalf("listen: %v", err)
 	}
 	cl := &countingListener{Listener: ln}
-	t.Cleanup(func() { cl.Close() })
+	// u5jf: the accepted connections are closed at test cleanup, not only the listener, so a
+	// peer that holds its end open cannot strand the read goroutine.
+	var openMu sync.Mutex
+	var open []net.Conn
+	t.Cleanup(func() {
+		openMu.Lock()
+		for _, c := range open {
+			c.Close()
+		}
+		openMu.Unlock()
+		cl.Close()
+	})
 	go func() {
 		for {
 			conn, err := cl.Accept()
 			if err != nil {
 				return
 			}
+			openMu.Lock()
+			open = append(open, conn)
+			openMu.Unlock()
 			go func(c net.Conn) {
 				defer c.Close()
 				br := bufio.NewReader(c)
