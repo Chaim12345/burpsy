@@ -106,6 +106,17 @@ export function orderToolTabs<T extends { id: string }>(tabs: readonly T[], orde
  return [...out, ...tabs.filter((tab) => byId.has(tab.id))];
 }
 
+/**
+ * The tab `delta` places from `currentId` in `tabs` as given, wrapping at the ends; null when
+ * `currentId` is not among them. The next/previous-tab chords walk the strip the operator sees, so
+ * pass the ORDERED tabs (PR 363 review: they walked the default order and ignored a dragged one).
+ */
+export function neighbourTab<T extends { id: string }>(tabs: readonly T[], currentId: string, delta: number): T | null {
+ const at = tabs.findIndex((tab) => tab.id === currentId);
+ if (at === -1 || tabs.length === 0) return null;
+ return tabs[(((at + delta) % tabs.length) + tabs.length) % tabs.length] ?? null;
+}
+
 /** `order` after dragging `from` onto `to`: it lands where `to` was (after it going forward, before it going back). */
 export function moveToolTab(order: readonly string[], from: string, to: string): string[] {
  const fromAt = order.indexOf(from);
