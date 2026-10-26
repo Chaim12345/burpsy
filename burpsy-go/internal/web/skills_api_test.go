@@ -140,15 +140,22 @@ func TestTheDisabledLiteralOutranksTheSkillNameWildcard(t *testing.T) {
 	}
 }
 
-// The {name}/{$} twin matches ONLY the trailing slash: a loaded skill with anything after its name
-// is a 404, never the skill (the old handler looked up "jwt-none/extra" and found nothing).
-// "/api/skills/" is the mux's own 404.
-func TestAnExistingSkillWithExtraPathStays404(t *testing.T) {
+// /api/skills/{rest...} is the old subtree with a named remainder: the name is the remainder with
+// its slashes trimmed, so a nested path is looked up whole and answers the old 404 body, and the
+// bare collection slash answers the old empty-name 404.
+func TestSkillRemaindersKeepTheOldNotFoundBodies(t *testing.T) {
 	s := skillsServer(t)
-	for _, path := range []string{"/api/skills/", "/api/skills/jwt-none/extra", "/api/skills/jwt-none/extra/", "/api/skills/jwt-none/a/b?exchange_id=7"} {
+	for path, name := range map[string]string{
+		"/api/skills/":                           "",
+		"/api/skills/a/b":                        "a/b",
+		"/api/skills/jwt-none/extra":             "jwt-none/extra",
+		"/api/skills/jwt-none/extra/":            "jwt-none/extra",
+		"/api/skills/jwt-none/a/b?exchange_id=7": "jwt-none/a/b",
+	} {
 		rec := doReq(s, http.MethodGet, path, "")
-		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "Resend exchange") {
-			t.Errorf("GET %s = %d %q, want 404 and no skill prompt", path, rec.Code, strings.TrimSpace(rec.Body.String()))
+		want := "No skill named " + name + " is loaded"
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) || strings.Contains(rec.Body.String(), "Resend exchange") {
+			t.Errorf("GET %s = %d %q, want 404 containing %q", path, rec.Code, strings.TrimSpace(rec.Body.String()), want)
 		}
 	}
 }

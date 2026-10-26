@@ -252,17 +252,16 @@ func TestAnUnknownTokenSendsNothing(t *testing.T) {
 	}
 }
 
-// fxxm batch 3: /reissue/{token} carries the token as a path value. A token with a slash in it
-// cannot name a live token, so the mux answers 404 and nothing is spent or sent; the bare prefix
-// is not a token at all.
-func TestAReissueTokenIsASingleSegmentPathValue(t *testing.T) {
+// fxxm: /reissue/{token...} is the old subtree with a named remainder. The bare prefix, a nested
+// path and an unknown token all answer the same 410 body the TrimPrefix handler gave (the token is
+// whatever follows /reissue/, slashes included, and none of them names a live token).
+func TestAReissueRemainderKeepsTheOldGoneAnswer(t *testing.T) {
 	s := newTestServer()
-	for _, path := range []string{"/reissue/", "/reissue/a/b"} {
-		if rec := get(t, s, path); rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404 from the mux", path, rec.Code)
+	const gone = "this re-issue URL has already been used or has expired"
+	for _, path := range []string{"/reissue/", "/reissue/a/b", "/reissue/nosuchtoken"} {
+		rec := get(t, s, path)
+		if rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), gone) {
+			t.Errorf("GET %s = %d %q, want 410 with the expired-URL body", path, rec.Code, rec.Body.String())
 		}
-	}
-	if rec := get(t, s, "/reissue/nosuchtoken"); rec.Code != http.StatusGone {
-		t.Errorf("GET an unknown single-segment token = %d, want 410", rec.Code)
 	}
 }

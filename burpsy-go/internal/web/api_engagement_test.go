@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,16 +142,23 @@ func TestEngagementUnknownKindIsANamedRefusal(t *testing.T) {
 	}
 }
 
-// fxxm batch 3: /api/engagement/{kind} carries its kind in the pattern. A multi-segment or empty
-// remainder is the mux's own 404, not a kind to look up; the named kinds still resolve, and the
-// literal clickbandit.js route outranks the {kind} wildcard.
-func TestEngagementKindIsAPathValueAndMultiSegmentRemaindersAre404(t *testing.T) {
+// fxxm: /api/engagement/{kind...} is the old subtree with a named remainder: an empty, nested or
+// slash-terminated remainder is looked up as a kind text and answers the same 404 body as before;
+// the named kinds still resolve and the literal clickbandit.js route outranks the wildcard.
+func TestEngagementRemainderKeepsTheOldUnknownKindAnswer(t *testing.T) {
 	s := newTestServer()
-	for _, path := range []string{"/api/engagement/", "/api/engagement/comments/extra", "/api/engagement/a/b"} {
+	for path, kind := range map[string]string{
+		"/api/engagement/":               "",
+		"/api/engagement/a/b":            "a/b",
+		"/api/engagement/comments/extra": "comments/extra",
+		"/api/engagement/comments/":      "comments/",
+		"/api/engagement/nope":           "nope",
+	} {
 		rec := httptest.NewRecorder()
 		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		want := fmt.Sprintf("unknown engagement kind %q; the kinds are comments, scripts, references", kind)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("GET %s = %d %q, want 404 containing %q", path, rec.Code, rec.Body.String(), want)
 		}
 	}
 	rec := httptest.NewRecorder()
@@ -161,6 +169,6 @@ func TestEngagementKindIsAPathValueAndMultiSegmentRemaindersAre404(t *testing.T)
 	rec = httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/engagement/clickbandit.js", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
-		t.Errorf("clickbandit.js = %d %q, want the literal asset route to win over {kind}", rec.Code, rec.Header().Get("Content-Type"))
+		t.Errorf("clickbandit.js = %d %q, want the literal asset route to win over {kind...}", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }

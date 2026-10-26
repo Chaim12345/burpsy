@@ -736,7 +736,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/engagement/{kind}": {
+    "/api/engagement/{kind...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -3478,7 +3478,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}": {
+    "/api/skills/{rest...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -3486,24 +3486,7 @@ export type paths = {
             cookie?: never;
         };
         /** one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable */
-        get: operations["getApiSkillsByName"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/{name}/{$}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** one skill with its prompt rendered from ?argument=value (trailing-slash form of /api/skills/{name}) */
-        get: operations["getApiSkillsByNameBy$"];
+        get: operations["getApiSkillsByRest"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4149,7 +4132,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/reissue/{token}": {
+    "/reissue/{token...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -6002,7 +5985,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                kind: string;
+                "kind...": string;
             };
             cookie?: never;
         };
@@ -12859,42 +12842,12 @@ export interface operations {
             };
         };
     };
-    getApiSkillsByName: {
+    getApiSkillsByRest: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description JSON result; no verified shape is declared for this route yet */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    getApiSkillsByNameBy$: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                $: string;
-                name: string;
+                "rest...": string;
             };
             cookie?: never;
         };
@@ -14279,7 +14232,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                token: string;
+                "token...": string;
             };
             cookie?: never;
         };
