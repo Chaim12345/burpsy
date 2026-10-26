@@ -113,7 +113,10 @@ test("UAT: Network settings Revert restores a blanked number field", async ({ pa
 
   const shot = async (name: string) => {
     const file = path.join("artifacts", "uat-pr363", `${name}.png`);
-    await section.screenshot({ path: file });
+    // The viewport with the section pinned to its top, so the header (Saved/Revert/Save) and the Timeouts
+    // row are both in frame; an element screenshot of this tall section came out scrolled and cropped.
+    await section.evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page.screenshot({ path: file });
     await testInfo.attach(name, { path: file, contentType: "image/png" });
   };
 
