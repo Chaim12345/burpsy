@@ -211,6 +211,10 @@ func graphQLParamSpans(head string) []graphQLQuerySpan {
 	// of the target in the head plus the query-string start.
 	targetOff := strings.Index(head, target)
 	rest := target[q+1:]
+	// Walk the byte offset alongside the split: a first-text-match search for the part's text
+	// can land inside an earlier lookalike parameter (oldquery=<same value>), not on the part
+	// the loop is on.
+	off := 0
 	for _, p := range strings.Split(rest, "&") {
 		if strings.HasPrefix(p, "query=") {
 			// The console lists this carrier only when the value reads as a GraphQL document;
@@ -219,9 +223,10 @@ func graphQLParamSpans(head string) []graphQLQuerySpan {
 			if !httputil.LooksLikeGraphQLDocument(httputil.GraphQLPercentDecode(p[len("query="):])) {
 				return nil
 			}
-			start := targetOff + q + 1 + strings.Index(rest, p) + len("query=")
+			start := targetOff + q + 1 + off + len("query=")
 			return []graphQLQuerySpan{{start: start, end: start + len(p) - len("query="), source: "params"}}
 		}
+		off += len(p) + 1
 	}
 	return nil
 }
