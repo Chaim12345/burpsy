@@ -44,7 +44,7 @@ func newMidExchange(t *testing.T, useTLS bool) *midExchange {
 	m.target = startConnCounting(t, useTLS, protos, func(w http.ResponseWriter, _ *http.Request) {
 		m.once.Do(func() { close(m.arrived) })
 		<-m.release
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	return m
 }
@@ -129,7 +129,7 @@ func Test_a_connection_returned_after_a_mid_exchange_cert_bind_presents_no_certi
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		m.once.Do(func() { close(m.arrived) })
 		<-m.release
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	srv.TLS = &tls.Config{
 		ClientAuth: tls.RequestClientCert,
