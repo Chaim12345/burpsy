@@ -1589,10 +1589,13 @@ function TaskDetail({
  // was isolated from All issues and the site map.
  const issuesDetailed = useIssuesDetailedWithIsolated();
  // The retained run behind this task, when there is one. Only an API scan's row carries anything the
- // detail pane does not already have (its definition), and the request is made for every kind anyway
- // because which kinds have a run is not something the console should have to predict — a crawl
- // answers with its own run, and the card simply does not render for it.
- const run = useCrawlRun(task.id > 0 ? task.id : null);
+ // detail pane does not already have (its definition). Which kinds have a run is not something the
+ // console should predict, so it does not: the retained-run list (the same registry the server answers
+ // ?task= from, already kept warm by the shell) says which tasks have one, and only those are asked
+ // for. Asking for every task answered 404 for each one without a run, on every Dashboard load.
+ const retainedRuns = useCrawls();
+ const hasRetainedRun = retainedRuns.data?.crawls.some((entry) => entry.task_id === task.id) === true;
+ const run = useCrawlRun(task.id > 0 && hasRetainedRun ? task.id : null);
  const focusIssue = useApp((state) => state.focusIssue);
  const setRoute = useApp((state) => state.setRoute);
  // Scoped to THIS task, through the tested module rather than a filter inline here
