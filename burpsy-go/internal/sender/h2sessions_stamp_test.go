@@ -63,7 +63,7 @@ func TestH2SessionsDoNotOutliveAClientCertificateChange(t *testing.T) {
 	var mu sync.Mutex
 	var presented [][]byte
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	srv.EnableHTTP2 = true
 	srv.TLS = &tls.Config{
