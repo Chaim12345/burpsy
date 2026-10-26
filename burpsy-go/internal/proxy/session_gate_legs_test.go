@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -87,7 +88,11 @@ func newGatedLegFixtureWithCertDir(t *testing.T, nextProtos []string, certDir st
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { oln.Close(); origin.Close() })
-	go origin.Serve(oln)
+	go func() {
+		if err := origin.Serve(oln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("origin serve: %v", err)
+		}
+	}()
 
 	thost, tportStr, _ := net.SplitHostPort(oln.Addr().String())
 	tport, _ := strconv.Atoi(tportStr)
