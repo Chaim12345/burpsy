@@ -108,6 +108,15 @@ type pooledConn struct {
 	// before saying anything" (stale; safe to retry an idempotent request) from a partial answer.
 	read *atomic.Int64
 	key  string
+	// owner, route and dialAddr are the reuse stamp (o388, caller-owned pool). A ConnPool is passed
+	// in and may be shared between Senders, and two Senders' generation numbers are independent
+	// counters that can be equal while their settings differ, so the generation alone cannot say
+	// "same settings". The owner pointer says which Sender dialled this connection; only that
+	// Sender may take it. route and dialAddr let that Sender re-check, at take time, that its
+	// settings are still the ones the connection was dialled under (same helper as the Sender pools).
+	owner    *Sender
+	route    string
+	dialAddr string
 }
 
 // countingConn counts what is read off a connection.
@@ -306,10 +315,17 @@ func (s *Sender) sendReusing(
 		return nil, SendOutcome{}, err
 	}
 	if mayIdle {
+		routeFor := s.routeForDialAddr(host, useTLS)
 		for {
 			pc := pool.takeIdle(key)
 			if pc == nil {
 				break
+			}
+			if pc.owner != s || pc.route != routeFor(pc.dialAddr) {
+				// Dialled by another Sender, or under settings since changed: never carries this
+				// request. Closed like a dead connection; the slot is already held.
+				pc.conn.Close()
+				continue
 			}
 			if !aliveCheck(pc) {
 				pc.conn.Close()
@@ -390,6 +406,9 @@ func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTL
 		negotiated: negotiated,
 		read:       read,
 		key:        key,
+		owner:      s,
+		route:      id.route,
+		dialAddr:   id.dialAddr,
 	}, nil
 }
 
