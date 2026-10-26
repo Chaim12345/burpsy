@@ -300,3 +300,62 @@ func TestTrafficHookPanicFailsOpen(t *testing.T) {
 		t.Fatalf("the panic was not counted: %+v", c)
 	}
 }
+
+// PR #363 review (W6 confirmed the shape in both the TLS and the plaintext path): a response
+// the extension hook dropped was still offered to the intercept hold, and an operator Drop
+// there overwrote the note naming the extension as the actor. The hook's drop already decided
+// what the client gets: nothing is held, and the recorded exchange keeps the extension's note.
+func TestTrafficHookDroppedResponseIsNotHeldForTheOperator(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "origin-body")
+	}))
+	defer origin.Close()
+
+	hook := trafficHookStub(func(_ context.Context, phase string, raw []byte) TrafficHookResult {
+		if phase == "response" {
+			return TrafficHookResult{Raw: raw, Dropped: true, Applied: []string{"stub"}}
+		}
+		return TrafficHookResult{Raw: raw}
+	})
+	// Response interception on, no rules: Burp's "intercept everything" for the response side.
+	engine := intercept.NewEngine()
+	engine.SetEnabled(true)
+	if err := engine.SetRules(intercept.DirectionResponse, true, nil); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	store := core.NewTrafficStore()
+	cfg := NewProxyConfig(store).
+		WithScope(testScope()).
+		WithLogger(zap.NewNop()).
+		WithTrafficHook(hook).
+		WithIntercept(engine)
+	proxyAddr := startProxy(t, NewServer(cfg))
+
+	resp, err := hookClient(proxyAddr).Get(origin.URL)
+	if err == nil {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if strings.Contains(string(body), "origin-body") {
+			t.Fatalf("dropped response reached the client: %q", body)
+		}
+	}
+	if held := engine.Held(); len(held) != 0 {
+		t.Fatalf("a hook-dropped response was held for the operator: %d items", len(held))
+	}
+	// The recorded exchange names the extension as the actor. Nobody forwarded or dropped a
+	// hold - there was none - so the note can only have survived if the hold was skipped.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		exchanges := store.ObserveExchanges(func(*core.Exchange) {})
+		if len(exchanges) > 0 {
+			if exchanges[0].Notes == nil || !strings.Contains(*exchanges[0].Notes, "an extension dropped this response") {
+				t.Fatalf("the recorded note does not name the extension as the actor: %v", exchanges[0].Notes)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the dropped exchange was never recorded")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

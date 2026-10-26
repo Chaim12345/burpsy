@@ -2121,7 +2121,10 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// responseEdited is the operator's own edit to the response half, paired below with the request
 	// half this function was handed.
 	var responseEdited bool
-	if s.config.intercept != nil {
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what the
+	// client gets, and holding the bytes would invite an operator Drop that overwrites the note
+	// naming the extension as the actor — the mirror of the request side returning on res.Dropped.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
@@ -2618,7 +2621,10 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		dropped = true
 		notes = extensionDropNote()
 	}
-	if s.config.intercept != nil {
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what
+	// the client gets; a hold would invite an operator Drop whose note overwrites the one
+	// naming the extension as the actor.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
