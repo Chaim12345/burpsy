@@ -885,12 +885,16 @@ export function SequencerPage(): JSX.Element {
  // Send to Sequencer (fhp): a hand-off from the row context menu lands here once and is
  // consumed immediately — the seed is session-only, and a second visit to the page must not
  // re-offer yesterday's request.
+ const [seedResponse, setSeedResponse] = useState<string | null>(null);
  const sequencerSeed = useApp((state) => state.sequencerSeed);
  const setSequencerSeed = useApp((state) => state.setSequencerSeed);
  useEffect(() => {
   if (!sequencerSeed) return;
   setCaptureRequest(sequencerSeed.request);
   setCaptureTarget(sequencerSeed.target);
+  // The response the picker lists rides in the same step: the seed is cleared just below, and an
+  // effect keyed on the seed would see that clear and wipe the response straight away.
+  setSeedResponse(sequencerSeed.response ?? null);
   setSequencerSeed(null);
   toast.success(`Loaded ${sequencerSeed.label} — pick the token location, then Start live capture`);
  }, [sequencerSeed, setSequencerSeed]);
@@ -898,10 +902,6 @@ export function SequencerPage(): JSX.Element {
  // The picker's contents (6t8): the cookies, headers and form fields actually present in the
  // response that arrived with the hand-off. Empty when the seed carried no response — the
  // typed inputs remain the path then, exactly as before.
- const [seedResponse, setSeedResponse] = useState<string | null>(null);
- useEffect(() => {
-  setSeedResponse(sequencerSeed?.response ?? null);
- }, [sequencerSeed]);
  const locationOptions = useMemo(
   () => ({
    cookie: seedResponse ? cookieOptions(seedResponse) : [],
