@@ -254,6 +254,55 @@ func (w *domASTWalker) walkStatement(st ast.Statement, sc domScriptSrc, scope *d
 			n += w.walkBody(s.Finally, sc, scope)
 		}
 		return n
+	case *ast.ReturnStatement:
+		if s.Argument != nil {
+			return w.walkExprStatement(s.Argument, sc, scope)
+		}
+	case *ast.ThrowStatement:
+		if s.Argument != nil {
+			return w.walkExprStatement(s.Argument, sc, scope)
+		}
+	case *ast.SwitchStatement:
+		n := w.walkExprStatement(s.Discriminant, sc, scope)
+		for _, c := range s.Body {
+			for _, sub := range c.Consequent {
+				if !w.e.spend(1) {
+					return n
+				}
+				n += w.walkStatement(sub, sc, scope)
+			}
+		}
+		return n
+	case *ast.LabelledStatement:
+		if s.Statement != nil {
+			return w.walkStatement(s.Statement, sc, scope)
+		}
+	case *ast.WithStatement:
+		if s.Body != nil {
+			return w.walkStatement(s.Body, sc, scope)
+		}
+	}
+	return 0
+}
+
+// walkFunctionValue walks the body of a function literal used as a value - a handler assigned to
+// window.onhashchange, an arrow callback - with the enclosing scope visible, as the IIFE and
+// event-handler paths do. Other expressions walk nothing.
+func (w *domASTWalker) walkFunctionValue(expr ast.Expression, sc domScriptSrc, scope *domASTScope) int {
+	switch fn := expr.(type) {
+	case *ast.FunctionLiteral:
+		if fn.Body != nil {
+			return w.walkBody(fn.Body, sc, &domASTScope{parent: scope})
+		}
+	case *ast.ArrowFunctionLiteral:
+		switch body := fn.Body.(type) {
+		case *ast.BlockStatement:
+			return w.walkBody(body, sc, &domASTScope{parent: scope})
+		case *ast.ExpressionBody:
+			if body.Expression != nil {
+				return w.walkExprStatement(body.Expression, sc, &domASTScope{parent: scope})
+			}
+		}
 	}
 	return 0
 }
@@ -352,6 +401,11 @@ func (w *domASTWalker) walkExprStatement(expr ast.Expression, sc domScriptSrc, s
 // a member write is a sink when the member names one, a safe sink is suppressed, and a computed
 // target with a tainted value is unresolved, never silent.
 func (w *domASTWalker) walkAssign(x *ast.AssignExpression, sc domScriptSrc, scope *domASTScope) int {
+	// el.onclick = function(){ ... }: the handler's body runs later with this scope visible.
+	return w.walkFunctionValue(x.Right, sc, scope) + w.walkAssignValue(x, sc, scope)
+}
+
+func (w *domASTWalker) walkAssignValue(x *ast.AssignExpression, sc domScriptSrc, scope *domASTScope) int {
 	if w.sinksOn {
 		w.scanSinkCalls(x.Right, sc, scope)
 	}
@@ -442,12 +496,9 @@ func (w *domASTWalker) walkCall(x *ast.CallExpression, sc domScriptSrc, scope *d
 			return 0
 		}
 		for _, arg := range x.ArgumentList {
-			switch h := arg.(type) {
-			case *ast.FunctionLiteral:
-				if h.Body != nil {
-					w.walkBody(h.Body, sc, &domASTScope{parent: scope})
-				}
-			default:
+			if isFunctionValue(arg) {
+				w.walkFunctionValue(arg, sc, scope)
+			} else {
 				w.scanSinkCalls(arg, sc, scope)
 			}
 		}
@@ -795,3 +846,12 @@ func (w *domASTWalker) sliceSource(node ast.Expression) string {
 
 // keep strings imported for the dotted-render helpers that need it.
 var _ = strings.TrimSpace
+
+// isFunctionValue reports whether expr is a function literal or an arrow function.
+func isFunctionValue(expr ast.Expression) bool {
+	switch expr.(type) {
+	case *ast.FunctionLiteral, *ast.ArrowFunctionLiteral:
+		return true
+	}
+	return false
+}

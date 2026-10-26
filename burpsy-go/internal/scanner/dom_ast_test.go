@@ -62,3 +62,20 @@ func Test_an_unparseable_script_falls_back_to_the_lexical_pass(t *testing.T) {
 		t.Errorf("sink = %q, want innerHTML", f.Sink.Match)
 	}
 }
+
+// Sinks the lexical pass found and the AST walker used to skip: a handler function assigned to an
+// event property, a switch case, a return argument, and an arrow callback. Each is one flow.
+func Test_the_ast_pass_reaches_handlers_switch_cases_returns_and_arrow_callbacks(t *testing.T) {
+	for name, src := range map[string]string{
+		"assigned handler": `window.onhashchange = function(){ document.write(location.hash); };`,
+		"switch case":      "switch (location.search) { case '?a': document.write(location.hash); break; }",
+		"return argument":  `function f(){ return eval(location.hash); } f();`,
+		"arrow callback":   `[1].forEach(() => { document.write(location.hash); });`,
+		"arrow expression": `window.addEventListener("hashchange", () => document.write(location.hash));`,
+		"labelled block":   `outer: { document.write(location.hash); }`,
+	} {
+		if a := AnalyzeDOMScript(src, DOMBudget{}); len(a.Flows) != 1 {
+			t.Errorf("%s: flows = %d, want 1 (%s)", name, len(a.Flows), a.Summary())
+		}
+	}
+}
