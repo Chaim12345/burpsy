@@ -1187,7 +1187,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "none",
 		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
 	},
-	"/api/skills/{name}/": {
+	"/api/skills/{name}/{$}": {
 		// The trailing-slash twin of /api/skills/{name}: the old subtree pattern served it.
 		methods: []string{"GET"}, risk: riskRead, subPath: "none",
 		summary: "one skill with its prompt rendered from ?argument=value (trailing-slash form of /api/skills/{name})",

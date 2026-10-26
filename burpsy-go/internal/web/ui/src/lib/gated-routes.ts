@@ -167,7 +167,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/skills": false,
  "/api/skills/disabled": false,
  "/api/skills/{name}": false,
- "/api/skills/{name}/": false,
+ "/api/skills/{name}/{$}": false,
  "/api/stats": false,
  "/api/target/analyze": false,
  "/api/tasks/pause": false,

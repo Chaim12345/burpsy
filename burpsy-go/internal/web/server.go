@@ -1059,7 +1059,7 @@ func (s *Server) setupRoutes() {
 	// A skill name never contains "/" (^[a-z0-9][a-z0-9_-]{0,63}$), so {name} is the whole remainder;
 	// the "{name}/" twin keeps the trailing-slash form the old subtree pattern served (burpsy-react-ui-fxxm).
 	s.route("/api/skills/{name}", s.handleSkill)
-	s.route("/api/skills/{name}/", s.handleSkill)
+	s.route("/api/skills/{name}/{$}", s.handleSkill)
 	s.route("/api/skills/disabled", s.handleSkillsDisabled)
 	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
 	s.route("/api/datasets/", s.handleDatasets)

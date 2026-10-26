@@ -140,15 +140,15 @@ func TestTheDisabledLiteralOutranksTheSkillNameWildcard(t *testing.T) {
 	}
 }
 
-// "/api/skills/a/b" reaches the {name}/ twin (a trailing slash is a subtree) with name "a": same 404,
-// different body than the old "No skill named a/b". "/api/skills/" is the mux's own 404.
-func TestAnEmptyOrNestedSkillPathStays404(t *testing.T) {
+// The {name}/{$} twin matches ONLY the trailing slash: a loaded skill with anything after its name
+// is a 404, never the skill (the old handler looked up "jwt-none/extra" and found nothing).
+// "/api/skills/" is the mux's own 404.
+func TestAnExistingSkillWithExtraPathStays404(t *testing.T) {
 	s := skillsServer(t)
-	for _, path := range []string{"/api/skills/", "/api/skills/a/b"} {
+	for _, path := range []string{"/api/skills/", "/api/skills/jwt-none/extra", "/api/skills/jwt-none/extra/", "/api/skills/jwt-none/a/b?exchange_id=7"} {
 		rec := doReq(s, http.MethodGet, path, "")
-		t.Logf("GET %s = %d %q", path, rec.Code, strings.TrimSpace(rec.Body.String()))
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "Resend exchange") {
+			t.Errorf("GET %s = %d %q, want 404 and no skill prompt", path, rec.Code, strings.TrimSpace(rec.Body.String()))
 		}
 	}
 }

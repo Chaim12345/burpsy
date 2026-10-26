@@ -166,7 +166,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/skills": "riskRead",
  "/api/skills/disabled": "riskLocal",
  "/api/skills/{name}": "riskRead",
- "/api/skills/{name}/": "riskRead",
+ "/api/skills/{name}/{$}": "riskRead",
  "/api/stats": "riskRead",
  "/api/target/analyze": "riskRead",
  "/api/tasks/pause": "riskLocal",

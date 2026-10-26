@@ -503,12 +503,12 @@ var notExposed = map[string]string{
 	"GET /reissue/{token}": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
 	"GET /api/events": "the SSE change stream: it never ends, so it cannot be one tool result. The transport " +
 		"itself is the stream's agent-side consumer",
-	"GET /api/exchanges/":     "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
-	"GET /api/findings":       "legacy alias of /api/issues (issues' GET); a second spelling of one read",
-	"POST /api/scanner/audit": "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
-	"GET /api/skills":         "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
-	"GET /api/skills/{name}":  "served as MCP prompts: prompts/get renders a skill through it",
-	"GET /api/skills/{name}/": "the trailing-slash twin of GET /api/skills/{name}: same prompts/get path, an agent has no reason to use this form",
+	"GET /api/exchanges/":        "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
+	"GET /api/findings":          "legacy alias of /api/issues (issues' GET); a second spelling of one read",
+	"POST /api/scanner/audit":    "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
+	"GET /api/skills":            "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
+	"GET /api/skills/{name}":     "served as MCP prompts: prompts/get renders a skill through it",
+	"GET /api/skills/{name}/{$}": "the trailing-slash twin of GET /api/skills/{name}: same prompts/get path, an agent has no reason to use this form",
 	"PUT /api/skills/disabled": "the operator's per-project switch, set in the console's Settings; an agent sees its effect " +
 		"as the skills prompts/list no longer offers",
 	"GET /api/openapi.json": "the API's self-description for codegen and tooling (the typed console client's source); " +
