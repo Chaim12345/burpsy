@@ -414,6 +414,18 @@ func (s *Sender) Network() NetworkSettings {
 	return s.net
 }
 
+// requestHasConnectionHeader reports whether a raw HTTP/1 request carries any Connection
+// header, so the close-delimited accommodation can add its own only where none exists —
+// never over one the operator wrote.
+func requestHasConnectionHeader(raw []byte) bool {
+	head, _, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !ok {
+		return false
+	}
+	_, present := httputil.HeaderValue(head, "connection")
+	return present
+}
+
 // ApplyNetwork installs new network settings and rebuilds the typed path's transport for them.
 //
 // It validates first and changes nothing on refusal: a half-applied settings document — the new
@@ -434,6 +446,11 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	// is what retires the caller-owned h2 sessions this sender cannot flush (dial_identity.go).
 	s.netGen++
 	s.pool.closeAll()
+	// The close-delimited marks keyed the same dial decisions as the pool: an authority
+	// that close-delimited under the old network may answer completely under the new
+	// resolution or carrier, and an uncleared mark would force fresh connections for the
+	// process's life (PR #363 review).
+	s.closeDelimitedAuthorities = sync.Map{}
 	return nil
 }
 
@@ -1088,9 +1105,21 @@ func (s *Sender) SendRawOutcome(
 	// Keep-alive (ry5n): an HTTP/1 send may ride a connection an earlier send left reusable.
 	keep := settings.KeepAliveHTTP1() && !settings.Streaming.isStreaming(host)
 	key := poolKey(host, port, useTLS)
+	connCloseAdded := false
+	// The send went out with a header the operator did not write; the record says so, on
+	// success and failure alike, because the bytes went out either way.
+	const connCloseNote = "Connection: close added (request carried no Connection header); the authority close-delimited its previous response"
 	if _, closeDelimited := s.closeDelimitedAuthorities.Load(key); closeDelimited {
-		plan.http1 = httputil.EnsureConnectionClose(plan.http1)
+		// The mark forces a fresh, non-pooled connection (keep=false) unconditionally: that
+		// is what it exists for. Connection: close is ADDED only when the request carries
+		// no Connection header of its own — overwriting one the operator wrote would
+		// rewrite their bytes without a word, and an operator-set Connection: keep-alive
+		// still gets the fresh connection the mark demands (PR #363 review).
 		keep = false
+		if !requestHasConnectionHeader(plan.http1) {
+			plan.http1 = httputil.EnsureConnectionClose(plan.http1)
+			connCloseAdded = true
+		}
 	}
 	if keep {
 		// The take re-evaluates each candidate's OWN dial address against the live
@@ -1128,6 +1157,9 @@ func (s *Sender) SendRawOutcome(
 			s.observeCloseDelimited(key, resp)
 		}
 		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
+		if connCloseAdded {
+			out.Note = connCloseNote
+		}
 		return resp, out, err
 	}
 
@@ -1238,6 +1270,9 @@ func (s *Sender) SendRawOutcome(
 		s.observeCloseDelimited(key, resp)
 	}
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+	if connCloseAdded {
+		out.Note = connCloseNote
+	}
 	return resp, out, err
 }
 

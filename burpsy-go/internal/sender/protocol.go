@@ -441,6 +441,11 @@ type SendOutcome struct {
 	// (SendOptions.H2Sessions, adkx) — so it was NOT the first request on its connection. False for
 	// every fresh dial, which without H2Sessions is every send.
 	ConnectionReused bool
+	// Note is an operator-facing line about a transport accommodation that is not a
+	// downgrade: a Connection header the sender added to a request that had none, a
+	// response body cut at the cap. Empty when the send needed no such word (PR #363
+	// review: an accommodation the record does not mention is one nobody can audit).
+	Note string
 }
 
 // Downgraded reports whether this send went out as HTTP/1.1.
