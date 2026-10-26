@@ -60,6 +60,7 @@ function installFetch() {
     ? json({ result: { output: "ok" } })
     : new Response("a hotkey invocation carries at most 100 selected rows, got 101", { status: invokeStatus });
   }
+  if (path === "/api/repeater/send") return json({ response: "HTTP/1.1 200 OK\r\n\r\n" });
   if (path === "/api/history") return json([row(0), row(1), row(2)]);
   if (path === "/api/scope") return json({ rules: [], enabled: false });
   return json({});
@@ -166,5 +167,28 @@ describe("the open Repeater editor travels as editor", () => {
   await waitFor(() => expect(invokes).toHaveLength(1));
   expect(invokes[0]).toMatchObject({ name: "keys", registration: "go", editor: { raw: REQ } });
   expect(((invokes[0]?.editor ?? {}) as Record<string, unknown>).message).toBeUndefined();
+ });
+ test("stepped back to a past send, it carries that send's request, not the draft", async () => {
+  const FIRST = "GET /first HTTP/1.1\r\nHost: x\r\n\r\n";
+  const SECOND = "GET /second HTTP/1.1\r\nHost: x\r\n\r\n";
+  useApp.setState({ repeaterTabs: [], activeRepeaterTab: "" });
+  const id = useApp.getState().openRepeaterTab({ name: "t", target: "x.test:443", request: FIRST });
+  renderWithProviders(
+   <>
+    <Hotkeys />
+    <RepeaterPage />
+   </>,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Send" }));
+  await screen.findByRole("group", { name: "Send history" }).catch(() => undefined);
+  useApp.getState().updateRepeaterTab(id, { request: SECOND });
+  await waitFor(() => expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Previous send" }));
+  // stepped back: the newest entry is now one step forward
+  await waitFor(() => expect((screen.getByRole("button", { name: "Next send" }) as HTMLButtonElement).disabled).toBe(false));
+  press();
+  await waitFor(() => expect(invokes).toHaveLength(1));
+  expect(invokes[0]).toMatchObject({ editor: { raw: FIRST } });
  });
 });

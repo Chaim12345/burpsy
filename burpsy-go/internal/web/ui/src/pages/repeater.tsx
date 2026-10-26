@@ -323,7 +323,6 @@ export function RepeaterPage(): JSX.Element {
  const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
  // The open request editor's text is what a plugin hotkey sees as the editor message (gqvg). A
  // Repeater draft is not a stored message, so only the bytes travel, never an id.
- usePublishHotkeyEditor(active && active.kind !== "ws" ? { raw: active.request } : null);
 
  useEffect(() => {
   if (!active && tabs.length === 0) return;
@@ -729,6 +728,8 @@ export function RepeaterPage(): JSX.Element {
   * so a non-null pin always means the operator is deliberately looking at a past send.
   */
  const viewedRequest = active && viewing[active.id] != null ? (result?.request ?? null) : null;
+ // What a plugin hotkey carries is what the request pane shows: a past send while paged back, else the draft.
+ usePublishHotkeyEditor(active && active.kind !== "ws" ? { raw: viewedRequest ?? active.request } : null);
  /** The field list a paged-back kettled send carried, or null (jae5). */
  const viewedFields = viewedRequest != null && httpResult?.h2Headers ? httpResult.h2Headers : null;
 
