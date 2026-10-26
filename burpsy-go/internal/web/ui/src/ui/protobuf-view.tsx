@@ -502,6 +502,19 @@ function ReflectBar({
  const [tls, setTls] = useState(true);
  const [busy, setBusy] = useState(false);
  const [failure, setFailure] = useState<string | null>(null);
+ // Which fetch is current. A reflect answer decodes the body it was sent with, so it is dropped when
+ // the body (or the gRPC flag) changed while it was in flight, or when a newer fetch started, rather
+ // than overwriting the new body's frames with the old body's decode (PR 363 review). A body change
+ // also clears the busy and failure state of the fetch it cancelled.
+ const generation = useRef(0);
+ useEffect(() => {
+  generation.current += 1;
+  setBusy(false);
+  setFailure(null);
+  return () => {
+   generation.current += 1;
+  };
+ }, [bodyBase64, grpc]);
 
  if (!open) {
   return (
@@ -515,12 +528,20 @@ function ReflectBar({
 
  const go = () => {
   const reflect: ProtoReflectTarget = { target: target.trim(), service: service.trim(), tls };
+  const mine = ++generation.current;
+  const current = () => generation.current === mine;
   setBusy(true);
   setFailure(null);
   reflectDecodeProtobuf(bodyBase64, grpc, reflect)
-   .then((res) => onResult(res, reflect.target))
-   .catch((err) => setFailure(err instanceof Error ? err.message : String(err)))
-   .finally(() => setBusy(false));
+   .then((res) => {
+    if (current()) onResult(res, reflect.target);
+   })
+   .catch((err) => {
+    if (current()) setFailure(err instanceof Error ? err.message : String(err));
+   })
+   .finally(() => {
+    if (current()) setBusy(false);
+   });
  };
 
  return (
