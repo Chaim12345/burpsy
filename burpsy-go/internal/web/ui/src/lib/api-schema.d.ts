@@ -3438,6 +3438,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/skills/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable */
+        get: operations["getApiSkillsByName"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/{name}/{$}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** one skill with its prompt rendered from ?argument=value (trailing-slash form of /api/skills/{name}) */
+        get: operations["getApiSkillsByNameBy$"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skills/disabled": {
         parameters: {
             query?: never;
@@ -3451,23 +3485,6 @@ export type paths = {
          * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         put: operations["putApiSkillsDisabled"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/none": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable */
-        get: operations["getApiSkillsNone"];
-        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -12743,21 +12760,16 @@ export interface operations {
             };
         };
     };
-    putApiSkillsDisabled: {
+    getApiSkillsByName: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                name: string;
+            };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description the skills this project turns off; the whole list, replacing the previous one */
-                    disabled: string[];
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
@@ -12777,14 +12789,51 @@ export interface operations {
             };
         };
     };
-    getApiSkillsNone: {
+    getApiSkillsByNameBy$: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                $: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putApiSkillsDisabled: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description the skills this project turns off; the whole list, replacing the previous one */
+                    disabled: string[];
+                };
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

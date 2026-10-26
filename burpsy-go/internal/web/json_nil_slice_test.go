@@ -122,7 +122,6 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/scanner/config":                "plain-text 503: no scanner configured",
 		"/api/scope/check":                   "plain-text 400: url is required",
 		"/api/settings/triage":               "plain-text 503: persistence is not attached",
-		"/api/skills/":                       "plain-text 404: a skill name is required",
 		"/api/target/analyze":                "plain-text 400: host is required",
 		"/ca.crt":                            "plain-text 404: TLS interception is off in the test server",
 	}
