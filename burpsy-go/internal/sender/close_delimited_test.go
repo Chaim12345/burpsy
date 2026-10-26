@@ -121,3 +121,76 @@ func TestACloseDelimitedResponseDowngradesTheNextSendToConnectionClose(t *testin
 		t.Fatalf("second send still waited (%v); want well under the %v hold", second, hold)
 	}
 }
+
+// PR #363 review: an authority's close-delimited mark forces a FRESH connection, but it must
+// not rewrite a Connection header the operator wrote - their bytes go out verbatim, and no
+// note claims an addition that did not happen.
+func TestACloseDelimitedMarkKeepsTheOperatorsOwnConnectionHeader(t *testing.T) {
+	srv := startTruncatingListingServer(t, 50*time.Millisecond)
+	host, port := mustHostPort(t, srv.addr)
+	s := NewSender(DefaultSenderConfig())
+	ctx := context.Background()
+	raw := []byte("GET /ftp/ HTTP/1.1\r\nHost: " + srv.addr + "\r\n\r\n")
+	if _, _, err := s.SendRawOutcome(ctx, host, port, false, raw, ProtocolPreferenceHTTP1); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+
+	// The authority is now marked. The operator's next request carries its own Connection header.
+	keepAlive := []byte("GET /ftp/ HTTP/1.1\r\nHost: " + srv.addr + "\r\nConnection: keep-alive\r\n\r\n")
+	_, outcome, err := s.SendRawOutcome(ctx, host, port, false, keepAlive, ProtocolPreferenceHTTP1)
+	if err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	if srv.sawClose.Load() != 0 {
+		t.Fatal("the sender overwrote the operator's Connection header with its own close")
+	}
+	if outcome.Note != "" {
+		t.Fatalf("no header was added, but the outcome claims one: %q", outcome.Note)
+	}
+}
+
+// PR #363 review: when the mark adds Connection: close to a request that had no Connection
+// header, the outcome says so - an accommodation the record does not mention cannot be audited.
+func TestACloseDelimitedMarkAddsConnectionCloseAndSaysSo(t *testing.T) {
+	srv := startTruncatingListingServer(t, 50*time.Millisecond)
+	host, port := mustHostPort(t, srv.addr)
+	s := NewSender(DefaultSenderConfig())
+	ctx := context.Background()
+	raw := []byte("GET /ftp/ HTTP/1.1\r\nHost: " + srv.addr + "\r\n\r\n")
+	if _, _, err := s.SendRawOutcome(ctx, host, port, false, raw, ProtocolPreferenceHTTP1); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	_, outcome, err := s.SendRawOutcome(ctx, host, port, false, raw, ProtocolPreferenceHTTP1)
+	if err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	if srv.sawClose.Load() != 1 {
+		t.Fatal("the marked send did not ask for the close")
+	}
+	if !strings.Contains(outcome.Note, "Connection: close") {
+		t.Fatalf("the added header is not on the record: %q", outcome.Note)
+	}
+}
+
+// PR #363 review: the marks keyed the old network's dial decisions; replacing the network
+// settings retires them with the pool, or an authority that close-delimited once is punished
+// with fresh connections for the process's life.
+func TestApplyNetworkClearsTheCloseDelimitedMark(t *testing.T) {
+	srv := startTruncatingListingServer(t, 50*time.Millisecond)
+	host, port := mustHostPort(t, srv.addr)
+	s := NewSender(DefaultSenderConfig())
+	ctx := context.Background()
+	raw := []byte("GET /ftp/ HTTP/1.1\r\nHost: " + srv.addr + "\r\n\r\n")
+	if _, _, err := s.SendRawOutcome(ctx, host, port, false, raw, ProtocolPreferenceHTTP1); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if err := s.ApplyNetwork(s.Network()); err != nil {
+		t.Fatalf("ApplyNetwork: %v", err)
+	}
+	if _, _, err := s.SendRawOutcome(ctx, host, port, false, raw, ProtocolPreferenceHTTP1); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	if srv.sawClose.Load() != 0 {
+		t.Fatal("the close-delimited mark survived a network-settings replacement")
+	}
+}

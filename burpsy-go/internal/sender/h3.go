@@ -25,6 +25,21 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	if !useTLS {
 		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 runs over QUIC and QUIC is always encrypted: a plaintext target cannot carry it, and silently falling back to cleartext HTTP/1.1 would send on a protocol the caller did not ask for")
 	}
+	// Egress policy the h3 leg cannot honor is a refusal, not a bypass (PR #363 review):
+	// RoundTripH3 dials the origin directly over QUIC, so an upstream proxy, the SOCKS
+	// carrier, or a host-resolution override would be silently ignored while the record
+	// implied they were in force. The pin is strict — it never falls back — so the honest
+	// answer is an error naming the cause. The h1/h2 legs honor all three; send without
+	// the pin to use them.
+	if s.upstream != nil && !s.upstream.Empty() {
+		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the configured upstream proxy: QUIC dials the origin directly, and sending anyway would bypass the upstream the operator configured; refusing rather than pretending the upstream carried this")
+	}
+	if _, _, _, carrierSet := s.carrier.Configured(); carrierSet {
+		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the SOCKS carrier: QUIC dials the origin directly, and sending anyway would bypass the carrier the operator configured; refusing rather than pretending the carrier carried this")
+	}
+	if _, overridden := s.Network().Resolution.resolveHost(host); overridden {
+		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the host-resolution override for %q: the override pins the dial address the TCP legs use, and QUIC dials the name as given; refusing rather than pretending the override applied", host)
+	}
 	// The carriability bar is planH2's. h3's request model is h2's with QPACK standing in for
 	// HPACK, so any construct h2 has nowhere to put — a smuggled Transfer-Encoding, a hop-by-hop
 	// field — h3 has nowhere to put either. Under an explicit pin the refusal is an error naming
@@ -41,7 +56,7 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	verify, roots, minVersion := s.tlsPolicy(settings)
 	tlsConfig := &tls.Config{
 		ServerName:         host,
-		InsecureSkipVerify: !verify,
+		InsecureSkipVerify: !verify, //nolint:gosec // the operator's own TLS-verification switch, exactly as on the TCP legs (s.tlsPolicy); never forced true here
 		RootCAs:            roots,
 		MinVersion:         minVersion,
 		NextProtos:         []string{"h3"},
@@ -59,7 +74,7 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	// and the proxy's Alt-Svc leg, so the mechanics are reviewed once. An endpoint that does not
 	// answer QUIC surfaces as a dial or handshake failure here - the strict answer, because the
 	// caller asked for h3 and h3 did not happen.
-	resp, err := httputil.RoundTripH3(ctx, tlsConfig, fmt.Sprintf("%s:%d", host, port), plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	resp, truncated, err := httputil.RoundTripH3(ctx, tlsConfig, fmt.Sprintf("%s:%d", host, port), plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
 		return nil, SendOutcome{}, err
 	}
@@ -69,6 +84,9 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 		Negotiated: "h3",
 		Rewrites:   plan.Rewrites,
 		Rendered:   burpsyhttp2.RenderRequest(plan.Method, plan.Path, plan.Authority, plan.Headers, plan.Body),
+	}
+	if truncated {
+		outcome.Note = fmt.Sprintf("the response body passed the %d-byte cap and was cut there", httputil.MaxResponseBodyBytes)
 	}
 	return resp, outcome, nil
 }

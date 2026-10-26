@@ -5,6 +5,7 @@ package httputil
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -329,12 +330,23 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 				}
 				buf := make([]byte, readN)
 				if n, err := io.ReadFull(br, buf); err != nil {
-					// An upstream that closes short of its declared Content-Length
-					// has still sent bytes — OWASP Juice Shop's serve-index /ftp/
-					// listing declares 59 more than it ever sends. Hand the partial
+					// Only a clean end-of-stream shortage is a truncated body to
+					// salvage: the peer closed short, so the partial is everything it
+					// ever sent — OWASP Juice Shop's serve-index /ftp/ listing
+					// declares 59 more bytes than it ever writes. Hand the partial
 					// body back with a typed error so a caller that can frame it
 					// honestly (close-delimited, see CloseDelimitedHead) may use it;
 					// callers that cannot discard it on err exactly as before.
+					//
+					// Any other failure — a timeout, a cancellation, a reset — means
+					// the origin was still writing when the read died, and salvaging
+					// that partial as if the reply had completed would invent bytes
+					// the origin never sent (PR #363 review: a body read that hits
+					// the caller's deadline mid-stream must fail the send, not
+					// complete it).
+					if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+						return nil, fmt.Errorf("reading body: %w", err)
+					}
 					body.Write(buf[:n])
 					return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
 				}
@@ -375,7 +387,10 @@ func ResponseStatus(raw []byte) *int {
 }
 
 // TruncatedBodyError reports a response body that ended before its declared
-// Content-Length: the peer closed (or stopped) short. It carries the partial
+// Content-Length with a clean EOF: the peer closed (or stopped) short. A read
+// that failed for any other reason — a timeout, a cancellation, a reset — is
+// never this error, because the origin was still writing and the partial is
+// not "everything it sent". It carries the partial
 // body alongside (ReadResponseBody returns it as the result value) because the
 // bytes that arrived are still evidence — the honest framing for them is
 // close-delimited, which CloseDelimitedHead builds.
@@ -446,7 +461,6 @@ func EnsureConnectionClose(rawRequest []byte) []byte {
 		out = append(out, []byte("Connection: close"))
 	}
 	head = bytes.Join(out, []byte("\r\n"))
-	out = nil
 	result := make([]byte, 0, len(head)+4+len(rest))
 	result = append(result, head...)
 	result = append(result, '\r', '\n', '\r', '\n')

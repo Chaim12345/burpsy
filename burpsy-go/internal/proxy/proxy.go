@@ -1873,7 +1873,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
 				var truncated *httputil.TruncatedBodyError
-				if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+				if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 					return
 				}
 				if truncated != nil {
@@ -1999,7 +1999,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
 		var truncated *httputil.TruncatedBodyError
-		if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+		if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 			return
 		}
 		if truncated != nil {
@@ -2121,7 +2121,10 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// responseEdited is the operator's own edit to the response half, paired below with the request
 	// half this function was handed.
 	var responseEdited bool
-	if s.config.intercept != nil {
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what the
+	// client gets, and holding the bytes would invite an operator Drop that overwrites the note
+	// naming the extension as the actor — the mirror of the request side returning on res.Dropped.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
@@ -2618,7 +2621,10 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		dropped = true
 		notes = extensionDropNote()
 	}
-	if s.config.intercept != nil {
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what
+	// the client gets; a hold would invite an operator Drop whose note overwrites the one
+	// naming the extension as the actor.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
@@ -3577,6 +3583,26 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
+// h3EgressPossible reports whether an h3 leg could honor the configured egress (PR #363
+// review): QUIC dials the advertised endpoint directly, so an upstream proxy or the SOCKS
+// carrier would be silently bypassed. With either in force the Alt-Svc table is not ridden.
+func (s *Server) h3EgressPossible() bool {
+	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
+		return false
+	}
+	_, _, _, carrierSet := s.carrier().Configured()
+	return !carrierSet
+}
+
+// h3UncertainDeliveryError marks an HTTP/3 attempt that failed after its connection existed.
+// That is not proof the origin received or processed the request - delivery is uncertain and
+// unknowable from here - so the caller must not replay it over another carrier: an automatic
+// retry is how a non-idempotent request reaches the origin twice (PR #363 review).
+type h3UncertainDeliveryError struct{ err error }
+
+func (e *h3UncertainDeliveryError) Error() string { return e.err.Error() }
+func (e *h3UncertainDeliveryError) Unwrap() error { return e.err }
+
 // forwardResult is one forward's response plus the honest record of what carried it: the
 // protocol the bytes actually rode and, when an h3 attempt fell back, a note naming the attempt
 // and the carrier (burpsy-react-ui-vln3 ruling A). The exchange row is built from these, never
@@ -3594,14 +3620,37 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	// responses, the operator's kill switch on, and the request carriable - then the forward
 	// rides QUIC. A request h3 has nowhere to put is not an error here: nothing was attempted,
 	// and HTTP/1.1 carrying it is the ordinary truth of the row.
+	// forForwarding runs once, up front, so an h3 attempt and the h1 leg write the same
+	// bytes: the platform-auth headers it injects belong to the exchange whichever carrier
+	// rides it (PR #363 review).
+	forwardBytes := s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))
 	var h3Note *string
-	if tls && s.config.network.HTTP3AltSvcEnabled() {
+	// h3EgressPossible: QUIC dials the advertised endpoint directly, so with an upstream
+	// proxy or the SOCKS carrier in force the Alt-Svc table is not ridden at all - the h1
+	// leg, which honors both, carries the request (PR #363 review).
+	if tls && s.config.network.HTTP3AltSvcEnabled() && s.h3EgressPossible() {
 		if endpoint, ok := s.config.altSvc.h3Endpoint(host, port, time.Now()); ok {
-			result, attempted, err := s.forwardH3(requestData, host, port, endpoint)
+			result, attempted, err := s.forwardH3(forwardBytes, host, port, endpoint)
 			if err == nil {
+				// The h3 leg's response teaches the same lessons the h1 leg's would: an auth
+				// challenge is what lets the NEXT request authenticate, and an Alt-Svc
+				// advertisement refreshes the very table that sent this request over QUIC
+				// (PR #363 review).
+				if headEnd := requestHeadEnd(result.response); headEnd > 0 {
+					learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(result.response[:headEnd]))
+					if value, ok := httputil.HeaderValue(result.response[:headEnd], "alt-svc"); ok {
+						s.config.altSvc.learn(host, port, value, time.Now())
+					}
+				}
 				return result, nil
 			}
 			if attempted {
+				var uncertain *h3UncertainDeliveryError
+				if errors.As(err, &uncertain) {
+					// Delivery is uncertain: replaying over another carrier could deliver
+					// the request twice. Surface the failure, never fall back automatically.
+					return forwardResult{}, uncertain.err
+				}
 				// Ruling A: the fallback carries the record of both the attempt and the carrier.
 				note := fmt.Sprintf("HTTP/3 was advertised by this origin and attempted; the endpoint did not answer QUIC (%v); the exchange was carried over HTTP/1.1", err)
 				h3Note = &note
@@ -3615,7 +3664,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
-	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
+	if _, err := upstreamConn.Write(forwardBytes); err != nil {
 		return forwardResult{serverIP: serverIP}, err
 	}
 
@@ -3656,11 +3705,13 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 // is litigated.
 const h3AttemptTimeout = 3 * time.Second
 
-// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3). The
-// bool reports whether a QUIC attempt actually happened: a request the carriability bar refuses
-// is not an attempt, so its "failure" earns no fallback note - HTTP/1.1 was always going to
-// carry it, and the row saying so needs no explanation. The TLS policy is the proxy's own: the
-// same verify switch, roots and version floor dialUpstreamTLS applies, over a different carrier.
+// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3).
+// requestData is already the for-forwarding bytes (platform auth applied), the same bytes the
+// h1 leg would write. The bool reports whether a QUIC attempt actually happened: a request the
+// carriability bar refuses is not an attempt, so its "failure" earns no fallback note - HTTP/1.1
+// was always going to carry it, and the row saying so needs no explanation. The TLS policy is
+// the proxy's own: the same verify switch, roots and version floor dialUpstreamTLS applies, over
+// a different carrier.
 func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoint string) (forwardResult, bool, error) {
 	plan, err := sender.PlanH3(requestData)
 	if err != nil {
@@ -3675,20 +3726,49 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 		}
 	}
 
+	// The host-resolution override the TCP legs honor applies to the endpoint dial (PR #363
+	// review): the override replaces the lookup, not the name - SNI and :authority stay the
+	// origin's, exactly as dialUpstreamFor keeps them.
+	dialAddress := endpoint
+	if n := s.config.network; n != nil {
+		if endpointHost, endpointPort, splitErr := net.SplitHostPort(endpoint); splitErr == nil {
+			if portNum, convErr := strconv.ParseUint(endpointPort, 10, 16); convErr == nil {
+				dialAddress = n.Resolution.DialAddress(context.Background(), endpointHost, uint16(portNum))
+			}
+		}
+	}
+
+	// The pre-existing lifecycle is preserved exactly: the WHOLE attempt stays under the
+	// h3AttemptTimeout budget it always had - a slow origin still costs the client 3s, no
+	// more. What changed is what a failure means (PR #363 review): the dial is bounded
+	// inside that budget, and a dial failure means no request byte left this proxy, so the
+	// h1 fallback is honest; a failure after the connection exists leaves delivery
+	// uncertain - the origin may or may not have the request - so that error comes back
+	// typed and forwardRequest surfaces it instead of replaying automatically.
+	// forwardRequest owns no caller context (the h1 leg runs under Background by design),
+	// so this budget is the bound an idle peer gets, as it was before the split.
 	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
 	defer cancel()
-	resp, err := httputil.RoundTripH3(ctx, tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, ctx, tlsConfig, dialAddress, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
+		if maybeDelivered {
+			return forwardResult{}, true, &h3UncertainDeliveryError{err: err}
+		}
 		return forwardResult{}, true, err
 	}
-	// firstByte is the attempt's completion: RoundTripH3 reads the body inside the one call, so
-	// no earlier instant is honestly available here. Documented rather than faked.
-	return forwardResult{
+	// firstByte is the attempt's completion: RoundTripH3Measured reads the body inside the one
+	// call, so no earlier instant is honestly available here. Documented rather than faked.
+	result := forwardResult{
 		response:  resp,
-		serverIP:  endpoint,
+		serverIP:  dialAddress,
 		firstByte: time.Now(),
 		protocol:  core.ProtocolHTTP3,
-	}, true, nil
+	}
+	if truncated {
+		note := fmt.Sprintf("the HTTP/3 response body passed the %d-byte cap and was cut there", httputil.MaxResponseBodyBytes)
+		result.note = &note
+	}
+	return result, true, nil
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting
