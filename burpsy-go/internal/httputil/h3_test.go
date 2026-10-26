@@ -139,3 +139,45 @@ func TestRoundTripH3CapsTheResponseBody(t *testing.T) {
 	}
 }
 
+// A dial that never connected is the only h3 failure that may be retried on another carrier:
+// maybeDelivered stays false (PR #363 review: the request cannot have reached the origin).
+func TestRoundTripH3MeasuredDialFailureIsNotSent(t *testing.T) {
+	// A UDP port nobody listens on: the handshake times out under the dial bound.
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := udp.LocalAddr().String()
+	_ = udp.Close()
+	tlsConfig := &tls.Config{ServerName: "127.0.0.1", InsecureSkipVerify: true, NextProtos: []string{"h3"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, maybeDelivered, _, err := RoundTripH3Measured(300*time.Millisecond, ctx, tlsConfig, addr, "example.test", "GET", "/", nil, nil)
+	if err == nil {
+		t.Fatal("a round trip to a dead endpoint succeeded")
+	}
+	if maybeDelivered {
+		t.Fatal("a dial that never connected was reported as possibly delivered")
+	}
+}
+
+// A failure after the connection existed leaves delivery uncertain - the origin may have the
+// request or not, and this side cannot know: maybeDelivered comes back true, which is what
+// stops the proxy from automatically replaying the request over HTTP/1.1 (PR #363 review).
+func TestRoundTripH3MeasuredPostConnectFailureIsSent(t *testing.T) {
+	addr, _ := startH3OriginWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		// Hold the response open past the client's deadline: the connection exists, the
+		// request arrived, and the exchange dies waiting.
+		<-r.Context().Done()
+	})
+	tlsConfig := &tls.Config{ServerName: "127.0.0.1", InsecureSkipVerify: true, NextProtos: []string{"h3"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, maybeDelivered, _, err := RoundTripH3Measured(5*time.Second, ctx, tlsConfig, addr, "example.test", "GET", "/", nil, nil)
+	if err == nil {
+		t.Fatal("a round trip whose response never came succeeded")
+	}
+	if !maybeDelivered {
+		t.Fatal("a failure after the handshake was reported as safe to replay")
+	}
+}

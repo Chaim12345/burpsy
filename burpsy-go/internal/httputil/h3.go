@@ -90,7 +90,22 @@ var maxH3ResponseBodyBytes = int64(MaxResponseBodyBytes)
 // forward-per-request shape; pooling QUIC connections is a separate decision, not smuggled in
 // here.
 func RoundTripH3(ctx context.Context, tlsConfig *tls.Config, dialAuthority, authority, method, rawTarget string, headers []burpsyhttp2.Header, body []byte) (resp []byte, truncated bool, err error) {
-	return roundTripH3(0, ctx, tlsConfig, dialAuthority, authority, method, rawTarget, headers, body)
+	resp, _, truncated, err = roundTripH3(0, ctx, tlsConfig, dialAuthority, authority, method, rawTarget, headers, body)
+	return resp, truncated, err
+}
+
+// RoundTripH3Measured is RoundTripH3 with the dial bounded separately from the exchange
+// (PR #363 review): the QUIC handshake runs under dialTimeout, and only a dial that never
+// connected is a safe "try another carrier" - no request byte could have reached the origin.
+// Once a connection exists, delivery is UNCERTAIN: a later failure can follow a request the
+// origin received, or one it never did, and there is no way to know which - so
+// maybeDelivered comes back true and the caller must not replay the request over another
+// carrier: an automatic retried POST is the origin possibly seeing it twice.
+//
+// The exchange itself runs under ctx, like RoundTripH3. A dialTimeout of 0 leaves the dial
+// under ctx alone.
+func RoundTripH3Measured(dialTimeout time.Duration, ctx context.Context, tlsConfig *tls.Config, dialAuthority, authority, method, rawTarget string, headers []burpsyhttp2.Header, body []byte) (resp []byte, maybeDelivered bool, truncated bool, err error) {
+	return roundTripH3(dialTimeout, ctx, tlsConfig, dialAuthority, authority, method, rawTarget, headers, body)
 }
 
 // roundTripH3 is the shared body of both entry points. dialTimeout > 0 bounds only the

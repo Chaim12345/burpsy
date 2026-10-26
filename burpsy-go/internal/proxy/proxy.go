@@ -3577,6 +3577,15 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
+// h3UncertainDeliveryError marks an HTTP/3 attempt that failed after its connection existed.
+// That is not proof the origin received or processed the request - delivery is uncertain and
+// unknowable from here - so the caller must not replay it over another carrier: an automatic
+// retry is how a non-idempotent request reaches the origin twice (PR #363 review).
+type h3UncertainDeliveryError struct{ err error }
+
+func (e *h3UncertainDeliveryError) Error() string { return e.err.Error() }
+func (e *h3UncertainDeliveryError) Unwrap() error { return e.err }
+
 // forwardResult is one forward's response plus the honest record of what carried it: the
 // protocol the bytes actually rode and, when an h3 attempt fell back, a note naming the attempt
 // and the carrier (burpsy-react-ui-vln3 ruling A). The exchange row is built from these, never
@@ -3602,6 +3611,12 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 				return result, nil
 			}
 			if attempted {
+				var uncertain *h3UncertainDeliveryError
+				if errors.As(err, &uncertain) {
+					// Delivery is uncertain: replaying over another carrier could deliver
+					// the request twice. Surface the failure, never fall back automatically.
+					return forwardResult{}, uncertain.err
+				}
 				// Ruling A: the fallback carries the record of both the attempt and the carrier.
 				note := fmt.Sprintf("HTTP/3 was advertised by this origin and attempted; the endpoint did not answer QUIC (%v); the exchange was carried over HTTP/1.1", err)
 				h3Note = &note
@@ -3657,10 +3672,11 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 const h3AttemptTimeout = 3 * time.Second
 
 // forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3). The
-// bool reports whether a QUIC attempt actually happened: a request the carriability bar refuses
-// is not an attempt, so its "failure" earns no fallback note - HTTP/1.1 was always going to
-// carry it, and the row saying so needs no explanation. The TLS policy is the proxy's own: the
-// same verify switch, roots and version floor dialUpstreamTLS applies, over a different carrier.
+// bool reports whether a QUIC attempt actually happened: a request the
+// carriability bar refuses is not an attempt, so its "failure" earns no fallback note - HTTP/1.1
+// was always going to carry it, and the row saying so needs no explanation. The TLS policy is
+// the proxy's own: the same verify switch, roots and version floor dialUpstreamTLS applies, over
+// a different carrier.
 func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoint string) (forwardResult, bool, error) {
 	plan, err := sender.PlanH3(requestData)
 	if err != nil {
@@ -3675,14 +3691,20 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
-	defer cancel()
-	resp, truncated, err := httputil.RoundTripH3(ctx, tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	// The dial and the exchange are bounded separately (PR #363 review): the handshake runs
+	// under h3AttemptTimeout, and a failure there means no request byte left this proxy, so
+	// the h1 fallback is honest. A failure after the connection exists leaves delivery
+	// uncertain - the origin may or may not have the request - so that error comes back
+	// typed and forwardRequest surfaces it instead of replaying automatically.
+	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, context.Background(), tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
+		if maybeDelivered {
+			return forwardResult{}, true, &h3UncertainDeliveryError{err: err}
+		}
 		return forwardResult{}, true, err
 	}
-	// firstByte is the attempt's completion: RoundTripH3 reads the body inside the one call, so
-	// no earlier instant is honestly available here. Documented rather than faked.
+	// firstByte is the attempt's completion: RoundTripH3Measured reads the body inside the one
+	// call, so no earlier instant is honestly available here. Documented rather than faked.
 	result := forwardResult{
 		response:  resp,
 		serverIP:  endpoint,
