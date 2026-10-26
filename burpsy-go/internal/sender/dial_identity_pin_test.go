@@ -1,23 +1,36 @@
 package sender
 
 import (
+	"context"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/upstream"
-	"github.com/burpsy-go/burpsy/internal/alpn"
 )
 
-// Structural pins for the freeze the behavioural tests in dial_identity_test.go cannot
-// interpose on: the stamp's inputs and the dial's inputs must be one read, and the settings
-// generation must move when the settings or the carrier do.
+// Structural pins for the freeze the behavioural tests in dial_identity_test.go and
+// dial_identity_route_test.go cannot interpose on: the stamp's inputs and the dial's inputs
+// must be one read, the frozen policy must be the WHOLE policy, and the settings generation
+// must move when the settings or the carrier do.
+
+func mustCapture(t *testing.T, s *Sender, host string, port uint16, useTLS bool) dialIdentity {
+	t.Helper()
+	id, err := s.captureDialIdentity(context.Background(), host, port, useTLS)
+	if err != nil {
+		t.Fatalf("captureDialIdentity: %v", err)
+	}
+	return id
+}
 
 // The upstream rule has no public interposition seam — the capture and the dial sit
 // microseconds apart with no network between — so the freeze is pinned directly: after
 // capture, mutating the live policy moves neither the identity's frozen policy nor its
-// stamp, and the frozen policy still resolves the host to the capture-time rule.
+// stamp, and the frozen policy still resolves the dialled address to the capture-time rule.
 func TestDialIdentityFreezesTheUpstreamRuleAtCapture(t *testing.T) {
 	policy := upstream.NewPolicy()
 	if _, err := policy.Set("*", "http://127.0.0.1:8081"); err != nil {
@@ -27,46 +40,56 @@ func TestDialIdentityFreezesTheUpstreamRuleAtCapture(t *testing.T) {
 	config.Upstream = policy
 	s := NewSender(config)
 
-	id := s.captureDialIdentity("example.com", true)
+	id := mustCapture(t, s, "example.com", 443, true)
 	if !id.wrap {
 		t.Fatal("a configured policy must route the dial through upstream.Dialer")
 	}
 	if _, err := policy.Set("*", "http://127.0.0.1:9999"); err != nil {
 		t.Fatal(err)
 	}
-	if got := id.upstream.For("example.com").Raw(); got != "http://127.0.0.1:8081" {
+	if got := id.upstream.ForAddr(id.dialAddr).Raw(); got != "http://127.0.0.1:8081" {
 		t.Errorf("the frozen policy resolves to %q after the live policy moved, want the capture-time rule", got)
 	}
-	if id.route == "" || id.route == s.captureDialIdentity("example.com", true).route {
+	if id.route == "" || id.route == mustCapture(t, s, "example.com", 443, true).route {
 		t.Error("the stamp did not change when the rule it names did")
 	}
 }
 
-// The freeze rebuilds the resolved rule through Raw -> Parse, the persistence round trip.
-// Pin the classes that round trip must not lose: credentials, the socks5h remote-resolution
-// flag, and the TLS-to-the-proxy kind. Raw equality is the canonical-form comparison — the
-// frozen rule is semantically the rule that was resolved, credentials included (the stamp is
-// in-memory only; nothing logs it).
-func TestDialIdentityFrozenRulePreservesTheResolvedProxy(t *testing.T) {
-	for _, raw := range []string{
-		"http://user:s3cret@127.0.0.1:8081",
-		"https://127.0.0.1:8443",
-		"socks5h://user:p%40ss@127.0.0.1:1080",
-	} {
-		policy := upstream.NewPolicy()
-		if _, err := policy.Set("*", raw); err != nil {
-			t.Fatalf("Set(%q): %v", raw, err)
-		}
-		config := DefaultSenderConfig()
-		config.Upstream = policy
-		s := NewSender(config)
+// The frozen policy is the whole policy as a value, not the one resolved rule: the dial
+// resolves the policy for the address it dials (the override's answer, often an IP literal),
+// and isHTTPProxyAddr — the check that keeps a connection to a configured proxy from being
+// tunnelled through another proxy — reads every rule, so dropping the unmatching rules would
+// change both answers. Snapshot equality pins the whole content; the resolution pins the
+// lookup key.
+func TestDialIdentityFrozenPolicyIsTheWholePolicyResolvedForTheDialledAddress(t *testing.T) {
+	policy := upstream.NewPolicy()
+	if _, err := policy.Set("127.0.0.1", "http://user:s3cret@127.0.0.1:8081"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policy.Set("other.example", "socks5h://127.0.0.1:1080"); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultSenderConfig()
+	config.Upstream = policy
+	s := NewSender(config)
+	n := s.Network()
+	n.Resolution.Overrides = []HostOverride{{Host: "example.test", Address: "127.0.0.1", Enabled: true}}
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
 
-		id := s.captureDialIdentity("example.com", true)
-		got := id.upstream.For("example.com").Raw()
-		want := policy.For("example.com").Raw()
-		if got != want {
-			t.Errorf("rule %q: frozen resolution renders %q, live renders %q — the round trip lost semantics", raw, got, want)
-		}
+	id := mustCapture(t, s, "example.test", 443, true)
+	if id.dialAddr != "127.0.0.1:443" {
+		t.Fatalf("dialAddr = %q, want the override's answer", id.dialAddr)
+	}
+	if got := id.upstream.ForAddr(id.dialAddr).Raw(); got != "http://user:s3cret@127.0.0.1:8081" {
+		t.Errorf("the frozen rule for the dialled address is %q, want the IP-literal rule with its credentials", got)
+	}
+	if !strings.Contains(id.route, "http://user:s3cret@127.0.0.1:8081") {
+		t.Error("the stamp does not name the IP-literal rule the dial consumes")
+	}
+	if got, want := id.upstream.Snapshot(), policy.Snapshot(); !reflect.DeepEqual(got, want) {
+		t.Errorf("the frozen policy is not the whole policy: got %+v, want %+v", got, want)
 	}
 }
 
@@ -83,7 +106,7 @@ func TestDialIdentityFreezesTheCertificateAndTheSettingsGeneration(t *testing.T)
 	config.Timeout = 500 * time.Millisecond
 	s := NewSender(config)
 
-	id := s.captureDialIdentity("127.0.0.1", true)
+	id := mustCapture(t, s, "127.0.0.1", 443, true)
 	if !certs.Remove("127.0.0.1") {
 		t.Fatal("the binding just added was not there to remove")
 	}
@@ -95,8 +118,37 @@ func TestDialIdentityFreezesTheCertificateAndTheSettingsGeneration(t *testing.T)
 	if err := s.ApplyNetwork(n); err != nil {
 		t.Fatal(err)
 	}
-	if after := s.captureDialIdentity("127.0.0.1", true); after.route == id.route {
+	if after := mustCapture(t, s, "127.0.0.1", 443, true); after.route == id.route {
 		t.Error("ApplyNetwork left the stamp unchanged: a settings change would retire nothing")
+	}
+}
+
+// The settings the dial consumes are the capture's value, not a later ApplyNetwork's: the
+// dial address (override), the resolver, the timeouts and the TLS policy all come from
+// id.settings, so the stamp's generation and the dial's settings describe the same instant.
+func TestDialIdentityFreezesTheSettingsValueAtCapture(t *testing.T) {
+	config := DefaultSenderConfig()
+	s := NewSender(config)
+	n := s.Network()
+	n.Resolution.Overrides = []HostOverride{{Host: "example.test", Address: "127.0.0.1", Enabled: true}}
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
+
+	id := mustCapture(t, s, "example.test", 443, false)
+	if id.dialAddr != "127.0.0.1:443" {
+		t.Fatalf("dialAddr = %q, want the override's answer", id.dialAddr)
+	}
+
+	n.Resolution.Overrides = nil
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
+	if id.dialAddr != "127.0.0.1:443" {
+		t.Error("the captured dial address moved with the live settings")
+	}
+	if id.settings.Resolution.Overrides == nil {
+		t.Error("the captured settings value aliases the live settings")
 	}
 }
 
@@ -112,12 +164,12 @@ func TestDialIdentityFreezesTheTLSFingerprintAtCapture(t *testing.T) {
 	config.TLSFingerprints = fingerprints
 	s := NewSender(config)
 
-	id := s.captureDialIdentity("example.com", true)
+	id := mustCapture(t, s, "example.com", 443, true)
 	fingerprints.Add("example.com", alpn.Fingerprint("firefox-test"))
 	if id.fingerprint != alpn.Fingerprint("chrome-test") {
 		t.Errorf("the frozen fingerprint moved with the live store: %q", id.fingerprint)
 	}
-	if after := s.captureDialIdentity("example.com", true); after.route == id.route {
+	if after := mustCapture(t, s, "example.com", 443, true); after.route == id.route {
 		t.Error("a fingerprint change left the stamp unchanged")
 	}
 }
@@ -133,7 +185,7 @@ func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 	before := upstream.NewCarrier()
 	after := upstream.NewCarrier()
 	s.WithUpstreamCarrier(before)
-	base := s.captureDialIdentity("example.com", false)
+	base := mustCapture(t, s, "example.com", 443, false)
 
 	const captures = 200
 	var wg sync.WaitGroup
@@ -149,7 +201,14 @@ func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 					return
 				default:
 				}
-				id := s.captureDialIdentity("example.com", false)
+				id, err := s.captureDialIdentity(context.Background(), "example.com", 443, false)
+				if err != nil {
+					select {
+					case failures <- err.Error():
+					default:
+					}
+					return
+				}
 				sawNewCarrier := id.carrier == after
 				sawNewGeneration := id.gen > base.gen
 				if sawNewCarrier != sawNewGeneration {
@@ -169,7 +228,7 @@ func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 	for f := range failures {
 		t.Error(f)
 	}
-	if s.captureDialIdentity("example.com", false).carrier != after {
+	if id := mustCapture(t, s, "example.com", 443, false); id.carrier != after {
 		t.Error("the carrier settled on the pre-swap value")
 	}
 }

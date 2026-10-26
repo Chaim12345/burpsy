@@ -337,7 +337,12 @@ func (s *Sender) sendReusing(
 
 	// A fresh connection, within the live bound.
 	pool.makeRoom()
-	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key, s.captureDialIdentity(host, useTLS))
+	id, cerr := s.captureDialIdentity(ctx, host, port, useTLS)
+	if cerr != nil {
+		pool.releaseSlot()
+		return nil, SendOutcome{}, cerr
+	}
+	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key, id)
 	if err != nil {
 		pool.releaseSlot()
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)

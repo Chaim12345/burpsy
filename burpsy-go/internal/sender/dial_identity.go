@@ -1,18 +1,20 @@
 package sender
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
-// dialIdentity is one send's frozen answer to "what carries this connection": every mutable
-// input the dial reads, captured once before the dial begins, in exactly the form the dial
-// will consume it, plus the pool stamp computed from those same frozen values.
+// dialIdentity is one dial decision's frozen answer to "what carries this connection": every
+// mutable input the dial reads, captured once at the dial decision point, in exactly the
+// form the dial will consume it, plus the pool stamp computed from those same frozen values.
 //
 // burpsy-react-ui-o388-predial-vs-dial: the stamp the pools reuse-check against used to be
 // captured before the dial while the dial re-read the live stores as it worked — the client
@@ -23,42 +25,66 @@ import (
 // closes that by construction: the stamp and the socket come from one read, so a connection
 // can no longer be labelled with an identity it never presented.
 //
-// The resolver, the dial-address override and the TLS policy are not individually hashable;
-// they live in NetworkSettings and reach the dial only through ApplyNetwork, so a generation
-// counter that ApplyNetwork and WithUpstreamCarrier bump stands in for all of them at once.
-// That is also what retires the caller-owned h2 sessions on a settings change: ApplyNetwork
-// flushes the h1 pool (closeAll) but cannot flush sessions it does not own, and the stamp
-// can.
+// What is frozen, and what is only versioned:
+//
+//   - settings is the NetworkSettings value at capture: the dial's resolver, dial-address
+//     override, timeouts and TLS policy are consumed from it, so the dial reads the same
+//     settings the stamp's generation versions. The sub-structs HTTP1/2/3 are pointers
+//     shared with the stored settings; nothing in-tree mutates them after ApplyNetwork
+//     (both callers pass freshly built values, and Normalise rebuilds the overrides slice),
+//     so the generation — bumped by every ApplyNetwork and WithUpstreamCarrier — covers
+//     every in-tree mutation path. A future in-place mutation path must bump it too.
+//   - upstream is the WHOLE policy as a value at capture (the Snapshot -> Restore
+//     persistence round trip), not the one resolved rule: the dial resolves the policy for
+//     the address it dials (the override's answer, often an IP literal — ForAddr), and a
+//     rule list reduced to the resolved rule would answer isHTTPProxyAddr differently for a
+//     target that is itself a configured proxy. wrap answers from the same snapshot, so the
+//     gate and the consumed policy cannot disagree about the instant they describe.
+//   - cert is the store's answer pointer at capture, replayed by frozenCerts. In-tree
+//     bindings are immutable once loaded (LoadClientCert builds a fresh tls.Certificate;
+//     Add/Remove/ReplaceWith swap entries, never edit one), so the pointer cannot change
+//     under the stamp; an embedder that mutates a tls.Certificate in place after binding it
+//     would desync presentation from stamp and is outside what the freeze can see.
+//   - fingerprint is the resolved ClientHello fingerprint at capture (63pf): a dial input
+//     outside the settings generation's reach, populated only at construction in-tree, but
+//     freezable for one read, so it rides the identity rather than being re-read at dial
+//     time.
+//
+// The stamp is in-memory only — pooled connections and h2 sessions carry it, nothing logs,
+// encodes or dumps it — so the rule's Raw form (credentials included, per the persistence
+// contract) never leaves the process through it.
 type dialIdentity struct {
-	// gen is the network-settings generation at capture — see the type note.
+	// gen is the network-settings generation at capture, read under s.mu with the carrier
+	// and the config: WithUpstreamCarrier writes the pointer and bumps the generation inside
+	// one locked section, so the pair can never straddle a swap.
 	gen uint64
-	// upstream is the policy frozen to this host's resolution: a single-default policy built
-	// from the one locked For read at capture, so the dial consumes what the stamp names
-	// however the live policy mutates afterwards. Nil when the sender has no policy at all,
-	// which upstream.Dialer already reads as "dial directly".
+	// settings is the network settings value at capture — see the type note for what the
+	// value shares with the stored settings and why that is safe today.
+	settings NetworkSettings
+	// dialAddr is the address the dial opens: settings.dialAddressFor at capture. It is also
+	// the upstream policy's lookup key (ForAddr), so the frozen rule is resolved for exactly
+	// what the socket connects to.
+	dialAddr string
+	// upstream is the whole policy as a value at capture — see the type note. Nil when the
+	// sender has no policy, which upstream.Dialer already reads as "dial directly".
 	upstream *upstream.Policy
-	// wrap is the Carry gate's answer at capture: a non-empty policy or a configured carrier
-	// routes the dial through upstream.Dialer. Taken from the live policy's emptiness rather
-	// than the frozen resolution so the gate keeps its exact dialTLS meaning; the gate and
-	// the rule read can straddle a mutation, and then the stamp still names the route the
-	// dial consumed, which is the property the pools rely on.
+	// wrap is the Carry gate's answer from the SAME snapshot as upstream: a non-empty frozen
+	// policy or a configured carrier routes the dial through upstream.Dialer. A policy change
+	// after capture cannot tear the gate from the route, because both describe the capture
+	// instant; the next dial decision recaptures.
 	wrap bool
-	// carrier is the global SOCKS layer in force at capture, read under s.mu with the
-	// generation: WithUpstreamCarrier writes the pointer and bumps the generation inside one
-	// locked section, so the two are always a consistent pair — a capture either precedes a
-	// swap or follows it, never straddles it.
+	// carrier is the global SOCKS layer in force at capture.
 	carrier *upstream.Carrier
-	// cert is the client certificate the handshake presents: the store's answer at capture,
-	// replayed by frozenCerts when the dialer's GetClientCertificate asks. Nil presents none,
-	// which is also what a nil store meant at capture.
+	// cert is the client certificate the handshake presents — see the type note for the
+	// in-place-mutation boundary. Nil presents none, which is also what a nil store meant at
+	// capture.
 	cert *tls.Certificate
-	// fingerprint is the resolved ClientHello fingerprint at capture (63pf). The bindings
-	// mutate without a generation bump, so the resolved value rides the identity and the
-	// stamp rather than being re-read at dial time.
+	// fingerprint is the resolved ClientHello fingerprint at capture.
 	fingerprint alpn.Fingerprint
-	// route is the reuse stamp, in the shape routeState established (o388) with the
-	// generation prepended and the fingerprint appended: gen, the frozen upstream rule, the
-	// frozen certificate's leaf hash, the fingerprint.
+	// route is the reuse stamp: the generation, the frozen rule FOR THE DIALLED ADDRESS,
+	// the frozen certificate's leaf hash, and the fingerprint — the o388 shape with the
+	// generation prepended and the fingerprint appended, and with the rule resolved for the
+	// dialled address rather than the original host (the dial's own lookup key).
 	route string
 }
 
@@ -81,29 +107,36 @@ func (id dialIdentity) certSource() alpn.ClientCertSource {
 	return frozenCerts{cert: id.cert}
 }
 
-// captureDialIdentity reads every mutable dial input once, immediately before the dial it
-// will drive, and derives the pool stamp from the same values. It replaces routeState: the
-// stamp's inputs and the dial's inputs are now one read by construction, not two reads hoped
-// to land close together.
-func (s *Sender) captureDialIdentity(host string, useTLS bool) dialIdentity {
-	// The generation, the carrier and the config pointer are read under one RLock so the
-	// snapshot the stamp and the dial are built from can never straddle a setter's swap.
+// captureDialIdentity reads every mutable dial input once, at one dial decision point, and
+// derives the pool stamp from the same values. It replaces routeState: the stamp's inputs
+// and the dial's inputs are one read by construction, not two reads hoped to land close
+// together. Each dial decision captures its own — a pool take's comparison and the fresh
+// dial after a failed pooled exchange are different decisions and must not share a capture
+// (an operator change landing during the failed exchange governs the redial, as it always
+// has).
+func (s *Sender) captureDialIdentity(ctx context.Context, host string, port uint16, useTLS bool) (dialIdentity, error) {
+	// The generation, the settings, the carrier and the config pointer are read under one
+	// RLock so the snapshot the stamp and the dial are built from can never straddle a
+	// setter's swap.
 	s.mu.RLock()
-	id := dialIdentity{gen: s.netGen, carrier: s.carrier}
+	id := dialIdentity{gen: s.netGen, settings: s.net, carrier: s.carrier}
 	cfg := s.config
 	s.mu.RUnlock()
+	id.dialAddr = id.settings.dialAddressFor(ctx, host, port)
 	route := "direct"
 	if s.upstream != nil {
-		// One locked read; Proxy is an immutable value. Raw renders a URL Parse accepts —
-		// that round trip is the persistence contract — so rebuilding a single-default policy
-		// from it cannot fail.
-		proxy := s.upstream.For(host)
+		// Snapshot renders and Restore re-parses the same Raw form — the persistence round
+		// trip — under one locked read of the live policy. A failure here means the live
+		// policy's own Snapshot could not be rebuilt, which the dial must surface rather
+		// than route around.
 		frozen := upstream.NewPolicy()
-		_ = frozen.SetDefault(proxy.Raw())
+		if err := frozen.Restore(s.upstream.Snapshot()); err != nil {
+			return dialIdentity{}, fmt.Errorf("freezing the upstream policy: %w", err)
+		}
 		id.upstream = frozen
-		route = proxy.Raw()
+		route = frozen.ForAddr(id.dialAddr).Raw()
 	}
-	id.wrap = (s.upstream != nil && !s.upstream.Empty()) || id.carrier != nil
+	id.wrap = (id.upstream != nil && !id.upstream.Empty()) || id.carrier != nil
 	if useTLS && cfg != nil {
 		if cfg.ClientCerts != nil {
 			if cert := cfg.ClientCerts.For(host); cert != nil {
@@ -123,5 +156,5 @@ func (s *Sender) captureDialIdentity(host string, useTLS bool) dialIdentity {
 		}
 	}
 	id.route = strconv.FormatUint(id.gen, 10) + "\x00" + route + "\x00" + string(id.fingerprint)
-	return id
+	return id, nil
 }

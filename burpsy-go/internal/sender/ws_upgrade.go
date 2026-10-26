@@ -79,11 +79,13 @@ func (s *Sender) SendUpgrade(ctx context.Context, host string, port uint16, useT
 	started := time.Now()
 
 	var conn net.Conn
-	var err error
-	if useTLS {
-		conn, _, err = s.dialTLS(ctx, host, port, alpn.EgressOffer(false), s.captureDialIdentity(host, true))
-	} else {
-		conn, err = s.dialPlain(ctx, host, port, s.captureDialIdentity(host, false))
+	id, err := s.captureDialIdentity(ctx, host, port, useTLS)
+	if err == nil {
+		if useTLS {
+			conn, _, err = s.dialTLS(ctx, host, port, alpn.EgressOffer(false), id)
+		} else {
+			conn, err = s.dialPlain(ctx, host, port, id)
+		}
 	}
 	if err != nil {
 		return UpgradeResult{}, fmt.Errorf("connection failed: %w", err)
