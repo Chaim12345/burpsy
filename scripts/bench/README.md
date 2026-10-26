@@ -26,7 +26,7 @@ Two things it is not:
 
 ```bash
 # 1. the target (Docker or the released jar; the app serves http on 9090)
-docker run --rm -p 9090:9090 sasanlabs/owasp-vulnerableapp:latest
+docker run --rm -p 9090:9090 sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149
 
 # 2. burpsy, scoped to the target, on a known proxy/web pair
 go build -o /tmp/burpsy ./cmd/burpsy

@@ -23,7 +23,7 @@ fi
 if ! sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^va$'; then
   echo "[boot] starting VulnerableApp"
   sudo docker rm -f va >/dev/null 2>&1
-  sudo docker run -d --name va -p 9090:9090 sasanlabs/owasp-vulnerableapp:latest >/dev/null
+  sudo docker run -d --name va -p 9090:9090 sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149 >/dev/null
 fi
 
 # 3. burpsy

@@ -118,7 +118,7 @@ jobs:
           tools: "false"
       - name: Start OWASP VulnerableApp
         run: |
-          docker run -d --name vulnapp -p 9090:9090 sasanlabs/owasp-vulnerableapp:latest
+          docker run -d --name vulnapp -p 9090:9090 sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149
           for i in $(seq 60); do curl -fsS -o /dev/null http://127.0.0.1:9090/VulnerableApp/scanner && exit 0; sleep 2; done
           docker logs vulnapp | tail -50
           echo "::error::VulnerableApp did not come up"; exit 1
