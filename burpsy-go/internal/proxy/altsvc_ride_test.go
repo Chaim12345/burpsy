@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -140,5 +141,58 @@ func TestTheKillSwitchOffRidesNothing(t *testing.T) {
 	case got := <-seen:
 		t.Fatalf("the h3 endpoint saw %q with the switch off", got)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// PR #363 review: an h3 endpoint that answers QUIC but never answers the REQUEST leaves
+// delivery uncertain. The forward must fail inside the attempt's time budget - the
+// pre-existing 3s lifecycle, preserved - the client must not be silently handed an h1 answer,
+// and the request must never be sent twice.
+func TestAHangingH3AttemptFailsUncertainAndNeverReplays(t *testing.T) {
+	cert := selfSignedCert(t, "altsvc.test", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	server := &http3.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done() // accept the request, answer never
+		}),
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = server.Serve(udp) }()
+	t.Cleanup(func() { _ = server.Close(); _ = udp.Close() })
+	_, portStr, _ := net.SplitHostPort(udp.LocalAddr().String())
+	var h3Port uint16
+	_, _ = fmt.Sscanf(portStr, "%d", &h3Port)
+
+	var h1Hits atomic.Int64
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h1Hits.Add(1)
+		w.Header().Set("Alt-Svc", fmt.Sprintf(`h3=":%d"; ma=3600`, h3Port))
+		_, _ = w.Write([]byte("plain-h1"))
+	}))
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	origin.StartTLS()
+	t.Cleanup(origin.Close)
+	host, port := splitHostPort(t, origin.URL)
+
+	srv := NewServer(NewProxyConfig(nil).WithScope(testScope()).WithUpstreamTLS(NewTLSPolicy().WithVerify(false)))
+	raw := []byte(fmt.Sprintf("POST /ride?q=1 HTTP/1.1\r\nHost: %s\r\nContent-Length: 4\r\n\r\ntest", host))
+	if _, err := srv.forwardRequest(raw, host, port, true); err != nil {
+		t.Fatalf("first forwardRequest: %v", err)
+	}
+
+	start := time.Now()
+	_, err = srv.forwardRequest(raw, host, port, true)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("a hanging h3 exchange produced an answer instead of failing")
+	}
+	if elapsed > h3AttemptTimeout+2*time.Second {
+		t.Fatalf("the attempt outlived its %v budget: %v", h3AttemptTimeout, elapsed)
+	}
+	if got := h1Hits.Load(); got != 1 {
+		t.Fatalf("the h1 origin was asked %d times: the uncertain request was replayed", got)
 	}
 }

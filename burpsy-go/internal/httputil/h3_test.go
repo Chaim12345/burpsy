@@ -181,3 +181,22 @@ func TestRoundTripH3MeasuredPostConnectFailureIsSent(t *testing.T) {
 		t.Fatal("a failure after the handshake was reported as safe to replay")
 	}
 }
+
+// Cancelling the exchange after the handshake is the same uncertain shape: the connection
+// existed, the request may or may not have been processed, so maybeDelivered is true and the
+// error is the cancellation - never a safe automatic retry (PR #363 review).
+func TestRoundTripH3MeasuredCancelAfterHandshakeIsUncertain(t *testing.T) {
+	addr, _ := startH3OriginWithHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	})
+	tlsConfig := &tls.Config{ServerName: "127.0.0.1", InsecureSkipVerify: true, NextProtos: []string{"h3"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+	_, maybeDelivered, _, err := RoundTripH3Measured(5*time.Second, ctx, tlsConfig, addr, "example.test", "GET", "/", nil, nil)
+	if err == nil {
+		t.Fatal("a cancelled exchange succeeded")
+	}
+	if !maybeDelivered {
+		t.Fatal("a cancellation after the handshake was reported as safe to replay")
+	}
+}

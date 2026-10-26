@@ -3738,12 +3738,18 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 		}
 	}
 
-	// The dial and the exchange are bounded separately (PR #363 review): the handshake runs
-	// under h3AttemptTimeout, and a failure there means no request byte left this proxy, so
-	// the h1 fallback is honest. A failure after the connection exists leaves delivery
+	// The pre-existing lifecycle is preserved exactly: the WHOLE attempt stays under the
+	// h3AttemptTimeout budget it always had - a slow origin still costs the client 3s, no
+	// more. What changed is what a failure means (PR #363 review): the dial is bounded
+	// inside that budget, and a dial failure means no request byte left this proxy, so the
+	// h1 fallback is honest; a failure after the connection exists leaves delivery
 	// uncertain - the origin may or may not have the request - so that error comes back
 	// typed and forwardRequest surfaces it instead of replaying automatically.
-	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, context.Background(), tlsConfig, dialAddress, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	// forwardRequest owns no caller context (the h1 leg runs under Background by design),
+	// so this budget is the bound an idle peer gets, as it was before the split.
+	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
+	defer cancel()
+	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, ctx, tlsConfig, dialAddress, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
 		if maybeDelivered {
 			return forwardResult{}, true, &h3UncertainDeliveryError{err: err}
