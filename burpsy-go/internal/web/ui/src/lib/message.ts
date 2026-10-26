@@ -292,7 +292,7 @@ export function prettyMessage(raw: string): string {
    pretty = null;
   }
  } else if (type.includes("xml") || type.includes("html") || /^\s*<[a-z!?]/i.test(body)) {
-  pretty = prettyMarkup(body);
+  pretty = prettyMarkup(body, raw.includes("\r\n") ? "\r\n" : "\n");
  } else if (type.includes("css") || looksLikeCss(body)) {
   pretty = prettyCss(body);
  } else if (type.includes("javascript") || type.includes("ecmascript") || looksLikeJs(body)) {
@@ -303,7 +303,8 @@ export function prettyMessage(raw: string): string {
  void startLine;
  // The editor splits a document on one separator, CRLF whenever the message holds one, so a JSON body
  // pretty-printed with bare LFs under a CRLF head would show as one line; it takes the head's separator
- // above (PR 363 review). Markup, CSS and JS keep LF: their text nodes would come back as CRLF.
+ // above (PR 363 review). Markup takes it only at the tag breaks prettyMarkup inserts, so a text node's
+// own newlines are never rewritten; CSS and JS keep LF, since their write-back keeps the pretty text.
  return raw.slice(0, bodyOffset) + pretty;
 }
 
@@ -397,24 +398,29 @@ export function compactMessage(pretty: string): string {
    return pretty;
   }
  }
- return pretty.slice(0, bodyOffset) + body.replace(/>\n\s*</g, "><");
+ return pretty.slice(0, bodyOffset) + body.replace(/>\r?\n\s*</g, "><");
 }
 
-function prettyMarkup(input: string): string {
- const withBreaks = input.replace(/></g, ">\n<");
+/**
+ * Indents markup with a break between adjacent tags. `sep` is the break it inserts, the message's own
+ * separator, so a CRLF response's Pretty view splits into lines in an editor that splits on CRLF; a
+ * newline already inside the body (a text node's) stays exactly as it was.
+ */
+function prettyMarkup(input: string, sep = "\n"): string {
  let depth = 0;
- return withBreaks
-  .split("\n")
-  .map((line) => {
-   const trimmed = line.trim();
-   if (/^<\/[^>]+>/.test(trimmed)) depth = Math.max(0, depth - 1);
-   const indented = "  ".repeat(depth) + trimmed;
-   const opens =
-    /^<[^/!?][^>]*[^/]>$/.test(trimmed) && !/^<(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)\b/i.test(trimmed);
-   if (opens) depth += 1;
-   return indented;
-  })
-  .join("\n");
+ const indent = (line: string) => {
+  const trimmed = line.trim();
+  if (/^<\/[^>]+>/.test(trimmed)) depth = Math.max(0, depth - 1);
+  const indented = "  ".repeat(depth) + trimmed;
+  const opens =
+   /^<[^/!?][^>]*[^/]>$/.test(trimmed) && !/^<(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)\b/i.test(trimmed);
+  if (opens) depth += 1;
+  return indented;
+ };
+ return input
+  .split(/(?<=>)(?=<)/)
+  .map((part) => part.split("\n").map(indent).join("\n"))
+  .join(sep);
 }
 
 /* ==== the message editor's hide-headers lists (burpsy-react-ui-whr) ========

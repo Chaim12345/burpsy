@@ -19,7 +19,9 @@ func runCL0(t *testing.T, listener string) ([]*Finding, error) {
 	t.Cleanup(func() { l.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return checkRequestSmuggling(ctx, smugglingAt(l.Host, l.Port, l.TLS))
+	cc := smugglingAt(l.Host, l.Port, l.TLS)
+	cc.Config = &ScanConfig{CheckRequestSmuggling: true, CheckExtendedActive: true}
+	return checkRequestSmuggling(ctx, cc)
 }
 
 func runClientSideDesync(t *testing.T, listener string) ([]*Finding, error) {
@@ -92,6 +94,29 @@ func TestClientSideDesyncStaysQuietOnTheSafeTwin(t *testing.T) {
 	for _, x := range fs {
 		if x.Name == "Client-side desync" {
 			t.Fatalf("safe twin reported: %+v", x)
+		}
+	}
+}
+
+// CL.0 can leave a response on a shared back-end connection, so the smuggling switch alone (whose
+// promise is that nothing is queued) does not run it: only the extended-active opt-in does.
+func TestCL0NeedsTheExtendedActiveOptIn(t *testing.T) {
+	l, err := vulnapp.StartListener("desync-cl0")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cc := smugglingAt(l.Host, l.Port, l.TLS)
+	cc.Config = &ScanConfig{CheckRequestSmuggling: true}
+	fs, err := checkRequestSmuggling(ctx, cc)
+	if err != nil {
+		t.Fatalf("check errored: %v", err)
+	}
+	for _, x := range fs {
+		if x.Param == "CL.0" {
+			t.Fatalf("CL.0 ran under CheckRequestSmuggling alone: %+v", x)
 		}
 	}
 }

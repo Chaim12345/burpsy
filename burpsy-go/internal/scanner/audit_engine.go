@@ -846,7 +846,7 @@ func (r *auditRun) unitVariantCapped(key string) bool {
 	if set[key] {
 		return false
 	}
-	if uint32(len(set)) >= capN {
+	if uint64(len(set)) >= uint64(capN) {
 		return true
 	}
 	set[key] = true

@@ -34,7 +34,7 @@ func rateLimitedSeed(t *testing.T, statuses ...int) (*ActiveScanner, core.Exchan
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt64(&hits, 1)
 		w.WriteHeader(statuses[int(n-1)%len(statuses)])
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	store := core.NewTrafficStore()
 	h, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
@@ -160,7 +160,7 @@ func rateLimitedSeedWide(t *testing.T, statuses ...int) (*ActiveScanner, core.Ex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt64(&hits, 1)
 		w.WriteHeader(statuses[int(n-1)%len(statuses)])
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	store := core.NewTrafficStore()
 	h, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))

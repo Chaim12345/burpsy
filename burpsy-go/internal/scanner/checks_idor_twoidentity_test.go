@@ -31,15 +31,16 @@ func idorTwoIdentityAudit(t *testing.T, path string, mod func(*ScanConfig)) []*F
 	return findings
 }
 
-// bob's session asking for id=1 is served alice's profile: the cross-read proves the object
-// belongs to a DIFFERENT user, which the one-account swap cannot show - the finding is firm.
-func TestIDORTwoIdentityFirmsTheCrossRead(t *testing.T) {
+// bob's session asking for id=1 is served alice's profile. Cookie sessions carry no user id the
+// scanner can read, so nothing ties the profile to alice: a shared, login-only record would answer
+// the same way. The cross-read is reported, but tentative, and says what is missing.
+func TestIDORTwoIdentityCrossReadWithoutOwnershipIsTentative(t *testing.T) {
 	f := idorFindingIn(idorTwoIdentityAudit(t, "/idor/profile?id=1", nil))
 	if f == nil {
 		t.Fatal("no IDOR finding on the vulnerable twin")
 	}
-	if f.Confidence != "firm" || f.Severity != "high" {
-		t.Errorf("confidence/severity = %s/%s, want firm/high", f.Confidence, f.Severity)
+	if f.Confidence != "tentative" || f.Severity != "high" {
+		t.Errorf("confidence/severity = %s/%s, want tentative/high without ownership evidence", f.Confidence, f.Severity)
 	}
 	if !strings.Contains(f.Description, "second") {
 		t.Errorf("description does not name the second identity: %s", f.Description)
@@ -64,5 +65,43 @@ func TestIDORTwoIdentityOffWithoutItsSwitch(t *testing.T) {
 	}
 	if f.Confidence != "tentative" {
 		t.Errorf("confidence = %s, want tentative without the two-identity switch", f.Confidence)
+	}
+}
+
+// A cookie header whose names B's set does not hold still carries A's session: the replay would be
+// A's own request, so it is not a two-identity read at all.
+func TestIDORReidentityUncoveredWhenACookieIsNotReplaced(t *testing.T) {
+	raw := "GET /x HTTP/1.1\r\nHost: h\r\nCookie: session=alice\r\n\r\n"
+	if _, covered := idorReidentity(raw, &SecondIdentity{CookieHeader: "sid=bob"}); covered {
+		t.Error("covered with A's session cookie left in place")
+	}
+	if out, covered := idorReidentity(raw, &SecondIdentity{CookieHeader: "session=bob"}); !covered || !strings.Contains(out, "Cookie: session=bob") {
+		t.Errorf("same-name cookie: covered=%v out=%q", covered, out)
+	}
+}
+
+// A credential header B has no value for (here X-Auth-Token) leaves the request A's.
+func TestIDORReidentityUncoveredForAnUnfilledCredentialHeader(t *testing.T) {
+	raw := "GET /x HTTP/1.1\r\nHost: h\r\nX-Auth-Token: alice-token\r\n\r\n"
+	if _, covered := idorReidentity(raw, &SecondIdentity{CookieHeader: "sid=bob"}); covered {
+		t.Error("covered with A's X-Auth-Token left in place")
+	}
+	raw = "GET /x HTTP/1.1\r\nHost: h\r\nX-API-Key: alice-key\r\n\r\n"
+	if _, covered := idorReidentity(raw, &SecondIdentity{APIKeyHeader: "X-API-Key", APIKeyValue: "bob-key"}); !covered {
+		t.Error("the configured API-key header was not treated as replaced")
+	}
+}
+
+// Ownership evidence: an owner-like field naming the session's own user id.
+func TestIDOROwnedBySession(t *testing.T) {
+	session := map[string]bool{"1": true}
+	if path, v, ok := idorOwnedBySession(session, idorShapeOf(`{"order":{"id":7,"userId":1}}`)); !ok || path != "order.userId" || v != "1" {
+		t.Errorf("owner field not found: %q %q %v", path, v, ok)
+	}
+	if _, _, ok := idorOwnedBySession(session, idorShapeOf(`{"name":"widget","price":1}`)); ok {
+		t.Error("a non-owner field counted as ownership")
+	}
+	if _, _, ok := idorOwnedBySession(nil, idorShapeOf(`{"userId":1}`)); ok {
+		t.Error("ownership without any session id")
 	}
 }

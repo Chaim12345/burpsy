@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ const (
 	IssueOAuthImplicitFlow      = "OAuth implicit flow"
 	IssueOAuthStateMissing      = "OAuth state parameter missing"
 	IssueOAuthPKCEAbsentOrPlain = "OAuth PKCE absent or downgraded"
-	IssueOAuthRedirectURIBypass = "OAuth redirect_uri validation bypass"
+	IssueOAuthRedirectURIBypass = "OAuth redirect_uri validation bypass" //nolint:gosec // G101: an issue name, not a credential
 )
 
 // oauthEnabled is the bundle's own switch.
@@ -145,25 +146,30 @@ func checkOAuthRedirectBypass(ctx context.Context, cc *CheckContext) ([]*Finding
 	if gate == nil {
 		return nil, fmt.Errorf("oauth redirect_uri: no authorised sender: %w", errCapabilityMissing)
 	}
+	if _, ok := oauthWithRedirectURI(raw, variants[0], false); !ok {
+		// Sending the request unchanged five times would read as "validated" when nothing was tested.
+		return nil, fmt.Errorf("oauth redirect_uri: the parameter could not be located in the request target")
+	}
 	var hits []string
 	// Variant 1-4: substitute the value. Variant 5: duplicate the parameter - the first value
 	// is the registered callback, the second the attacker's.
 	probes := append([]string{}, variants...)
 	for _, v := range probes {
-		mutated := oauthWithRedirectURI(raw, registered, v, false)
+		mutated, _ := oauthWithRedirectURI(raw, v, false)
 		res, err := gate.Send(ctx, []byte(mutated))
 		if err != nil || res.Err != nil || res.Status == nil {
 			continue
 		}
-		if *res.Status == 302 && oauthLocationHitsCanary(string(res.Raw), v) {
+		if *res.Status == 302 && oauthLocationTargets(string(res.Raw), v) {
 			hits = append(hits, v)
 		}
 	}
 	// Parameter pollution: registered first, attacker second.
-	mutated := oauthWithRedirectURI(raw, registered, "https://"+oauthCanaryHost+"/cb", true)
+	dup := "https://" + oauthCanaryHost + "/cb"
+	mutated, _ := oauthWithRedirectURI(raw, dup, true)
 	res, err := gate.Send(ctx, []byte(mutated))
 	if err == nil && res.Err == nil && res.Status != nil && *res.Status == 302 &&
-		strings.Contains(string(res.Raw), oauthCanaryHost) {
+		oauthLocationTargets(string(res.Raw), dup) {
 		hits = append(hits, "duplicate redirect_uri parameter")
 	}
 	if len(hits) == 0 {
@@ -178,27 +184,74 @@ func checkOAuthRedirectBypass(ctx context.Context, cc *CheckContext) ([]*Finding
 }
 
 // oauthWithRedirectURI returns the raw request with redirect_uri's value replaced (or
-// duplicated, when duplicate is set: registered first, value second).
-func oauthWithRedirectURI(raw, old, value string, duplicate bool) string {
-	enc := url.QueryEscape(value)
-	if duplicate {
-		return strings.Replace(raw, "redirect_uri="+url.QueryEscape(old),
-			"redirect_uri="+url.QueryEscape(old)+"&redirect_uri="+enc, 1)
+// duplicated, when duplicate is set: the captured pair first, value second). The pair is found by
+// its decoded name in the request target's query, whatever spelling the client used for the value
+// (unencoded, lowercase escapes, %20); ok is false when there is no such pair to rewrite.
+func oauthWithRedirectURI(raw, value string, duplicate bool) (string, bool) {
+	line, rest, _ := strings.Cut(raw, "\r\n")
+	fields := strings.SplitN(line, " ", 3)
+	if len(fields) != 3 {
+		return raw, false
 	}
-	return strings.Replace(raw, "redirect_uri="+url.QueryEscape(old), "redirect_uri="+enc, 1)
+	target, query, hasQuery := strings.Cut(fields[1], "?")
+	if !hasQuery {
+		return raw, false
+	}
+	pairs := strings.Split(query, "&")
+	for i, p := range pairs {
+		name, _, _ := strings.Cut(p, "=")
+		if n, err := url.QueryUnescape(name); err != nil || n != "redirect_uri" {
+			continue
+		}
+		repl := "redirect_uri=" + url.QueryEscape(value)
+		if duplicate {
+			repl = p + "&" + repl
+		}
+		pairs[i] = repl
+		fields[1] = target + "?" + strings.Join(pairs, "&")
+		return strings.Join(fields, " ") + "\r\n" + rest, true
+	}
+	return raw, false
 }
 
-// oauthLocationHitsCanary reports whether a 302 response's Location carries this variant's
-// manipulated marker: the canary host, or the traversal canary path.
-func oauthLocationHitsCanary(respRaw, variant string) bool {
-	loc := headerValue(respRaw, "Location")
-	if loc == "" {
+// oauthLocationTargets reports whether a 302 response's Location IS this variant's manipulated
+// redirect: an absolute URL on the variant's host and path (for the traversal variant, a path that
+// ends in the canary segment once dot segments are resolved). The canary merely appearing in the
+// Location - a login bounce or an error page echoing redirect_uri in its own query - is not a
+// redirect to the attacker.
+func oauthLocationTargets(respRaw, variant string) bool {
+	lu, err := url.Parse(headerValue(respRaw, "Location"))
+	if err != nil || !lu.IsAbs() {
 		return false
 	}
-	if strings.Contains(loc, oauthCanaryHost) {
-		return true
+	vu, err := url.Parse(variant)
+	if err != nil || !strings.EqualFold(lu.Hostname(), vu.Hostname()) || lu.Port() != vu.Port() {
+		return false
 	}
-	return strings.Contains(variant, "cb-burpsy-canary") && strings.Contains(loc, "cb-burpsy-canary")
+	if strings.Contains(variant, "cb-burpsy-canary") {
+		return strings.HasSuffix(path.Clean(lu.Path), "/cb-burpsy-canary")
+	}
+	return lu.Path == vu.Path
+}
+
+// oauthLocationGrant reports whether a Location carries an issued grant (a code, an access token
+// or an id token in its query or fragment) and no error: RFC 6749 section 4.1.2.1 answers a
+// rejected authorize request with a 302 too, carrying error=.
+func oauthLocationGrant(loc string) bool {
+	lu, err := url.Parse(loc)
+	if err != nil {
+		return false
+	}
+	q := lu.Query()
+	if f, err := url.ParseQuery(lu.Fragment); err == nil {
+		for k, v := range f {
+			q[k] = append(q[k], v...)
+		}
+	}
+	if q.Get("error") != "" {
+		return false
+	}
+	return q.Get("code") != "" || q.Get("access_token") != "" || q.Get("id_token") != ""
 }
 
 // checkOAuthStateMissing runs the state row against one captured authorize request. It rides the
@@ -219,8 +272,8 @@ func checkOAuthStateMissing(ctx context.Context, cc *CheckContext) ([]*Finding, 
 	if !strings.Contains(strings.SplitN(resp, "\r\n", 2)[0], " 302") {
 		return nil, nil
 	}
-	if headerValue(resp, "Location") == "" {
-		return nil, nil
+	if !oauthLocationGrant(headerValue(resp, "Location")) {
+		return nil, nil // a refusal (error=...) or a login bounce, not a grant
 	}
 	return []*Finding{buildHeaderFinding(cc, IssueOAuthStateMissing, "medium", "firm",
 		"authorize request carried no state parameter and the server answered 302 with a grant",

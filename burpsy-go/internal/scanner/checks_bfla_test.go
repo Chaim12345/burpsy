@@ -127,3 +127,15 @@ func TestBFLAWriteMethods(t *testing.T) {
 		}
 	}
 }
+
+// A role-enforcing write that refuses with HTTP 200 and the success envelope's shape
+// ({"updated":false,...}) is not a finding: the answer differs from the admin's in value.
+func TestBFLAWriteStaysQuietOnA200RefusalEnvelope(t *testing.T) {
+	before := vulnapp.APIAuthSettingWritesBy(bobUID)
+	if f := bflaFindingIn(bflaWriteAudit(t, "/api/envelope/admin/settings", true)); f != nil {
+		t.Fatalf("finding on the 200 refusal envelope: %s", f.Description)
+	}
+	if vulnapp.APIAuthSettingWritesBy(bobUID) != before {
+		t.Error("the envelope twin accepted a write from the low-privilege identity")
+	}
+}
