@@ -276,3 +276,35 @@ func TestSendRawOutcomeHTTP3AllowsAnEmptyCarrier(t *testing.T) {
 		t.Fatalf("an empty carrier is no carrier; the pin refused or failed: %v", err)
 	}
 }
+
+// The G402 annotation on the h3 dial claims InsecureSkipVerify is the OPERATOR's verification
+// switch reaching QUIC, not a hardcoded bypass. This test is that claim: with verification on
+// (the default policy), a self-signed h3 endpoint is refused by the TLS handshake; with the
+// operator's switch off, the same endpoint answers.
+func TestH3SendHonoursTheOperatorsTLSVerificationSwitch(t *testing.T) {
+	host, port, _ := startH3Server(t)
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+
+	verifying := NewSender(&SenderConfig{TLSVerify: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err := verifying.SendRawOutcome(ctx, host, port, true, raw, ProtocolPreferenceHTTP3)
+	if err == nil {
+		t.Fatal("a self-signed h3 endpoint answered an operator who left TLS verification on; " +
+			"the nolint annotation's claim would be false")
+	}
+	if !strings.Contains(err.Error(), "certificate") && !strings.Contains(err.Error(), "tls") {
+		t.Fatalf("the refusal is not a TLS verification failure: %v", err)
+	}
+
+	notVerifying := NewSender(&SenderConfig{TLSVerify: false})
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	resp, outcome, err := notVerifying.SendRawOutcome(ctx2, host, port, true, raw, ProtocolPreferenceHTTP3)
+	if err != nil {
+		t.Fatalf("the operator's verification-off switch did not reach the h3 dial: %v", err)
+	}
+	if outcome.Negotiated != "h3" || !strings.Contains(string(resp), "h3-ok") {
+		t.Fatalf("unexpected outcome: negotiated %q, resp %q", outcome.Negotiated, resp)
+	}
+}
