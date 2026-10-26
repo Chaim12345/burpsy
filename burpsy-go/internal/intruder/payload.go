@@ -664,6 +664,14 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.Collaborator = &c
+	case "plugin":
+		var pl struct {
+			Plugin *PluginSource `json:"plugin"`
+		}
+		if err := json.Unmarshal(b, &pl); err != nil {
+			return err
+		}
+		s.Plugin = pl.Plugin
 	case "character_substitution":
 		var cs CharacterSubstitution
 		if err := json.Unmarshal(b, &cs); err != nil {
