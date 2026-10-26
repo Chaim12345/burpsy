@@ -554,6 +554,25 @@ func (c *Crawler) admitSelfRegistration(f discoveredForm, base, u *url.URL, dept
 	}
 	if c.enqueue(item, base.String(), lim) {
 		rep.FormsSubmitted++
+		// The same success-path bookkeeping admitForm does for an ordinary submission
+		// (PR #363 review): the per-form cap check runs BEFORE the registration branch, so a
+		// registration that never increments the count is a registration the cap never stops -
+		// the generated credentials make every body unique, and without the count the only
+		// remaining bound was MaxTemplateVisits, about twenty accounts on a site whose footer
+		// carries the register form. The destination goes on the record too: a fresh body is a
+		// new destination by the threshold's own key, which is exactly its reading.
+		if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+			c.formSubmissions[f.signature(base)]++
+		}
+		if threshold := c.cfg.FormSubmissionOptimizationThreshold; threshold > 0 {
+			sig := f.signature(base)
+			set := c.formDestinations[sig]
+			if set == nil {
+				set = make(map[string]struct{})
+				c.formDestinations[sig] = set
+			}
+			set[item.method+" "+item.url.String()+" "+string(item.body)] = struct{}{}
+		}
 	}
 }
 
