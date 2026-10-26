@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -103,15 +104,45 @@ func (r *Run) spawn(ctx context.Context, req SpawnRequest, parentPlanner Planner
 	return nil
 }
 
-// waitChildren blocks until every child has finished or ctx ends.
+// waitChildren blocks until every child has finished. While ctx is live that wait has no bound: the
+// caller asked for AwaitChildren. Once ctx ends the children are being cancelled (their contexts
+// derive from the parent's), and the parent gives them StopGrace to finish so it never reports itself
+// stopped with a child still running, and never hangs on a child whose Invoker, Planner or Approver
+// ignores cancellation: after the grace it stops waiting and the straggler is left to its own
+// context, as it was before.
 func (r *Run) waitChildren(ctx context.Context) {
 	r.mu.Lock()
 	kids := append([]*Run(nil), r.children...)
 	r.mu.Unlock()
+	var grace <-chan time.Time
 	for _, k := range kids {
 		select {
 		case <-k.Done():
+			continue
 		case <-ctx.Done():
+		}
+		if grace == nil {
+			d := r.sup.StopGrace
+			if d <= 0 {
+				d = 5 * time.Second
+			}
+			timer := time.NewTimer(d)
+			defer timer.Stop()
+			grace = timer.C
+		}
+		select {
+		case <-k.Done():
+		case <-grace:
+			var live []string
+			for _, c := range kids {
+				select {
+				case <-c.Done():
+				default:
+					live = append(live, c.task.ID)
+				}
+			}
+			r.append(Event{Kind: EventError, Message: "stopped with sub-task(s) still running after the stop grace: " + strings.Join(live, ", ") +
+				"; each keeps its own status until its Invoker, Planner or Approver returns"})
 			return
 		}
 	}

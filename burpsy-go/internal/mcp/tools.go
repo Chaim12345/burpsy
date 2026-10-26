@@ -669,7 +669,29 @@ func legacyOp(ops []op, name string) (op, bool) {
 			return o, true
 		}
 	}
-	return op{}, false
+	// A route rekeyed to a {param} pattern ("GET /api/message/{id}") is the operation the old
+	// "GET /api/message/" spelling named: the first op, in the tool's own order, whose pattern is that
+	// prefix followed by a parameter segment. "{$}" is an exact-match marker, not a parameter.
+	nverb, npath, ok := strings.Cut(name, " ")
+	if !ok {
+		return op{}, false
+	}
+	var found op
+	n := 0
+	for _, o := range ops {
+		verb, pattern, ok := strings.Cut(o.name, " ")
+		if !ok || verb != nverb || !strings.HasPrefix(pattern, npath) {
+			continue
+		}
+		if rest := pattern[len(npath):]; strings.HasPrefix(rest, "{") && rest != "{$}" {
+			found = o
+			n++
+		}
+	}
+	// More than one candidate (POST /api/tasks/ fronts cancel, again, pause and resume) means the old
+	// spelling no longer says which operation was meant; guessing could cancel a task the caller meant
+	// to pause, so the caller is refused and shown the real op names.
+	return found, n == 1
 }
 
 // subtreeForm maps a remainder-wildcard key ("/api/datasets/{rest...}") onto the trailing-slash
@@ -857,7 +879,14 @@ func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
 			id := strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
 			switch {
 			case isSubtreePattern(route.Pattern):
-				args.Path = subtreeForm(route.Pattern) + id
+				// The id fills the first placeholder and everything after it: for
+				// "/api/intruder/attacks/{id}/{action...}" the id "7/pause" names
+				// "/api/intruder/attacks/7/pause", never a path with a literal "{id}" in it.
+				base := subtreeForm(route.Pattern)
+				if i := strings.Index(base, "{"); i >= 0 {
+					base = base[:i]
+				}
+				args.Path = base + id
 			case strings.Contains(route.Pattern, "{id}"):
 				args.Path = strings.Replace(route.Pattern, "{id}", id, 1)
 			}

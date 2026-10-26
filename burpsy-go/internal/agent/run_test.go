@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -247,6 +248,44 @@ func TestMaxStepsStopsARunawayPlanner(t *testing.T) {
 	r := runTask(t, s, pl, Task{ID: "t"})
 	if r.Snapshot().Status != StatusLimit || inv.count() != 3 {
 		t.Fatalf("status %s, %d calls", r.Snapshot().Status, inv.count())
+	}
+}
+
+func TestMaxStepsBindsWithinASingleProposal(t *testing.T) {
+	inv := &fakeInvoker{}
+	var calls []Call
+	for i := 0; i < 8; i++ {
+		calls = append(calls, Call{Tool: "POST /api/repeater", Args: json.RawMessage(fmt.Sprintf(`{"n":%d}`, i))})
+	}
+	pl := plannerFunc(func(context.Context, TaskView) (Proposal, error) {
+		return Proposal{Calls: calls, Done: true, Summary: "all sent"}, nil
+	})
+	ap := &fakeApprover{decide: func(Pending) Decision { return Decision{Approved: true, Token: "t"} }}
+	s := newSup(inv, ap, Policy{})
+	s.MaxSteps = 3
+	r := runTask(t, s, pl, Task{ID: "t"})
+	snap := r.Snapshot()
+	if inv.count() != 3 {
+		t.Fatalf("%d calls reached the invoker from one proposal, want exactly MaxSteps=3", inv.count())
+	}
+	if snap.Status != StatusLimit {
+		t.Fatalf("status %s: a proposal truncated by the budget must not finish as done", snap.Status)
+	}
+	if len(snap.Steps) != 3 {
+		t.Fatalf("%d steps recorded, want 3", len(snap.Steps))
+	}
+}
+
+func TestAProposalThatExactlyFitsTheBudgetStillFinishes(t *testing.T) {
+	inv := &fakeInvoker{}
+	pl := plannerFunc(func(context.Context, TaskView) (Proposal, error) {
+		return Proposal{Calls: []Call{call("GET /api/history"), {Tool: "GET /api/history", Args: json.RawMessage(`{"n":2}`)}}, Done: true, Summary: "ok"}, nil
+	})
+	s := newSup(inv, nil, Policy{})
+	s.MaxSteps = 2
+	r := runTask(t, s, pl, Task{ID: "t"})
+	if st := r.Snapshot().Status; st != StatusDone || inv.count() != 2 {
+		t.Fatalf("status %s, %d calls", st, inv.count())
 	}
 }
 

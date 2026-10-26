@@ -196,6 +196,10 @@ type Supervisor struct {
 	// ChildPlanner builds the planner for a sub-task; nil reuses the parent's.
 	ChildPlanner func(parent Task, req SpawnRequest) Planner
 	MaxChildren  int
+	// StopGrace bounds how long a run that is being stopped waits for its children to finish. The
+	// Invoker, Planner and Approver contracts say they return when ctx ends, but a child whose
+	// implementation ignores that must not make its parent's stop hang; zero means 5 seconds.
+	StopGrace time.Duration
 }
 
 func (s *Supervisor) now() time.Time {
@@ -399,11 +403,26 @@ func (r *Run) loop(ctx context.Context, pl Planner) {
 				r.append(Event{Kind: EventRefused, Message: "spawn refused: " + err.Error()})
 			}
 		}
+		truncated := false
 		for _, c := range prop.Calls {
 			if ctx.Err() != nil {
 				break
 			}
+			// MaxSteps binds within a proposal too: a single model reply
+			// must not be able to run more calls than the budget allows.
+			r.mu.Lock()
+			spent := len(r.steps)
+			r.mu.Unlock()
+			if spent >= r.maxSteps() {
+				truncated = true
+				break
+			}
 			r.runCall(ctx, turn, c)
+		}
+		if truncated {
+			r.waitChildren(ctx)
+			r.finish(StatusLimit, "")
+			return
 		}
 		if prop.AwaitChildren {
 			r.setStatus(StatusAwaitingChildren)

@@ -328,3 +328,51 @@ func TestStoppingParentStopsChildren(t *testing.T) {
 		}
 	}
 }
+
+// A child whose Invoker ignores cancellation must not make the parent's stop hang: the parent gives
+// its children StopGrace, then reports stopped (the straggler stays blocked until released).
+func TestStoppingParentDoesNotHangOnAChildThatIgnoresCancellation(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	started := make(chan struct{}, 1)
+	inv := invokerFunc(func(context.Context, Call) (Outcome, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release // ignores ctx on purpose
+		return Outcome{Status: 200}, nil
+	})
+	s := newSup(inv, nil, Policy{})
+	s.StopGrace = 50 * time.Millisecond
+	s.ChildPlanner = func(Task, SpawnRequest) Planner {
+		return &scriptedPlanner{turns: []Proposal{{Calls: []Call{call("GET /api/history")}}}}
+	}
+	parent := &scriptedPlanner{turns: []Proposal{{Spawns: []SpawnRequest{{Goal: "c"}}, AwaitChildren: true}}}
+	r := s.Start(context.Background(), Task{ID: "p"}, parent)
+	<-started
+	r.Stop()
+	done := make(chan struct{})
+	go func() { r.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("parent stop hung on a child that ignores cancellation")
+	}
+	snap := r.Snapshot()
+	if snap.Status != StatusStopped {
+		t.Fatalf("status %s", snap.Status)
+	}
+	noted := false
+	for _, e := range snap.Transcript {
+		noted = noted || (e.Kind == EventError && strings.Contains(e.Message, "still running"))
+	}
+	if !noted {
+		t.Fatal("the parent stopped with a lingering child and its transcript does not say so")
+	}
+	for _, c := range r.children {
+		if c.Snapshot().Status.finished() {
+			t.Fatalf("child %s reports finished although its invoker is still blocked", c.task.ID)
+		}
+	}
+}
