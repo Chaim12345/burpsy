@@ -221,6 +221,7 @@ func annotate(fields []Field, md *messageDesc) []Field {
 		case f.WireType == wireVarint && fd.enum != nil:
 			if v, err := strconv.ParseUint(f.Varint, 10, 64); err == nil {
 				// The wire carries an enum as a (possibly negative) int32 widened to 64 bits.
+				//nolint:gosec // G115: intentional exact inverse of the canonical encoding - encoders write a negative enum as its int32 number sign-extended to 64 bits (protobuf.dev "Signed Integers"; protobuf-go appendEnumValue), so int64(v) recovers exactly a declared number and nothing else. Over-long or undeclared values match no name and the raw decimal stands. Pinned in schema_test.go.
 				if name, ok := fd.enum.values[int64(v)]; ok {
 					f.EnumName = name
 				}
@@ -315,6 +316,7 @@ func decodePacked(payload []byte, fd *fieldDesc) ([]string, bool) {
 	format := func(v uint64) string {
 		switch {
 		case fd.enum != nil:
+			//nolint:gosec // G115: same intentional inverse-of-sign-extension as the scalar enum path in annotate - only an exact declared number names, anything else stands as decimal. Pinned in packed_test.go.
 			if name, ok := fd.enum.values[int64(v)]; ok {
 				return name
 			}
@@ -324,6 +326,7 @@ func decodePacked(payload []byte, fd *fieldDesc) ([]string, bool) {
 		case fd.typeName == "bool":
 			return strconv.FormatBool(protowire.DecodeBool(v))
 		case fd.typeName == "float":
+			//nolint:gosec // G115: lossless round trip - packedKind maps float to the "fixed32" path, whose protowire.ConsumeFixed32 zero-extends a uint32 into v, so uint32(v) drops no bits. Pinned in packed_test.go.
 			return strconv.FormatFloat(float64(math.Float32frombits(uint32(v))), 'g', -1, 32)
 		case fd.typeName == "double":
 			return strconv.FormatFloat(math.Float64frombits(v), 'g', -1, 64)
