@@ -17,7 +17,8 @@
  * `doc.toString()` is the one reader that still joins with "\n" whatever the separator is. Read
  * through `documentText` / `selectionText` instead.
  */
-import type { EditorState } from "@codemirror/state";
+import type { EditorState, Extension } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 
 /**
  * The separator to build a message's editor state with. CRLF whenever the message holds one, so a
@@ -64,4 +65,24 @@ export function selectionTransformSpec(state: EditorState, transform: (input: st
   .filter((range) => !range.empty)
   .map((range) => ({ from: range.from, to: range.to, insert: transform(state.sliceDoc(range.from, range.to)) }));
  return changes.length === 0 ? null : { changes };
+}
+
+/**
+ * Pasted text takes the document's own separator. CodeMirror splits a paste on the state's
+ * separator only, so LF text pasted into a CRLF request kept bare LFs inside one line, and CRLF text
+ * pasted into an LF message kept its CRs. Every CR, LF and CRLF in the clipboard becomes
+ * `state.lineBreak`. In a mixed message the one separator is the document's, so a paste into its
+ * LF body gets CRLF when the head is CRLF.
+ */
+export const pasteLineBreaks: Extension = EditorView.clipboardInputFilter.of((text, state) => text.replace(/\r\n|\r|\n/g, state.lineBreak));
+
+/**
+ * True when the message mixes CRLF breaks with bare LF (or bare CR) breaks, for example a CRLF head
+ * over an LF body. The editor splits on one separator per document, so in such a message the breaks of
+ * the other kind stay characters inside a line and show as one long line. The bytes are untouched.
+ */
+export function hasMixedLineEndings(text: string): boolean {
+ const crlf = (text.match(/\r\n/g) ?? []).length;
+ const breaks = (text.match(/\r\n|\r|\n/g) ?? []).length;
+ return crlf > 0 && crlf < breaks;
 }
