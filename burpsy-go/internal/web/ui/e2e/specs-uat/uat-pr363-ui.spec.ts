@@ -51,7 +51,10 @@ test("UAT: Sequencer capture can be paused, resumed and stopped from the console
   await page.getByRole("menuitem", { name: "Send to Sequencer" }).click();
   await expect(page.locator("main h1")).toHaveText(/^Sequencer/);
   await page.getByRole("tab", { name: "Capture from a live exchange" }).click();
-  await page.getByLabel("Cookie name").selectOption("E2E_SESSION");
+  // The name is a picker when the handed-off response carries cookies, and a typed field when it does not.
+  const cookieName = page.getByLabel("Cookie name");
+  if ((await cookieName.evaluate((el) => el.tagName)) === "SELECT") await cookieName.selectOption("E2E_SESSION");
+  else await cookieName.fill("E2E_SESSION");
   // 100 requests 300 ms apart keeps the capture running for about 30 s, long enough to act on it.
   await page.getByLabel("Requests", { exact: true }).fill("100");
   await page.getByLabel("Delay (ms)").fill("300");
