@@ -53,7 +53,7 @@ type h2Session struct {
 	conn net.Conn
 	ip   string
 	// route fingerprints the upstream rule and client certificate captured immediately before
-	// the session's dial (Sender.routeState). A session whose route no longer matches the live
+	// the session's dial (Sender.captureDialIdentity). A session whose route no longer matches the live
 	// configuration is never reusable again (burpsy-react-ui-h2sess-stamp).
 	route    string
 	lastUsed time.Time

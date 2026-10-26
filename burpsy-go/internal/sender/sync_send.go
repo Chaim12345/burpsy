@@ -93,14 +93,14 @@ func (s *Sender) SendSynchronized(ctx context.Context, host string, port uint16,
 
 	var conn net.Conn
 	if !useTLS {
-		c, cerr := s.dialPlain(ctx, host, port)
+		c, cerr := s.dialPlain(ctx, host, port, s.captureDialIdentity(host, false))
 		if cerr != nil {
 			signalReady(sync)
 			return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", cerr)
 		}
 		conn = c
 	} else {
-		c, _, cerr := s.dialTLS(ctx, host, port, alpn.EgressOffer(false))
+		c, _, cerr := s.dialTLS(ctx, host, port, alpn.EgressOffer(false), s.captureDialIdentity(host, true))
 		if cerr != nil {
 			signalReady(sync)
 			return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", cerr)

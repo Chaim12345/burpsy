@@ -256,7 +256,7 @@ func Test_an_unusable_proxy_fails_the_send_on_every_path(t *testing.T) {
 	if _, err := snd.SendPipelined(context.Background(), host, port, false, [][]byte{raw}); err == nil {
 		t.Error("SendPipelined succeeded under an unusable proxy configuration")
 	}
-	if _, _, err := snd.dialTLS(context.Background(), host, port, []string{"http/1.1"}); err == nil {
+	if _, _, err := snd.dialTLS(context.Background(), host, port, []string{"http/1.1"}, snd.captureDialIdentity(host, true)); err == nil {
 		t.Error("dialTLS succeeded under an unusable proxy configuration")
 	}
 }

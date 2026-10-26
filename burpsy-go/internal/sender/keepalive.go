@@ -24,8 +24,6 @@ package sender
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -37,27 +35,6 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
-
-// routeState fingerprints what a connection to this authority would be dialled under right
-// now: the upstream rule that routes it and the client certificate its handshake would
-// present. Both stores mutate in place (the network settings screens call Policy.Set and
-// ClientCerts.Add on the live objects, and nothing rebuilds the sender), so the pool cannot
-// wait for a flush event: it stamps every kept connection with this fingerprint and take
-// closes any entry whose stamp no longer matches (burpsy-react-ui-o388).
-func (s *Sender) routeState(host string, useTLS bool) string {
-	route := "direct"
-	if s.upstream != nil {
-		route = s.upstream.For(host).Raw()
-	}
-	if !useTLS || s.config == nil || s.config.ClientCerts == nil {
-		return route
-	}
-	if cert := s.config.ClientCerts.For(host); cert != nil && len(cert.Certificate) > 0 {
-		sum := sha256.Sum256(cert.Certificate[0])
-		return route + "\x00" + hex.EncodeToString(sum[:8])
-	}
-	return route + "\x00"
-}
 
 // http1IdleTimeout is Burp's five seconds of inactivity after which a kept connection is closed.
 var http1IdleTimeout = 5 * time.Second
@@ -71,8 +48,9 @@ type idleConn struct {
 	negotiated string
 	// offeredH2 is true when the connection's handshake offered h2 and the target chose otherwise.
 	offeredH2 bool
-	// route fingerprints what the connection was dialled under - see Sender.routeState. A pooled
-	// connection whose route no longer matches the live configuration is never reusable again.
+	// route fingerprints what the connection was dialled under - see Sender.captureDialIdentity.
+	// A pooled connection whose route no longer matches the live configuration is never reusable
+	// again.
 	route string
 	timer *time.Timer
 }

@@ -158,13 +158,13 @@ func (s *Sender) dialOne(ctx context.Context, host string, port uint16, useTLS b
 		// the upstream proxy policy are composed. A probe that ignored the resolution override would
 		// be sent to a different machine from the ordinary request it is being compared against,
 		// which is the one thing a smuggling probe cannot afford.
-		conn, err := s.dialPlain(ctx, host, port)
+		conn, err := s.dialPlain(ctx, host, port, s.captureDialIdentity(host, false))
 		if err != nil {
 			return nil, fmt.Errorf("connection failed: %w", err)
 		}
 		return conn, nil
 	}
-	conn, _, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(false))
+	conn, _, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(false), s.captureDialIdentity(host, true))
 	if err != nil {
 		return nil, fmt.Errorf("connection failed: %w", err)
 	}

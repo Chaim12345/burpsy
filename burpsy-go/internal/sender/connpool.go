@@ -337,7 +337,7 @@ func (s *Sender) sendReusing(
 
 	// A fresh connection, within the live bound.
 	pool.makeRoom()
-	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key)
+	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key, s.captureDialIdentity(host, useTLS))
 	if err != nil {
 		pool.releaseSlot()
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
@@ -358,17 +358,17 @@ func (s *Sender) sendReusing(
 }
 
 // dialPooled opens one connection for the pool, through the same dial sites SendRawOutcome uses.
-func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTLS bool, plan sendPlan, key string) (*pooledConn, error) {
+func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTLS bool, plan sendPlan, key string, id dialIdentity) (*pooledConn, error) {
 	var conn net.Conn
 	negotiated := ""
 	if !useTLS {
-		c, err := s.dialPlain(ctx, host, port)
+		c, err := s.dialPlain(ctx, host, port, id)
 		if err != nil {
 			return nil, err
 		}
 		conn = c
 	} else {
-		c, n, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
+		c, n, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2), id)
 		if err != nil {
 			return nil, err
 		}
