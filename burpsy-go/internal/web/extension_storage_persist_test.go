@@ -7,9 +7,13 @@ package web
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -154,5 +158,133 @@ func Test_storage_refuses_to_overwrite_a_file_it_cannot_parse(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(file); string(raw) != "{not json" {
 		t.Fatalf("the unparseable file was rewritten: %q", raw)
+	}
+}
+
+// An existing file that is empty (or any bytes that are not a JSON object) is a parse failure and
+// is refused like any other corrupt file. It is NOT the same as a missing file, which is an empty
+// store. Our own writes go temp file then rename, so a zero-byte document is not something this
+// code produces; refusing is the conservative reading.
+func Test_storage_treats_an_empty_existing_file_as_unparseable_not_as_missing(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.db") + ".extensions.json"
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newTestServer()
+	s.WithPersist(openProject(t, dir, "a.db"))
+	st := s.ExtensionServices().Storage
+	if _, _, err := st.Get("plug", extension.ScopeProject, "k"); err == nil {
+		t.Fatal("an empty existing file read as an empty store")
+	}
+	if err := st.Set("plug", extension.ScopeProject, "k", json.RawMessage(`1`)); err == nil {
+		t.Fatal("set succeeded over an empty existing file")
+	}
+	if fi, _ := os.Stat(file); fi == nil || fi.Size() != 0 {
+		t.Fatal("the empty file was rewritten")
+	}
+}
+
+// Both scopes share the project's document and stay distinct inside it. "preferences" is per
+// project here (as before this fix), not user-level.
+func Test_storage_keeps_both_scopes_in_the_project_document_and_distinct(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestServer()
+	s.WithPersist(openProject(t, dir, "a.db"))
+	st := s.ExtensionServices().Storage
+	if err := st.Set("plug", extension.ScopeProject, "k", json.RawMessage(`"proj"`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Set("plug", extension.ScopePreferences, "k", json.RawMessage(`"pref"`)); err != nil {
+		t.Fatal(err)
+	}
+	if v, _, _ := st.Get("plug", extension.ScopeProject, "k"); string(v) != `"proj"` {
+		t.Errorf("project scope read %q", v)
+	}
+	if v, _, _ := st.Get("plug", extension.ScopePreferences, "k"); string(v) != `"pref"` {
+		t.Errorf("preferences scope read %q", v)
+	}
+	if got := readStorageFile(t, filepath.Join(dir, "a.db")+".extensions.json"); len(got) != 2 {
+		t.Fatalf("document holds %d rows, want 2 (one per scope): %v", len(got), got)
+	}
+	s.WithPersist(openProject(t, dir, "b.db"))
+	if _, found, _ := st.Get("plug", extension.ScopePreferences, "k"); found {
+		t.Fatal("preferences followed the operator into another project (they are per project)")
+	}
+}
+
+// The race the integrator asked for, through the real handler: POST /api/project/open takes the
+// project-switch WRITE lock, storage takes the READ side. Writers hammer Get/Set while the
+// console switches A->B->A repeatedly. Run under -race. It fails by deadlock (the test timeout),
+// by the race detector, by a torn read (the per-project marker must read as exactly that
+// project's value), or by a document that stops being valid JSON.
+func Test_storage_operations_race_a_real_project_switch_without_tearing_or_deadlock(t *testing.T) {
+	dir := t.TempDir()
+	aPath, bPath := filepath.Join(dir, "a.db"), filepath.Join(dir, "b.db")
+	a, b := openProject(t, dir, "a.db"), openProject(t, dir, "b.db")
+	s := newTestServer()
+	st := s.ExtensionServices().Storage
+	s.WithPersist(a)
+	if err := st.Set("plug", extension.ScopeProject, "marker", json.RawMessage(`"A"`)); err != nil {
+		t.Fatal(err)
+	}
+	s.WithPersist(b)
+	if err := st.Set("plug", extension.ScopeProject, "marker", json.RawMessage(`"B"`)); err != nil {
+		t.Fatal(err)
+	}
+	s.WithPersist(a)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var bad atomic.Int32
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				v, found, err := st.Get("plug", extension.ScopeProject, "marker")
+				if err != nil || !found || (string(v) != `"A"` && string(v) != `"B"`) {
+					bad.Add(1)
+				}
+				if err := st.Set("plug", extension.ScopeProject, "w"+string(rune('0'+w)), json.RawMessage(`1`)); err != nil {
+					bad.Add(1)
+				}
+			}
+		}(w)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 6; i++ {
+			next := bPath
+			if i%2 == 1 {
+				next = aPath
+			}
+			if rec := openProjectSwitch(t, s, next); rec.Code != http.StatusOK {
+				t.Errorf("switch %d = %d: %s", i, rec.Code, rec.Body.String())
+				return
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("deadlock: switches did not finish while storage operations were running")
+	}
+	close(stop)
+	wg.Wait()
+	if n := bad.Load(); n != 0 {
+		t.Fatalf("%d storage operations errored or read a torn marker during switches", n)
+	}
+	for name, want := range map[string]string{aPath: `"A"`, bPath: `"B"`} {
+		rows := readStorageFile(t, name+".extensions.json")
+		if got := string(rows[extensionStorageKey("plug", extension.ScopeProject, "marker")]); got != want {
+			t.Errorf("%s marker = %q, want %q", filepath.Base(name), got, want)
+		}
 	}
 }
