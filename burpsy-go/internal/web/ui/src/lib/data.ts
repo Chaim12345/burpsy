@@ -104,7 +104,7 @@ export const keys = {
  * Which caches a server event invalidates. Keys are prefixes, so one entry
  * covers every parameterised variant of a resource.
  */
-const INVALIDATION: Record<string, string[][]> = {
+export const INVALIDATION: Record<string, string[][]> = {
  history: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  capture: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  // A finished hidden-input run files its findings and notifies issues and dashboard; both refresh
@@ -116,8 +116,10 @@ const INVALIDATION: Record<string, string[][]> = {
  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
  // entry the only event that can tell the console a sweep has results.
  dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"]],
- task: [["dashboard"]],
- tasks: [["dashboard"]],
+ // A task event is also the retained-run list moving (a crawl or API scan registered, finished or was
+ // evicted). The Dashboard asks for a task's run only when that list names it, so the list must follow.
+ task: [["dashboard"], ["crawls"]],
+ tasks: [["dashboard"], ["crawls"]],
  ws: [["ws"], ["stats"], ["dashboard"]],
  intercept: [["intercept"]],
  scope: [["scope"]],
