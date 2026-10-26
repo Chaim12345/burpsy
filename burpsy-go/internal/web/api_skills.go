@@ -104,7 +104,7 @@ type skillPromptView struct {
 }
 
 func (s *Server) handleSkill(w http.ResponseWriter, r *http.Request) {
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/skills/"), "/")
+	name := r.PathValue("name")
 	sk, ok := s.skills.Get(name)
 	if !ok {
 		http.Error(w, "No skill named "+name+" is loaded", http.StatusNotFound)

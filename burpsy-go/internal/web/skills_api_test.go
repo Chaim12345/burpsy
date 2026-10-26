@@ -113,3 +113,42 @@ func TestNoLibrarySaysHowToLoadOne(t *testing.T) {
 		t.Fatalf("%s", rec.Body.String())
 	}
 }
+
+// burpsy-react-ui-fxxm batch 4: GET /api/skills/{name} reads the name with r.PathValue. These pin
+// what the old subtree pattern served and what the mux now decides.
+func TestASkillIsServedAtItsNameWithAndWithoutATrailingSlash(t *testing.T) {
+	s := skillsServer(t)
+	for _, path := range []string{"/api/skills/jwt-none?exchange_id=7", "/api/skills/jwt-none/?exchange_id=7"} {
+		rec := doReq(s, http.MethodGet, path, "")
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Resend exchange 7") {
+			t.Errorf("GET %s = %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := doReq(s, http.MethodGet, "/api/skills/nope/", ""); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "No skill named nope is loaded") {
+		t.Errorf("unknown name with a slash = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTheDisabledLiteralOutranksTheSkillNameWildcard(t *testing.T) {
+	s := skillsServer(t)
+	rec := doReq(s, http.MethodGet, "/api/skills/disabled", "")
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "PUT" {
+		t.Errorf("GET /api/skills/disabled = %d Allow=%q, want 405 PUT", rec.Code, rec.Header().Get("Allow"))
+	}
+	if rec := doReq(s, http.MethodPut, "/api/skills/disabled", `{"disabled":[]}`); rec.Code != http.StatusOK {
+		t.Errorf("PUT /api/skills/disabled = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// "/api/skills/a/b" reaches the {name}/ twin (a trailing slash is a subtree) with name "a": same 404,
+// different body than the old "No skill named a/b". "/api/skills/" is the mux's own 404.
+func TestAnEmptyOrNestedSkillPathStays404(t *testing.T) {
+	s := skillsServer(t)
+	for _, path := range []string{"/api/skills/", "/api/skills/a/b"} {
+		rec := doReq(s, http.MethodGet, path, "")
+		t.Logf("GET %s = %d %q", path, rec.Code, strings.TrimSpace(rec.Body.String()))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		}
+	}
+}

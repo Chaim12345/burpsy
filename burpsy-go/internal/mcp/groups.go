@@ -507,7 +507,8 @@ var notExposed = map[string]string{
 	"GET /api/findings":       "legacy alias of /api/issues (issues' GET); a second spelling of one read",
 	"POST /api/scanner/audit": "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
 	"GET /api/skills":         "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
-	"GET /api/skills/":        "served as MCP prompts: prompts/get renders a skill through it",
+	"GET /api/skills/{name}":  "served as MCP prompts: prompts/get renders a skill through it",
+	"GET /api/skills/{name}/": "the trailing-slash twin of GET /api/skills/{name}: same prompts/get path, an agent has no reason to use this form",
 	"PUT /api/skills/disabled": "the operator's per-project switch, set in the console's Settings; an agent sees its effect " +
 		"as the skills prompts/list no longer offers",
 	"GET /api/openapi.json": "the API's self-description for codegen and tooling (the typed console client's source); " +

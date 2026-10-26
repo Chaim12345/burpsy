@@ -1183,9 +1183,14 @@ var manifest = map[string]route{
 		summary: "the skill library from -skills DIR: each skill, the tools it calls, whether it is available " +
 			"and disabled for this project, and every refused manifest with why",
 	},
-	"/api/skills/": {
+	"/api/skills/{name}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "none",
 		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
+	},
+	"/api/skills/{name}/": {
+		// The trailing-slash twin of /api/skills/{name}: the old subtree pattern served it.
+		methods: []string{"GET"}, risk: riskRead, subPath: "none",
+		summary: "one skill with its prompt rendered from ?argument=value (trailing-slash form of /api/skills/{name})",
 	},
 	"/api/skills/disabled": {
 		// riskLocal: a project setting naming which loaded skills are switched off; sends nothing.
