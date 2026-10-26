@@ -324,7 +324,7 @@ func (s *Sender) sendReusing(
 			if pc.owner != s || pc.route != routeFor(pc.dialAddr) {
 				// Dialled by another Sender, or under settings since changed: never carries this
 				// request. Closed like a dead connection; the slot is already held.
-				pc.conn.Close()
+				_ = pc.conn.Close()
 				continue
 			}
 			if !aliveCheck(pc) {
