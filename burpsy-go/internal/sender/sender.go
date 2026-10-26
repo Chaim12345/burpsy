@@ -1538,6 +1538,9 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 		s.net.Timeouts.ConnectMS = total
 	}
 	s.client = buildClient(s.config, s.net, s.carrier)
+	// A dial input changed in place: bump the generation so caller-owned pools retire what was dialled
+	// under the old value (dial_identity.go), as ApplyNetwork does.
+	s.netGen++
 	s.pool.closeAll()
 	return s
 }
@@ -1565,6 +1568,9 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
 	s.client = buildClient(s.config, s.net, s.carrier)
+	// A dial input changed in place: bump the generation so caller-owned pools retire what was dialled
+	// under the old value (dial_identity.go), as ApplyNetwork does.
+	s.netGen++
 	s.pool.closeAll()
 	return s
 }
