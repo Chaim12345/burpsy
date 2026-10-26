@@ -334,11 +334,41 @@ func routeRiskFor(path string) (string, riskClass, bool) {
 		if pattern == "/" || !patternMatches(pattern, path) {
 			continue
 		}
-		if !found || literalLen(pattern) > literalLen(best) || literalLen(pattern) == literalLen(best) && pattern < best {
+		switch {
+		case !found, literalLen(pattern) > literalLen(best):
 			best, bestRisk, found = pattern, r.risk, true
+		case literalLen(pattern) == literalLen(best):
+			// Equal specificity is a conflict the mux would not have let through. Fail closed: the
+			// more severe risk class wins, then the pattern string, so the answer is stable.
+			if rs, bs := riskSeverity(r.risk), riskSeverity(bestRisk); rs > bs || rs == bs && pattern < best {
+				best, bestRisk = pattern, r.risk
+			}
 		}
 	}
 	return best, bestRisk, found
+}
+
+// riskSeverity orders risk classes for the fail-closed tie-break. An unknown class ranks highest.
+func riskSeverity(r riskClass) int {
+	switch r {
+	case riskAsset:
+		return 0
+	case riskRead:
+		return 1
+	case riskLocal:
+		return 2
+	case riskEgress:
+		return 3
+	case riskScope:
+		return 4
+	case riskAttack, riskExecute:
+		return 5
+	case riskCredential:
+		return 6
+	case riskDestructive:
+		return 7
+	}
+	return 8
 }
 
 // literalLen is a pattern's literal text: its length with every {wildcard} removed. It is the
@@ -372,6 +402,12 @@ func patternMatches(pattern, path string) bool {
 	// keeps its risk class for every path the mux hands to its handler (burpsy-react-ui-fxxm).
 	if i := strings.LastIndex(pattern, "/"); i >= 0 && strings.HasSuffix(pattern, "...}") && strings.HasPrefix(pattern[i+1:], "{") {
 		pattern = pattern[:i+1]
+	}
+	// "{$}" anchors the pattern: "/api/x/{$}" is the one path "/api/x/", not the subtree below it.
+	if strings.HasSuffix(pattern, "/{$}") {
+		pSegs := strings.Split(strings.TrimSuffix(pattern, "{$}"), "/")
+		aSegs := strings.Split(path, "/")
+		return len(aSegs) == len(pSegs) && segmentsMatch(pSegs, aSegs)
 	}
 	if !strings.Contains(pattern, "{") {
 		return pathHasPrefix(path, pattern)

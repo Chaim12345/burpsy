@@ -5,7 +5,11 @@ package web
 // The confirmation gate and the MCP binding both resolve through it, so a miss there is a route
 // the gate cannot see.
 
-import "testing"
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestRouteRiskForResolvesParamPatterns(t *testing.T) {
 	cases := []struct {
@@ -58,6 +62,54 @@ func TestRouteRiskForResolvesRemainderPatterns(t *testing.T) {
 		pattern, _, ok := routeRiskFor(tc.path)
 		if !ok || pattern != tc.want {
 			t.Errorf("routeRiskFor(%q) = %q, %v; want %q", tc.path, pattern, ok, tc.want)
+		}
+	}
+}
+
+// fxxm batch 7: routeRiskFor against the production mux. For every path the manifest can generate
+// and each verb, the manifest entry the mux itself matched must carry the risk class the gate
+// resolves (mux fallthrough "/" and trailing-slash redirects excluded; double slashes are cleaned
+// by the mux before routing). A pattern pair that tie on literal text must not exist.
+func TestRouteRiskForAgreesWithTheProductionMux(t *testing.T) {
+	s := newTestServer()
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		if p != "" && !strings.Contains(p, "//") && !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	for p, r := range manifest {
+		base := strings.TrimSuffix(p, "{$}")
+		if strings.HasSuffix(p, "/") || strings.Contains(p, "{") {
+			for _, sp := range []string{r.subPath, "x", "1", "x/y", "disabled", "x/", "confirm", "resolve"} {
+				add(concretePath(p, sp))
+			}
+		}
+		add(base)
+		add(strings.TrimSuffix(base, "/"))
+		for ap := range r.actionPaths {
+			add(concretePath(p, ap))
+		}
+	}
+	for _, path := range paths {
+		for _, m := range []string{"GET", "POST", "DELETE"} {
+			_, mp := s.mux.Handler(httptest.NewRequest(m, path, nil))
+			if i := strings.Index(mp, " "); i >= 0 {
+				mp = mp[i+1:]
+			}
+			mr, mok := manifest[mp]
+			if mp == "" || mp == "/" || !mok {
+				continue
+			}
+			if strings.HasSuffix(mp, "/") && !strings.HasSuffix(path, "/") && !strings.Contains(mp, "{") {
+				continue // the mux answered with a redirect to the subtree
+			}
+			_, risk, ok := routeRiskFor(path)
+			if !ok || risk != mr.risk {
+				t.Errorf("%s %s: mux matched %q (%s), routeRiskFor says %q ok=%v", m, path, mp, mr.risk, risk, ok)
+			}
 		}
 	}
 }
