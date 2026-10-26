@@ -359,7 +359,20 @@ func TestStoppingParentDoesNotHangOnAChildThatIgnoresCancellation(t *testing.T) 
 	case <-time.After(3 * time.Second):
 		t.Fatal("parent stop hung on a child that ignores cancellation")
 	}
-	if st := r.Snapshot().Status; st != StatusStopped {
-		t.Fatalf("status %s", st)
+	snap := r.Snapshot()
+	if snap.Status != StatusStopped {
+		t.Fatalf("status %s", snap.Status)
+	}
+	noted := false
+	for _, e := range snap.Transcript {
+		noted = noted || (e.Kind == EventError && strings.Contains(e.Message, "still running"))
+	}
+	if !noted {
+		t.Fatal("the parent stopped with a lingering child and its transcript does not say so")
+	}
+	for _, c := range r.children {
+		if c.Snapshot().Status.finished() {
+			t.Fatalf("child %s reports finished although its invoker is still blocked", c.task.ID)
+		}
 	}
 }

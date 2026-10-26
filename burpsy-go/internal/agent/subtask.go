@@ -133,6 +133,16 @@ func (r *Run) waitChildren(ctx context.Context) {
 		select {
 		case <-k.Done():
 		case <-grace:
+			var live []string
+			for _, c := range kids {
+				select {
+				case <-c.Done():
+				default:
+					live = append(live, c.task.ID)
+				}
+			}
+			r.append(Event{Kind: EventError, Message: "stopped with sub-task(s) still running after the stop grace: " + strings.Join(live, ", ") +
+				"; each keeps its own status until its Invoker, Planner or Approver returns"})
 			return
 		}
 	}
