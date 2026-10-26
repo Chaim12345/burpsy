@@ -1873,7 +1873,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
 				var truncated *httputil.TruncatedBodyError
-				if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+				if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 					return
 				}
 				if truncated != nil {
@@ -1999,7 +1999,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
 		var truncated *httputil.TruncatedBodyError
-		if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+		if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 			return
 		}
 		if truncated != nil {
@@ -3732,7 +3732,7 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 	dialAddress := endpoint
 	if n := s.config.network; n != nil {
 		if endpointHost, endpointPort, splitErr := net.SplitHostPort(endpoint); splitErr == nil {
-			if portNum, convErr := strconv.Atoi(endpointPort); convErr == nil {
+			if portNum, convErr := strconv.ParseUint(endpointPort, 10, 16); convErr == nil {
 				dialAddress = n.Resolution.DialAddress(context.Background(), endpointHost, uint16(portNum))
 			}
 		}

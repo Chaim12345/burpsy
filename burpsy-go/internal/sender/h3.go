@@ -56,7 +56,7 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	verify, roots, minVersion := s.tlsPolicy(settings)
 	tlsConfig := &tls.Config{
 		ServerName:         host,
-		InsecureSkipVerify: !verify,
+		InsecureSkipVerify: !verify, //nolint:gosec // the operator's own TLS-verification switch, exactly as on the TCP legs (s.tlsPolicy); never forced true here
 		RootCAs:            roots,
 		MinVersion:         minVersion,
 		NextProtos:         []string{"h3"},

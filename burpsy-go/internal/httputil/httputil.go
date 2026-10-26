@@ -461,7 +461,6 @@ func EnsureConnectionClose(rawRequest []byte) []byte {
 		out = append(out, []byte("Connection: close"))
 	}
 	head = bytes.Join(out, []byte("\r\n"))
-	out = nil
 	result := make([]byte, 0, len(head)+4+len(rest))
 	result = append(result, head...)
 	result = append(result, '\r', '\n', '\r', '\n')
