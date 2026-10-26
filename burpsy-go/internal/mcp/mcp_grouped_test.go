@@ -440,3 +440,14 @@ func TestIntruderControlDoesNotOfferAnUnreachableIDOp(t *testing.T) {
 		}
 	}
 }
+
+func TestAmbiguousLegacySpellingIsRefusedNotGuessed(t *testing.T) {
+	ops := []op{{name: "POST /api/tasks/{id}/cancel"}, {name: "POST /api/tasks/{id}/pause"}}
+	if got, ok := legacyOp(ops, "POST /api/tasks/"); ok {
+		t.Fatalf("legacyOp guessed %q among several candidates", got.name)
+	}
+	_, err := resolveFor(t, "tasks", callArgs{Op: "POST /api/tasks/", ID: "5/pause"})
+	if err == nil || !strings.Contains(err.Error(), "is not an operation") {
+		t.Fatalf("err = %v, want the not-an-operation refusal that lists the real ops", err)
+	}
+}

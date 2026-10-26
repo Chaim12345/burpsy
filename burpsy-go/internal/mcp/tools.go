@@ -676,16 +676,22 @@ func legacyOp(ops []op, name string) (op, bool) {
 	if !ok {
 		return op{}, false
 	}
+	var found op
+	n := 0
 	for _, o := range ops {
 		verb, pattern, ok := strings.Cut(o.name, " ")
 		if !ok || verb != nverb || !strings.HasPrefix(pattern, npath) {
 			continue
 		}
 		if rest := pattern[len(npath):]; strings.HasPrefix(rest, "{") && rest != "{$}" {
-			return o, true
+			found = o
+			n++
 		}
 	}
-	return op{}, false
+	// More than one candidate (POST /api/tasks/ fronts cancel, again, pause and resume) means the old
+	// spelling no longer says which operation was meant; guessing could cancel a task the caller meant
+	// to pause, so the caller is refused and shown the real op names.
+	return found, n == 1
 }
 
 // subtreeForm maps a remainder-wildcard key ("/api/datasets/{rest...}") onto the trailing-slash
