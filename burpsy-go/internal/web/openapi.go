@@ -69,7 +69,8 @@ func openAPIDocument() map[string]any {
 			if strings.HasPrefix(variantKey, "?") {
 				continue
 			}
-			path := templateIDSegments(concretePath(pattern, variantKey), pattern)
+			sub := subtreeSpelling(pattern)
+			path := templateIDSegments(concretePath(sub, variantKey), sub)
 			if _, ok := paths[path]; ok {
 				continue // the manifest already publishes it; the variant body merges below
 			}
@@ -109,8 +110,19 @@ func openAPIVersionOf() string {
 // segments templated — are what the document names.
 func openAPIPathsFor(pattern string, spec route) map[string][]string {
 	out := map[string][]string{}
+	// A trailing remainder wildcard ("/api/datasets/{rest...}") is the subtree it replaced
+	// ("/api/datasets/"): the document keeps naming the concrete sub-shapes callers send, not the
+	// remainder spelling, so rekeying a route does not rewrite its published contract.
+	pattern = subtreeSpelling(pattern)
 	templated := func(sub string) string {
-		return templateIDSegments(concretePath(pattern, sub), pattern)
+		path := templateIDSegments(concretePath(pattern, sub), pattern)
+		if strings.Contains(pattern, "{") && strings.HasSuffix(pattern, "/") {
+			// "/api/x/{id}/{action...}" spelled as the subtree "/api/x/{id}/": the sub-shape
+			// already carries the action segment, so the pattern's own trailing slash is not part
+			// of the published path.
+			path = strings.TrimSuffix(path, "/")
+		}
+		return path
 	}
 	switch {
 	case strings.HasSuffix(pattern, "/"):
@@ -131,6 +143,17 @@ func openAPIPathsFor(pattern string, spec route) map[string][]string {
 		out[pattern] = append([]string(nil), spec.methods...)
 	}
 	return out
+}
+
+// subtreeSpelling maps a trailing remainder wildcard onto the trailing-slash subtree it replaced;
+// any other pattern is returned unchanged.
+func subtreeSpelling(pattern string) string {
+	if strings.HasSuffix(pattern, "...}") {
+		if i := strings.LastIndex(pattern, "/"); i >= 0 {
+			return pattern[:i+1]
+		}
+	}
+	return pattern
 }
 
 // templateIDSegments re-templates the concrete id segments of a path the manifest spelled out as an
@@ -282,7 +305,8 @@ func openAPIVariantFor(path, pattern string, spec opSchema) (reflect.Type, bool)
 		if key == "" || strings.HasPrefix(key, "?") {
 			continue // a base-path discriminator, not an action sub-path; openAPIBaseVariants owns it
 		}
-		if templateIDSegments(concretePath(pattern, key), pattern) == path {
+		sub := subtreeSpelling(pattern)
+		if templateIDSegments(concretePath(sub, key), sub) == path {
 			return spec.variants[key], true
 		}
 	}

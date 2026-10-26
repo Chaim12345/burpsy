@@ -115,10 +115,10 @@ var groupedTools = []groupSpec{
 		name: "intercept_control", group: groupRequests,
 		short: "Forwards, drops, edits or annotates held messages, and sets the intercept switch and its rules.",
 		ops: []string{
-			"POST /api/intercept/", "POST /api/intercept/annotate/{id}", "POST /api/intercept/drop-all",
+			"POST /api/intercept/{rest...}", "POST /api/intercept/annotate/{id}", "POST /api/intercept/drop-all",
 			"POST /api/intercept/enable", "POST /api/intercept/forward-all", "POST /api/intercept/in-scope-only",
 			"GET /api/intercept/newline-correction", "PUT /api/intercept/newline-correction",
-			"GET /api/intercept/rules/", "PUT /api/intercept/rules/",
+			"GET /api/intercept/rules/{dir...}", "PUT /api/intercept/rules/{dir...}",
 			"GET /api/intercept/startup", "POST /api/intercept/startup",
 		},
 	},
@@ -465,9 +465,9 @@ var groupedTools = []groupSpec{
 		short: "Reads and edits the Organizer: saved items, their notes and status, and collections.",
 		ops: []string{
 			"GET /api/tools/organizer", "POST /api/tools/organizer",
-			"POST /api/tools/organizer/", "PUT /api/tools/organizer/", "DELETE /api/tools/organizer/",
+			"POST /api/tools/organizer/{rest...}", "PUT /api/tools/organizer/{rest...}", "DELETE /api/tools/organizer/{rest...}",
 			"POST /api/tools/organizer/collections",
-			"PUT /api/tools/organizer/collections/", "POST /api/tools/organizer/collections/", "DELETE /api/tools/organizer/collections/",
+			"PUT /api/tools/organizer/collections/{rest...}", "POST /api/tools/organizer/collections/{rest...}", "DELETE /api/tools/organizer/collections/{rest...}",
 		},
 	},
 

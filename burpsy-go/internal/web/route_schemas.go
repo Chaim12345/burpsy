@@ -167,7 +167,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
 	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},
 
-	"POST /api/intercept/": {variants: map[string]reflect.Type{
+	"POST /api/intercept/{rest...}": {variants: map[string]reflect.Type{
 		"1/forward": typeOf[interceptForwardReq](),
 		"1/drop":    typeOf[interceptDropReq](),
 	}, optional: true},
@@ -177,7 +177,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/intercept/forward-all":       noBody,
 	"POST /api/intercept/in-scope-only":     {body: typeOf[interceptInScopeOnlyReq]()},
 	"PUT /api/intercept/newline-correction": {body: typeOf[interceptNewlineCorrectionReq]()},
-	"PUT /api/intercept/rules/":             {body: typeOf[interceptListState]()},
+	"PUT /api/intercept/rules/{dir...}":     {body: typeOf[interceptListState]()},
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
 	"POST /api/proxy/history-logging":       {body: typeOf[proxyHistoryLoggingReq]()},
 
@@ -353,19 +353,19 @@ var routeSchemas = map[string]opSchema{
 	"DELETE /api/tools/log":                 noBody,
 	"PATCH /api/tools/log/":                 {body: typeOf[toolLogSetCommentReq]()},
 	"POST /api/tools/organizer":             {body: typeOf[organizerReq]()},
-	"POST /api/tools/organizer/":            {body: typeOf[organizerItemReq]()},
-	"PUT /api/tools/organizer/":             {variants: map[string]reflect.Type{"1/status": typeOf[organizerItemStatusReq]()}},
-	"DELETE /api/tools/organizer/":          noBody,
+	"POST /api/tools/organizer/{rest...}":   {body: typeOf[organizerItemReq]()},
+	"PUT /api/tools/organizer/{rest...}":    {variants: map[string]reflect.Type{"1/status": typeOf[organizerItemStatusReq]()}},
+	"DELETE /api/tools/organizer/{rest...}": noBody,
 	"POST /api/tools/organizer/collections": {body: typeOf[organizerCollectionCreateReq]()},
-	"PUT /api/tools/organizer/collections/": {variants: map[string]reflect.Type{
+	"PUT /api/tools/organizer/collections/{rest...}": {variants: map[string]reflect.Type{
 		"1":       typeOf[organizerCollectionUpdateReq](),
 		"inbox":   typeOf[organizerInboxMoveReq](),
 		"1/items": typeOf[organizerCollectionItemsReq](),
 	}},
-	"POST /api/tools/organizer/collections/": {variants: map[string]reflect.Type{
+	"POST /api/tools/organizer/collections/{rest...}": {variants: map[string]reflect.Type{
 		"1/duplicate": nil,
 	}},
-	"DELETE /api/tools/organizer/collections/": {query: []queryParam{
+	"DELETE /api/tools/organizer/collections/{rest...}": {query: []queryParam{
 		{name: "items", kind: "string", desc: "what happens to the collection's items", enum: []string{"inbox", "delete"}},
 	}},
 

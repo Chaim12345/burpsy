@@ -1302,7 +1302,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/scanner/passive-branch", s.handlePassiveBranch)
 	s.route("/api/intercept/forward-all", s.handleInterceptForwardAll)
 	s.route("/api/intercept/drop-all", s.handleInterceptDropAll)
-	s.route("/api/intercept/rules/", s.handleInterceptRules)
+	s.route("/api/intercept/rules/{dir...}", s.handleInterceptRules)
 	// The held queue's annotate write: /api/intercept/annotate/{id}, its own exact-subtree
 	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
 	// /api/intercept/{id} resolution paths below.
@@ -1313,7 +1313,7 @@ func (s *Server) setupRoutes() {
 	// startup preference would let a caller set one and silently send the other.
 	s.route("/api/intercept/startup", s.handleInterceptStartup)
 	s.route("/api/proxy/history-logging", s.handleProxyHistoryLogging)
-	s.route("/api/intercept/", s.handleInterceptHeld)
+	s.route("/api/intercept/{rest...}", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).
 	s.route("/api/network/proxy", s.handleNetworkProxy)
@@ -1395,8 +1395,8 @@ func (s *Server) setupRoutes() {
 	// handler. Registering only the item subtree is what made every collections call answer
 	// "Invalid item id" (burpsy-react-ui-dcr).
 	s.route("/api/tools/organizer/collections", s.handleOrganizerCollections)
-	s.route("/api/tools/organizer/collections/", s.handleOrganizerCollections)
-	s.route("/api/tools/organizer/", s.handleOrganizerItem)
+	s.route("/api/tools/organizer/collections/{rest...}", s.handleOrganizerCollections)
+	s.route("/api/tools/organizer/{rest...}", s.handleOrganizerItem)
 
 	// WebSocket capture surface. The parenthetical here used to read "empty while the Go proxy has no
 	// WS relay", which stopped being true when internal/proxy/ws.go landed: handleWebSocketUpgrade

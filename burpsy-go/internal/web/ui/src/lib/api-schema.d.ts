@@ -611,7 +611,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/datasets/{rest...}": {
+    "/api/datasets/history": {
         parameters: {
             query?: never;
             header?: never;
@@ -619,7 +619,7 @@ export type paths = {
             cookie?: never;
         };
         /** one table view over a list — history, issues, sitemap, tool-log, ws-history, intruder/{task}: regex over columns, sort, offset/limit paging, facet counts, and a long-poll for new rows */
-        get: operations["getApiDatasetsByRest"];
+        get: operations["getApiDatasetsHistory"];
         put?: never;
         post?: never;
         delete?: never;
@@ -736,7 +736,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/engagement/{kind...}": {
+    "/api/engagement/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -744,7 +744,7 @@ export type paths = {
             cookie?: never;
         };
         /** Burp's site-map engagement searches: comments, scripts, references to a URL */
-        get: operations["getApiEngagementByKind"];
+        get: operations["getApiEngagementById"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1542,7 +1542,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/intruder/attacks/{id}/{action...}": {
+    "/api/intruder/attacks/{id}/stop": {
         parameters: {
             query?: never;
             header?: never;
@@ -1555,7 +1555,7 @@ export type paths = {
          * POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, an attack past acting on answers 409
          * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
-        post: operations["postApiIntruderAttacksByIdByAction"];
+        post: operations["postApiIntruderAttacksByIdStop"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2506,7 +2506,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/report/{rest...}": {
+    "/api/report/json": {
         parameters: {
             query?: never;
             header?: never;
@@ -2514,7 +2514,7 @@ export type paths = {
             cookie?: never;
         };
         /** export findings as json, sarif, html or Burp-XML (m7dk) */
-        get: operations["getApiReportByRest"];
+        get: operations["getApiReportJson"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3040,7 +3040,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/sequencer/capture/{rest...}": {
+    "/api/sequencer/capture/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -3048,10 +3048,10 @@ export type paths = {
             cookie?: never;
         };
         /** GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture */
-        get: operations["getApiSequencerCaptureByRest"];
+        get: operations["getApiSequencerCaptureById"];
         put?: never;
         /** GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture */
-        post: operations["postApiSequencerCaptureByRest"];
+        post: operations["postApiSequencerCaptureById"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3478,23 +3478,6 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{rest...}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable */
-        get: operations["getApiSkillsByRest"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/skills/disabled": {
         parameters: {
             query?: never;
@@ -3508,6 +3491,23 @@ export type paths = {
          * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         put: operations["putApiSkillsDisabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/skills/none": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable */
+        get: operations["getApiSkillsNone"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -4132,7 +4132,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/reissue/{token...}": {
+    "/reissue/token": {
         parameters: {
             query?: never;
             header?: never;
@@ -4143,7 +4143,7 @@ export type paths = {
          * spend one one-shot re-issue token: re-send its exchange under the minted session variant, record the outcome, and answer with a page that names the variant
          * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
-        get: operations["getReissueByToken"];
+        get: operations["getReissueToken"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5679,7 +5679,7 @@ export interface operations {
             };
         };
     };
-    getApiDatasetsByRest: {
+    getApiDatasetsHistory: {
         parameters: {
             query?: {
                 case_insensitive?: "true" | "false" | "1" | "0";
@@ -5706,9 +5706,7 @@ export interface operations {
                 wait_seconds?: string;
             };
             header?: never;
-            path: {
-                "rest...": string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -5975,7 +5973,7 @@ export interface operations {
             };
         };
     };
-    getApiEngagementByKind: {
+    getApiEngagementById: {
         parameters: {
             query?: {
                 /** @description limit the search to one host */
@@ -5987,7 +5985,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                "kind...": string;
+                id: string;
             };
             cookie?: never;
         };
@@ -7577,12 +7575,11 @@ export interface operations {
             };
         };
     };
-    postApiIntruderAttacksByIdByAction: {
+    postApiIntruderAttacksByIdStop: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                "action...": string;
                 id: string;
             };
             cookie?: never;
@@ -10289,7 +10286,7 @@ export interface operations {
             };
         };
     };
-    getApiReportByRest: {
+    getApiReportJson: {
         parameters: {
             query?: {
                 exclude_false_positives?: "true" | "false" | "1" | "0";
@@ -10299,9 +10296,7 @@ export interface operations {
                 severity?: string;
             };
             header?: never;
-            path: {
-                "rest...": string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -11754,12 +11749,12 @@ export interface operations {
             };
         };
     };
-    getApiSequencerCaptureByRest: {
+    getApiSequencerCaptureById: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                "rest...": string;
+                id: string;
             };
             cookie?: never;
         };
@@ -11783,12 +11778,12 @@ export interface operations {
             };
         };
     };
-    postApiSequencerCaptureByRest: {
+    postApiSequencerCaptureById: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                "rest...": string;
+                id: string;
             };
             cookie?: never;
         };
@@ -12846,16 +12841,21 @@ export interface operations {
             };
         };
     };
-    getApiSkillsByRest: {
+    putApiSkillsDisabled: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                "rest...": string;
-            };
+            path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description the skills this project turns off; the whole list, replacing the previous one */
+                    disabled: string[];
+                };
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
@@ -12875,21 +12875,14 @@ export interface operations {
             };
         };
     };
-    putApiSkillsDisabled: {
+    getApiSkillsNone: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description the skills this project turns off; the whole list, replacing the previous one */
-                    disabled: string[];
-                };
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
@@ -14231,13 +14224,11 @@ export interface operations {
             };
         };
     };
-    getReissueByToken: {
+    getReissueToken: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                "token...": string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
