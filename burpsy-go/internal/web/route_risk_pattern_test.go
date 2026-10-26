@@ -124,6 +124,10 @@ func TestRouteRiskForAgreesWithTheProductionMux(t *testing.T) {
 // the mux: double slashes, dot segments and a missing trailing slash. For every such spelling the
 // answer without a token must be a refusal (428), a redirect (the mux never runs the handler), or
 // a 404/405; and a redirect, when followed with the same verb, must land on a 428.
+//
+// This pin covers STATUS only, across every gated route: a status is not proof that no handler ran.
+// The side-effect proof is TestOddSpellingsOfHistoryRemovalRemoveNothingUnconfirmed (api_history_rows_test.go),
+// which counts surviving history rows for one representative destructive route.
 func TestCanonicalisedSpellingsOfGatedRoutesNeverExecuteUnconfirmed(t *testing.T) {
 	s := newTestServer()
 	checked := 0

@@ -106,3 +106,31 @@ func TestClearingHistoryNeedsAConfirmation(t *testing.T) {
 		t.Fatalf("after a confirmed clear history lists %d rows, want 0", n)
 	}
 }
+
+// fxxm batch 7: a status code alone does not prove non-execution (a handler can mutate and then
+// error), so this pins the SIDE EFFECT. Every odd spelling of the destructive history-removal route,
+// unconfirmed and in both body shapes (clear-all and named ids), must leave every row in place, and
+// a redirect it answers with must leave them in place when followed with the same verb and body.
+func TestOddSpellingsOfHistoryRemovalRemoveNothingUnconfirmed(t *testing.T) {
+	s := newTestServer()
+	first := seedResponse(t, s, "HTTP/1.1 200 OK", "a")
+	seedResponse(t, s, "HTTP/1.1 200 OK", "b")
+	seedResponse(t, s, "HTTP/1.1 200 OK", "c")
+	spellings := []string{
+		"/api//history/rows", "/api/./history/rows", "/api/x/../history/rows",
+		"/api/history/rows/", "/api/history//rows", "/api/history/./rows", "/api/history/rows/.",
+	}
+	for _, sp := range spellings {
+		for _, body := range []string{"", fmt.Sprintf(`{"ids":[%d]}`, first)} {
+			rec := guarded(t, s, http.MethodDelete, sp, body)
+			if rec.Code >= 300 && rec.Code < 400 {
+				if loc := rec.Header().Get("Location"); loc != "" {
+					guarded(t, s, http.MethodDelete, loc, body)
+				}
+			}
+			if n := historyRowCount(t, s); n != 3 {
+				t.Fatalf("DELETE %s (body %q) answered %d and history now lists %d rows, want all 3", sp, body, rec.Code, n)
+			}
+		}
+	}
+}
