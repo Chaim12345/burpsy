@@ -1,7 +1,10 @@
 package sender
 
 import (
+	"time"
+
 	"context"
+	"github.com/burpsy-go/burpsy/internal/upstream"
 	"testing"
 )
 
@@ -75,5 +78,50 @@ func TestStampSharedPoolDifferentSendersEqualGenerationDoNotShare(t *testing.T) 
 	stampSend(t, stampAuth(t, b, srv.addr), pool)
 	if got := srv.accepts.Load(); got != 2 || pool.Reused() != 0 {
 		t.Fatalf("accepts=%d reused=%d, want 2 and 0: Sender B reused Sender A's connection", got, pool.Reused())
+	}
+}
+
+// Same-Sender in-place setters change a dial input without ApplyNetwork; each must retire a
+// caller pool's idle connection.
+func TestStampWithTimeoutAndWithTLSVerifyRetireCallerPoolConn(t *testing.T) {
+	for name, change := range map[string]func(*Sender){
+		"WithTimeout":   func(s *Sender) { s.WithTimeout(7 * time.Second) },
+		"WithTLSVerify": func(s *Sender) { s.WithTLSVerify(!s.Network().TLS.Verify) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := startKeepAliveServer(t, framed, 0)
+			pool := NewConnPool(2)
+			defer pool.Close()
+			s := NewSender(DefaultSenderConfig())
+			auth := stampAuth(t, s, srv.addr)
+			stampSend(t, auth, pool)
+			change(s)
+			stampSend(t, auth, pool)
+			if got := srv.accepts.Load(); got != 2 || pool.Reused() != 0 {
+				t.Fatalf("accepts=%d reused=%d, want 2 and 0", got, pool.Reused())
+			}
+		})
+	}
+}
+
+// R2: an upstream rule change on the same Sender. The route stamp carries the rule for the dialled
+// address, so the idle direct connection must not carry a send the new rule sends through a (dead)
+// proxy: the send must fail, not succeed over the old connection.
+func TestStampUpstreamRuleChangeRetiresCallerPoolConn(t *testing.T) {
+	srv := startKeepAliveServer(t, framed, 0)
+	pool := NewConnPool(2)
+	defer pool.Close()
+	policy := upstream.NewPolicy()
+	cfg := DefaultSenderConfig()
+	cfg.Upstream = policy
+	s := NewSender(cfg)
+	auth := stampAuth(t, s, srv.addr)
+	stampSend(t, auth, pool)
+	if _, err := policy.Set("*", "http://127.0.0.1:1"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := auth.SendReusing(context.Background(), pool, []byte(keepAliveReq), ProtocolPreferenceAuto)
+	if err == nil {
+		t.Fatalf("send succeeded (accepts=%d reused=%d) over a connection dialled before the rule change", srv.accepts.Load(), pool.Reused())
 	}
 }
