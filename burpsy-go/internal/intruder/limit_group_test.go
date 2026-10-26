@@ -7,6 +7,7 @@ package intruder
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +96,78 @@ func TestPaceNChargesTheWholeGroupOnce(t *testing.T) {
 	release()
 	if waited > 500*time.Millisecond {
 		t.Fatalf("a 4-token reservation waited %v: the tokens were staggered, not charged at once", waited)
+	}
+}
+
+// Two concurrent groups whose sizes each exceed half the pool can deadlock it when
+// acquisition is one slot at a time: each holds a partial share and waits on the other
+// forever, and every plain Pace hangs behind them (PR #363 review: cap 4, two PaceN(3)
+// each take 2). With acquisition serialized, one group is admitted whole while the other
+// holds NOTHING, and the admitted group's release then admits the waiter.
+//
+// The interleave that splits the pool is a race, so the round count does the work: 200
+// rounds make a non-splitting run on the old loop implausible (observed splitting within
+// the first few rounds on an 8-core machine).
+func TestPaceNGroupsDoNotDeadlockAPoolTheyShare(t *testing.T) {
+	for round := 0; round < 200; round++ {
+		l := groupLimiter(4)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		type outcome struct {
+			release func()
+			err     error
+		}
+		results := make(chan outcome, 2)
+		start := make(chan struct{})
+		go func() { <-start; r, err := l.PaceN(ctx, 3); results <- outcome{r, err} }()
+		go func() { <-start; r, err := l.PaceN(ctx, 3); results <- outcome{r, err} }()
+		close(start)
+		// One group must be admitted whole while the other still waits; the old loop let
+		// both hold a 2-slot split and neither ever returned.
+		first := <-results
+		if first.err != nil {
+			cancel()
+			t.Fatalf("round %d: no group was admitted: %v", round, first.err)
+		}
+		// The admitted group's release frees the waiter's slots; the waiter then completes.
+		first.release()
+		second := <-results
+		cancel()
+		if second.err != nil {
+			t.Fatalf("round %d: the waiting group was not admitted after the first released: %v", round, second.err)
+		}
+		second.release()
+		// The pool drains fully: a third group is admitted without waiting on a leak.
+		release, err := l.PaceN(context.Background(), 3)
+		if err != nil {
+			t.Fatalf("round %d: the pool did not drain after both groups released: %v", round, err)
+		}
+		release()
+	}
+}
+
+// A group queued BEHIND another group's acquisition turn must still honor its own context:
+// a plain mutex wait cannot be cancelled, so with a slot-blocked leader (a full pool and a
+// long-lived ctx) a queued group would outlive its own deadline by the leader's whole wait.
+func TestPaceNWaitingForAnotherGroupStillHonorsContext(t *testing.T) {
+	l := groupLimiter(2)
+	a, b := l.Acquire(), l.Acquire() // the pool is full; no group can take a slot
+	defer a.Release()
+	defer b.Release()
+	// The leader blocks on slots for far longer than the queued group's deadline.
+	slow, stopSlow := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopSlow()
+	leader := make(chan error, 1)
+	go func() { _, err := l.PaceN(slow, 2); leader <- err }()
+	time.Sleep(100 * time.Millisecond) // the leader is inside its acquisition turn
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := l.PaceN(ctx, 2)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the queued group ended with %v, want its own deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("the queued group outlived its context by %v waiting on the leader's turn", elapsed)
 	}
 }
