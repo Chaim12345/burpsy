@@ -115,6 +115,26 @@ func TestRepeaterGraphQLQueryEditsTheURLCarrierWithCodecParity(t *testing.T) {
 	}
 }
 
+func TestRepeaterGraphQLQueryEditsTheRealQueryParamNotALookalike(t *testing.T) {
+	s := newTestServer()
+	// oldquery carries the same value as the real query parameter: a first-text-match offset
+	// lands inside oldquery, rewrites it, and still reports success (PR #363 review).
+	raw := "GET /graphql?oldquery=%7B%20a%20%7D&query=%7B%20a%20%7D HTTP/1.1\r\nHost: shop.example\r\n\r\n"
+	rec := postJSON(t, s, "/api/repeater/graphql-query", map[string]any{
+		"request": raw, "index": 0, "query": "{ b }",
+	})
+	var resp repeaterGraphQLQueryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Source != "params" {
+		t.Fatalf("source = %q, want params", resp.Source)
+	}
+	if !strings.Contains(resp.Request, "oldquery=%7B%20a%20%7D&query=%7B%20b%20%7D") {
+		t.Errorf("the edit did not land on the real query parameter, leaving the lookalike untouched:\n%s", resp.Request)
+	}
+}
+
 func TestRepeaterGraphQLQueryRefusesWhatItCannotName(t *testing.T) {
 	s := newTestServer()
 	plain := "POST /search HTTP/1.1\r\nHost: shop.example\r\nContent-Length: 17\r\n\r\n" + `{"queryx": "{ a }"}`
