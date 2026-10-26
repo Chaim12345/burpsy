@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import tarfile
+import socket
 import sys
 import tempfile
 import unittest
@@ -622,6 +623,46 @@ class TestOpenRedirectAdapters(unittest.TestCase):
             pfile = Path(td, "out", "payloads.txt")
             self.assertIn("-p", argv)
             self.assertEqual(pfile.read_text(), "//google.com\n")
+
+
+class TestNetBound(unittest.TestCase):
+    """The loopback boundary's audit layer (j1mk.16 / parity-lane policy)."""
+
+    def test_host_tokens_see_decoded_forms(self):
+        import parity_netbound as nb
+        # the W12 pair: fully percent-encoded google.com must surface as a host token
+        self.assertIn("google.com", nb.host_tokens("/%68%74%74%70%3a%2f%2f%67%6f%6f%67%6c%65%2e%63%6f%6d"))
+        self.assertIn("google.com", nb.host_tokens("/%2f%5c%2f%67%6f%6f%67%6c%65%2e%63%6f%6d/"))
+        # literal \xNN spelling (Oralyzer carries raw backslash-x)
+        self.assertIn("google.com", nb.host_tokens("http\\x3A\\x2F\\x2Fgoogle.com"))
+        # a :port is not a host token; a dword-sized number still is
+        self.assertNotIn("19090", nb.host_tokens("//127.0.0.1:19090/%2f.."))
+        self.assertIn("0xd83ad6ce", nb.host_tokens("http://0xd83ad6ce"))
+
+    def test_audit_flags_external_and_marks_loopback_clean(self):
+        import parity_netbound as nb
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d, "payloads.txt")
+            f.write_text("//127.0.0.1:19090/%2f..\n/%68%74%74%70%3a%2f%2f%67%6f%6f%67%6c%65%2e%63%6f%6d\n")
+            a = nb.audit_payloads(f)
+            self.assertEqual(2, a["lines"])
+            self.assertEqual(1, a["lines_with_external_hosts"])
+            self.assertEqual([], a["rows"][0]["external"])
+            self.assertIn("google.com", a["rows"][1]["external"])
+
+    def test_preflight_requires_external_refusal(self):
+        import parity_netbound as nb
+        # probe a port that is certainly closed on loopback: refusal counts as blocked
+        self.assertTrue(nb.preflight(external_probe=("127.0.0.1", 1), timeout=2))
+        # a listening "external" must fail the contract
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        try:
+            with self.assertRaises(RuntimeError):
+                nb.preflight(external_probe=("127.0.0.1", srv.getsockname()[1]), timeout=2)
+        finally:
+            srv.close()
 
 
 if __name__ == "__main__":
