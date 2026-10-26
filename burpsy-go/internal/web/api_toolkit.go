@@ -2348,8 +2348,7 @@ type organizerItemReq struct {
 }
 
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/")
-	idStr = strings.TrimSuffix(idStr, "/")
+	idStr := strings.TrimSuffix(r.PathValue("rest"), "/")
 	// The status write is a subpath, not the item id: /{id}/status must be split before the id is
 	// parsed, or Atoi("1/status") fails and every status PUT would be answered "Invalid item id".
 	// Same shape as the session-rule detail handler's /update-macro and /run suffix routes.
@@ -2467,8 +2466,7 @@ type organizerCollectionUpdateReq struct {
 // "inbox" as the literal id in the move path is deliberate: collection 0 is not a collection, and
 // making the UI mint a fake numeric id for it would be a second lie about the id space.
 func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/collections")
-	rest = strings.Trim(rest, "/")
+	rest := strings.Trim(r.PathValue("rest"), "/")
 
 	if rest == "" {
 		switch r.Method {

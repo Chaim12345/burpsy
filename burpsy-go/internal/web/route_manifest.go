@@ -472,7 +472,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "interception state: enabled, wired, and what is currently held",
 	},
-	"/api/intercept/": {
+	"/api/intercept/{rest...}": {
 		// POST only, and this is also the catch-all under /api/intercept — see the note in setupRoutes
 		// about preserving handleInterceptHeld's breadth through the Phase 1 ServeMux migration.
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
@@ -518,7 +518,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body",
 	},
-	"/api/intercept/rules/": {
+	"/api/intercept/rules/{dir...}": {
 		// "requests" and "responses", plural — see directionFor. The singular was a guess when this
 		// entry was first written, and it answered 404 "Unknown direction" for every verb, which the
 		// 405 test read as a missing guard. The handler was right; the manifest was wrong.
@@ -1291,7 +1291,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskLocal,
 		summary: "the organizer's saved items",
 	},
-	"/api/tools/organizer/": {
+	"/api/tools/organizer/{rest...}": {
 		// POST updates title/note/highlight, PUT .../status sets the workflow status, DELETE removes.
 		// Not GET. The status PUT exists because a status change is one deliberate operator decision
 		// (Burp applies it from the item's status submenu), kept off the POST edit form the same way
@@ -1307,7 +1307,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "create a collection: POST {name}; a duplicate name is a 400",
 	},
-	"/api/tools/organizer/collections/": {
+	"/api/tools/organizer/collections/{rest...}": {
 		// The collections surface: PUT {id} renames / sets the About note, POST {id}/duplicate
 		// copies the group with its items under fresh ids, PUT {id}/items moves or copies items
 		// in (and PUT /inbox moves them back), DELETE {id} deletes with ?items=inbox (default,

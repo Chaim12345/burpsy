@@ -364,12 +364,21 @@ func toAny(ss []string) []any {
 	return out
 }
 
-// fxxm batch 7: the old trailing-slash op spelling still names the remainder-keyed operation.
-func TestRemainderSpellingMapsTheOldSubtreeOpName(t *testing.T) {
-	if got := remainderSpelling("GET /api/datasets/"); got != "GET /api/datasets/{rest...}" {
-		t.Errorf("remainderSpelling = %q", got)
+// fxxm batch 7/8: the old trailing-slash op spelling still names the remainder-keyed operation,
+// whatever the remainder is called.
+func TestLegacyOpSpellingNamesTheRemainderKeyedOperation(t *testing.T) {
+	ops := []op{{name: "GET /api/datasets/{rest...}"}, {name: "PUT /api/intercept/rules/{dir...}"}, {name: "GET /api/history"}}
+	for name, want := range map[string]string{
+		"GET /api/datasets/":        "GET /api/datasets/{rest...}",
+		"PUT /api/intercept/rules/": "PUT /api/intercept/rules/{dir...}",
+	} {
+		if got, ok := legacyOp(ops, name); !ok || got.name != want {
+			t.Errorf("legacyOp(%q) = %q, %v; want %q", name, got.name, ok, want)
+		}
 	}
-	if got := remainderSpelling("GET /api/history"); got != "GET /api/history" {
-		t.Errorf("a non-subtree name changed: %q", got)
+	for _, name := range []string{"GET /api/history", "GET /api/history/", "POST /api/datasets/"} {
+		if got, ok := legacyOp(ops, name); ok {
+			t.Errorf("legacyOp(%q) matched %q", name, got.name)
+		}
 	}
 }

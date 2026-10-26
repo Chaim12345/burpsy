@@ -645,7 +645,7 @@ func resolveOp(t tool, args callArgs) (op, error) {
 	}
 	o, ok := t.byOp[name]
 	if !ok {
-		o, ok = t.byOp[remainderSpelling(name)]
+		o, ok = legacyOp(t.ops, name)
 	}
 	if !ok {
 		return op{}, fmt.Errorf("%q is not an operation of the %s tool; it fronts %s", args.Op, t.Name, strings.Join(opNames(t.ops), ", "))
@@ -656,16 +656,20 @@ func resolveOp(t tool, args callArgs) (op, error) {
 	return o, nil
 }
 
-// remainderSpelling maps the pre-fxxm subtree spelling of an op ("GET /api/datasets/") onto the
-// remainder-wildcard key that replaced it ("GET /api/datasets/{rest...}"), so an agent that
-// states the old op name keeps working. A name without a trailing slash is returned unchanged
-// (it then misses, as any unknown op does).
-func remainderSpelling(name string) string {
-	verb, pattern, ok := strings.Cut(name, " ")
-	if !ok || !strings.HasSuffix(pattern, "/") {
-		return name
+// legacyOp finds the operation a pre-fxxm subtree spelling ("GET /api/datasets/") names: the op
+// whose remainder-wildcard key ("GET /api/datasets/{rest...}") has that trailing-slash form. An agent
+// that states the old op name keeps working. Only a name that ends in "/" can be a legacy spelling.
+func legacyOp(ops []op, name string) (op, bool) {
+	if !strings.HasSuffix(name, "/") {
+		return op{}, false
 	}
-	return verb + " " + pattern + "{rest...}"
+	for _, o := range ops {
+		verb, pattern, ok := strings.Cut(o.name, " ")
+		if ok && strings.HasSuffix(pattern, "...}") && verb+" "+subtreeForm(pattern) == name {
+			return o, true
+		}
+	}
+	return op{}, false
 }
 
 // subtreeForm maps a remainder-wildcard key ("/api/datasets/{rest...}") onto the trailing-slash

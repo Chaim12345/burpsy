@@ -100,6 +100,7 @@ func TestOpenAPICoversEveryManifestRoute(t *testing.T) {
 			continue
 		}
 		_, pattern, _ := strings.Cut(key, " ")
+		pattern = oracleSubtree(pattern)
 		for _, variantKey := range sortedKeys(spec.variants) {
 			if strings.HasPrefix(variantKey, "?") {
 				continue
@@ -242,6 +243,7 @@ func TestOpenAPIActionVariantsPublishTheirOwnBody(t *testing.T) {
 			continue
 		}
 		method, pattern, _ := strings.Cut(key, " ")
+		pattern = oracleSubtree(pattern)
 		for variantKey, variantType := range spec.variants {
 			concrete := pattern
 			if !strings.HasPrefix(variantKey, "?") {
@@ -398,6 +400,10 @@ func TestOpenAPIOperationsCarryTheirRiskClass(t *testing.T) {
 //     through the wildcard, numeric segments templated back to the wildcard's own name.
 func expectedOpenAPIPaths(pattern string, spec route) map[string]bool {
 	out := map[string]bool{}
+	// A trailing remainder wildcard publishes as the trailing-slash subtree it replaced.
+	if strings.HasSuffix(pattern, "...}") {
+		pattern = pattern[:strings.LastIndex(pattern, "/")+1]
+	}
 	template := func(sub string) string {
 		var concrete string
 		wildcard := "id"
@@ -406,6 +412,9 @@ func expectedOpenAPIPaths(pattern string, spec route) map[string]bool {
 			concrete = pattern[:i] + sub + pattern[strings.Index(pattern, "}")+1:]
 		} else {
 			concrete = pattern + sub
+		}
+		if strings.Contains(pattern, "{") && strings.HasSuffix(pattern, "/") {
+			concrete = strings.TrimSuffix(concrete, "/")
 		}
 		segments := strings.Split(concrete, "/")
 		for j, segment := range segments {
@@ -503,4 +512,13 @@ func TestOpenAPIResponseDeclarationsAreTypes(t *testing.T) {
 			t.Errorf("%s: response is not a reflectable type", key)
 		}
 	}
+}
+
+// oracleSubtree restates how a trailing remainder wildcard publishes: as the trailing-slash subtree
+// it replaced. The document tests keep their own oracle instead of calling the generator's helper.
+func oracleSubtree(pattern string) string {
+	if strings.HasSuffix(pattern, "...}") {
+		return pattern[:strings.LastIndex(pattern, "/")+1]
+	}
+	return pattern
 }

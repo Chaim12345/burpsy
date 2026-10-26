@@ -470,7 +470,7 @@ func rulesToSpecs(rules []*intercept.Rule) []interceptRuleSpec {
 
 // handleInterceptRules serves GET/PUT /api/intercept/rules/{requests|responses}.
 func (s *Server) handleInterceptRules(w http.ResponseWriter, r *http.Request) {
-	dir, ok := directionFor(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/intercept/rules/"), "/"))
+	dir, ok := directionFor(strings.TrimSuffix(r.PathValue("dir"), "/"))
 	if !ok {
 		http.Error(w, "Unknown direction", http.StatusNotFound)
 		return
@@ -575,7 +575,7 @@ type interceptDropReq struct {
 
 // handleInterceptHeld serves POST /api/intercept/{id}/forward and /api/intercept/{id}/drop.
 func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/intercept/"), "/")
+	rest := strings.TrimSuffix(r.PathValue("rest"), "/")
 	parts := strings.SplitN(rest, "/", 2)
 	if len(parts) != 2 {
 		http.Error(w, "Usage: /api/intercept/{id}/forward|drop", http.StatusBadRequest)
