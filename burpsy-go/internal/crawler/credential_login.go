@@ -336,7 +336,13 @@ func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte,
 		// scoped by Domain or marked Secure/HttpOnly keeps exactly that scope in the jar — an
 		// attribute dropped here would send the session where the application said it must not
 		// go, or read as a different cookie than the one issued.
-		c := &http.Cookie{Name: lc.Name, Value: lc.Value, Path: lc.Path, Secure: lc.Secure, HttpOnly: lc.HTTPOnly}
+		// G124 flags the unset SameSite, but this is a CLIENT jar rebuild, not a Set-Cookie:
+		// Secure/HttpOnly/Domain/Path arrive from the issued cookie and are preserved, and
+		// net/http/cookiejar's send decision (jar.go shouldSend) reads scheme, host, path and
+		// the secure flag - SameSite is never consulted on send, so the replayed request is
+		// byte-identical with or without it. Attribute preservation is covered by the
+		// /admin-scoped cookie test in credential_login_test.go.
+		c := &http.Cookie{Name: lc.Name, Value: lc.Value, Path: lc.Path, Secure: lc.Secure, HttpOnly: lc.HTTPOnly} //nolint:gosec // client-side jar replay of the issued attributes; cookiejar.shouldSend never consults SameSite (grounding comment above)
 		if !lc.HostOnly {
 			c.Domain = lc.Domain
 		}
