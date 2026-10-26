@@ -109,7 +109,7 @@ func endpointSummary(eps []APIDocEndpoint) []string {
 }
 
 func TestAnOpenAPIDocumentInJSONYieldsItsOperations(t *testing.T) {
-	format, eps, failure := ParseAPIDocument("application/json", []byte(openAPIJSON))
+	format, eps, failure := ParseAPIDocument("application/json", "", []byte(openAPIJSON))
 	if format != APIDocOpenAPI {
 		t.Errorf("format = %q, want %q", format, APIDocOpenAPI)
 	}
@@ -149,8 +149,8 @@ func TestAnOpenAPIDocumentInJSONYieldsItsOperations(t *testing.T) {
 }
 
 func TestTheSameDocumentInYAMLYieldsTheSameEndpointsAsJSON(t *testing.T) {
-	_, fromJSON, failureJSON := ParseAPIDocument("application/json", []byte(openAPIJSON))
-	format, fromYAML, failureYAML := ParseAPIDocument("text/yaml", []byte(openAPIYAML))
+	_, fromJSON, failureJSON := ParseAPIDocument("application/json", "", []byte(openAPIJSON))
+	format, fromYAML, failureYAML := ParseAPIDocument("text/yaml", "", []byte(openAPIYAML))
 
 	if format != APIDocOpenAPI {
 		t.Errorf("YAML document sniffed as %q, want %q", format, APIDocOpenAPI)
@@ -183,7 +183,7 @@ func TestASwagger2DocumentIsRecognisedAsSwaggerNotOpenAPI(t *testing.T) {
 	const swagger = `{"swagger":"2.0","info":{"title":"Pets","version":"1.0"},
 	  "paths":{"/pets":{"get":{"operationId":"listPets","summary":"All the pets",
 	  "parameters":[{"name":"limit","in":"query"}]}}}}`
-	format, eps, failure := ParseAPIDocument("application/json", []byte(swagger))
+	format, eps, failure := ParseAPIDocument("application/json", "", []byte(swagger))
 	if format != APIDocSwagger {
 		t.Errorf("format = %q, want %q: a tool that calls a Swagger 2 document OpenAPI is "+
 			"reporting something false about a document the operator will rely on", format, APIDocSwagger)
@@ -218,7 +218,7 @@ func TestAWSDLDocumentYieldsItsOperations(t *testing.T) {
   </wsdl:binding>
 </wsdl:definitions>`
 
-	format, eps, failure := ParseAPIDocument("application/wsdl+xml", []byte(wsdl))
+	format, eps, failure := ParseAPIDocument("application/wsdl+xml", "", []byte(wsdl))
 	if format != APIDocWSDL {
 		t.Errorf("format = %q, want %q", format, APIDocWSDL)
 	}
@@ -247,7 +247,7 @@ func TestABodyThatIsNotAnAPIDocumentIsNotAFailure(t *testing.T) {
 		{"empty", "application/json", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			format, eps, failure := ParseAPIDocument(tc.contentType, []byte(tc.body))
+			format, eps, failure := ParseAPIDocument(tc.contentType, "", []byte(tc.body))
 			if format != APIDocNone {
 				t.Errorf("format = %q, want %q", format, APIDocNone)
 			}
@@ -272,7 +272,7 @@ func TestADocumentThatAnnouncesItselfAndCannotBeReadIsAFailureNotZeroLocations(t
 		{"a mapping whose paths are nonsense", `{"openapi":"3.0.0","paths":"not-an-object"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			format, eps, failure := ParseAPIDocument("application/json", []byte(tc.body))
+			format, eps, failure := ParseAPIDocument("application/json", "", []byte(tc.body))
 			if format == APIDocNone {
 				t.Fatalf("a body that announces itself as a definition sniffed as %q, so the caller "+
 					"cannot tell a broken definition from a non-definition", format)
@@ -293,7 +293,7 @@ func TestAnEmptyPathsObjectIsARealAnswerAndNotAFailure(t *testing.T) {
 	// A skeleton definition is legal and common early in a project's life. Zero endpoints is the
 	// TRUE answer, and reporting it as a failure would tell an operator their API is broken when the
 	// file simply declares no routes yet.
-	format, eps, failure := ParseAPIDocument("application/json",
+	format, eps, failure := ParseAPIDocument("application/json", "",
 		[]byte(`{"openapi":"3.0.0","info":{"title":"New","version":"0.1"},"paths":{}}`))
 	if format != APIDocOpenAPI {
 		t.Errorf("format = %q, want %q", format, APIDocOpenAPI)
@@ -316,7 +316,7 @@ func TestDocumentMetadataIsNotMistakenForAnOperation(t *testing.T) {
 	  "servers":[{"url":"https://api.example.test"}],
 	  "x-vendor-note":"ignore me",
 	  "get":{"operationId":"listUsers"}}}}`
-	_, eps, failure := ParseAPIDocument("application/json", []byte(doc))
+	_, eps, failure := ParseAPIDocument("application/json", "", []byte(doc))
 	if failure != "" {
 		t.Fatalf("failure: %s", failure)
 	}
@@ -333,7 +333,7 @@ func TestAParameterNameDeclaredTwiceIsReportedOnce(t *testing.T) {
 	// substitute, and a report listing it twice reads as two parameters where there is one.
 	const doc = `{"openapi":"3.0.0","paths":{"/users/{id}":{"get":{"operationId":"g",
 	  "parameters":[{"name":"id","in":"path"},{"name":"id","in":"query"}]}}}}`
-	_, eps, _ := ParseAPIDocument("application/json", []byte(doc))
+	_, eps, _ := ParseAPIDocument("application/json", "", []byte(doc))
 	params := endpointByID(t, eps, "g").Parameters
 	if len(params) != 1 || params[0] != "id" {
 		t.Errorf("parameters = %v, want [id]", params)
@@ -346,7 +346,7 @@ func TestAnExternalParameterRefIsNotFollowed(t *testing.T) {
 	// crawler makes everywhere else it would invent a URL.
 	const doc = `{"openapi":"3.0.0","paths":{"/users":{"get":{"operationId":"g",
 	  "parameters":[{"$ref":"https://other.example.test/params.json#/Trace"}]}}}}`
-	_, eps, failure := ParseAPIDocument("application/json", []byte(doc))
+	_, eps, failure := ParseAPIDocument("application/json", "", []byte(doc))
 	if failure != "" {
 		t.Fatalf("failure: %s", failure)
 	}
@@ -362,7 +362,7 @@ func TestATruncatedWSDLKeepsWhatItReadAndReportsTheBreak(t *testing.T) {
 <wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/">
   <wsdl:operation name="GetUser" soapAction="urn:GetUser"/>
   <wsdl:operation name="ListUsers"`
-	_, eps, failure := ParseAPIDocument("application/wsdl+xml", []byte(truncated))
+	_, eps, failure := ParseAPIDocument("application/wsdl+xml", "", []byte(truncated))
 	if len(eps) != 1 {
 		t.Errorf("parsed %d operations (%v), want the one the untruncated prefix names", len(eps), endpointSummary(eps))
 	}
@@ -376,7 +376,7 @@ func TestADocumentWithAYAMLMarkerIsReadAsYAML(t *testing.T) {
 	// YAML and invalid JSON, so without the marker strip the JSON attempt fails on framing and the
 	// document would take the YAML path for the wrong reason.
 	const marked = "---\n" + openAPIYAML
-	format, eps, failure := ParseAPIDocument("text/yaml", []byte(marked))
+	format, eps, failure := ParseAPIDocument("text/yaml", "", []byte(marked))
 	if format != APIDocOpenAPI || failure != "" {
 		t.Fatalf("format=%q failure=%q, want %q and no failure", format, failure, APIDocOpenAPI)
 	}

@@ -2389,7 +2389,7 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// so a WSDL served as text/xml or application/wsdl+xml was read as a sitemap and its operations
 	// never crawled (found by burpsy-react-ui-ai64; an existing WSDL test had been passing only because
 	// the HTML page linking to the WSDL was itself misread as one).
-	if LooksLikeSitemap(contentType, body) && sniffAPIDocument(contentType, body) == APIDocNone {
+	if LooksLikeSitemap(contentType, body) && sniffAPIDocument(contentType, item.url.Path, body) == APIDocNone {
 		c.consumeSitemap(item, contentType, body, &fetch, rep, lim)
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
@@ -2950,7 +2950,7 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 		return false
 	}
 
-	format, eps, failure := ParseAPIDocument(contentType, body)
+	format, eps, failure := ParseAPIDocument(contentType, item.url.Path, body)
 	if format == APIDocNone {
 		return false
 	}
