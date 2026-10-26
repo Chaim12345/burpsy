@@ -1123,6 +1123,13 @@ func (s *Sender) SendRawOutcome(
 		}
 	}
 
+	// The pool stamp must name the identity in force as this dial begins, not whatever is
+	// configured when the response comes back: a route or certificate change during the
+	// exchange must not relabel the connection (burpsy-react-ui-o388). This is captured
+	// immediately before the dial, which is NOT the dialer-reported consumed identity: a
+	// change landing while the socket itself is being opened remains a race, and closing it
+	// needs the dialer to report the identity it consumed.
+	dialRoute := s.routeState(host, useTLS)
 	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
 	if err != nil {
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
@@ -1193,7 +1200,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: s.routeState(host, useTLS)})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialRoute})
 		}
 		return resp, out, err
 	}
@@ -1377,6 +1384,8 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 //
 // With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
+	// dialRoute is the identity in force as this dial begins - see the note at the TLS dial.
+	dialRoute := s.routeState(host, false)
 	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
 		return nil, "", fmt.Errorf("connection failed: %w", err)
@@ -1388,7 +1397,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: s.routeState(host, false)})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialRoute})
 	} else {
 		conn.Close()
 	}
