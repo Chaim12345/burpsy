@@ -1109,12 +1109,14 @@ func (s *Sender) SendRawOutcome(
 
 	// HTTP/2 connection reuse (adkx): a carriable request rides the tab's open h2 session when there
 	// is one. Keyed by the caller's key, the authority and the SNI override, so a session opened under
-	// one ClientHello is never handed to a send asking for another.
+	// one ClientHello is never handed to a send asking for another. The session also carries the
+	// route captured immediately before its dial, so a route or certificate change retires it
+	// (h2sess-stamp).
 	opts, _ := SendOptionsFrom(ctx)
 	sessionKey := ""
 	if opts.H2Sessions != nil && plan.wantH2 {
 		sessionKey = opts.H2SessionKey + "\x00" + formatAuthority(host, port, true) + "\x00" + opts.SNI
-		if sess := opts.H2Sessions.take(sessionKey); sess != nil {
+		if sess := opts.H2Sessions.take(sessionKey, s.routeState(host, true)); sess != nil {
 			opts.H2Sessions.reused.Add(1)
 			resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 			out := s.finish(host, port, useTLS, alpn.H2, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
@@ -1161,7 +1163,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		opts.H2Sessions.opened.Add(1)
 		kept = true
-		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn)}
+		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialRoute}
 		resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
 		return resp, out, err
