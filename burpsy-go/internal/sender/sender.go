@@ -39,6 +39,12 @@ type Sender struct {
 	client *http.Client
 	config *SenderConfig
 	net    NetworkSettings
+	// netGen is the network-settings generation: bumped by every ApplyNetwork and
+	// WithUpstreamCarrier call, it is the part of the pool stamp that retires connections
+	// and caller-owned h2 sessions when settings or the carrier change (dial_identity.go).
+	// Guarded by mu with the state it versions, so a capture reads the generation, the
+	// carrier and the config as one consistent snapshot.
+	netGen uint64
 	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
 	// the path. Building a CertPool parses every system root, and this is the handshake path for every
 	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
@@ -424,7 +430,9 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	s.net = normalised
 	s.client = buildClient(s.config, normalised, s.carrier)
 	// A kept connection was dialled under the settings just replaced (resolution, TLS, timeouts), so
-	// none of them may carry the next send.
+	// none of them may carry the next send. The pool flush reaches the h1 pool; the generation bump
+	// is what retires the caller-owned h2 sessions this sender cannot flush (dial_identity.go).
+	s.netGen++
 	s.pool.closeAll()
 	return nil
 }
@@ -491,7 +499,7 @@ func resolveUpstream(config *SenderConfig) (*upstream.Policy, error) {
 // dialForProgram's cleartext arm all come here, so a proxy setting cannot cover some of them and not
 // others. That was the state before — three independent net.Dialers, none of which had heard of
 // SenderConfig.ProxyURL.
-func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.Conn, error) {
+func (s *Sender) dialPlain(ctx context.Context, host string, port uint16, id dialIdentity) (net.Conn, error) {
 	if s.upstreamErr != nil {
 		return nil, s.upstreamErr
 	}
@@ -501,18 +509,20 @@ func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.C
 	// whatever TCP connection upstream.Dialer opens, to the proxy or to the origin. Building a bare
 	// net.Dialer here instead — which is what this did before the network settings landed — would have
 	// meant that configuring a proxy silently stopped honouring the operator's resolver.
-	settings := s.Network()
+	// Settings, policy, carrier and address are all the capture-time freeze, not live reads:
+	// the stamp this dial's connection will carry names these values (dial_identity.go).
+	settings := id.settings
 	dialer := upstream.Dialer{
-		Policy: s.upstream,
+		Policy: id.upstream,
 		// The global SOCKS layer. Every dial in this package carries it, not just the transport's:
 		// the raw path — which is the one Repeater sends through, and therefore the one an operator
 		// exercising the setting from the UI actually uses — would otherwise go direct and make the
 		// setting look installed and inert (burpsy-react-ui-mr83 part 3).
-		Carrier: s.carrier,
+		Carrier: id.carrier,
 		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 		Base:    settings.dialer(),
 	}
-	return dialer.DialContext(ctx, "tcp", settings.dialAddressFor(ctx, host, port))
+	return dialer.DialContext(ctx, "tcp", id.dialAddr)
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -542,7 +552,12 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 		s.protocols.hits.Add(1)
 		return known, nil
 	}
-	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(true))
+	id, cerr := s.captureDialIdentity(ctx, host, port, true)
+	if cerr != nil {
+		return ProtocolSupportUnknown, fmt.Errorf("discovering %s's protocol: %w",
+			formatAuthority(host, port, useTLS), cerr)
+	}
+	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(true), id)
 	if err != nil {
 		return ProtocolSupportUnknown, fmt.Errorf("discovering %s's protocol: %w",
 			formatAuthority(host, port, useTLS), err)
@@ -561,7 +576,7 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // the TLS session is still end-to-end with the origin, so the certificate verified and the protocol
 // negotiated are the origin's own. A proxy that terminated TLS here would be reporting its own ALPN as
 // the target's.
-func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (net.Conn, string, error) {
+func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string, id dialIdentity) (net.Conn, string, error) {
 	if s.upstreamErr != nil {
 		return nil, "", s.upstreamErr
 	}
@@ -572,7 +587,9 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// open tunnel and the handshake runs on top of it, so the certificate verified and the protocol
 	// negotiated are the origin's, not the proxy's. Base is what stops the proxied branch from losing
 	// the operator's resolver on its way to the proxy.
-	settings := s.Network()
+	// The settings are the capture-time freeze, like every other dial input: the same value
+	// the stamp's generation versions (dial_identity.go).
+	settings := id.settings
 	connect := time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond
 	// All three dial concerns in one place. A client certificate configured for this host is
 	// presented here too, which covers every raw-bytes TLS path in the package at once:
@@ -590,12 +607,15 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		MinVersion:         minVersion,
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
-		ClientCerts:        s.config.ClientCerts,
+		// The certificate source and fingerprint are the capture-time freeze: the handshake
+		// presents what the stamp names, not whatever the stores hold when it runs
+		// (dial_identity.go, burpsy-react-ui-o388-predial-vs-dial).
+		ClientCerts: id.certSource(),
 		// Repeater's Override SNI (k011), when this send carries one. Every raw TLS path dials here,
 		// so the override reaches h2 and HTTP/1 sends alike.
 		SNI: sniOverride(ctx),
 		// The per-target browser fingerprint (63pf); empty keeps Go's own hello.
-		Fingerprint: s.config.TLSFingerprints.For(host),
+		Fingerprint: id.fingerprint,
 	}
 	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
 	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
@@ -603,15 +623,15 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// a bare socket, so the layer was configured, reported as configured, and never carried a single
 	// connection. Burp's setting says "every outbound connection", and the gate made it mean "every
 	// connection to an upstream proxy" (burpsy-react-ui-mr83 part 3).
-	if s.upstream != nil && !s.upstream.Empty() || s.carrier != nil {
+	if id.wrap {
 		dialer.Carry = upstream.Dialer{
-			Policy:  s.upstream,
-			Carrier: s.carrier,
+			Policy:  id.upstream,
+			Carrier: id.carrier,
 			Timeout: connect,
 			Base:    settings.dialer(),
 		}.DialContext
 	}
-	conn, negotiated, err := dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
+	conn, negotiated, err := dialer.Dial(ctx, host, id.dialAddr, offer)
 	if err == nil && s.config.ServerCerts != nil {
 		s.config.ServerCerts.Record(host, port, alpn.PeerCertificates(conn))
 	}
@@ -1073,8 +1093,12 @@ func (s *Sender) SendRawOutcome(
 		keep = false
 	}
 	if keep {
-		route := s.routeState(host, useTLS)
-		if ic := s.pool.take(key, plan.wantH2, route); ic != nil {
+		// The take re-evaluates each candidate's OWN dial address against the live
+		// configuration (dial_identity.go): no capture, and no DNS lookup, on a pool
+		// hit. The fresh dial below captures its own identity — a configuration change
+		// landing during a failed pooled exchange governs the redial, as it did before
+		// the freeze.
+		if ic := s.pool.take(key, plan.wantH2, s.routeForDialAddr(host, useTLS)); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
@@ -1116,7 +1140,7 @@ func (s *Sender) SendRawOutcome(
 	sessionKey := ""
 	if opts.H2Sessions != nil && plan.wantH2 {
 		sessionKey = opts.H2SessionKey + "\x00" + formatAuthority(host, port, true) + "\x00" + opts.SNI
-		if sess := opts.H2Sessions.take(sessionKey, s.routeState(host, true)); sess != nil {
+		if sess := opts.H2Sessions.take(sessionKey, s.routeForDialAddr(host, true)); sess != nil {
 			opts.H2Sessions.reused.Add(1)
 			resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 			out := s.finish(host, port, useTLS, alpn.H2, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
@@ -1125,14 +1149,17 @@ func (s *Sender) SendRawOutcome(
 		}
 	}
 
-	// The pool stamp must name the identity in force as this dial begins, not whatever is
-	// configured when the response comes back: a route or certificate change during the
-	// exchange must not relabel the connection (burpsy-react-ui-o388). This is captured
-	// immediately before the dial, which is NOT the dialer-reported consumed identity: a
-	// change landing while the socket itself is being opened remains a race, and closing it
-	// needs the dialer to report the identity it consumed.
-	dialRoute := s.routeState(host, useTLS)
-	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
+	// The pool stamp names the identity this dial consumes: captured at this dial decision
+	// point — after any failed pooled exchange, so the retry reads the configuration live at
+	// redial as it always has — and the dial below runs on its frozen values, so a route or
+	// certificate change during the dial or the exchange neither relabels the connection
+	// (burpsy-react-ui-o388) nor stamps it with an identity it never presented
+	// (burpsy-react-ui-o388-predial-vs-dial).
+	dialID, derr := s.captureDialIdentity(ctx, host, port, useTLS)
+	if derr != nil {
+		return nil, SendOutcome{}, derr
+	}
+	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2), dialID)
 	if err != nil {
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
@@ -1163,7 +1190,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		opts.H2Sessions.opened.Add(1)
 		kept = true
-		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialRoute}
+		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialID.route, dialAddr: dialID.dialAddr}
 		resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
 		return resp, out, err
@@ -1202,7 +1229,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialRoute})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route, dialAddr: dialID.dialAddr})
 		}
 		return resp, out, err
 	}
@@ -1386,9 +1413,12 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 //
 // With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
-	// dialRoute is the identity in force as this dial begins - see the note at the TLS dial.
-	dialRoute := s.routeState(host, false)
-	conn, err := s.dialPlain(ctx, host, port)
+	// The stamp names the identity this dial consumes - see the note at the TLS dial.
+	dialID, derr := s.captureDialIdentity(ctx, host, port, false)
+	if derr != nil {
+		return nil, "", derr
+	}
+	conn, err := s.dialPlain(ctx, host, port, dialID)
 	if err != nil {
 		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
@@ -1399,7 +1429,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialRoute})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route, dialAddr: dialID.dialAddr})
 	} else {
 		conn.Close()
 	}
@@ -1621,6 +1651,10 @@ func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
 	if s == nil {
 		return s
 	}
+	// The field writes, the generation bump and the client rebuild happen inside one locked
+	// section, so a capture (dial_identity.go) reads the carrier and the generation as one
+	// consistent pair — it either precedes this swap or follows it, never straddles it.
+	s.mu.Lock()
 	s.carrier = carrier
 	// The config too, because the next client rebuild reads from there rather than from the Sender —
 	// a WithTLSVerify or a settings change would otherwise drop the carrier silently.
@@ -1631,8 +1665,10 @@ func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
 	// construction, so setting the field afterwards would leave the transport dialling through a nil
 	// layer while the field reported one — the live pass caught exactly that: the console reported the
 	// carrier configured, every dial site read the field, and the connection still went out direct.
-	s.mu.Lock()
 	s.client = buildClient(s.config, s.net, carrier)
+	// Same retirement as ApplyNetwork: the pool flush covers h1, the generation covers the
+	// caller-owned h2 sessions dialled under the previous layer (dial_identity.go).
+	s.netGen++
 	s.pool.closeAll()
 	s.mu.Unlock()
 	return s
@@ -1643,5 +1679,7 @@ func (s *Sender) UpstreamCarrier() *upstream.Carrier {
 	if s == nil {
 		return nil
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.carrier
 }

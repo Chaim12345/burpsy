@@ -24,8 +24,6 @@ package sender
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net"
@@ -37,27 +35,6 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
-
-// routeState fingerprints what a connection to this authority would be dialled under right
-// now: the upstream rule that routes it and the client certificate its handshake would
-// present. Both stores mutate in place (the network settings screens call Policy.Set and
-// ClientCerts.Add on the live objects, and nothing rebuilds the sender), so the pool cannot
-// wait for a flush event: it stamps every kept connection with this fingerprint and take
-// closes any entry whose stamp no longer matches (burpsy-react-ui-o388).
-func (s *Sender) routeState(host string, useTLS bool) string {
-	route := "direct"
-	if s.upstream != nil {
-		route = s.upstream.For(host).Raw()
-	}
-	if !useTLS || s.config == nil || s.config.ClientCerts == nil {
-		return route
-	}
-	if cert := s.config.ClientCerts.For(host); cert != nil && len(cert.Certificate) > 0 {
-		sum := sha256.Sum256(cert.Certificate[0])
-		return route + "\x00" + hex.EncodeToString(sum[:8])
-	}
-	return route + "\x00"
-}
 
 // http1IdleTimeout is Burp's five seconds of inactivity after which a kept connection is closed.
 var http1IdleTimeout = 5 * time.Second
@@ -71,10 +48,14 @@ type idleConn struct {
 	negotiated string
 	// offeredH2 is true when the connection's handshake offered h2 and the target chose otherwise.
 	offeredH2 bool
-	// route fingerprints what the connection was dialled under - see Sender.routeState. A pooled
-	// connection whose route no longer matches the live configuration is never reusable again.
+	// route fingerprints what the connection was dialled under - see Sender.captureDialIdentity.
+	// A pooled connection whose route no longer matches the live configuration is never reusable
+	// again.
 	route string
-	timer *time.Timer
+	// dialAddr is the address the dial opened - the upstream policy's lookup key (ForAddr),
+	// carried so a take can re-evaluate the rule for it without resolving the host again.
+	dialAddr string
+	timer    *time.Timer
 }
 
 type http1Pool struct {
@@ -92,13 +73,18 @@ func poolKey(host string, port uint16, useTLS bool) string {
 
 // take returns the most recently kept connection for key, or nil. With needOfferedH2, only a
 // connection whose handshake already offered h2 qualifies.
-func (p *http1Pool) take(key string, needOfferedH2 bool, route string) *idleConn {
+func (p *http1Pool) take(key string, needOfferedH2 bool, routeFor func(dialAddr string) string) *idleConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := p.idle[key]
 	for i := len(list) - 1; i >= 0; i-- {
 		ic := list[i]
-		if ic.route != route {
+		// The candidate is re-evaluated under the live configuration FOR ITS OWN dial
+		// address: the rule that routes that address today must be the rule it was dialled
+		// under. Re-evaluating the candidate's address — rather than resolving the host
+		// again — is what keeps a pool hit free of DNS lookups when a family filter makes
+		// resolution live (burpsy-react-ui-o388-predial-vs-dial).
+		if ic.route != routeFor(ic.dialAddr) {
 			// Dialled under a different upstream rule or client identity than the live
 			// configuration asks for now. Keeping it would resurrect it the moment the
 			// route flipped back, so it is closed, not skipped.
