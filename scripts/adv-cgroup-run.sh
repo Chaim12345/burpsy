@@ -42,8 +42,18 @@ have=$(go env GOVERSION | sed 's/^go//'); [ "$(printf '%s\n%s\n' "$MIN_GO" "$hav
 mkdir -m 0700 -- "$OUT_DIR" || die "cannot create OUT_DIR"
 BIN_DIR=$(mktemp -d) || exit 1; trap 'rm -rf "$BIN_DIR"' EXIT   # removes only the compiled test binary
 
-# Compile with a bound (outside the memory cap, but one package, one CPU, 5 minutes).
-GOMAXPROCS=1 GOFLAGS="-p=1" timeout -k 10 300 go test -c -o "$BIN_DIR/jsadv.test" ./internal/jsexec || die "compile failed or timed out"
+# Preflight + compile INSIDE a hard cap: the compile runs under capped-run.sh too (COMPILE_MIB, default 3072,
+# one CPU), and the script refuses to go further unless that run reports "hard limits: cgroup v2". So a host
+# without a working cgroup is detected here, before any adversarial case, and compile memory is bounded.
+COMPILE_MIB=${COMPILE_MIB:-3072}
+[[ $COMPILE_MIB =~ ^[1-9][0-9]*$ ]] || die "COMPILE_MIB must be a positive integer"
+BURPSY_KILL_GRACE=5 timeout -k 30 300 "$CR" --cpus 1 --mem "${COMPILE_MIB}M" --slots 1 -- \
+  go test -c -o "$BIN_DIR/jsadv.test" ./internal/jsexec >"$OUT_DIR/compile.log" 2>&1
+crc=$?; echo "$crc" >"$OUT_DIR/compile.rc"
+grep -q 'hard limits: cgroup v2' "$OUT_DIR/compile.log" || die "compile ran without a cgroup v2 hard cap (see $OUT_DIR/compile.log); nothing was run"
+[ "$crc" = 0 ] && [ -x "$BIN_DIR/jsadv.test" ] || die "compile failed or timed out, exit $crc (see $OUT_DIR/compile.log)"
+# Snapshot the burpsy-run-* cgroups that exist now: only NEW ones after a case count as ours.
+before=$(ls /sys/fs/cgroup 2>/dev/null | grep '^burpsy-run-' | sort || true)
 { echo "host: $(uname -srm)"; echo "go: $(go version)"; echo "git HEAD: $(git rev-parse HEAD)"; echo "base: $BASE_SHA"
   echo "test sha256: $TEST_SHA256"; echo "capped-run sha256: $(sha256sum "$CR" | awk '{print $1}')"
   echo "MemAvailable_KB: $(awk '/MemAvailable/{print $2}' /proc/meminfo) cpus: $(nproc) cap_MiB: $MEM_MIB cases: $CASES"
@@ -70,8 +80,13 @@ for k in $CASES; do
   [ "$readback" = 1 ] || valid=0
   # Nothing of this case may be left running, and its cgroup must be gone, before the next case or the end.
   sleep 1
-  if pgrep -f "$BIN_DIR/jsadv.test" >/dev/null || ls /sys/fs/cgroup 2>/dev/null | grep -q '^burpsy-run-'; then
-    echo "   -> LEFTOVER process or cgroup after $k: stopping, not removing anything"; valid=0; echo "leftover after $k" >>"$OUT_DIR/host.txt"; break
+  # Leftovers are scoped to THIS run: processes whose command line contains this run's private binary dir, and
+  # burpsy-run-* cgroups that were not there before (another job's cgroups are not ours and are ignored).
+  after=$(ls /sys/fs/cgroup 2>/dev/null | grep '^burpsy-run-' | sort || true)
+  new_cg=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')
+  if pgrep -f -- "$BIN_DIR" >/dev/null || [ -n "${new_cg// /}" ]; then
+    echo "   -> LEFTOVER after $k (process matching $BIN_DIR, or new cgroup: ${new_cg:-none}): stopping, not removing anything"
+    valid=0; echo "leftover after $k: $new_cg" >>"$OUT_DIR/host.txt"; break
   fi
   [ "$valid" = 1 ] || { echo "   -> cap not proven for $k: this case is not valid evidence; stopping"; break; }
 done
