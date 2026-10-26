@@ -92,6 +92,8 @@ type route struct {
 // under a subtree pattern, substituted for the wildcard in a "{id}" pattern
 // (burpsy-react-ui-fxxm).
 func concretePath(pattern, subPath string) string {
+	// "{$}" anchors a pattern to its exact trailing slash and is not part of a URL.
+	pattern = strings.TrimSuffix(pattern, "{$}")
 	if i := strings.Index(pattern, "{"); i >= 0 {
 		return pattern[:i] + subPath + pattern[strings.Index(pattern, "}")+1:]
 	}
