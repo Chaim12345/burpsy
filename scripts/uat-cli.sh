@@ -103,6 +103,16 @@ import json,sys
 d=json.loads(sys.argv[1]); b=(d.get("breakdown") or {}).get("breakdown") or {}
 sys.exit(0 if d.get("active_checks",0)>0 and b.get("errored",1)==0 else 1)' "$res" && ok "the audit of $label ran active checks with none errored" || no "audit of $label ran no active checks or some errored: ${res:0:200}"
 }
+# xss_on ID -> reflected cross-site scripting issues that carry an occurrence on exchange ID. /api/issues
+# lists every occurrence of an issue with its exchange_id, so this is per exchange: unlike the totals it is
+# not collapsed by the de-duplication across exchanges.
+xss_on() {
+  curl -s "http://127.0.0.1:$WEB_PORT/api/issues" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+want=int(sys.argv[1])
+print(sum(1 for f in d.get("findings",[]) if "cross-site scripting" in (f.get("check_name") or f.get("issue_name") or "").lower() and any(o.get("exchange_id")==want for o in f.get("occurrences",[]))))' "$1"
+}
 # xss_count [PATH] -> cross-site scripting findings, optionally only those naming PATH.
 xss_count() {
   curl -s "http://127.0.0.1:$WEB_PORT/api/findings" | python3 -c '
@@ -115,6 +125,8 @@ print(sum(1 for f in rows if "cross-site scripting" in json.dumps(f).lower() and
 audit_exchange "$XID" "/search" || { echo "############ $PASS passed, $FAIL failed ############"; exit 1; }
 n=$(xss_count)
 FOUND_VULN=$LAST_FOUND
+v_named=$(xss_on "$XID")
+[ "${v_named:-0}" -ge 1 ] && ok "the vulnerable exchange ($XID) carries a named cross-site scripting issue" || no "no named cross-site scripting issue on exchange $XID"
 [ "${n:-0}" -ge 1 ] && ok "a cross-site scripting finding was reported ($n)" || no "no cross-site scripting finding after auditing /search"
 
 echo "=== 4. the safe twin stays clean ==="
@@ -131,13 +143,16 @@ if [ "$SID" = none ]; then
   no "no /safe/search exchange in history"
 elif audit_exchange "$SID" "$TWIN"; then
   FOUND_TWIN=$LAST_FOUND
+  t_named=$(xss_on "$SID")
+  [ "${t_named:-9}" -eq 0 ] && ok "no cross-site scripting issue is attributed to the safe twin exchange ($SID)" || no "cross-site scripting issue attributed to the twin exchange $SID (${t_named})"
   total_after=$(xss_count)
   [ "${total_after:-0}" -eq "${n:-0}" ] && ok "auditing the safe twin added no cross-site scripting finding ($n -> $total_after)" || no "cross-site scripting findings changed $n -> $total_after after the safe twin audit"
 fi
 
 echo "=== 5. the per-audit finding counts have teeth ==="
 # The findings list de-duplicates by name across exchanges, so its total cannot show a second vulnerable
-# exchange (or a vulnerable twin) adding anything. Each audit's own outcome.findings is per exchange: a
+# exchange (or a vulnerable twin) adding anything. The named checks above use each issue's occurrences (exchange_id).
+# Supplementary: each audit's own outcome.findings is per exchange: a
 # second vulnerable exchange must report the same count as the first (control: the count is stable), and
 # the safe twin must report strictly fewer (the reflected-XSS finding is missing). Pointing UAT_TWIN_PATH
 # at /search makes the twin vulnerable and this last check must then fail.
@@ -145,6 +160,8 @@ env -u NO_PROXY -u no_proxy curl -s -o /dev/null -x "http://127.0.0.1:$PROXY_POR
 sleep 0.5
 CID=$(history_id "/search?q=control")
 if [ "$CID" = none ]; then no "no control exchange in history"; elif audit_exchange "$CID" "/search?q=control"; then
+  c_named=$(xss_on "$CID")
+  [ "${c_named:-0}" -ge 1 ] && ok "the second vulnerable exchange ($CID) carries the named issue too (the per-exchange check can see a second one)" || no "no named cross-site scripting issue on the second vulnerable exchange $CID"
   [ "$LAST_FOUND" -eq "$FOUND_VULN" ] && ok "a second vulnerable exchange reports the same finding count ($FOUND_VULN)" || no "vulnerable audits disagree ($FOUND_VULN vs $LAST_FOUND): the comparison below is not trustworthy"
   [ "${FOUND_TWIN:--1}" -ge 0 ] && [ "$FOUND_TWIN" -lt "$FOUND_VULN" ] && ok "the safe twin's audit found fewer than the vulnerable one ($FOUND_TWIN < $FOUND_VULN)" || no "the twin's audit found ${FOUND_TWIN:-none}, not fewer than the vulnerable audit's $FOUND_VULN"
 fi
