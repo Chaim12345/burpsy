@@ -3,6 +3,7 @@ package grpcproto
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc"
 	reflectv1 "google.golang.org/grpc/reflection/grpc_reflection_v1"
@@ -25,8 +26,9 @@ import (
 func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface, symbol string) ([]protoreflect.FileDescriptor, error) {
 	client := reflectv1.NewServerReflectionClient(conn)
 	// byPath accumulates the raw FileDescriptorProtos keyed by file path;
-	// queue is the BFS frontier of paths not yet requested.
+	// arrival records fetch order, so the entry pick is deterministic.
 	byPath := map[string]*descriptorpb.FileDescriptorProto{}
+	var arrival []string
 	request := func(makeReq func() *reflectv1.ServerReflectionRequest) error {
 		stream, err := client.ServerReflectionInfo(ctx)
 		if err != nil {
@@ -46,6 +48,9 @@ func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface,
 				if err := proto.Unmarshal(raw, fdp); err != nil {
 					return fmt.Errorf("reflection: undecodable FileDescriptorProto: %w", err)
 				}
+				if _, ok := byPath[fdp.GetName()]; !ok {
+					arrival = append(arrival, fdp.GetName())
+				}
 				byPath[fdp.GetName()] = fdp
 			}
 			return nil
@@ -63,21 +68,19 @@ func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface,
 	}); err != nil {
 		return nil, err
 	}
-	// The entry file is whichever file the symbol answer named that is not a
-	// dependency of another file in the same answer; in practice it is the
-	// file declaring the symbol, and the graph walk below reaches the rest.
+	// The entry is the file declaring the symbol: the only choice independent
+	// of answer order and map iteration. grpc-go sends the declaring file
+	// first, so arrival order is the fallback when no file's declarations
+	// match (a server that answers a partially qualified symbol).
 	entryPath := ""
-	for path := range byPath {
-		entryPath = path
-		break
-	}
-	for path, fdp := range byPath {
-		for _, dep := range fdp.GetDependency() {
-			if dep == entryPath && path != entryPath {
-				// entryPath is itself imported by a sibling; prefer the sibling.
-				entryPath = path
-			}
+	for _, path := range arrival {
+		if declaresSymbol(byPath[path], symbol) {
+			entryPath = path
+			break
 		}
+	}
+	if entryPath == "" && len(arrival) > 0 {
+		entryPath = arrival[0]
 	}
 	// BFS the import graph: every dependency the graph names that we do not
 	// already hold gets its own FileByFilename request.
@@ -145,4 +148,42 @@ func FetchServiceDescriptors(ctx context.Context, conn grpc.ClientConnInterface,
 		return true
 	})
 	return out, nil
+}
+
+// declaresSymbol reports whether fdp declares the fully-qualified symbol as a
+// top-level message (or nested message), enum, or service of its package.
+func declaresSymbol(fdp *descriptorpb.FileDescriptorProto, symbol string) bool {
+	prefix := fdp.GetPackage() + "."
+	if !strings.HasPrefix(symbol, prefix) {
+		return false
+	}
+	rest := symbol[len(prefix):]
+	var inMessage func(d *descriptorpb.DescriptorProto, name string) bool
+	inMessage = func(d *descriptorpb.DescriptorProto, name string) bool {
+		if d.GetName() == name {
+			return true
+		}
+		for _, n := range d.GetNestedType() {
+			if strings.HasPrefix(name, d.GetName()+".") && inMessage(n, name[len(d.GetName())+1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, m := range fdp.GetMessageType() {
+		if inMessage(m, rest) {
+			return true
+		}
+	}
+	for _, e := range fdp.GetEnumType() {
+		if e.GetName() == rest {
+			return true
+		}
+	}
+	for _, svc := range fdp.GetService() {
+		if svc.GetName() == rest {
+			return true
+		}
+	}
+	return false
 }
