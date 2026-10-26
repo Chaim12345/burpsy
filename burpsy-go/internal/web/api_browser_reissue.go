@@ -147,7 +147,7 @@ func (s *Server) handleRepeaterBrowserReissue(w http.ResponseWriter, r *http.Req
 // outcomes are also recorded as exchanges, so the two variants appear in history like any
 // other send — the comparison survives the dialog.
 func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimPrefix(r.URL.Path, "/reissue/")
+	token := r.PathValue("token")
 	rec, ok := s.reissueSpend(token)
 	if !ok {
 		// Expired or already spent: the answer must not be a silent nothing, because the

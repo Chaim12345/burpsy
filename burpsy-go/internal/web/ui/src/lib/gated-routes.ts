@@ -43,8 +43,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/dominvader/hit": false,
  "/api/dominvader/hits": false,
  "/api/dominvader/scan": false,
- "/api/engagement/": false,
  "/api/engagement/clickbandit.js": false,
+ "/api/engagement/{kind}": false,
  "/api/events": false,
  "/api/events/stats": false,
  "/api/exchange/": false,
@@ -194,5 +194,5 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/ws/history": false,
  "/api/ws/message/{id}": false,
  "/ca.crt": false,
- "/reissue/": false,
+ "/reissue/{token}": false,
 };

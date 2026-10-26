@@ -333,7 +333,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
 	},
-	"/api/engagement/": {
+	"/api/engagement/{kind}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
 	},
@@ -1334,7 +1334,7 @@ var manifest = map[string]route{
 	"/ca.crt": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the CA certificate the proxy signs leaves with, so a browser can be told to trust it",
-	}, "/reissue/": {
+	}, "/reissue/{token}": {
 		// The minted URL's fetch surface, outside /api on purpose: it is what the operator
 		// pastes into their browser, and it spends a token before anything else. riskEgress
 		// because the fetch is the send; the token is the operator's own mint.

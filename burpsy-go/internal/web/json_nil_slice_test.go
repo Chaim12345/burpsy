@@ -108,7 +108,6 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	nonJSONError := map[string]string{
 		"/api/advisories/":                   "plain-text 400/404: a type index is required",
 		"/api/crawl/live":                    "plain-text 400: task id is required",
-		"/api/engagement/":                   "plain-text 404: an engagement kind is required",
 		"/api/exchange/":                     "plain-text 400: an exchange ID is required",
 		"/api/exchanges/":                    "plain-text 400: an exchange ID is required",
 		"/api/extensions/console":            "plain-text 400: a plugin name is required",
@@ -126,7 +125,6 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/skills/":                       "plain-text 404: a skill name is required",
 		"/api/target/analyze":                "plain-text 400: host is required",
 		"/ca.crt":                            "plain-text 404: TLS interception is off in the test server",
-		"/reissue/":                          "plain-text 410: no live re-issue token",
 	}
 	// Routes that never return on empty state because they stream. Any other route that takes
 	// the two-second timeout is a hang, not a stream, and fails.

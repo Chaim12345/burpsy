@@ -58,7 +58,7 @@ func TestTheAnswerPageNeverRendersAStoredPathAsMarkup(t *testing.T) {
 		"/reissue/"+token+"?variant=original", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
-	s.handleBrowserReissueFetch(rec, req)
+	s.mux.ServeHTTP(rec, req) // through the mux: the token is a {token} path value (fxxm)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET the answer page = %d (%s)", rec.Code, rec.Body.String())

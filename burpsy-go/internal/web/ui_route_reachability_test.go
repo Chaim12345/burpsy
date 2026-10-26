@@ -64,7 +64,7 @@ var uiRouteExempt = map[string]string{
 		"SERVER half now, with this reason, is exactly what the exemption exists for — the route is " +
 		"operator-facing by design (the operator's right-click) while the console string lands with " +
 		"the menu work. Remove this exemption when the UI half wires the action.",
-	"/reissue/": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
+	"/reissue/{token}": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
 		"(Burp's request-in-browser dialog hands the URL to the operator the same way — " +
 		"repeatRequestInBrowserRenderUrlTxtField); the SPA never fetches this path, it only " +
 		"DISPLAYS it, and the reachability test scans for fetch call sites",

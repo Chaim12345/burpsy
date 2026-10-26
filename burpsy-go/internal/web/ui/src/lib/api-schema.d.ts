@@ -736,7 +736,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/engagement/{id}": {
+    "/api/engagement/{kind}": {
         parameters: {
             query?: never;
             header?: never;
@@ -744,7 +744,7 @@ export type paths = {
             cookie?: never;
         };
         /** Burp's site-map engagement searches: comments, scripts, references to a URL */
-        get: operations["getApiEngagementById"];
+        get: operations["getApiEngagementByKind"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4092,7 +4092,7 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/reissue/token": {
+    "/reissue/{token}": {
         parameters: {
             query?: never;
             header?: never;
@@ -4103,7 +4103,7 @@ export type paths = {
          * spend one one-shot re-issue token: re-send its exchange under the minted session variant, record the outcome, and answer with a page that names the variant
          * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
-        get: operations["getReissueToken"];
+        get: operations["getReissueByToken"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5933,7 +5933,7 @@ export interface operations {
             };
         };
     };
-    getApiEngagementById: {
+    getApiEngagementByKind: {
         parameters: {
             query?: {
                 /** @description limit the search to one host */
@@ -5945,7 +5945,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                id: string;
+                kind: string;
             };
             cookie?: never;
         };
@@ -14126,11 +14126,13 @@ export interface operations {
             };
         };
     };
-    getReissueToken: {
+    getReissueByToken: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                token: string;
+            };
             cookie?: never;
         };
         requestBody?: never;
