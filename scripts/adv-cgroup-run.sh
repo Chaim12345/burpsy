@@ -40,55 +40,62 @@ have=$(go env GOVERSION | sed 's/^go//'); [ "$(printf '%s\n%s\n' "$MIN_GO" "$hav
 # Fresh private output dir: refuse an existing path or a symlink; create it 0700.
 [ ! -e "$OUT_DIR" ] && [ ! -L "$OUT_DIR" ] || die "OUT_DIR already exists (use a fresh path)"
 mkdir -m 0700 -- "$OUT_DIR" || die "cannot create OUT_DIR"
-BIN_DIR=$(mktemp -d) || exit 1; trap 'rm -rf "$BIN_DIR"' EXIT   # removes only the compiled test binary
+BIN_DIR="$OUT_DIR/bin"; mkdir -m 0700 -- "$BIN_DIR" || die "cannot create $BIN_DIR"   # inside OUT_DIR; NEVER auto-removed
 
-# Preflight + compile INSIDE a hard cap: the compile runs under capped-run.sh too (COMPILE_MIB, default 3072,
-# one CPU), and the script refuses to go further unless that run reports "hard limits: cgroup v2". So a host
-# without a working cgroup is detected here, before any adversarial case, and compile memory is bounded.
+# Preflight evidence is written BEFORE anything is compiled or run.
 COMPILE_MIB=${COMPILE_MIB:-3072}
 [[ $COMPILE_MIB =~ ^[1-9][0-9]*$ ]] || die "COMPILE_MIB must be a positive integer"
-BURPSY_KILL_GRACE=5 timeout -k 30 300 "$CR" --cpus 1 --mem "${COMPILE_MIB}M" --slots 1 -- \
-  go test -c -o "$BIN_DIR/jsadv.test" ./internal/jsexec >"$OUT_DIR/compile.log" 2>&1
-crc=$?; echo "$crc" >"$OUT_DIR/compile.rc"
-grep -q 'hard limits: cgroup v2' "$OUT_DIR/compile.log" || die "compile ran without a cgroup v2 hard cap (see $OUT_DIR/compile.log); nothing was run"
-[ "$crc" = 0 ] && [ -x "$BIN_DIR/jsadv.test" ] || die "compile failed or timed out, exit $crc (see $OUT_DIR/compile.log)"
-# Snapshot the burpsy-run-* cgroups that exist now: only NEW ones after a case count as ours.
-before=$(ls /sys/fs/cgroup 2>/dev/null | grep '^burpsy-run-' | sort || true)
 { echo "host: $(uname -srm)"; echo "go: $(go version)"; echo "git HEAD: $(git rev-parse HEAD)"; echo "base: $BASE_SHA"
   echo "test sha256: $TEST_SHA256"; echo "capped-run sha256: $(sha256sum "$CR" | awk '{print $1}')"
-  echo "MemAvailable_KB: $(awk '/MemAvailable/{print $2}' /proc/meminfo) cpus: $(nproc) cap_MiB: $MEM_MIB cases: $CASES"
+  echo "MemAvailable_KB: $(awk '/MemAvailable/{print $2}' /proc/meminfo) cpus: $(nproc) cap_MiB: $MEM_MIB compile_MiB: $COMPILE_MIB cases: $CASES"
+  echo "cgroup mounts: $(grep cgroup /proc/mounts | awk '{print $3}' | sort | uniq -c | tr '\n' ' ')"
 } | tee "$OUT_DIR/host.txt"
 
-valid=1
-for k in $CASES; do
-  out="$OUT_DIR/$k.log"
-  # In the same capped process, read back memory.max FIRST; any other value or a read failure aborts with 97.
-  inner='cg=/sys/fs/cgroup/$(cut -d: -f3 /proc/self/cgroup); m=$(cat "$cg/memory.max" 2>&1)
-         echo "memory.max in effect: $m"
-         [ "$m" = "$(( MEM_MIB * 1024 * 1024 ))" ] || { echo "CAP NOT IN EFFECT"; exit 97; }
-         exec env BURPSY_ADV_HARNESS=1 ADV='"$k"' "$BIN" -test.run TestAdversarialResourceHarness -test.v'
-  # Outer timeout must exceed capped-run's own TERM->KILL grace (BURPSY_KILL_GRACE=5): -k 30 leaves it room.
-  BURPSY_KILL_GRACE=5 MEM_MIB=$MEM_MIB BIN="$BIN_DIR/jsadv.test" \
-    timeout -k 30 90 "$CR" --cpus 1 --mem "${MEM_MIB}M" --slots 1 -- bash -c "$inner" >"$out" 2>&1
-  rc=$?; echo "$rc" >"$OUT_DIR/$k.rc"
-  hard=$(grep -o 'hard limits: .*' "$out" | head -1)
-  readback=$(grep -c "memory.max in effect: $(( MEM_MIB * 1024 * 1024 ))\$" "$out")
-  echo "== $k exit=$rc | ${hard:-no capped-run line} | readback-matches=$readback"
-  grep -E "memory.max in effect|CAP NOT|err=|fatal|out of memory|memory cap|FAIL|PASS|SKIP" "$out" | head -8 | cut -c1-200
-  # Valid only with a v2 hard cap AND the in-process readback matching.
-  case "$hard" in *"cgroup v2"*) ;; *) valid=0;; esac
-  [ "$readback" = 1 ] || valid=0
-  # Nothing of this case may be left running, and its cgroup must be gone, before the next case or the end.
+# run_capped NAME MIB TIMEOUT CMD...   Runs CMD inside capped-run.sh. Inside the cap, BEFORE exec'ing CMD, the
+# shell persists ITS OWN cgroup path and reads memory.max; CMD starts only if memory.max == MIB*1048576 (else exit 97).
+# So no compile or case work starts unless the cap is proven in effect from inside.
+run_capped() {
+  local name=$1 mib=$2 tmo=$3; shift 3
+  local inner='cg=$(cut -d: -f3 /proc/self/cgroup); echo "$cg" >"$OUT_DIR/$NAME.cgroup"
+         m=$(cat "/sys/fs/cgroup$cg/memory.max" 2>&1); echo "memory.max in effect: $m"
+         [ "$m" = "$(( MIB * 1024 * 1024 ))" ] || { echo "CAP NOT IN EFFECT"; exit 97; }
+         exec "$@"'
+  BURPSY_KILL_GRACE=5 NAME=$name MIB=$mib OUT_DIR=$OUT_DIR \
+    timeout -k 30 "$tmo" "$CR" --cpus 1 --mem "${mib}M" --slots 1 -- bash -c "$inner" _ "$@" >"$OUT_DIR/$name.log" 2>&1
+  local rc=$?; echo "$rc" >"$OUT_DIR/$name.rc"
+  hard=$(grep -o 'hard limits: .*' "$OUT_DIR/$name.log" | head -1)
+  readback=$(grep -c "memory.max in effect: $(( mib * 1024 * 1024 ))\$" "$OUT_DIR/$name.log")
+  echo "== $name exit=$rc | ${hard:-no capped-run line} | readback-matches=$readback"
+  grep -E "memory.max in effect|CAP NOT|err=|fatal|out of memory|memory cap|FAIL|PASS|SKIP" "$OUT_DIR/$name.log" | head -8 | cut -c1-200
+  CAPPED_OK=1
+  case "$hard" in *"cgroup v2"*) ;; *) CAPPED_OK=0;; esac
+  [ "$readback" = 1 ] || CAPPED_OK=0
+  # Cleanup proof from THIS run's own recorded cgroup path: it must be gone, or have an empty cgroup.procs.
   sleep 1
-  # Leftovers are scoped to THIS run: processes whose command line contains this run's private binary dir, and
-  # burpsy-run-* cgroups that were not there before (another job's cgroups are not ours and are ignored).
-  after=$(ls /sys/fs/cgroup 2>/dev/null | grep '^burpsy-run-' | sort || true)
-  new_cg=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tr '\n' ' ')
-  if pgrep -f -- "$BIN_DIR" >/dev/null || [ -n "${new_cg// /}" ]; then
-    echo "   -> LEFTOVER after $k (process matching $BIN_DIR, or new cgroup: ${new_cg:-none}): stopping, not removing anything"
-    valid=0; echo "leftover after $k: $new_cg" >>"$OUT_DIR/host.txt"; break
+  local cgp; cgp=$(cat "$OUT_DIR/$name.cgroup" 2>/dev/null)
+  if [ -z "$cgp" ]; then echo "   -> no own-cgroup path recorded for $name"; CAPPED_OK=0
+  elif [ "$cgp" = / ]; then echo "   -> own cgroup is the root: cap not in effect"; CAPPED_OK=0
+  elif [ -d "/sys/fs/cgroup$cgp" ]; then
+    if [ -n "$(cat "/sys/fs/cgroup$cgp/cgroup.procs" 2>/dev/null)" ] || grep -q '^populated 1' "/sys/fs/cgroup$cgp/cgroup.events" 2>/dev/null; then
+      echo "   -> LEFTOVER: own cgroup $cgp still has processes after $name"; CLEAN=0; CAPPED_OK=0
+    fi
   fi
-  [ "$valid" = 1 ] || { echo "   -> cap not proven for $k: this case is not valid evidence; stopping"; break; }
-done
-( cd "$OUT_DIR" && sha256sum ./*.log ./*.rc host.txt > SHA256SUMS ) && echo "raw logs and SHA256SUMS kept in $OUT_DIR (valid=$valid)"
+  pgrep -f -- "$BIN_DIR" >/dev/null && { echo "   -> LEFTOVER process matching $BIN_DIR after $name"; CLEAN=0; CAPPED_OK=0; }
+  { echo "$name: exit=$rc capped_ok=$CAPPED_OK clean=$CLEAN own_cgroup=${cgp:-none}"; } >>"$OUT_DIR/host.txt"
+}
+CLEAN=1; valid=1
+
+# Compile runs INSIDE the proven cap too; on a failed readback the compile never starts.
+run_capped compile "$COMPILE_MIB" 300 go test -c -o "$BIN_DIR/jsadv.test" ./internal/jsexec
+if [ "$CAPPED_OK" != 1 ] || [ "$(cat "$OUT_DIR/compile.rc")" != 0 ] || [ ! -x "$BIN_DIR/jsadv.test" ]; then
+  valid=0; echo "   -> compile not capped/clean/successful: nothing adversarial was run (see $OUT_DIR/compile.log)"
+else
+  for k in $CASES; do
+    run_capped "$k" "$MEM_MIB" 90 env BURPSY_ADV_HARNESS=1 ADV="$k" "$BIN_DIR/jsadv.test" -test.run TestAdversarialResourceHarness -test.v
+    [ "$CAPPED_OK" = 1 ] || { valid=0; echo "   -> cap/cleanup not proven for $k: not valid evidence; stopping"; break; }
+  done
+fi
+( cd "$OUT_DIR" && sha256sum ./*.log ./*.rc ./*.cgroup host.txt > SHA256SUMS ) && echo "raw logs and SHA256SUMS kept in $OUT_DIR (valid=$valid clean=$CLEAN)"
+# The binary is deleted ONLY when everything was proven clean; otherwise it and all evidence are left in place.
+[ "$valid" = 1 ] && [ "$CLEAN" = 1 ] && rm -rf -- "$BIN_DIR"
 [ "$valid" = 1 ]
