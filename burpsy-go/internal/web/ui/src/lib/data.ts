@@ -115,11 +115,13 @@ export const INVALIDATION: Record<string, string[][]> = {
  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
  // entry the only event that can tell the console a sweep has results.
- dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"]],
- // A task event is also the retained-run list moving (a crawl or API scan registered, finished or was
- // evicted). The Dashboard asks for a task's run only when that list names it, so the list must follow.
- task: [["dashboard"], ["crawls"]],
- tasks: [["dashboard"], ["crawls"]],
+ // The server emits only this kind for a task starting or finishing (dash.Registry.Start records
+ // EventTaskStarted, which fires changeDashboard; a crawl notifies changeDashboard again when it
+ // finishes: events.go, server.go, api_crawl.go), and it is the one signal that the retained-run list
+ // moved. The Dashboard asks for a task's crawl run only when that list names it, so ["crawls"] follows.
+ dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"], ["crawls"]],
+ task: [["dashboard"]],
+ tasks: [["dashboard"]],
  ws: [["ws"], ["stats"], ["dashboard"]],
  intercept: [["intercept"]],
  scope: [["scope"]],
