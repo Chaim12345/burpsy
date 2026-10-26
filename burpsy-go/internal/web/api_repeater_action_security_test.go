@@ -499,6 +499,38 @@ func TestRepeaterActionPutBodyIsCappedBeforeDecode(t *testing.T) {
 	}
 }
 
+// The 128 KiB raw-body cap is exact: a body of precisely 128 KiB decodes (and then fails on the
+// script's own limit - a 400 that proves the decode ran), while one byte more is refused 413
+// before any decode. The earlier pin covers clearly-oversized (200 KiB) and under (120 KiB); this
+// one walks the N/N+1 edge itself (1944 correction follow-up).
+func TestRepeaterActionPutBodyCapIsExactAt128KiB(t *testing.T) {
+	s := newTestServer()
+	put := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/api/repeater/tabs/tab-p/action", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	// {"script":"..."} - 13 bytes of JSON framing around the script text; x needs no escaping.
+	const framing = len(`{"script":""}`)
+	n := `{"script":"` + strings.Repeat("x", 128*1024-framing) + `"}`
+	if len(n) != 128*1024 {
+		t.Fatalf("test construction: the N body is %d bytes, want exactly %d", len(n), 128*1024)
+	}
+	if rec := put(n); rec.Code != http.StatusBadRequest {
+		t.Errorf("N = exactly 128 KiB answered %d, want the 400 script refusal that proves the raw cap admitted it and the decode ran: %s", rec.Code, rec.Body)
+	}
+	plus := `{"script":"` + strings.Repeat("x", 128*1024-framing+1) + `"}`
+	if len(plus) != 128*1024+1 {
+		t.Fatalf("test construction: the N+1 body is %d bytes, want %d", len(plus), 128*1024+1)
+	}
+	if rec := put(plus); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("N+1 = 128 KiB + 1 byte answered %d, want 413 before any decode: %s", rec.Code, rec.Body)
+	}
+}
+
 // A corrupt saved action never blocks the others: it is skipped at restore (logged and counted)
 // while the valid rows come back.
 func TestRepeaterActionRestoreSkipsACorruptRow(t *testing.T) {

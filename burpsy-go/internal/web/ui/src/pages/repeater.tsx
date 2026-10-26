@@ -161,13 +161,20 @@ function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
 function FailedActionCleanupNotices(): JSX.Element | null {
  const failedActionCleanups = useApp((state) => state.failedActionCleanups);
  const clearFailedActionCleanup = useApp((state) => state.clearFailedActionCleanup);
+ // A bulk close can leave several orphans: each notice names its tab (from the open strip or the
+ // reopen stack), or falls back to the bare id, so two notices are never indistinguishable.
+ const repeaterTabs = useApp((state) => state.repeaterTabs);
+ const closedRepeaterTabs = useApp((state) => state.closedRepeaterTabs);
+ const nameOf = (tabId: string) => [...repeaterTabs, ...closedRepeaterTabs].find((tab) => tab.id === tabId)?.name;
  if (failedActionCleanups.length === 0) return null;
  return (
   <div className="notice" role="alert" aria-label="Failed action cleanups">
    {failedActionCleanups.map((entry) => (
     <div className="toolbar" key={entry.tabId}>
      <Badge tone="warn">action left behind</Badge>
-     <span>Closing this tab did not forget its custom action on the server: {entry.error}</span>
+     <span>
+      Closing {nameOf(entry.tabId) ? `tab "${nameOf(entry.tabId)}"` : "this tab"} did not forget its custom action on the server: {entry.error}
+     </span>
      <Button size="small" onClick={() => forgetRepeaterTabAction(entry.tabId)}>
       Retry
      </Button>

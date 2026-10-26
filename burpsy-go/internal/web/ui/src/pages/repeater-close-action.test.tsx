@@ -115,6 +115,84 @@ describe("Repeater tab close surfaces a failed action cleanup (1944 correction)"
   expect(mints.length).toBe(2);
  });
 
+ test("a 404 answers as nothing-left-to-forget: no notice, and a stale entry clears on retry", async () => {
+  // Fresh close, tab never had an action server-side: 404 is the common case, not a failure.
+  const id = openOnlyTab("https://target.test:443");
+  deleteStatuses = [404];
+  renderRepeater();
+  fireEvent.click(await screen.findByRole("button", { name: /Close t/ }));
+  await waitFor(() => {
+   expect(calls.some((c) => c.method === "DELETE" && c.path === `/api/repeater/tabs/${id}/action`)).toBe(true);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(screen.queryByRole("alert", { name: "Failed action cleanups" })).toBeNull();
+  expect(useApp.getState().failedActionCleanups).toHaveLength(0);
+ });
+
+ test("retrying into a 404 clears the stale failure entry", async () => {
+  const id = openOnlyTab("https://target.test:443");
+  useApp.setState({ failedActionCleanups: [{ tabId: id, error: "the action store is unavailable" }] });
+  deleteStatuses = [404];
+  renderRepeater();
+  await screen.findByRole("alert", { name: "Failed action cleanups" });
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await act(async () => {
+   for (let i = 0; i < 20 && useApp.getState().failedActionCleanups.length > 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+   }
+  });
+  // The orphan is gone (someone forgot it elsewhere), so the notice is done - not retried forever.
+  expect(useApp.getState().failedActionCleanups).toHaveLength(0);
+  expect(screen.queryByRole("alert", { name: "Failed action cleanups" })).toBeNull();
+ });
+
+ test("dismiss clears the notice without retrying - the orphan stays, and nothing more is sent", async () => {
+  openOnlyTab("https://target.test:443");
+  deleteStatuses = [500];
+  renderRepeater();
+  fireEvent.click(await screen.findByRole("button", { name: /Close t/ }));
+  await screen.findByRole("alert", { name: "Failed action cleanups" });
+  const deletesBefore = calls.filter((c) => c.method === "DELETE").length;
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await act(async () => {
+   await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  expect(screen.queryByRole("alert", { name: "Failed action cleanups" })).toBeNull();
+  expect(useApp.getState().failedActionCleanups).toHaveLength(0);
+  // No second DELETE: dismiss never retries, it only clears the notice.
+  expect(calls.filter((c) => c.method === "DELETE").length).toBe(deletesBefore);
+ });
+
+ test("a bulk close lists each failed cleanup by tab name, and retry clears only its own", async () => {
+  openOnlyTab("https://one.test:443", { name: "alpha" });
+  useApp.getState().openRepeaterTab({ name: "bravo", target: "https://two.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
+  const charlie = useApp.getState().openRepeaterTab({ name: "charlie", target: "https://three.test:443", request: "GET / HTTP/1.1\r\nHost: x\r\n\r\n" });
+  deleteStatuses = [500];
+  renderRepeater();
+  fireEvent.contextMenu(await screen.findByText("bravo"));
+  fireEvent.click(await screen.findByText("Close other tabs"));
+  const alert = await screen.findByRole("alert", { name: "Failed action cleanups" });
+  await waitFor(() => {
+   expect(alert.textContent).toContain('tab "alpha"');
+   expect(alert.textContent).toContain('tab "charlie"');
+  });
+  expect(useApp.getState().failedActionCleanups).toHaveLength(2);
+  // The kept tab was never asked to forget anything.
+  expect(calls.some((c) => c.method === "DELETE" && c.path.includes("/bravo/"))).toBe(false);
+  // Retry the first listed failure; the other stays put.
+  deleteStatuses = [200];
+  fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]!);
+  await act(async () => {
+   for (let i = 0; i < 20 && useApp.getState().failedActionCleanups.length > 1; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+   }
+  });
+  expect(useApp.getState().failedActionCleanups).toHaveLength(1);
+  expect(useApp.getState().failedActionCleanups[0]!.tabId).toBe(charlie);
+  expect(screen.getByRole("alert", { name: "Failed action cleanups" }).textContent).toContain('tab "charlie"');
+  expect(screen.getByRole("alert", { name: "Failed action cleanups" }).textContent).not.toContain('tab "alpha"');
+ });
+
  test("the confirmation token is minted for exactly the tab-action DELETE it then carries", async () => {
   const id = openOnlyTab("https://target.test:443");
   renderRepeater();
