@@ -58,6 +58,17 @@ def audit_payloads(path):
             "lines_with_external_hosts": sum(1 for r in rows if r["external"]), "rows": rows}
 
 
+def boundary_identity():
+    """Facts about the namespace the caller is IN, recorded verbatim. Nothing here assumes
+    /proc/1, a host, or 'loopback only': the caller compares the captured value against a
+    baseline it captured OUTSIDE the boundary before launch and reads the interface list."""
+    return {
+        "net_ns": os.readlink("/proc/self/ns/net"),
+        "pid_ns": os.readlink("/proc/self/ns/pid"),
+        "interfaces": sorted(os.listdir("/sys/class/net")),
+    }
+
+
 def preflight(external_probe=("1.1.1.1", 443), timeout=3):
     """The boundary contract: external MUST fail, loopback MUST work. Raises on any doubt."""
     try:
@@ -96,14 +107,25 @@ def cmd_audit(path):
     print(json.dumps(audit_payloads(path), indent=1))
 
 
-def cmd_run(argv, audit_out=None):
-    """Re-exec argv inside the boundary (once), preflight first; audit the tools dir after."""
+def cmd_run(argv, audit_out=None, receipt_path=None):
+    """Re-exec argv inside the boundary (once), preflight first; record receipts after.
+
+    The receipt binds the boundary to THIS run: the inner namespace identity must differ
+    from the outer baseline the driver captured before launch (PARITY_NETBOUND_OUTER_NS),
+    and the interface list is recorded verbatim - no unexamined loopback-only claim. The
+    payload audit covers the payloads files actually fed (the parity out dir)."""
     if not os.environ.get(INSIDE_ENV):
         return subprocess.call(BWRAP + ["env", "%s=1" % INSIDE_ENV] + argv)
     preflight()
+    identity = boundary_identity()
+    outer = os.environ.get("PARITY_NETBOUND_OUTER_NS")
+    identity["outer_net_ns_baseline"] = outer
+    identity["namespace_differs_from_outer"] = (outer is not None and identity["net_ns"] != outer)
     try:
         return subprocess.call(argv)
     finally:
+        if receipt_path:
+            Path(receipt_path).write_text(json.dumps(identity, indent=1))
         if audit_out:
             audits = [audit_payloads(p) for p in sorted(Path(audit_out[0]).rglob("payloads.txt"))]
             Path(audit_out[1]).write_text(json.dumps(audits, indent=1))
@@ -123,10 +145,10 @@ def main(argv):
         return 0
     if cmd == "run" and rest:
         return cmd_run(rest)
-    if cmd == "run-audit" and len(rest) >= 3:
-        # run-audit TOOLS_DIR AUDIT_JSON -- CMD...
-        tools_dir, audit_json, cmdv = rest[0], rest[1], rest[3:]
-        return cmd_run(cmdv, audit_out=(tools_dir, audit_json))
+    if cmd == "run-audit" and len(rest) >= 4:
+        # run-audit AUDIT_ROOT AUDIT_JSON RECEIPT_JSON -- CMD...
+        audit_root, audit_json, receipt, cmdv = rest[0], rest[1], rest[2], rest[4:]
+        return cmd_run(cmdv, audit_out=(audit_root, audit_json), receipt_path=receipt)
     print(__doc__)
     return 2
 

@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import tarfile
+import os
 import socket
 import sys
 import tempfile
@@ -649,6 +650,15 @@ class TestNetBound(unittest.TestCase):
             self.assertEqual(1, a["lines_with_external_hosts"])
             self.assertEqual([], a["rows"][0]["external"])
             self.assertIn("google.com", a["rows"][1]["external"])
+
+    def test_boundary_identity_records_facts(self):
+        import parity_netbound as nb
+        ident = nb.boundary_identity()
+        self.assertRegex(ident["net_ns"], r"^net:\[\d+\]$")
+        self.assertRegex(ident["pid_ns"], r"^pid:\[\d+\]$")
+        self.assertIn("lo", ident["interfaces"])  # recorded verbatim, not asserted lo-only
+        # this process is NOT inside the boundary during unit tests: its ns is the baseline
+        self.assertEqual(ident["net_ns"], os.readlink("/proc/self/ns/net"))
 
     def test_preflight_requires_external_refusal(self):
         import parity_netbound as nb
