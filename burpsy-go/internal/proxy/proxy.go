@@ -3577,6 +3577,17 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
+// h3EgressPossible reports whether an h3 leg could honor the configured egress (PR #363
+// review): QUIC dials the advertised endpoint directly, so an upstream proxy or the SOCKS
+// carrier would be silently bypassed. With either in force the Alt-Svc table is not ridden.
+func (s *Server) h3EgressPossible() bool {
+	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
+		return false
+	}
+	_, _, _, carrierSet := s.carrier().Configured()
+	return !carrierSet
+}
+
 // h3UncertainDeliveryError marks an HTTP/3 attempt that failed after its connection existed.
 // That is not proof the origin received or processed the request - delivery is uncertain and
 // unknowable from here - so the caller must not replay it over another carrier: an automatic
@@ -3603,11 +3614,28 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	// responses, the operator's kill switch on, and the request carriable - then the forward
 	// rides QUIC. A request h3 has nowhere to put is not an error here: nothing was attempted,
 	// and HTTP/1.1 carrying it is the ordinary truth of the row.
+	// forForwarding runs once, up front, so an h3 attempt and the h1 leg write the same
+	// bytes: the platform-auth headers it injects belong to the exchange whichever carrier
+	// rides it (PR #363 review).
+	forwardBytes := s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))
 	var h3Note *string
-	if tls && s.config.network.HTTP3AltSvcEnabled() {
+	// h3EgressPossible: QUIC dials the advertised endpoint directly, so with an upstream
+	// proxy or the SOCKS carrier in force the Alt-Svc table is not ridden at all - the h1
+	// leg, which honors both, carries the request (PR #363 review).
+	if tls && s.config.network.HTTP3AltSvcEnabled() && s.h3EgressPossible() {
 		if endpoint, ok := s.config.altSvc.h3Endpoint(host, port, time.Now()); ok {
-			result, attempted, err := s.forwardH3(requestData, host, port, endpoint)
+			result, attempted, err := s.forwardH3(forwardBytes, host, port, endpoint)
 			if err == nil {
+				// The h3 leg's response teaches the same lessons the h1 leg's would: an auth
+				// challenge is what lets the NEXT request authenticate, and an Alt-Svc
+				// advertisement refreshes the very table that sent this request over QUIC
+				// (PR #363 review).
+				if headEnd := requestHeadEnd(result.response); headEnd > 0 {
+					learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(result.response[:headEnd]))
+					if value, ok := httputil.HeaderValue(result.response[:headEnd], "alt-svc"); ok {
+						s.config.altSvc.learn(host, port, value, time.Now())
+					}
+				}
 				return result, nil
 			}
 			if attempted {
@@ -3630,7 +3658,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
-	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
+	if _, err := upstreamConn.Write(forwardBytes); err != nil {
 		return forwardResult{serverIP: serverIP}, err
 	}
 
@@ -3671,8 +3699,9 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 // is litigated.
 const h3AttemptTimeout = 3 * time.Second
 
-// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3). The
-// bool reports whether a QUIC attempt actually happened: a request the
+// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3).
+// requestData is already the for-forwarding bytes (platform auth applied), the same bytes the
+// h1 leg would write. The bool reports whether a QUIC attempt actually happened: a request the
 // carriability bar refuses is not an attempt, so its "failure" earns no fallback note - HTTP/1.1
 // was always going to carry it, and the row saying so needs no explanation. The TLS policy is
 // the proxy's own: the same verify switch, roots and version floor dialUpstreamTLS applies, over
@@ -3691,12 +3720,24 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 		}
 	}
 
+	// The host-resolution override the TCP legs honor applies to the endpoint dial (PR #363
+	// review): the override replaces the lookup, not the name - SNI and :authority stay the
+	// origin's, exactly as dialUpstreamFor keeps them.
+	dialAddress := endpoint
+	if n := s.config.network; n != nil {
+		if endpointHost, endpointPort, splitErr := net.SplitHostPort(endpoint); splitErr == nil {
+			if portNum, convErr := strconv.Atoi(endpointPort); convErr == nil {
+				dialAddress = n.Resolution.DialAddress(context.Background(), endpointHost, uint16(portNum))
+			}
+		}
+	}
+
 	// The dial and the exchange are bounded separately (PR #363 review): the handshake runs
 	// under h3AttemptTimeout, and a failure there means no request byte left this proxy, so
 	// the h1 fallback is honest. A failure after the connection exists leaves delivery
 	// uncertain - the origin may or may not have the request - so that error comes back
 	// typed and forwardRequest surfaces it instead of replaying automatically.
-	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, context.Background(), tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, context.Background(), tlsConfig, dialAddress, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
 		if maybeDelivered {
 			return forwardResult{}, true, &h3UncertainDeliveryError{err: err}
@@ -3707,7 +3748,7 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 	// call, so no earlier instant is honestly available here. Documented rather than faked.
 	result := forwardResult{
 		response:  resp,
-		serverIP:  endpoint,
+		serverIP:  dialAddress,
 		firstByte: time.Now(),
 		protocol:  core.ProtocolHTTP3,
 	}
