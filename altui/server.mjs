@@ -98,7 +98,23 @@ function proxy(req, res) {
   });
 }
 
+// Inbound Host gate, mirroring the backend's api_sameorigin.go rule (loopback
+// authority, any port). Without it the proxy answers a browser that reached it
+// via DNS rebinding (Host: attacker.example -> 127.0.0.1) and launders that
+// call's provenance when rewriting Host for the backend. Reads are gated here
+// too, not just mutations: a rebound page must not read API responses either.
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
+function hostAllowed(req) {
+  const h = req.headers.host;
+  return typeof h === 'string' && LOOPBACK_HOST.test(h.trim());
+}
+
 http.createServer((req, res) => {
+  if (!hostAllowed(req)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'refused: non-loopback Host (DNS rebinding guard)' }));
+    return;
+  }
   if (req.url.startsWith('/api/') || req.url === '/api' || req.url.startsWith('/reissue/')) proxy(req, res);
   else serveStatic(req, res);
 }).listen(PORT, '127.0.0.1', () => {
