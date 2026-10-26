@@ -78,4 +78,14 @@ st=$(awk '/^State:/ {print $2}' "/proc/$gc/status" 2>/dev/null); # a zombie is d
 check "grandchild is gone after the wrapper is signalled" gone "$([ -n "$st" ] && [ "$st" != Z ] && echo alive || echo gone)"
 kill -KILL "$gc" 2>/dev/null
 
+# 6. The signal-escalation killer must not keep the slot lock: after the wrapper exits, the lock
+# is free at once, not only when the orphaned grace sleep ends (PR #363 review, capped-run.sh:112).
+BURPSY_KILL_GRACE=5 "$cr" -- bash -c "touch $tmp/up6; exec sleep 30" 2>/dev/null &
+w=$!
+wait_for "$tmp/up6"; kill -TERM "$w"; reap "$w"
+check "signalled wrapper exits 143 (grace 5)" 143 "$status"
+flock -n "$tmp/burpsy-heavy.0.lock" true
+check "slot lock is free right after the wrapper exits" 0 "$?"
+sleep 5 # let the orphaned grace sleep end, so its KILL cannot land inside a later test
+
 exit $fail

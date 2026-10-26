@@ -109,7 +109,9 @@ on_signal() {
   if [ -z "$child" ]; then exit 143; fi
   signal_run TERM
   if [ -z "$killer" ]; then
-    ( sleep "$grace"; signal_run KILL ) >/dev/null 2>&1 </dev/null &
+    # Close the slot lock fd like the run subshell does: cleanup() kills this subshell, and an
+    # orphaned grace sleep that inherited {lockfd} would keep the slot held after the wrapper exits.
+    ( sleep "$grace"; signal_run KILL ) >/dev/null 2>&1 </dev/null {lockfd}>&- &
     killer=$!
   fi
 }
