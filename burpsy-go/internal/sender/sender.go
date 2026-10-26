@@ -1093,15 +1093,12 @@ func (s *Sender) SendRawOutcome(
 		keep = false
 	}
 	if keep {
-		// One capture per dial decision: this take's stamp check is its own decision, the
-		// fresh dial below is another — a configuration change landing during a failed
-		// pooled exchange governs the redial, as it did before the freeze
-		// (dial_identity.go).
-		takeID, terr := s.captureDialIdentity(ctx, host, port, useTLS)
-		if terr != nil {
-			return nil, SendOutcome{}, terr
-		}
-		if ic := s.pool.take(key, plan.wantH2, takeID.route); ic != nil {
+		// The take re-evaluates each candidate's OWN dial address against the live
+		// configuration (dial_identity.go): no capture, and no DNS lookup, on a pool
+		// hit. The fresh dial below captures its own identity — a configuration change
+		// landing during a failed pooled exchange governs the redial, as it did before
+		// the freeze.
+		if ic := s.pool.take(key, plan.wantH2, s.routeForDialAddr(host, useTLS)); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
@@ -1143,11 +1140,7 @@ func (s *Sender) SendRawOutcome(
 	sessionKey := ""
 	if opts.H2Sessions != nil && plan.wantH2 {
 		sessionKey = opts.H2SessionKey + "\x00" + formatAuthority(host, port, true) + "\x00" + opts.SNI
-		takeID, terr := s.captureDialIdentity(ctx, host, port, true)
-		if terr != nil {
-			return nil, SendOutcome{}, terr
-		}
-		if sess := opts.H2Sessions.take(sessionKey, takeID.route); sess != nil {
+		if sess := opts.H2Sessions.take(sessionKey, s.routeForDialAddr(host, true)); sess != nil {
 			opts.H2Sessions.reused.Add(1)
 			resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 			out := s.finish(host, port, useTLS, alpn.H2, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
@@ -1197,7 +1190,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		opts.H2Sessions.opened.Add(1)
 		kept = true
-		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialID.route}
+		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialID.route, dialAddr: dialID.dialAddr}
 		resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
 		return resp, out, err
@@ -1236,7 +1229,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route, dialAddr: dialID.dialAddr})
 		}
 		return resp, out, err
 	}
@@ -1436,7 +1429,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route, dialAddr: dialID.dialAddr})
 	} else {
 		conn.Close()
 	}

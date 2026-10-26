@@ -107,6 +107,61 @@ func (id dialIdentity) certSource() alpn.ClientCertSource {
 	return frozenCerts{cert: id.cert}
 }
 
+// certAnswer reads the client-certificate answer for host from cfg and renders its stamp
+// suffix: nothing when the question is never asked, a bare separator when it is asked and the
+// answer is "none", or the binding's leading-bytes hash. Capture and take re-evaluation share
+// it so both pin the same answer in the same form.
+func certAnswer(cfg *SenderConfig, host string, useTLS bool) (*tls.Certificate, string) {
+	if !useTLS || cfg == nil || cfg.ClientCerts == nil {
+		return nil, ""
+	}
+	cert := cfg.ClientCerts.For(host)
+	if cert == nil || len(cert.Certificate) == 0 {
+		return cert, "\x00"
+	}
+	sum := sha256.Sum256(cert.Certificate[0])
+	return cert, "\x00" + hex.EncodeToString(sum[:8])
+}
+
+// fingerprintAnswer is the client-fingerprint answer for host, shared by capture and take
+// re-evaluation for the same reason.
+func fingerprintAnswer(cfg *SenderConfig, host string, useTLS bool) alpn.Fingerprint {
+	if !useTLS || cfg == nil || cfg.TLSFingerprints == nil {
+		return ""
+	}
+	return cfg.TLSFingerprints.For(host)
+}
+
+// routeStamp assembles the fingerprint both sides of a pool exchange compare. One assembler
+// keeps the dial-time capture and the take-time re-evaluation byte-identical in form.
+func routeStamp(gen uint64, route string, fp alpn.Fingerprint) string {
+	return strconv.FormatUint(gen, 10) + "\x00" + route + "\x00" + string(fp)
+}
+
+// routeForDialAddr re-evaluates, under the configuration live right now, the stamp a
+// connection dialled to a given address would carry. Pool takes call it with the candidate's
+// OWN stored dial address: ForAddr on an already-resolved address never resolves, so a pool
+// hit does no DNS lookup even when a family filter makes resolution live - the one lookup
+// stays where it was before the identity capture existed, at dial time
+// (burpsy-react-ui-o388-predial-vs-dial). The generation and the config pointer are read once
+// under s.mu so a stamp cannot straddle a setter's swap; the upstream policy is read live,
+// under its own lock, exactly as routeState read it before the capture existed.
+func (s *Sender) routeForDialAddr(host string, useTLS bool) func(dialAddr string) string {
+	s.mu.RLock()
+	gen := s.netGen
+	cfg := s.config
+	s.mu.RUnlock()
+	_, suffix := certAnswer(cfg, host, useTLS)
+	fp := fingerprintAnswer(cfg, host, useTLS)
+	return func(dialAddr string) string {
+		route := "direct"
+		if s.upstream != nil {
+			route = s.upstream.ForAddr(dialAddr).Raw()
+		}
+		return routeStamp(gen, route+suffix, fp)
+	}
+}
+
 // captureDialIdentity reads every mutable dial input once, at one dial decision point, and
 // derives the pool stamp from the same values. It replaces routeState: the stamp's inputs
 // and the dial's inputs are one read by construction, not two reads hoped to land close
@@ -137,24 +192,10 @@ func (s *Sender) captureDialIdentity(ctx context.Context, host string, port uint
 		route = frozen.ForAddr(id.dialAddr).Raw()
 	}
 	id.wrap = (id.upstream != nil && !id.upstream.Empty()) || id.carrier != nil
-	if useTLS && cfg != nil {
-		if cfg.ClientCerts != nil {
-			if cert := cfg.ClientCerts.For(host); cert != nil {
-				id.cert = cert
-				if len(cert.Certificate) > 0 {
-					sum := sha256.Sum256(cert.Certificate[0])
-					route += "\x00" + hex.EncodeToString(sum[:8])
-				} else {
-					route += "\x00"
-				}
-			} else {
-				route += "\x00"
-			}
-		}
-		if cfg.TLSFingerprints != nil {
-			id.fingerprint = cfg.TLSFingerprints.For(host)
-		}
-	}
-	id.route = strconv.FormatUint(id.gen, 10) + "\x00" + route + "\x00" + string(id.fingerprint)
+	var suffix string
+	id.cert, suffix = certAnswer(cfg, host, useTLS)
+	route += suffix
+	id.fingerprint = fingerprintAnswer(cfg, host, useTLS)
+	id.route = routeStamp(id.gen, route, id.fingerprint)
 	return id, nil
 }

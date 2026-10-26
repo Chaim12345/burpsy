@@ -121,3 +121,64 @@ func TestARetryAfterAFailedPooledExchangeDialsTheCurrentConfiguration(t *testing
 			"the operator's new route: %q", resp)
 	}
 }
+
+// A pool hit must not resolve the host again. Before the dial identity existed a take read
+// only the live route state — no DNS — and the one lookup a family filter needs happened at
+// the dial. The first cut of the capture resolved the dial address for the TAKE's stamp too,
+// so every pooled send under a family filter paid a lookup the dial had already paid. The
+// take now re-evaluates the candidate's own stored dial address, which never resolves. The
+// resolver below counts its calls: two sends, the second a pooled hit, must leave the count
+// at one — and the IP-literal rule matching the resolver's answer must still be the rule
+// that carried the dial, proving the take's re-evaluation did not trade the lookup away for
+// hostname-keyed matching (which would never match an IP rule and silently pool nothing).
+func TestAPoolHitDoesNoDNSLookupWhenAFamilyFilterMakesResolutionLive(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(okHandler))
+	defer origin.Close()
+	_, port, err := hostPort(strings.TrimPrefix(origin.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := upstreamtest.StartConnect(t, "", "")
+
+	policy := upstream.NewPolicy()
+	if _, err := policy.Set("127.0.0.1", "http://"+proxy.Addr()); err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultSenderConfig()
+	config.Upstream = policy
+	config.Timeout = 5 * time.Second
+	s := NewSender(config)
+	n := s.Network()
+	n.HTTP1 = &HTTP1Settings{EnableKeepAlive: true}
+	n.Resolution.Family = FamilyIPv4
+	var lookups atomic.Int32
+	n.Resolution.Lookup = func(_ context.Context, host string) ([]string, error) {
+		lookups.Add(1)
+		return []string{"127.0.0.1"}, nil
+	}
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+	if _, err := s.SendRaw(context.Background(), "example.test", port, false, raw); err != nil {
+		t.Fatalf("first SendRaw: %v", err)
+	}
+	if _, err := s.SendRaw(context.Background(), "example.test", port, false, raw); err != nil {
+		t.Fatalf("second SendRaw: %v", err)
+	}
+	// Under a family filter every fresh dial resolves the host, so a count of one after two
+	// sends is itself the proof the second send rode the pool; the re-pooled connection below
+	// is the corroboration. (SendOutcome.ConnectionReused reports only h2 reuse - protocol.go.)
+	if got := lookups.Load(); got != 1 {
+		t.Errorf("two sends, the second pooled, resolved %d times, want 1 (the dial's) - a take must not resolve the host again", got)
+	}
+	if n := s.pool.idleCount(); n != 1 {
+		t.Errorf("after two sends %d connection(s) sit pooled, want 1 (the first send's, ridden and returned by the second)", n)
+	}
+	target := "127.0.0.1:" + strings.TrimPrefix(origin.URL, "http://127.0.0.1:")
+	if !proxy.Saw(target) {
+		t.Errorf("the rule for the resolver's answer did not carry the dial: proxy saw %v, want a CONNECT for %q",
+			proxy.Requests(), target)
+	}
+}

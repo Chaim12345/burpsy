@@ -55,7 +55,11 @@ type h2Session struct {
 	// route fingerprints the upstream rule and client certificate captured immediately before
 	// the session's dial (Sender.captureDialIdentity). A session whose route no longer matches the live
 	// configuration is never reusable again (burpsy-react-ui-h2sess-stamp).
-	route    string
+	route string
+	// dialAddr is the address the session's dial opened - the upstream policy's lookup key
+	// (ForAddr), carried so a take can re-evaluate the rule for it without resolving the
+	// host again (burpsy-react-ui-o388-predial-vs-dial).
+	dialAddr string
 	lastUsed time.Time
 }
 
@@ -91,7 +95,7 @@ func (p *H2Sessions) Close() {
 // take removes and returns the live session for key, or nil. Expired and unusable sessions are
 // closed. So is a session whose dial consumed a different route or client identity than the
 // live configuration asks for: keeping it would resurrect it the moment the route flipped back.
-func (p *H2Sessions) take(key string, route string) *h2Session {
+func (p *H2Sessions) take(key string, routeFor func(dialAddr string) string) *h2Session {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.evictLocked(time.Now())
@@ -100,7 +104,10 @@ func (p *H2Sessions) take(key string, route string) *h2Session {
 		return nil
 	}
 	delete(p.sessions, key)
-	if sess.route != route || !sess.cc.CanTakeNewRequest() {
+	// The session is re-evaluated under the live configuration FOR ITS OWN dial address, so a
+	// pool hit needs no DNS lookup even when a family filter makes resolution live
+	// (burpsy-react-ui-o388-predial-vs-dial).
+	if sess.route != routeFor(sess.dialAddr) || !sess.cc.CanTakeNewRequest() {
 		sess.cc.Close()
 		return nil
 	}

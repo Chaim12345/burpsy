@@ -52,7 +52,10 @@ type idleConn struct {
 	// A pooled connection whose route no longer matches the live configuration is never reusable
 	// again.
 	route string
-	timer *time.Timer
+	// dialAddr is the address the dial opened - the upstream policy's lookup key (ForAddr),
+	// carried so a take can re-evaluate the rule for it without resolving the host again.
+	dialAddr string
+	timer    *time.Timer
 }
 
 type http1Pool struct {
@@ -70,13 +73,18 @@ func poolKey(host string, port uint16, useTLS bool) string {
 
 // take returns the most recently kept connection for key, or nil. With needOfferedH2, only a
 // connection whose handshake already offered h2 qualifies.
-func (p *http1Pool) take(key string, needOfferedH2 bool, route string) *idleConn {
+func (p *http1Pool) take(key string, needOfferedH2 bool, routeFor func(dialAddr string) string) *idleConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := p.idle[key]
 	for i := len(list) - 1; i >= 0; i-- {
 		ic := list[i]
-		if ic.route != route {
+		// The candidate is re-evaluated under the live configuration FOR ITS OWN dial
+		// address: the rule that routes that address today must be the rule it was dialled
+		// under. Re-evaluating the candidate's address — rather than resolving the host
+		// again — is what keeps a pool hit free of DNS lookups when a family filter makes
+		// resolution live (burpsy-react-ui-o388-predial-vs-dial).
+		if ic.route != routeFor(ic.dialAddr) {
 			// Dialled under a different upstream rule or client identity than the live
 			// configuration asks for now. Keeping it would resurrect it the moment the
 			// route flipped back, so it is closed, not skipped.
