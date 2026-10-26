@@ -1502,7 +1502,47 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
-    "/api/intruder/attacks/{id}/{action}": {
+    "/api/intruder/attacks/{$}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * no task id: answers the 404 that names the expected form
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        post: operations["postApiIntruderAttacksBy$"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/intruder/attacks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * no action segment: answers the 404 that names the expected form
+         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        post: operations["postApiIntruderAttacksById"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/intruder/attacks/{id}/{action...}": {
         parameters: {
             query?: never;
             header?: never;
@@ -7494,12 +7534,70 @@ export interface operations {
             };
         };
     };
+    postApiIntruderAttacksBy$: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                $: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postApiIntruderAttacksById: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     postApiIntruderAttacksByIdByAction: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                action: string;
+                "action...": string;
                 id: string;
             };
             cookie?: never;

@@ -327,7 +327,9 @@ func Test_every_route_declares_a_risk_class_and_a_summary(t *testing.T) {
 			t.Errorf("route %q is a subtree pattern with no subPath, so it is tested at a URL nobody requests",
 				pattern)
 		}
-		if strings.Contains(pattern, "{") && spec.subPath == "" {
+		// "{$}" only anchors the exact trailing slash ("/api/x/{$}" is requested as "/api/x/"), so it
+		// is a literal URL and needs no subPath.
+		if strings.Contains(strings.TrimSuffix(pattern, "{$}"), "{") && spec.subPath == "" {
 			t.Errorf("route %q is a wildcard pattern with no subPath, so it is tested at a URL nobody requests",
 				pattern)
 		}

@@ -549,7 +549,16 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "every intruder attack this process is running, with its status; sends nothing",
 	},
-	"/api/intruder/attacks/{id}/{action}": {
+	"/api/intruder/attacks/{$}": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "no task id: answers the 404 that names the expected form",
+	},
+	"/api/intruder/attacks/{id}": {
+		// The no-action shape of the old subtree: kept so its "Expected ..." 404 body survives.
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "no action segment: answers the 404 that names the expected form",
+	},
+	"/api/intruder/attacks/{id}/{action...}": {
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1/stop",
 		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
 			"an attack past acting on answers 409",

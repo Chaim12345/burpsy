@@ -168,7 +168,15 @@ func (s *Server) handleIntruderAttacks(w http.ResponseWriter, r *http.Request) {
 // already over" (409) means the id was right and the action cannot apply. Collapsing them into one
 // success — the shape /api/sequencer/stop used to have before it grew a real loop to stop — is how a
 // stop button that does nothing reads as a stop button that worked.
+// handleIntruderAttackNoAction is the old handler's first answer, kept for the two shapes with no
+// action segment: "/api/intruder/attacks/" and "/api/intruder/attacks/{id}".
+func (s *Server) handleIntruderAttackNoAction(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "Expected /api/intruder/attacks/{task_id}/{pause|resume|stop}", http.StatusNotFound)
+}
+
 func (s *Server) handleIntruderAttackAction(w http.ResponseWriter, r *http.Request) {
+	// {action...} keeps the old Cut-at-first-slash contract: "stop/" and "stop/extra" arrive as the
+	// action text, so their "Unknown action" bodies are the ones the old subtree handler wrote.
 	idStr, action := r.PathValue("id"), r.PathValue("action")
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {

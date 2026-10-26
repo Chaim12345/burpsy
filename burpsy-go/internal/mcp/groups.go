@@ -365,7 +365,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "intruder_control", group: groupFuzzing,
 		short: "Pauses, resumes or stops an attack, and uploads a payload file.",
-		ops:   []string{"POST /api/intruder/attacks/{id}/{action}", "POST /api/intruder/payload-files"},
+		ops:   []string{"POST /api/intruder/attacks/{id}/{action...}", "POST /api/intruder/attacks/{id}", "POST /api/intruder/attacks/{$}", "POST /api/intruder/payload-files"},
 	},
 	{
 		name: "authz", group: groupFuzzing,

@@ -212,6 +212,21 @@ func TestIntruderAttacksListsARunningAttackAndStopEndsIt(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// On a live attack, an action the handler does not know answers with its text, whole: the
+	// {action...} remainder keeps "pause/" and "pause/extra" as the old Cut did.
+	for action, want := range map[string]string{
+		"frobnicate":  `Unknown action "frobnicate"`,
+		"pause/":      `Unknown action "pause/"`,
+		"pause/extra": `Unknown action "pause/extra"`,
+		"":            `Unknown action ""`,
+	} {
+		rec := httptest.NewRecorder()
+		srv.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/intruder/attacks/%d/%s", task.ID, action), nil))
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("live attack, action %q = %d %q, want 404 containing %s", action, rec.Code, strings.TrimSpace(rec.Body.String()), want)
+		}
+	}
+
 	// Pause, then stop while paused. A pause that could not be stopped would leave the driver in its
 	// wait forever.
 	if code, _ := attackAction(t, srv, task.ID, "pause"); code != http.StatusOK {
@@ -242,24 +257,30 @@ func TestIntruderAttacksListsARunningAttackAndStopEndsIt(t *testing.T) {
 
 func TestIntruderAttackActionRefusals(t *testing.T) {
 	srv := newTestServer()
+	// Each refusal keeps the body the old subtree handler wrote (burpsy-react-ui-fxxm): a caller reads
+	// these to tell "wrong id" from "wrong shape", so the statuses alone do not preserve the contract.
+	const expected = "Expected /api/intruder/attacks/{task_id}/{pause|resume|stop}"
 	cases := []struct {
 		path string
 		code int
+		body string
 		why  string
 	}{
-		{"/api/intruder/attacks/9999/stop", http.StatusNotFound, "an unknown task id"},
-		{"/api/intruder/attacks/notanumber/stop", http.StatusNotFound, "a non-numeric id"},
-		{"/api/intruder/attacks/1", http.StatusNotFound, "no action segment"},
-		{"/api/intruder/attacks/1/frobnicate", http.StatusNotFound, "an unknown action"},
-		{"/api/intruder/attacks/1/stop/extra", http.StatusNotFound, "a segment after the action"},
-		{"/api/intruder/attacks/1/stop/", http.StatusNotFound, "a trailing slash after the action"},
+		{"/api/intruder/attacks/9999/stop", http.StatusNotFound, "No running attack with that task id", "an unknown task id"},
+		{"/api/intruder/attacks/notanumber/stop", http.StatusNotFound, "Invalid task id", "a non-numeric id"},
+		{"/api/intruder/attacks/1", http.StatusNotFound, expected, "no action segment"},
+		{"/api/intruder/attacks/", http.StatusNotFound, expected, "no task id"},
+		{"/api/intruder/attacks/1/frobnicate", http.StatusNotFound, "No running attack with that task id", "an unknown action on an unknown id"},
+		{"/api/intruder/attacks/1/stop/extra", http.StatusNotFound, "No running attack with that task id", "a segment after the action"},
+		{"/api/intruder/attacks/1/stop/", http.StatusNotFound, "No running attack with that task id", "a trailing slash after the action"},
+		{"/api/intruder/attacks/1/", http.StatusNotFound, "No running attack with that task id", "an empty action"},
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(http.MethodPost, tc.path, nil)
 		rec := httptest.NewRecorder()
 		srv.mux.ServeHTTP(rec, req)
-		if rec.Code != tc.code {
-			t.Errorf("%s: %s = %d, want %d", tc.why, tc.path, rec.Code, tc.code)
+		if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.body) {
+			t.Errorf("%s: %s = %d %q, want %d containing %q", tc.why, tc.path, rec.Code, strings.TrimSpace(rec.Body.String()), tc.code, tc.body)
 		}
 	}
 	// An empty list is an empty array, not null: a client must not be able to read a missing field as
