@@ -8,7 +8,14 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { TOOL_TABS_STORAGE_KEY, clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./tool-tabs";
+import {
+ TOOL_TABS_STORAGE_KEY,
+ clearHiddenToolTabs,
+ neighbourTab,
+ orderToolTabs,
+ readHiddenToolTabs,
+ writeHiddenToolTabs,
+} from "./tool-tabs";
 
 const store = new Map<string, string>();
 
@@ -103,5 +110,23 @@ describe("hidden tool tabs", () => {
   } finally {
    target.localStorage = previous;
   }
+ });
+});
+
+describe("neighbourTab (next/previous-tab chords follow the saved order)", () => {
+ const tabs = [{ id: "a" }, { id: "b" }, { id: "c" }];
+ const dragged = orderToolTabs(tabs, ["c", "a", "b"]);
+ test("walks the order it is given, not the default one", () => {
+  expect(neighbourTab(dragged, "c", 1)?.id).toBe("a");
+  expect(neighbourTab(dragged, "a", 1)?.id).toBe("b");
+  expect(neighbourTab(tabs, "c", 1)?.id).toBe("a");
+  expect(neighbourTab(tabs, "a", 1)?.id).toBe("b");
+  expect(neighbourTab(dragged, "a", -1)?.id).toBe("c");
+ });
+ test("wraps both ways and says nothing for an unknown tab", () => {
+  expect(neighbourTab(dragged, "b", 1)?.id).toBe("c");
+  expect(neighbourTab(dragged, "c", -1)?.id).toBe("b");
+  expect(neighbourTab(dragged, "zzz", 1)).toBeNull();
+  expect(neighbourTab([], "a", 1)).toBeNull();
  });
 });
