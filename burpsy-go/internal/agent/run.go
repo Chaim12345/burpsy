@@ -399,11 +399,26 @@ func (r *Run) loop(ctx context.Context, pl Planner) {
 				r.append(Event{Kind: EventRefused, Message: "spawn refused: " + err.Error()})
 			}
 		}
+		truncated := false
 		for _, c := range prop.Calls {
 			if ctx.Err() != nil {
 				break
 			}
+			// MaxSteps binds within a proposal too: a single model reply
+			// must not be able to run more calls than the budget allows.
+			r.mu.Lock()
+			spent := len(r.steps)
+			r.mu.Unlock()
+			if spent >= r.maxSteps() {
+				truncated = true
+				break
+			}
 			r.runCall(ctx, turn, c)
+		}
+		if truncated {
+			r.waitChildren(ctx)
+			r.finish(StatusLimit, "")
+			return
 		}
 		if prop.AwaitChildren {
 			r.setStatus(StatusAwaitingChildren)
