@@ -196,6 +196,10 @@ type Supervisor struct {
 	// ChildPlanner builds the planner for a sub-task; nil reuses the parent's.
 	ChildPlanner func(parent Task, req SpawnRequest) Planner
 	MaxChildren  int
+	// StopGrace bounds how long a run that is being stopped waits for its children to finish. The
+	// Invoker, Planner and Approver contracts say they return when ctx ends, but a child whose
+	// implementation ignores that must not make its parent's stop hang; zero means 5 seconds.
+	StopGrace time.Duration
 }
 
 func (s *Supervisor) now() time.Time {
