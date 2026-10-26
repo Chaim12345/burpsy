@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -106,5 +107,20 @@ func TestACappedVariantIsCountedCoveredNotAbandoned(t *testing.T) {
 	}
 	if ran != 1 {
 		t.Errorf("the check ran %d times across two variants under a cap of 1, want 1", ran)
+	}
+}
+
+// The default is unlimited: on a single-URL API every distinct JSON operation is its own variant,
+// so a default cap would silently stop auditing every operation after it.
+func TestTheDefaultAuditConfigHasNoVariantCap(t *testing.T) {
+	cfg := DefaultAuditConfig()
+	if cfg.MaxUnitVariantsPerUnit != 0 {
+		t.Fatalf("default MaxUnitVariantsPerUnit = %d, want 0 (unlimited)", cfg.MaxUnitVariantsPerUnit)
+	}
+	run := newAuditRun(cfg)
+	for i := range 40 {
+		if run.unitVariantCapped(fmt.Sprintf("h/graphql#fp%d", i)) {
+			t.Fatalf("operation %d of one GraphQL endpoint capped under the default config", i)
+		}
 	}
 }

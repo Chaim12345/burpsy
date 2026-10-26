@@ -579,7 +579,10 @@ type AuditConfig struct {
 	// region with an unrecognized name re-mints a unit per capture, and without a bound the
 	// re-dispatch is limited only by capture count. Variants beyond the cap are counted
 	// AlreadyCovered (the scope's checks DID cover this endpoint this run) and the unit is
-	// reported in AuditOutcome.UnitsVariantCapped. 0 = unlimited, the pre-W4 behaviour.
+	// reported in AuditOutcome.UnitsVariantCapped. 0 = unlimited, the default: the shape
+	// fingerprint hashes a JSON body byte-exact, so on a single-URL API (GraphQL, JSON-RPC) every
+	// operation is its own variant and any cap silently stops auditing the operations after it.
+	// An operator who sets a cap opts into that trade.
 	MaxUnitVariantsPerUnit uint32
 	// PauseSessionAfterFailedItems is Burp's `pause_task_failed_audit_item_count`.
 	PauseSessionAfterFailedItems uint32
@@ -1008,7 +1011,7 @@ func DefaultAuditConfig() AuditConfig {
 		MaxRequests:                           OptUint32{},
 		ConsecutiveCheckFailuresToAbandonUnit: 2,
 		ConsecutiveUnitFailuresToFailItem:     2,
-		MaxUnitVariantsPerUnit:                16,
+		MaxUnitVariantsPerUnit:                0,
 		PauseSessionAfterFailedItems:          0,
 		PauseSessionAtFailedItemPercentage:    0,
 	}
