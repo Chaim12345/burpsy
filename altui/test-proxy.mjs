@@ -82,7 +82,16 @@ r = await call({ host: `127.0.0.1:${PROXY_PORT}`, method: 'POST', path: '/api/re
 check('absent Origin passed through (no provenance invented)', r.status === 200 && lastSeen?.origin === undefined);
 // 8. no CORS headers ever
 check('no CORS headers added', r.headers['access-control-allow-origin'] === undefined);
-// 9. SSE streams (first frame arrives before response end)
+// 9. malformed URL: 400, proxy survives
+r = await call({ host: `127.0.0.1:${PROXY_PORT}`, path: '/%' });
+check('malformed URL 400 not crash', r.status === 400);
+r = await call({ host: `127.0.0.1:${PROXY_PORT}` });
+check('proxy alive after malformed URL', r.status === 200);
+// 10. localhost Origin accepted on mutation (fixed loopback origin set)
+lastSeen = null;
+r = await call({ host: `localhost:${PROXY_PORT}`, origin: `http://localhost:${PROXY_PORT}`, method: 'POST', path: '/api/repeater/send' });
+check('localhost Origin accepted', r.status === 200 && lastSeen?.origin === `http://127.0.0.1:${BACKEND_PORT}`);
+// 11. SSE streams (first frame arrives before response end)
 const sse = await new Promise((resolve) => {
   const t0 = Date.now();
   const req = http.get({ host: '127.0.0.1', port: PROXY_PORT, path: '/api/events', headers: { host: `127.0.0.1:${PROXY_PORT}` } }, (res) => {

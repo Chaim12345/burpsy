@@ -1,5 +1,5 @@
 import { renderMap, refreshMap } from './views/map.js';
-import { renderProbe } from './views/probe.js';
+import { renderProbe, loadExchange } from './views/probe.js';
 import { renderProve, refreshProve } from './views/prove.js';
 import { api } from './api.js';
 
@@ -27,6 +27,11 @@ function switchView(name) {
 
 document.querySelectorAll('.rail-item').forEach((b) => {
   b.onclick = () => { if (!b.classList.contains('rail-held')) switchView(b.dataset.view); };
+});
+
+window.addEventListener('altui:probe-load', (ev) => {
+  switchView('probe');
+  loadExchange(ev.detail?.exchange);
 });
 
 window.addEventListener('altui:refresh-map', () => { if (rendered.has('map')) refreshMap(); if (rendered.has('prove')) refreshProve(); });

@@ -1,5 +1,5 @@
-import { api, esc, fmtTime, fmtBytes, ConfirmRequired, mintConfirm } from '../api.js';
-import { toast, confirmDialog, hlDot, sevChip } from '../components.js';
+import { api, esc, fmtTime, fmtBytes } from '../api.js';
+import { toast, runGated, hlDot, sevChip } from '../components.js';
 
 // MAP — what do we know: live sitemap tree + HTTP history with filters.
 
@@ -155,6 +155,7 @@ function showDrawer(ex, req, resp) {
       <span class="mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ex.host)}:${ex.port}${esc(ex.path)}</span>
       <span class="st st-${String(ex.status || '')[0] || ''}">${ex.status ?? '—'}</span>
       <button class="act" id="dx-probe">Send to Probe</button>
+      <button class="act" id="dx-scope" title="Add this host:port to the engagement scope (needs your explicit confirm)">Add to scope</button>
       <button class="act" id="dx-close">✕</button>
     </div>
     <div class="drawer-body">
@@ -198,16 +199,16 @@ function showDrawer(ex, req, resp) {
   d.querySelector('#dx-save').onclick = async () => {
     const body = { highlight: d.querySelector('#dx-hl').value, notes: d.querySelector('#dx-notes').value };
     try {
-      await api.patch(`/api/exchange/${ex.id}`, body);
+      await runGated('PATCH', `/api/exchange/${ex.id}`, body);
       toast('annotation saved');
       refreshMap();
-    } catch (e) {
-      if (e instanceof ConfirmRequired) {
-        const ok = await confirmDialog({ challenge: e.challenge, method: 'PATCH', url: `/api/exchange/${ex.id}`, body });
-        if (!ok) return;
-        try { const tok = await mintConfirm(e.challenge.route, 'PATCH', `/api/exchange/${ex.id}`, body); await e.retry(tok.token); toast('annotation saved'); refreshMap(); }
-        catch (e2) { toast(e2.message, true); }
-      } else toast(e.message, true);
-    }
+    } catch (e) { toast(e.message, true); }
+  };
+  d.querySelector('#dx-scope').onclick = async () => {
+    const body = { action: 'include', pattern: ex.host, port: ex.port };
+    try {
+      const r = await runGated('POST', '/api/scope', body);
+      if (r !== undefined) toast(`${ex.host}:${ex.port} added to scope`);
+    } catch (e) { toast(e.message, true); }
   };
 }

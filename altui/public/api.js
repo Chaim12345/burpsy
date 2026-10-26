@@ -40,7 +40,7 @@ async function rawCall(method, url, body, extraHeaders = {}) {
 // Mint a one-time confirm token for an exact call. Called only from the
 // confirmation dialog's human click handler.
 export async function mintConfirm(route, method, url, body) {
-  const res = await fetch(`${route}/confirm`, {
+  const res = await fetch(`${route.replace(/\/+$/, '')}/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ method, url, body: body === undefined ? '' : (typeof body === 'string' ? body : JSON.stringify(body)) }),

@@ -28,7 +28,7 @@ export async function refreshProve() {
 function drawCounts() {
   const box = document.getElementById('pv-counts');
   if (!box) return;
-  const order = ['critical', 'high', 'medium', 'low', 'info'];
+  const order = ['critical', 'high', 'medium', 'low', 'informational']; // 'info' is a duplicate alias of 'informational' (api_capture.go) - showing both would double-count
   box.innerHTML = order
     .filter((k) => state.counts[k])
     .map((k) => `${sevChip(k[0].toUpperCase() + k.slice(1))} <span class="mut">${state.counts[k]}</span>`)

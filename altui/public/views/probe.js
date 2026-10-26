@@ -1,5 +1,5 @@
-import { api, esc, fmtBytes, ConfirmRequired, mintConfirm } from '../api.js';
-import { toast, confirmDialog } from '../components.js';
+import { api, esc, fmtBytes } from '../api.js';
+import { toast, runGated } from '../components.js';
 
 // PROBE — poke it and see: a request workbench (repeater) with an explicit
 // dry-run that shows the scope verdict before any byte leaves.
@@ -8,6 +8,11 @@ const state = {
   target: 'http://127.0.0.1:28099',
   request: 'GET / HTTP/1.1\r\nHost: 127.0.0.1:28099\r\n\r\n',
   response: null, sending: false,
+  // Exact-replay fidelity: when a stored exchange is loaded and the editor is
+  // untouched, sends go by from_exchange (the backend replays the stored octets).
+  // The textarea is text: LF and UTF-8 only, so a typed/edited send is the
+  // labeled text path, never a silent corruption of the original bytes.
+  fromExchange: null, loadedText: null, binaryLoaded: false,
 };
 
 export async function renderProbe(el) {
@@ -32,29 +37,43 @@ export async function renderProbe(el) {
     </div>`;
   const editor = el.querySelector('#p-editor');
   editor.value = state.request.replace(/\r\n/g, '\n');
-  editor.oninput = () => { state.request = editor.value; updateReqMeta(); };
+  editor.oninput = () => { state.request = editor.value; state.binaryLoaded = false; updateReqMeta(); };
   el.querySelector('#p-target').oninput = (e) => { state.target = e.target.value; };
   el.querySelector('#p-send').onclick = () => doSend(false);
   el.querySelector('#p-dry').onclick = () => doSend(true);
   updateReqMeta();
 
-  window.addEventListener('altui:probe-load', async (ev) => {
-    const id = ev.detail?.exchange;
-    if (id == null) return;
+}
+
+// Called by app.js after the Probe view is rendered; loads a stored exchange.
+export async function loadExchange(id) {
+  const editor = document.getElementById('p-editor');
+  if (id == null || !editor) return;
+  {
     try {
       const ex = await api.get(`/api/exchange/${id}`);
-      const msg = await api.get(`/api/message/${ex.request}`);
+      const msg = await api.get(`/api/message/${ex.request}?max_bytes=65536`);
       state.target = `http${ex.tls ? 's' : ''}://${ex.host}:${ex.port}`;
-      state.request = msg.text;
+      const text = msg.text != null ? msg.text : (msg.head || '') + '\r\n\r\n' + (msg.window_text || '');
+      state.fromExchange = id;
+      state.binaryLoaded = msg.window_utf8 === false;
+      if (state.binaryLoaded) {
+        // Non-UTF-8 request bytes cannot survive a textarea. Show a placeholder;
+        // Send replays the exact stored octets via from_exchange.
+        state.loadedText = `[binary request #${id}: ${msg.len ?? '?'} bytes - Send replays the exact stored bytes; typing here switches to the text path]`;
+        state.request = '';
+      } else {
+        state.loadedText = text.replace(/\r\n/g, '\n');
+        state.request = text;
+      }
       document.querySelector('#p-target').value = state.target;
-      editor.value = msg.text;
+      editor.value = state.loadedText;
       state.response = null;
       drawResp();
       updateReqMeta();
-      document.querySelector('[data-view=probe]').click();
       toast(`exchange #${id} loaded into Probe`);
     } catch (e) { toast(`load exchange: ${e.message}`, true); }
-  });
+  }
 }
 
 function updateReqMeta() {
@@ -71,11 +90,19 @@ async function doSend(dry) {
   if (state.sending) return;
   const target = state.target.trim();
   if (!target) { toast('set a target first, e.g. http://127.0.0.1:28099', true); return; }
-  const body = { request: normalizedRaw(), target, dry_run: dry };
+  const editor = document.getElementById('p-editor');
+  const pristine = state.fromExchange != null && editor.value === state.loadedText;
+  const body = pristine
+    ? { from_exchange: state.fromExchange, target, dry_run: dry }
+    : { request: normalizedRaw(), target, dry_run: dry };
+  if (!pristine && !dry) {
+    toast('text path: LF normalized to CRLF; non-UTF-8 bytes are not representable here', false);
+  }
   state.sending = true;
   document.getElementById('p-send').disabled = true;
   try {
-    const r = await api.post('/api/repeater/send', body);
+    const r = await runGated('POST', '/api/repeater/send', body);
+    if (r === undefined) return; // human declined the confirm dialog
     if (dry) {
       const v = document.getElementById('p-verdict');
       v.style.display = '';
@@ -88,21 +115,9 @@ async function doSend(dry) {
       window.dispatchEvent(new CustomEvent('altui:refresh-map'));
     }
   } catch (e) {
-    if (e instanceof ConfirmRequired) {
-      const ok = await confirmDialog({ challenge: e.challenge, method: 'POST', url: '/api/repeater/send', body });
-      if (ok) {
-        try {
-          const tok = await mintConfirm(e.challenge.route, 'POST', '/api/repeater/send', body);
-          const r = await e.retry(tok.token);
-          state.response = r; drawResp();
-          window.dispatchEvent(new CustomEvent('altui:refresh-map'));
-        } catch (e2) { toast(e2.message, true); }
-      }
-    } else {
-      toast(e.message, true);
-      const v = document.getElementById('p-verdict');
-      v.style.display = ''; v.className = 'verdict no'; v.textContent = `✗ ${e.message}`;
-    }
+    toast(e.message, true);
+    const v = document.getElementById('p-verdict');
+    v.style.display = ''; v.className = 'verdict no'; v.textContent = `✗ ${e.message}`;
   } finally {
     state.sending = false;
     document.getElementById('p-send').disabled = false;

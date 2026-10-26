@@ -41,7 +41,14 @@ const HOP_BY_HOP = new Set([
 ]);
 
 function serveStatic(req, res) {
-  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  let p;
+  try {
+    p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'malformed URL' }));
+    return;
+  }
   if (p === '/') p = '/index.html';
   const file = normalize(join(ROOT, p));
   if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
@@ -67,9 +74,15 @@ function proxy(req, res) {
   // Origin to the backend authority so the pair matches there. A foreign Origin is
   // refused here rather than laundered; an absent Origin (curl, non-browser) passes
   // through untouched exactly as it would hitting the backend directly.
-  const myOrigin = `http://127.0.0.1:${PORT}`;
+  // Fixed allowlist of loopback origins for THIS console's configured port -
+  // never derived from the request's Host header, which an attacker controls.
+  const myOrigins = new Set([
+    `http://127.0.0.1:${PORT}`,
+    `http://localhost:${PORT}`,
+    `http://[::1]:${PORT}`,
+  ]);
   if (headers.origin !== undefined) {
-    if (headers.origin !== myOrigin) {
+    if (!myOrigins.has(headers.origin)) {
       res.writeHead(403, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'cross-origin call refused by altui proxy' }));
       return;
