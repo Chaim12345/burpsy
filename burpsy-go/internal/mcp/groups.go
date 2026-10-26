@@ -60,7 +60,7 @@ var groupedTools = []groupSpec{
 		short: "Reads captured proxy traffic: the history list, one exchange, a stored message, a suite-wide search, counters, the Target analyzer, and a Repeater tab's history as one export.",
 		ops: []string{
 			"GET /api/history", "GET /api/message/{id}", "GET /api/search", "GET /api/stats",
-			"GET /api/engagement/", "GET /api/exchange/in-browser/{id}", "GET /api/target/analyze",
+			"GET /api/engagement/{kind}", "GET /api/exchange/in-browser/{id}", "GET /api/target/analyze",
 			"POST /api/repeater/history-export",
 		},
 	},
@@ -500,7 +500,7 @@ var notExposed = map[string]string{
 	"GET /ca.crt": "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
 	"GET /api/engagement/clickbandit.js": "the Clickbandit script served as text/javascript for the operator to paste into a " +
 		"browser's developer console — an asset that runs in a browser, not an operation",
-	"GET /reissue/": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
+	"GET /reissue/{token}": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
 	"GET /api/events": "the SSE change stream: it never ends, so it cannot be one tool result. The transport " +
 		"itself is the stream's agent-side consumer",
 	"GET /api/exchanges/":     "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
