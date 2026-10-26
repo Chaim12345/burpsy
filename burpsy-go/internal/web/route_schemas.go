@@ -70,7 +70,7 @@ var routeSchemas = map[string]opSchema{
 	}},
 	"GET /api/crawl/live": {query: []queryParam{{name: "task", kind: "integer", desc: "the crawl task to watch"}}},
 	"GET /api/discovery":  {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
-	"GET /api/engagement/{kind}": {query: []queryParam{
+	"GET /api/engagement/{kind...}": {query: []queryParam{
 		{name: "host", kind: "string", desc: "limit the search to one host"},
 		{name: "q", kind: "string", desc: "the search term"},
 		{name: "limit", kind: "integer", desc: "most rows to return"},

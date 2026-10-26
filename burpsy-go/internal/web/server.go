@@ -1058,8 +1058,7 @@ func (s *Server) setupRoutes() {
 	s.route("/api/skills", s.handleSkills)
 	// A skill name never contains "/" (^[a-z0-9][a-z0-9_-]{0,63}$), so {name} is the whole remainder;
 	// the "{name}/" twin keeps the trailing-slash form the old subtree pattern served (burpsy-react-ui-fxxm).
-	s.route("/api/skills/{name}", s.handleSkill)
-	s.route("/api/skills/{name}/{$}", s.handleSkill)
+	s.route("/api/skills/{rest...}", s.handleSkill)
 	s.route("/api/skills/disabled", s.handleSkillsDisabled)
 	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
 	s.route("/api/datasets/", s.handleDatasets)
@@ -1127,7 +1126,7 @@ func (s *Server) setupRoutes() {
 	// Engagement tools over the site map (burpsy-react-ui-1s07): Find comments, Find scripts
 	// and Find references, Burp's three site-map searches, computed over stored responses.
 	// One subtree pattern because the kind IS the path's last segment.
-	s.route("/api/engagement/{kind}", s.handleEngagement)
+	s.route("/api/engagement/{kind...}", s.handleEngagement)
 	s.route("/api/engagement/clickbandit.js", s.handleClickbandit)
 	s.route("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
@@ -1146,7 +1145,7 @@ func (s *Server) setupRoutes() {
 	// browser opens, and a URL the operator types should not look like a console API route.
 	// It is registered last so it cannot shadow an /api path, and its handler spends a token
 	// before anything else, so nothing here is reachable without one (burpsy-react-ui-7rk0).
-	s.route("/reissue/{token}", s.handleBrowserReissueFetch)
+	s.route("/reissue/{token...}", s.handleBrowserReissueFetch)
 	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
 	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a

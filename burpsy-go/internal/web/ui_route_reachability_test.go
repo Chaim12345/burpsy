@@ -64,7 +64,7 @@ var uiRouteExempt = map[string]string{
 		"SERVER half now, with this reason, is exactly what the exemption exists for — the route is " +
 		"operator-facing by design (the operator's right-click) while the console string lands with " +
 		"the menu work. Remove this exemption when the UI half wires the action.",
-	"/reissue/{token}": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
+	"/reissue/{token...}": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
 		"(Burp's request-in-browser dialog hands the URL to the operator the same way — " +
 		"repeatRequestInBrowserRenderUrlTxtField); the SPA never fetches this path, it only " +
 		"DISPLAYS it, and the reachability test scans for fetch call sites",
@@ -79,10 +79,8 @@ var uiRouteExempt = map[string]string{
 		"follows the store, and the console's own Add to site map uses POST /api/sitemap",
 	"/api/datasets/": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
 		"datasets MCP tool, burpsy-react-ui-co88); the console pages each list through its own route",
-	"/api/skills/{name}": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
+	"/api/skills/{rest...}": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
 		"console's Skills card lists and switches skills through /api/skills and /api/skills/disabled",
-	"/api/skills/{name}/{$}": "the trailing-slash twin of /api/skills/{name}, kept because the old subtree pattern served it; " +
-		"MCP prompts/get uses the slashless form",
 	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
 		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
 		"in_scope verdict on every history row and edits the rules through /api/scope",

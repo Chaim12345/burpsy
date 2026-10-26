@@ -335,7 +335,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
 	},
-	"/api/engagement/{kind}": {
+	"/api/engagement/{kind...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
 	},
@@ -1194,14 +1194,9 @@ var manifest = map[string]route{
 		summary: "the skill library from -skills DIR: each skill, the tools it calls, whether it is available " +
 			"and disabled for this project, and every refused manifest with why",
 	},
-	"/api/skills/{name}": {
+	"/api/skills/{rest...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "none",
 		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
-	},
-	"/api/skills/{name}/{$}": {
-		// The trailing-slash twin of /api/skills/{name}: the old subtree pattern served it.
-		methods: []string{"GET"}, risk: riskRead, subPath: "none",
-		summary: "one skill with its prompt rendered from ?argument=value (trailing-slash form of /api/skills/{name})",
 	},
 	"/api/skills/disabled": {
 		// riskLocal: a project setting naming which loaded skills are switched off; sends nothing.
@@ -1350,7 +1345,7 @@ var manifest = map[string]route{
 	"/ca.crt": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the CA certificate the proxy signs leaves with, so a browser can be told to trust it",
-	}, "/reissue/{token}": {
+	}, "/reissue/{token...}": {
 		// The minted URL's fetch surface, outside /api on purpose: it is what the operator
 		// pastes into their browser, and it spends a token before anything else. riskEgress
 		// because the fetch is the send; the token is the operator's own mint.

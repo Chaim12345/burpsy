@@ -4,7 +4,7 @@ package web
 //
 //	GET /api/skills            the library: every skill, whether it is available and disabled, and
 //	                           every manifest that was refused, with why
-//	GET /api/skills/{name}     one skill with its prompt rendered from ?argument=value
+//	GET /api/skills/{rest...}  one skill with its prompt rendered from ?argument=value
 //	PUT /api/skills/disabled   {"disabled":[names]} — which skills this PROJECT turns off
 //
 // The directory is named by the operator at start (-skills DIR); no route takes a path. The disabled
@@ -104,7 +104,9 @@ type skillPromptView struct {
 }
 
 func (s *Server) handleSkill(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	// {rest...} is the old subtree remainder, so the bare collection slash, a trailing slash and
+	// a nested path keep the name (and the "No skill named ..." body) the TrimPrefix form gave.
+	name := strings.Trim(r.PathValue("rest"), "/")
 	sk, ok := s.skills.Get(name)
 	if !ok {
 		http.Error(w, "No skill named "+name+" is loaded", http.StatusNotFound)
