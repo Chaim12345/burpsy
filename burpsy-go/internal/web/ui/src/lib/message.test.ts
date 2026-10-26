@@ -536,6 +536,18 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   expect(prettyMessage(compacted)).toBe(pretty);
  });
 
+ test("Pretty markup under a CRLF head breaks with CRLF, so the editor shows it as lines", () => {
+  // The editor splits a CRLF message on CRLF only (lib/editor-eol.ts): bare LF breaks would leave the
+  // whole pretty body on one line. The text node's own LF is the server's byte and stays LF.
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html><body><p>hi\nthere</p></body></html>"].join("\r\n");
+  const pretty = prettyMessage(HTML);
+  const body = parseMessage(pretty).body;
+  expect(body.split("\r\n").length).toBe(5);
+  expect(body).toContain("hi\n");
+  expect(body).not.toContain("hi\r\n");
+  expect(parseMessage(compactMessage(pretty)).body).toBe(parseMessage(compactMessage(prettyMessage(HTML.replace(/\r\n/g, "\n")))).body);
+ });
+
  test("a body with nothing formattable passes through untouched", () => {
   expect(compactMessage(FORM)).toBe(FORM);
  });
