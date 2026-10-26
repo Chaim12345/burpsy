@@ -3677,18 +3677,23 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 
 	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
 	defer cancel()
-	resp, err := httputil.RoundTripH3(ctx, tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	resp, truncated, err := httputil.RoundTripH3(ctx, tlsConfig, endpoint, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
 		return forwardResult{}, true, err
 	}
 	// firstByte is the attempt's completion: RoundTripH3 reads the body inside the one call, so
 	// no earlier instant is honestly available here. Documented rather than faked.
-	return forwardResult{
+	result := forwardResult{
 		response:  resp,
 		serverIP:  endpoint,
 		firstByte: time.Now(),
 		protocol:  core.ProtocolHTTP3,
-	}, true, nil
+	}
+	if truncated {
+		note := fmt.Sprintf("the HTTP/3 response body passed the %d-byte cap and was cut there", httputil.MaxResponseBodyBytes)
+		result.note = &note
+	}
+	return result, true, nil
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting

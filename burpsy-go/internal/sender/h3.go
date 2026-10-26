@@ -74,7 +74,7 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	// and the proxy's Alt-Svc leg, so the mechanics are reviewed once. An endpoint that does not
 	// answer QUIC surfaces as a dial or handshake failure here - the strict answer, because the
 	// caller asked for h3 and h3 did not happen.
-	resp, err := httputil.RoundTripH3(ctx, tlsConfig, fmt.Sprintf("%s:%d", host, port), plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	resp, truncated, err := httputil.RoundTripH3(ctx, tlsConfig, fmt.Sprintf("%s:%d", host, port), plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
 	if err != nil {
 		return nil, SendOutcome{}, err
 	}
@@ -84,6 +84,9 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 		Negotiated: "h3",
 		Rewrites:   plan.Rewrites,
 		Rendered:   burpsyhttp2.RenderRequest(plan.Method, plan.Path, plan.Authority, plan.Headers, plan.Body),
+	}
+	if truncated {
+		outcome.Note = fmt.Sprintf("the response body passed the %d-byte cap and was cut there", httputil.MaxResponseBodyBytes)
 	}
 	return resp, outcome, nil
 }
