@@ -251,3 +251,18 @@ func TestAnUnknownTokenSendsNothing(t *testing.T) {
 		t.Errorf("the unknown-token fetch created %d exchange(s): a guessable path must have no effect", after-before)
 	}
 }
+
+// fxxm batch 3: /reissue/{token} carries the token as a path value. A token with a slash in it
+// cannot name a live token, so the mux answers 404 and nothing is spent or sent; the bare prefix
+// is not a token at all.
+func TestAReissueTokenIsASingleSegmentPathValue(t *testing.T) {
+	s := newTestServer()
+	for _, path := range []string{"/reissue/", "/reissue/a/b"} {
+		if rec := get(t, s, path); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 from the mux", path, rec.Code)
+		}
+	}
+	if rec := get(t, s, "/reissue/nosuchtoken"); rec.Code != http.StatusGone {
+		t.Errorf("GET an unknown single-segment token = %d, want 410", rec.Code)
+	}
+}

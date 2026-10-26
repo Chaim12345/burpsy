@@ -48,7 +48,7 @@ type engagementRow struct {
 // carries a URL — href, src, action, formaction — substring, case-insensitive, the way an
 // operator types it rather than as a canonical URL that may not match how the page wrote it.
 func (s *Server) handleEngagement(w http.ResponseWriter, r *http.Request) {
-	kind := engagementKind(strings.TrimPrefix(r.URL.Path, "/api/engagement/"))
+	kind := engagementKind(r.PathValue("kind"))
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	hostFilter := strings.TrimSpace(r.URL.Query().Get("host"))
 
