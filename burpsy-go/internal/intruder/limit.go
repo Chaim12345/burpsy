@@ -282,6 +282,12 @@ type RateLimiter struct {
 	slots     chan struct{}
 	name      string
 	auto      *autoState
+	// groupMu serializes PaceN's slot acquisition. The all-or-nothing loop takes slots one
+	// at a time; two groups doing that concurrently can split the pool and each wait on the
+	// other forever (PR #363 review). A waiting group therefore holds NO slots until it
+	// holds them all - no hold-and-wait cycle. Plain Pace does not take it: the one slot a
+	// Pace holds frees on its own, so it can never be part of a cycle.
+	groupMu sync.Mutex
 	// variation is the delay schedule, nil for the flat bucket. Guarded by mu, the bucket's own
 	// lock, because it is read and advanced only inside reserve — which already holds it — so a
 	// varied pool grows no second lock and no lock order to get wrong.
@@ -434,6 +440,7 @@ func (l *RateLimiter) PaceN(ctx context.Context, n int) (func(), error) {
 		return nil, fmt.Errorf("declined: the pool cannot admit %d requests at once (its in-flight cap is %d)",
 			n, cap(l.slots))
 	}
+	l.groupMu.Lock()
 	taken := 0
 	releaseTaken := func() {
 		for ; taken > 0; taken-- {
@@ -446,9 +453,11 @@ func (l *RateLimiter) PaceN(ctx context.Context, n int) (func(), error) {
 			taken++
 		case <-ctx.Done():
 			releaseTaken()
+			l.groupMu.Unlock()
 			return nil, ctx.Err()
 		}
 	}
+	l.groupMu.Unlock()
 	if wait := l.reserveN(time.Now(), n); wait > 0 {
 		timer := time.NewTimer(wait)
 		defer timer.Stop()

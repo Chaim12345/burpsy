@@ -97,3 +97,49 @@ func TestPaceNChargesTheWholeGroupOnce(t *testing.T) {
 		t.Fatalf("a 4-token reservation waited %v: the tokens were staggered, not charged at once", waited)
 	}
 }
+
+// Two concurrent groups whose sizes each exceed half the pool can deadlock it when
+// acquisition is one slot at a time: each holds a partial share and waits on the other
+// forever, and every plain Pace hangs behind them (PR #363 review: cap 4, two PaceN(3)
+// each take 2). With acquisition serialized, one group is admitted whole while the other
+// holds NOTHING, and the admitted group's release then admits the waiter.
+//
+// The interleave that splits the pool is a race, so the round count does the work: 200
+// rounds make a non-splitting run on the old loop implausible (observed splitting within
+// the first few rounds on an 8-core machine).
+func TestPaceNGroupsDoNotDeadlockAPoolTheyShare(t *testing.T) {
+	for round := 0; round < 200; round++ {
+		l := groupLimiter(4)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		type outcome struct {
+			release func()
+			err     error
+		}
+		results := make(chan outcome, 2)
+		start := make(chan struct{})
+		go func() { <-start; r, err := l.PaceN(ctx, 3); results <- outcome{r, err} }()
+		go func() { <-start; r, err := l.PaceN(ctx, 3); results <- outcome{r, err} }()
+		close(start)
+		// One group must be admitted whole while the other still waits; the old loop let
+		// both hold a 2-slot split and neither ever returned.
+		first := <-results
+		if first.err != nil {
+			cancel()
+			t.Fatalf("round %d: no group was admitted: %v", round, first.err)
+		}
+		// The admitted group's release frees the waiter's slots; the waiter then completes.
+		first.release()
+		second := <-results
+		cancel()
+		if second.err != nil {
+			t.Fatalf("round %d: the waiting group was not admitted after the first released: %v", round, second.err)
+		}
+		second.release()
+		// The pool drains fully: a third group is admitted without waiting on a leak.
+		release, err := l.PaceN(context.Background(), 3)
+		if err != nil {
+			t.Fatalf("round %d: the pool did not drain after both groups released: %v", round, err)
+		}
+		release()
+	}
+}
