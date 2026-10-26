@@ -8,9 +8,13 @@ package scanner
 // GET/HEAD exchanges are replayed under CheckBFLA alone. A state-changing admin operation (POST, PUT
 // or PATCH) is replayed too, but that is a WRITE on the target, so it needs the explicit writes
 // opt-in CheckAPIWrites on top. DELETE is never replayed: a destructive probe is not worth the
-// damage a role check could do. A write replay is sent once, not repeated for stability: a second
-// write would apply the change twice, and the anonymous control plus the identical-shape check carry
-// the evidence.
+// damage a role check could do. The second identity's write is sent once, not repeated for
+// stability: a second write would apply the change twice. The captured write still reaches the
+// target up to three times in all - the harness baseline (as the audited identity), the second
+// identity's replay, and the anonymous control - so a create with a uniqueness rule can answer the
+// baseline with a conflict, and the pass then has nothing to compare. A write is reported only when
+// the second identity's answer matches the audited identity's VALUE for value, not just in shape:
+// a 200 refusal envelope ({"success":false,...}) has the success answer's shape.
 
 import (
 	"context"
@@ -103,6 +107,9 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if br.Status < 200 || br.Status > 299 || !ashape.same(idorShapeOf(br.Body)) {
 		return nil, nil // B was refused, or answered with a different shape (an error body)
 	}
+	if write && !bflaSameValues(ashape, idorShapeOf(br.Body)) {
+		return nil, nil // same shape, different answer: a refusal dressed as the success envelope
+	}
 	// The anonymous control: a privileged operation anyone can invoke is a finding of another
 	// kind, already the session-comparison row's business - and not a ROLE failure.
 	nr, err := h.send(ctx, []byte(idorAnonymous(raw, nil)))
@@ -135,8 +142,8 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 		detail = fmt.Sprintf("The request as captured is a state-changing call to a privileged operation "+
 			"(%s %s) made as the audited identity. Replayed once under a second configured identity - a "+
 			"low-privilege account on the same application - it returned HTTP %d with the same response "+
-			"structure: the operation accepted the write regardless of role, and that write was applied to "+
-			"the target. Control: the same request with every credential removed returned HTTP %d. "+
+			"structure and the same values as the audited identity's own write: the operation accepted the "+
+			"write regardless of role. Control: the same request with every credential removed returned HTTP %d. "+
 			"Not repeated for stability, because a second write would change state again.",
 			cc.Exchange.Method, cc.Exchange.Path, br.Status, nr.Status)
 	}
@@ -147,4 +154,25 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 		"operation itself rather than by hiding it in the interface: deny any session whose account " +
 		"lacks the role, whatever path or method the request uses."
 	return []*Finding{f}, nil
+}
+
+// bflaSameValues reports whether two answers match value for value: every JSON leaf equal, or the
+// same document for any other body. A write's answer is usually a small status envelope, where the
+// shape alone cannot tell "saved" from "denied".
+func bflaSameValues(a, b *idorShape) bool {
+	if a == nil || b == nil || a.kind != b.kind {
+		return false
+	}
+	if a.kind != "json" {
+		return strings.TrimSpace(a.body) == strings.TrimSpace(b.body)
+	}
+	if len(a.leaves) != len(b.leaves) {
+		return false
+	}
+	for k, v := range a.leaves {
+		if w, ok := b.leaves[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
 }

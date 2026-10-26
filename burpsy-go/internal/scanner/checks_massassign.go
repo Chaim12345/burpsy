@@ -170,8 +170,8 @@ func checkMassAssignment(ctx context.Context, cc *CheckContext) ([]*Finding, err
 	if json.Unmarshal([]byte(reqBody), &req) != nil {
 		return nil, nil
 	}
-	var firstCanary string
-	var wr ProbeResponse
+	var firstCanary, secondCanary string
+	var wr, reread ProbeResponse
 	for attempt := 0; attempt < 2; attempt++ {
 		canary := maCanary()
 		req[field] = canary
@@ -199,6 +199,8 @@ func checkMassAssignment(ctx context.Context, cc *CheckContext) ([]*Finding, err
 		}
 		if attempt == 0 {
 			firstCanary = canary
+		} else {
+			secondCanary, reread = canary, re
 		}
 	}
 	detail := fmt.Sprintf("The update request's answer names %q, a field the request itself never "+
@@ -207,13 +209,22 @@ func checkMassAssignment(ctx context.Context, cc *CheckContext) ([]*Finding, err
 		"client-supplied value into a field it manages itself. The injection was repeated with a "+
 		"second canary (%q, then %q) and persisted both times. Controls: the pre-injection read "+
 		"carried no canary, and the same write with every credential removed returned HTTP %d.",
-		field, field, wr.Status, field, firstCanary, "repeated", nr.Status)
+		field, field, wr.Status, field, firstCanary, secondCanary, nr.Status)
 	f := buildHeaderFinding(cc, "Broken access control", "high", "firm",
-		fmt.Sprintf("injected %q persisted and re-read, %s", field, excerpt(pre.Body, 0, 160)), detail)
+		fmt.Sprintf("injected %q persisted and re-read, %s", field, maCanaryExcerpt(reread.Body, secondCanary)), detail)
 	f.Param = field
 	f.Solution = "Bind incoming data to an explicit allow-list of client-writable fields on the " +
 		"server, or map the body onto a request type that has no privileged members. Never persist " +
 		"fields the request was not meant to carry, and keep server-managed fields such as roles " +
 		"out of the deserialised model's settable surface."
 	return []*Finding{f}, nil
+}
+
+// maCanaryExcerpt quotes the re-read body around the canary it holds, so the evidence shows the
+// persisted value rather than the start of the document.
+func maCanaryExcerpt(body, canary string) string {
+	if i := strings.Index(body, canary); i >= 0 {
+		return excerpt(body, i, len(canary))
+	}
+	return excerpt(body, 0, 160)
 }

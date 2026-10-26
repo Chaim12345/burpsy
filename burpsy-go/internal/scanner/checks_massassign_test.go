@@ -40,6 +40,12 @@ func TestMassAssignmentReportsAPersistedInjectedRole(t *testing.T) {
 	if !strings.Contains(f.Description, "role") {
 		t.Errorf("description does not name the injected field: %s", f.Description)
 	}
+	if strings.Contains(f.Description, `"repeated"`) || strings.Count(f.Description, "burpsy-ma-") != 2 {
+		t.Errorf("description does not name both canaries: %s", f.Description)
+	}
+	if !strings.Contains(f.Evidence, "burpsy-ma-") {
+		t.Errorf("evidence does not show the persisted canary: %s", f.Evidence)
+	}
 }
 
 // The safe twin binds only the declared fields: the injected role is dropped, nothing to report.

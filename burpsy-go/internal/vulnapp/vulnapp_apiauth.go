@@ -40,6 +40,10 @@ func apiAuthEndpoints() []Endpoint {
 			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
 			Note: "the same write enforcing the admin role: a non-admin session is 403 and nothing is " +
 				"written, anonymous is 401"},
+		{Path: "/api/envelope/admin/settings", Row: row, Safe: true, Method: "POST", ContentType: "application/json",
+			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
+			Note: "the same write enforcing the admin role, but refusing with HTTP 200 and the success " +
+				"envelope's shape ({\"updated\":false,...}): nothing is written for a non-admin"},
 		{Path: "/api/users/2", Row: row, Method: "POST", ContentType: "application/json",
 			Body:           `{"username":"bob","email":"bob@example.test"}`,
 			RequestHeaders: map[string]string{"Cookie": IDORSecondSessionCookie},
@@ -97,7 +101,11 @@ func APIAuthSettingWritesBy(uid int) int {
 
 // apiAuthAdminSettings is a state-changing admin operation: POST writes a setting. The vulnerable
 // twin accepts any authenticated session; the safe twin requires the admin (user 1).
-func apiAuthAdminSettings(safe bool) http.HandlerFunc {
+func apiAuthAdminSettings(safe bool) http.HandlerFunc { return apiAuthAdminSettingsAs(safe, false) }
+
+// apiAuthAdminSettingsAs is apiAuthAdminSettings; envelope makes the safe twin refuse with HTTP 200
+// and {"updated":false,...}, the success answer's shape, as many APIs do.
+func apiAuthAdminSettingsAs(safe, envelope bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid := idorSession(r)
 		if uid == 0 {
@@ -109,13 +117,17 @@ func apiAuthAdminSettings(safe bool) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if safe && uid != 1 {
-			idorJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
-			return
-		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			idorJSON(w, http.StatusBadRequest, map[string]string{"error": "json body required"})
+			return
+		}
+		if safe && uid != 1 {
+			if envelope {
+				idorJSON(w, http.StatusOK, map[string]any{"updated": false, "setting": body["setting"]})
+				return
+			}
+			idorJSON(w, http.StatusForbidden, map[string]string{"error": "admin role required"})
 			return
 		}
 		apiAuthSettingsMu.Lock()
@@ -128,6 +140,7 @@ func apiAuthAdminSettings(safe bool) http.HandlerFunc {
 func registerAPIAuth(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/settings", apiAuthAdminSettings(false))
 	mux.HandleFunc("/api/safe/admin/settings", apiAuthAdminSettings(true))
+	mux.HandleFunc("/api/envelope/admin/settings", apiAuthAdminSettingsAs(true, true))
 	mux.HandleFunc("/api/admin/users", apiAuthAdminUsers)
 	mux.HandleFunc("/api/safe/admin/users", apiAuthSafeAdminUsers)
 	mux.HandleFunc("/api/users/", apiAuthProfile(false))
