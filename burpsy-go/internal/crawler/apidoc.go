@@ -125,11 +125,11 @@ func apiMethod(key string) bool {
 // broken". failure is non-empty only in the second case — the body announced itself as a definition
 // and could not be read — and the caller turns that into SkipAPIUnparsed rather than reporting zero
 // locations, which is the whole point of the bead.
-func ParseAPIDocument(contentType string, body []byte) (format APIDocFormat, eps []APIDocEndpoint, failure string) {
+func ParseAPIDocument(contentType, path string, body []byte) (format APIDocFormat, eps []APIDocEndpoint, failure string) {
 	if len(body) == 0 {
 		return APIDocNone, nil, ""
 	}
-	format = sniffAPIDocument(contentType, body)
+	format = sniffAPIDocument(contentType, path, body)
 	if format == APIDocNone {
 		return APIDocNone, nil, ""
 	}
@@ -164,7 +164,7 @@ func ParseAPIDocument(contentType string, body []byte) (format APIDocFormat, eps
 // Cheap because it runs on every non-HTML response: a version key or a root element name read from
 // the head of the body. A hint, not a gate, for the reason LooksLikeJSON is a hint: a target serves
 // these as text/plain and application/octet-stream routinely.
-func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
+func sniffAPIDocument(contentType, path string, body []byte) APIDocFormat {
 	head := body
 	if len(head) > 4096 {
 		head = head[:4096]
@@ -196,13 +196,18 @@ func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
 		// schema does not match, and the loader's named failure, not the sniffer, sorts the
 		// body that carries the marker without being a result.
 		return APIDocGraphQLIntrospection
-	case sdlContentTypes[strings.TrimSpace(strings.SplitN(lowerCT, ";", 2)[0])], looksLikeSDLDocument(string(head)):
+	case sdlContentTypes[strings.TrimSpace(strings.SplitN(lowerCT, ";", 2)[0])],
+		!LooksLikeJavaScript(contentType, path) && looksLikeSDLDocument(string(head)):
 		// A schema document in SDL form. The content-type hint is a media-type allowlist
 		// (sdlContentTypes): application/graphql-response+json announces an introspection
 		// ANSWER and never reaches the SDL reader - with a result the "__schema" case above
 		// claims it, without one it is not an API document. The body marker is the line
 		// opening of a root operation type (looksLikeSDLDocument), which prose, TypeScript
-		// aliases and extensions do not carry.
+		// aliases and extensions do not carry - but an Apollo gql template literal in a
+		// JavaScript bundle carries it verbatim, and claiming the bundle as an SDL document
+		// both fails the parse and keeps the bundle's real routes from the JavaScript
+		// reader (PR #363 review). The body marker therefore never applies to JavaScript;
+		// the media-type allowlist is an explicit API announcement and stays ungated.
 		return APIDocGraphQLSDL
 	default:
 		return APIDocNone
@@ -512,5 +517,5 @@ func sortedKeys[V any](m map[string]V) []string {
 // is switched on: a WSDL handed to the OpenAPI reader finds no paths and reports a definition with
 // zero endpoints, which is a wrong answer rather than a missing one.
 func LooksLikeWSDL(contentType string, body []byte) bool {
-	return sniffAPIDocument(contentType, body) == APIDocWSDL
+	return sniffAPIDocument(contentType, "", body) == APIDocWSDL
 }

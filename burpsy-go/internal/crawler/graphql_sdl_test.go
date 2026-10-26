@@ -35,7 +35,7 @@ type Author {
 // and arguments sorted, so a schema and an introspection of that schema admit the same
 // frontier.
 func TestSDLImportsAsAPIDocument(t *testing.T) {
-	format, eps, failure := ParseAPIDocument("text/plain", []byte(schemaDocument))
+	format, eps, failure := ParseAPIDocument("text/plain", "", []byte(schemaDocument))
 	if format == APIDocNone {
 		t.Fatal("a GraphQL schema document was refused: the sniffer knows no SDL")
 	}
@@ -62,13 +62,13 @@ func TestBrokenSDLIsANamedFailure(t *testing.T) {
 		"unterminated":  "type Query {\n  book(title: String!): Book\n",
 		"no query root": "type Book {\n  title: String\n}\n\ntype Query {\n  broken(: String\n}\n",
 	} {
-		if _, _, failure := ParseAPIDocument("text/plain", []byte(body)); failure == "" {
+		if _, _, failure := ParseAPIDocument("text/plain", "", []byte(body)); failure == "" {
 			t.Errorf("%s: broken SDL degraded to a silent zero", name)
 		}
 	}
 	// A schema document with no Query root at all never sniffs (the markers are the root
 	// declarations), so it keeps today's answer: not an API document, not an error.
-	if format, _, _ := ParseAPIDocument("text/plain", []byte("type Book {\n  title: String\n}\n")); format != APIDocNone {
+	if format, _, _ := ParseAPIDocument("text/plain", "", []byte("type Book {\n  title: String\n}\n")); format != APIDocNone {
 		t.Error("a type-only document with no root operation type is not an importable schema; it must not announce itself")
 	}
 }
@@ -82,7 +82,7 @@ func TestSDLImportDoesNotWidenRecognition(t *testing.T) {
 		"json":             `{"type Query {": true}`,
 		"html":             "<html><body>type Query { book }</body></html>",
 	} {
-		if format, _, _ := ParseAPIDocument("text/plain", []byte(body)); format != APIDocNone {
+		if format, _, _ := ParseAPIDocument("text/plain", "", []byte(body)); format != APIDocNone {
 			t.Errorf("%s: non-SDL text recognised as %s", name, format)
 		}
 	}
@@ -144,7 +144,7 @@ func TestConventionalRootDeclarationsAreRecognised(t *testing.T) {
 		"directive":         "directive @key(fields: String!) on OBJECT\n\ntype Query @key(fields: \"id\") {\n  id: ID\n}\n",
 		"minified":          "type Query{book:Book} type Book{title:String}",
 	} {
-		format, eps, failure := ParseAPIDocument("text/plain", []byte(doc))
+		format, eps, failure := ParseAPIDocument("text/plain", "", []byte(doc))
 		if format == APIDocNone {
 			t.Errorf("%s: a conventional root declaration gqlparser parses was refused by the sniffer", name)
 			continue
@@ -164,7 +164,7 @@ func TestConventionalRootDeclarationsAreRecognised(t *testing.T) {
 		"extension":        "extend type Query {\n  extra: String\n}\n",
 		"typescript alias": "type Query = { book: string }\n",
 	} {
-		if format, _, _ := ParseAPIDocument("text/plain", []byte(doc)); format != APIDocNone {
+		if format, _, _ := ParseAPIDocument("text/plain", "", []byte(doc)); format != APIDocNone {
 			t.Errorf("%s: outside the accepted subset but recognised as %s", name, format)
 		}
 	}
@@ -173,16 +173,16 @@ func TestConventionalRootDeclarationsAreRecognised(t *testing.T) {
 // The content-type hint is a media-type allowlist, not a substring: graphql-response+json
 // announces an introspection ANSWER and the JSON path owns it, with or without the marker.
 func TestGraphQLContentTypesRouteByMediaTypeNotSubstring(t *testing.T) {
-	if format, _, failure := ParseAPIDocument("application/graphql-response+json", []byte(`{"errors":[{"message":"denied"}]}`)); format != APIDocNone {
+	if format, _, failure := ParseAPIDocument("application/graphql-response+json", "", []byte(`{"errors":[{"message":"denied"}]}`)); format != APIDocNone {
 		t.Errorf("a graphql-response body with no schema result routed to %s (failure %q); it is not an API document", format, failure)
 	}
-	if format, _, _ := ParseAPIDocument("application/graphql-response+json", []byte(introspectionDocument)); format != APIDocGraphQLIntrospection {
+	if format, _, _ := ParseAPIDocument("application/graphql-response+json", "", []byte(introspectionDocument)); format != APIDocGraphQLIntrospection {
 		t.Errorf("a graphql-response answer carrying a schema sorted as %s, want graphql-introspection", format)
 	}
 	// The allowlist carries the sniff when the root declaration sits beyond the head window,
 	// parameters and all.
 	padded := "# " + strings.Repeat("x", 5000) + "\n" + schemaDocument
-	if format, _, failure := ParseAPIDocument("application/graphql; charset=utf-8", []byte(padded)); format != APIDocGraphQLSDL || failure != "" {
+	if format, _, failure := ParseAPIDocument("application/graphql; charset=utf-8", "", []byte(padded)); format != APIDocGraphQLSDL || failure != "" {
 		t.Errorf("allowlisted media type with the marker beyond the head: format %s failure %q", format, failure)
 	}
 }
@@ -196,7 +196,7 @@ func TestOversizedSchemaDocumentHitsTheTokenBoundAsANamedFailure(t *testing.T) {
 		fmt.Fprintf(&b, "  f%06d: String\n", i)
 	}
 	b.WriteString("}\n")
-	_, _, failure := ParseAPIDocument("text/plain", []byte(b.String()))
+	_, _, failure := ParseAPIDocument("text/plain", "", []byte(b.String()))
 	if !strings.Contains(failure, "token limit") {
 		t.Fatalf("an over-bound schema document must name the token limit, got %q", failure)
 	}
@@ -218,7 +218,7 @@ func TestASchemaAndItsIntrospectionAdmitTheSameFrontier(t *testing.T) {
 	if failure != "" {
 		t.Fatalf("introspection form: %s", failure)
 	}
-	format, fromSDL, failure := ParseAPIDocument("text/plain", []byte(schemaDocument))
+	format, fromSDL, failure := ParseAPIDocument("text/plain", "", []byte(schemaDocument))
 	if format == APIDocNone || failure != "" {
 		t.Fatalf("SDL form: format %s failure %q", format, failure)
 	}
@@ -247,5 +247,35 @@ func TestADualSwitchCrawlAdmitsASchemaDocumentOnce(t *testing.T) {
 	}
 	if rep.APIDocumentsRead != 1 {
 		t.Errorf("APIDocumentsRead = %d, want 1: the live reader is JSON-only, so the document path owns a schema document even when armed", rep.APIDocumentsRead)
+	}
+}
+
+// PR #363 review: an Apollo gql template literal carries a line that trims to `type Query {`,
+// which matched the SDL body marker - the bundle was claimed as an SDL document, the parse
+// failed, and the body never fell through to the JavaScript reader, so its routes were lost.
+// The body marker must not fire on JavaScript content; the media-type allowlist stays.
+func TestTheSDLSniffLeavesJavaScriptBundlesToTheJavaScriptReader(t *testing.T) {
+	bundle := "const typeDefs = gql`\n  type Query {\n    secret: String\n  }\n`;\nfetch('/api/secret-route')\n"
+	// The reviewer's repro: JavaScript content type, SDL-shaped gql literal inside.
+	format, _, failure := ParseAPIDocument("application/javascript", "/static/app.js", []byte(bundle))
+	if format != APIDocNone || failure != "" {
+		t.Fatalf("a JavaScript bundle was claimed as %q (failure %q); its routes would never be read", format, failure)
+	}
+	// Same body, no JavaScript content type but a .js path with a vague one.
+	format, _, _ = ParseAPIDocument("text/plain", "/static/app.js", []byte(bundle))
+	if format != APIDocNone {
+		t.Fatalf("a .js body under a vague content type was claimed as %q", format)
+	}
+}
+
+// The gate is JavaScript-only: a real SDL document still sniffs as SDL, by the body marker on
+// plain text and by the media-type allowlist even on a misleading path.
+func TestTheSDLSniffStillClaimsRealSchemaDocuments(t *testing.T) {
+	schema := []byte("type Query {\n  book(id: ID!): Book\n}\n\ntype Book {\n  title: String\n}\n")
+	if format, _, _ := ParseAPIDocument("text/plain", "", schema); format != APIDocGraphQLSDL {
+		t.Fatalf("a plain-text SDL document no longer sniffs as SDL: %q", format)
+	}
+	if format, _, _ := ParseAPIDocument("application/graphql", "", schema); format != APIDocGraphQLSDL {
+		t.Fatalf("the media-type allowlist no longer claims SDL: %q", format)
 	}
 }

@@ -27,7 +27,7 @@ const introspectionParityAnswer = `{"data":{"__schema":{"queryType":{"name":"Que
 // ParseAPIDocument, the same "loading" the live answer path gets. Today the sniffer declines
 // it - it is JSON, and JSON means OpenAPI or nothing.
 func TestIntrospectionResultLoadsAsAPIDocument(t *testing.T) {
-	format, eps, failure := ParseAPIDocument("application/json", []byte(introspectionDocument))
+	format, eps, failure := ParseAPIDocument("application/json", "", []byte(introspectionDocument))
 	if format == APIDocNone {
 		t.Fatal("a saved introspection result was refused: the sniffer knows OpenAPI, Swagger and WSDL only")
 	}
@@ -52,7 +52,7 @@ func TestIntrospectionResultStructurallyBrokenIsANamedFailure(t *testing.T) {
 	if _, failure := ParseGraphQLOperations([]byte(broken)); failure == "" {
 		t.Fatal("live path: an empty __schema with no errors degraded to a silent zero")
 	}
-	if _, _, failure := ParseAPIDocument("application/json", []byte(broken)); failure == "" {
+	if _, _, failure := ParseAPIDocument("application/json", "", []byte(broken)); failure == "" {
 		t.Fatal("document path: an empty __schema with no errors degraded to a silent zero")
 	}
 }
@@ -84,7 +84,7 @@ func TestIntrospectionImportDoesNotWidenRecognition(t *testing.T) {
 		`{"errors":[{"message":"introspection denied"}]}`,
 		`{"data":{"__schema":null}}`,
 	} {
-		if format, _, _ := ParseAPIDocument("application/json", []byte(body)); format != APIDocNone {
+		if format, _, _ := ParseAPIDocument("application/json", "", []byte(body)); format != APIDocNone {
 			t.Fatalf("non-introspection JSON %s recognised as %s", body, format)
 		}
 	}

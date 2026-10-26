@@ -619,3 +619,108 @@ func TestNewRefusesARecordedLoginAndCredentialsTogether(t *testing.T) {
 			"method per scan")
 	}
 }
+
+// PR #363 review: a login form that appears on several pages is the SAME form found again, not
+// a second login function the crawl chose to ignore - the ignored-form record exists to show a
+// coverage hole, and an identical form is not one.
+func TestTheSameLoginFormOnTwoPagesIsNotReportedAsIgnored(t *testing.T) {
+	const loginFormHTML = `<form method="post" action="/login">
+		<input type="text" name="user" value="">
+		<input type="password" name="pass">
+		<input type="submit" value="Sign in">
+		</form>`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + loginFormHTML + `<a href="/other">other</a></body></html>`))
+	})
+	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + loginFormHTML + `</body></html>`))
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body><p>bad credentials</p></body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "alice", Password: "s3cret"}}
+	rep := run(t, cfg)
+	for _, s := range rep.Skips.Records {
+		if s.Reason == SkipLoginFormIgnored {
+			t.Fatalf("the same login form found again was reported as an ignored second form: %+v", s)
+		}
+	}
+	for _, sc := range rep.Skips.Counts {
+		if sc.Reason == SkipLoginFormIgnored && sc.Count != 0 {
+			t.Fatalf("the same login form found again was counted as ignored: %+v", sc)
+		}
+	}
+}
+
+// PR #363 review: self-registration returned before the per-form cap bookkeeping, so
+// MaxSubmissionsPerForm never applied to a registration form - the generated credentials make
+// every body unique, fingerprint dedup cannot merge the repeats, and a site carrying the
+// register form in its footer got about MaxTemplateVisits accounts. The cap now counts a
+// registration the way it counts any submission.
+func TestSelfRegistrationHonoursThePerFormCap(t *testing.T) {
+	const registerFormHTML = `<form method="post" action="/register">
+		<input type="text" name="user" value="">
+		<input type="password" name="pass">
+		<input type="password" name="pass2">
+		</form>`
+	var mu sync.Mutex
+	var posts int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + registerFormHTML + `<a href="/other">other</a></body></html>`))
+	})
+	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + registerFormHTML + `<a href="/third">third</a></body></html>`))
+	})
+	mux.HandleFunc("/third", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + registerFormHTML + `</body></html>`))
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mu.Lock()
+			posts++
+			mu.Unlock()
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body>` + registerFormHTML + `</body></html>`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.AttemptSelfRegister = true
+	cfg.Limits.MaxSubmissionsPerForm = 1
+	rep := run(t, cfg)
+
+	mu.Lock()
+	got := posts
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("the shared register form was submitted %d times with the per-form cap at 1; "+
+			"the review defect is exactly this account-per-page", got)
+	}
+	capped := false
+	for _, s := range rep.Skips.Records {
+		if s.Reason == SkipFormSubmissionCap {
+			capped = true
+		}
+	}
+	if !capped {
+		t.Errorf("the repeat discoveries were not reported as capped; records: %+v", rep.Skips.Records)
+	}
+}
