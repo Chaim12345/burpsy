@@ -103,16 +103,15 @@ func (r *Run) spawn(ctx context.Context, req SpawnRequest, parentPlanner Planner
 	return nil
 }
 
-// waitChildren blocks until every child has finished or ctx ends.
-func (r *Run) waitChildren(ctx context.Context) {
+// waitChildren blocks until every child has finished. It does not give up when ctx ends: a child's
+// context derives from its parent's, so cancelling the parent is what ends the children, and a
+// parent that reported itself stopped while a child was still running would be a stop that had not
+// finished (TestStoppingParentStopsChildren failed on that race).
+func (r *Run) waitChildren(_ context.Context) {
 	r.mu.Lock()
 	kids := append([]*Run(nil), r.children...)
 	r.mu.Unlock()
 	for _, k := range kids {
-		select {
-		case <-k.Done():
-		case <-ctx.Done():
-			return
-		}
+		<-k.Done()
 	}
 }
