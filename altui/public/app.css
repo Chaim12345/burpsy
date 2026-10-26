@@ -203,3 +203,9 @@ td.mono, .mono { font-family: var(--mono); }
   #probe-req { border-right: 0; border-bottom: 1px solid var(--line); }
   .drawer { width: 100%; }
 }
+
+@media (max-width: 760px) {
+  table.rows th:nth-child(6), table.rows td:nth-child(6),
+  table.rows th:nth-child(7), table.rows td:nth-child(7),
+  table.rows th:nth-child(8), table.rows td:nth-child(8) { display: none; }
+}
