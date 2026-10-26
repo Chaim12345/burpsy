@@ -84,6 +84,7 @@ import {
  clearHiddenToolTabs,
  clearToolTabOrder,
  moveToolTab,
+ neighbourTab,
  orderToolTabs,
  readHiddenToolTabs,
  readToolTabOrder,
@@ -499,16 +500,13 @@ function App(): JSX.Element {
  // there are thirteen tools and ten digits: four tabs are reachable only this way.
  const cycleTool = useCallback(
   (delta: number) => {
-   const tools = TOOLS;
-   const currentTool = toolOf(route);
-   const at = tools.findIndex((entry) => entry.id === currentTool.id);
-   if (at === -1) return;
-   // Wraps, because a cycle that stops at the ends makes the last tab unreachable from the
-   // first without counting.
-   const next = tools[(at + delta + tools.length) % tools.length]!;
-   navigate(entryLeaf(next));
+   // The strip the operator sees: a dragged tab order (sk29) moves the neighbours too. Wraps,
+   // because a cycle that stops at the ends makes the last tab unreachable from the first
+   // without counting.
+   const next = neighbourTab(orderedTools, toolOf(route).id, delta);
+   if (next) navigate(entryLeaf(next));
   },
-  [route, navigate],
+  [route, navigate, orderedTools],
  );
  useHotkeys(
   nextToolChord,

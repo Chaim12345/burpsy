@@ -286,6 +286,8 @@ export function prettyMessage(raw: string): string {
  if (type.includes("json") || looksLikeJson(body)) {
   try {
    pretty = JSON.stringify(JSON.parse(body), null, 2);
+   // JSON has no text nodes, so compactMessage rebuilds it whole and the separator never reaches the wire.
+   if (raw.includes("\r\n")) pretty = pretty.replace(/\n/g, "\r\n");
   } catch {
    pretty = null;
   }
@@ -299,6 +301,9 @@ export function prettyMessage(raw: string): string {
 
  if (pretty === null) return raw;
  void startLine;
+ // The editor splits a document on one separator, CRLF whenever the message holds one, so a JSON body
+ // pretty-printed with bare LFs under a CRLF head would show as one line; it takes the head's separator
+ // above (PR 363 review). Markup, CSS and JS keep LF: their text nodes would come back as CRLF.
  return raw.slice(0, bodyOffset) + pretty;
 }
 

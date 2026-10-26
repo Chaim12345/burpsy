@@ -104,7 +104,7 @@ export const keys = {
  * Which caches a server event invalidates. Keys are prefixes, so one entry
  * covers every parameterised variant of a resource.
  */
-const INVALIDATION: Record<string, string[][]> = {
+export const INVALIDATION: Record<string, string[][]> = {
  history: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  capture: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  // A finished hidden-input run files its findings and notifies issues and dashboard; both refresh
@@ -115,7 +115,11 @@ const INVALIDATION: Record<string, string[][]> = {
  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
  // entry the only event that can tell the console a sweep has results.
- dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"]],
+ // The server emits only this kind for a task starting or finishing (dash.Registry.Start records
+ // EventTaskStarted, which fires changeDashboard; a crawl notifies changeDashboard again when it
+ // finishes: events.go, server.go, api_crawl.go), and it is the one signal that the retained-run list
+ // moved. The Dashboard asks for a task's crawl run only when that list names it, so ["crawls"] follows.
+ dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"], ["crawls"]],
  task: [["dashboard"]],
  tasks: [["dashboard"]],
  ws: [["ws"], ["stats"], ["dashboard"]],

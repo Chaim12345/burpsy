@@ -62,3 +62,17 @@ describe("HttpEditor inline diff (6ibj)", () => {
   expect(container.querySelector(".cm-deletedChunk")).toBeNull();
  });
 });
+
+describe("HttpEditor mixed line endings notice", () => {
+ const MIXED = "POST /x HTTP/1.1\r\nHost: x\r\n\r\n{\n}";
+ test("Raw shows the notice for a mixed message and keeps its bytes", async () => {
+  const { container, queryByRole } = render(<HttpEditor value={MIXED} onChange={() => {}} label="Request" views={false} />);
+  await waitFor(() => expect(viewOf(container).state.sliceDoc(0)).toBe(MIXED));
+  expect(queryByRole("note", { name: "Mixed line endings" }) !== null).toBe(true);
+ });
+ test("no notice for a uniform message", async () => {
+  const { container, queryByRole } = render(<HttpEditor value={REQUEST} onChange={() => {}} label="Request" views={false} />);
+  await waitFor(() => expect(viewOf(container).state.sliceDoc(0)).toBe(REQUEST));
+  expect(queryByRole("note", { name: "Mixed line endings" }) === null).toBe(true);
+ });
+});
