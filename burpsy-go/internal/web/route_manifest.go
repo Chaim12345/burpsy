@@ -309,7 +309,7 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskDestructive,
 		summary: "clears the dashboard's event log (Burp's \"Clear event log\"); the SSE stream at /api/events is a different resource",
 	},
-	"/api/datasets/": {
+	"/api/datasets/{rest...}": {
 		// riskRead: a read-only table view over lists other read routes already serve
 		// (burpsy-react-ui-co88). No credential-class list is offered as a source.
 		methods: []string{"GET"}, risk: riskRead, subPath: "history",
@@ -874,7 +874,7 @@ var manifest = map[string]route{
 		summary: "write one WebSocket frame into a connection open through the proxy (Repeater attach), " +
 			"to the server or to the client; scope-gated on the connection's target, recorded on its history",
 	},
-	"/api/report/": {
+	"/api/report/{rest...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
 		summary: "export findings as json, sarif, html or Burp-XML (m7dk)",
 	},
@@ -1085,7 +1085,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "start a capture: N sends of one request, one token extracted per response",
 	},
-	"/api/sequencer/capture/": {
+	"/api/sequencer/capture/{rest...}": {
 		// Two operations under one subtree, and deliberately different verbs: reading a token list does
 		// not change state, stopping a capture does. Unguarded, `GET .../stop` answered {"stopped":true}
 		// — a state change reported for a request that could not have caused one.

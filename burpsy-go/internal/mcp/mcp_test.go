@@ -504,7 +504,7 @@ func TestEveryConfirmationWorthyRouteCanBeMinted(t *testing.T) {
 		}
 		gated++
 		args := map[string]any{"method": method}
-		if strings.HasSuffix(r.Pattern, "/") {
+		if isSubtreePattern(r.Pattern) {
 			args["path"] = pathExample(r)
 		}
 		res := call(t, base, confirmToolName, map[string]any{"tool": toolFor[r.Pattern], "arguments": args})
@@ -853,7 +853,7 @@ func TestEachToolsMethodEnumIsTheRoutesOwnVerbs(t *testing.T) {
 				needsPath = true
 			}
 		}
-		if wantPath := strings.HasSuffix(route, "/"); wantPath != needsPath {
+		if wantPath := isSubtreePattern(route); wantPath != needsPath {
 			t.Fatalf("tool %q (route %s) requires path = %v, want %v", tl.Name, route, needsPath, wantPath)
 		}
 	}

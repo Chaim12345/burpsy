@@ -334,17 +334,45 @@ func routeRiskFor(path string) (string, riskClass, bool) {
 		if pattern == "/" || !patternMatches(pattern, path) {
 			continue
 		}
-		if !found || len(pattern) > len(best) {
+		if !found || literalLen(pattern) > literalLen(best) || literalLen(pattern) == literalLen(best) && pattern < best {
 			best, bestRisk, found = pattern, r.risk, true
 		}
 	}
 	return best, bestRisk, found
 }
 
+// literalLen is a pattern's literal text: its length with every {wildcard} removed. It is the
+// specificity routeRiskFor ranks matches by, so "/api/skills/disabled" beats "/api/skills/{rest...}"
+// the way the mux's literal-beats-wildcard rule does (a plain length compare would let the longer
+// wildcard spelling win).
+func literalLen(pattern string) int {
+	n, depth := 0, 0
+	for _, r := range pattern {
+		switch {
+		case r == '{':
+			depth++
+		case r == '}':
+			if depth > 0 {
+				depth--
+			}
+		case depth == 0:
+			n++
+		}
+	}
+	return n
+}
+
 // patternMatches reports whether path falls under pattern: a subtree pattern (trailing slash) by
 // segment-bounded prefix, a {param} pattern by shape - same segment count, literals equal, every
 // wildcard segment non-empty - and anything else exactly.
 func patternMatches(pattern, path string) bool {
+	// A trailing "{name...}" is the mux's remainder wildcard: everything after the literal prefix,
+	// empty and nested included, exactly what the old "prefix/" subtree pattern matched. It resolves
+	// as that subtree (the prefix up to and including its last slash), so a gated or classified route
+	// keeps its risk class for every path the mux hands to its handler (burpsy-react-ui-fxxm).
+	if i := strings.LastIndex(pattern, "/"); i >= 0 && strings.HasSuffix(pattern, "...}") && strings.HasPrefix(pattern[i+1:], "{") {
+		pattern = pattern[:i+1]
+	}
 	if !strings.Contains(pattern, "{") {
 		return pathHasPrefix(path, pattern)
 	}

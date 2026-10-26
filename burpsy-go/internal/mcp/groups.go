@@ -150,7 +150,7 @@ var groupedTools = []groupSpec{
 		name: "issues", group: groupIssues,
 		short: "Reads scanner issues, the issue-definition catalogue, the selectable issue types and their detection methods, report exports and coverage.",
 		ops: []string{
-			"GET /api/issues", "GET /api/advisories", "GET /api/advisories/", "GET /api/report/",
+			"GET /api/issues", "GET /api/advisories", "GET /api/advisories/", "GET /api/report/{rest...}",
 			"GET /api/scanner/coverage", "GET /api/scanner/issue-types",
 		},
 	},
@@ -211,7 +211,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "datasets", group: groupDatasets,
 		short: "Searches, filters, sorts, pages and summarises any list — history, issues, site map, logger, WebSockets, an attack's requests.",
-		ops:   []string{"GET /api/datasets/"},
+		ops:   []string{"GET /api/datasets/{rest...}"},
 	},
 	{
 		name: "dashboard", group: groupDatasets,
@@ -380,7 +380,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "sequencer", group: groupFuzzing,
 		short: "Analyses token randomness and reads a live capture's samples.",
-		ops:   []string{"POST /api/sequencer/analyse", "GET /api/sequencer/capture/", "POST /api/sequencer/capture/"},
+		ops:   []string{"POST /api/sequencer/analyse", "GET /api/sequencer/capture/{rest...}", "POST /api/sequencer/capture/{rest...}"},
 	},
 	{
 		name: "sequencer_capture", group: groupFuzzing,

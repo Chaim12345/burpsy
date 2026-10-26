@@ -596,7 +596,7 @@ type datasetSourceInfo struct {
 }
 
 func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/datasets/"), "/")
+	rest := strings.Trim(r.PathValue("rest"), "/")
 	if rest == "" {
 		listing := datasetListing{Sources: make([]datasetSourceInfo, 0, len(datasetSources))}
 		for _, src := range datasetSources {

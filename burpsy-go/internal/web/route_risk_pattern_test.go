@@ -38,3 +38,26 @@ func TestRouteRiskForRefusesParamShapeMisses(t *testing.T) {
 		}
 	}
 }
+
+// A trailing {name...} is the mux's remainder wildcard (fxxm): it resolves like the old subtree, for
+// the empty remainder and nested paths too, and a literal route still beats it.
+func TestRouteRiskForResolvesRemainderPatterns(t *testing.T) {
+	cases := []struct {
+		path, want string
+	}{
+		{"/api/report/json", "/api/report/{rest...}"},
+		{"/api/report/finding/42", "/api/report/{rest...}"},
+		{"/api/report/", "/api/report/{rest...}"},
+		{"/api/datasets/history/3", "/api/datasets/{rest...}"},
+		{"/api/sequencer/capture/stop", "/api/sequencer/capture/{rest...}"},
+		{"/api/intruder/attacks/1/stop/extra", "/api/intruder/attacks/{id}/{action...}"},
+		{"/api/skills/disabled", "/api/skills/disabled"},
+		{"/api/engagement/clickbandit.js", "/api/engagement/clickbandit.js"},
+	}
+	for _, tc := range cases {
+		pattern, _, ok := routeRiskFor(tc.path)
+		if !ok || pattern != tc.want {
+			t.Errorf("routeRiskFor(%q) = %q, %v; want %q", tc.path, pattern, ok, tc.want)
+		}
+	}
+}

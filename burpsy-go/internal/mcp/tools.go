@@ -131,7 +131,7 @@ func (s *Server) buildRouteTools() []tool {
 // because MCP tool names are the addressing scheme: two descriptors with one name is a tool a
 // client cannot call unambiguously.
 func toolNameFor(pattern string) string {
-	trimmed := strings.Trim(pattern, "/")
+	trimmed := strings.Trim(subtreeForm(pattern), "/")
 	if trimmed == "" {
 		// The "/" entry is the console's own asset route (index.html and the SPA catch-all).
 		return "root"
@@ -158,7 +158,7 @@ func toolNameFor(pattern string) string {
 func uniqueToolName(r web.MCPRouteInfo, used map[string]bool) string {
 	base := toolNameFor(r.Pattern)
 	name := base
-	if used[name] && strings.HasSuffix(r.Pattern, "/") {
+	if used[name] && isSubtreePattern(r.Pattern) {
 		name = base + "_subtree"
 	}
 	for i := 2; used[name]; i++ {
@@ -191,7 +191,7 @@ func describeRoute(r web.MCPRouteInfo) string {
 		b.WriteString("Confirmation: not required.")
 	}
 
-	if strings.HasSuffix(r.Pattern, "/") {
+	if isSubtreePattern(r.Pattern) {
 		fmt.Fprintf(&b, " This is a subtree pattern, not a requestable URL: the path argument is required, for example %s.", pathExample(r))
 	}
 	return b.String()
@@ -267,7 +267,7 @@ func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 	}
 
 	required := []string{}
-	if strings.HasSuffix(r.Pattern, "/") {
+	if isSubtreePattern(r.Pattern) {
 		props["path"] = map[string]any{
 			"type": "string",
 			"description": fmt.Sprintf("Concrete request path under %s, for example %s. Required: %s is a subtree pattern and is not itself a requestable URL.",
@@ -467,7 +467,7 @@ func describeGrouped(g groupSpec, ops []op) string {
 	b.WriteString("Operations (pass one as \"op\"):")
 	for _, o := range ops {
 		fmt.Fprintf(&b, "\n- %s — %s", o.name, o.route.Summary)
-		if strings.HasSuffix(o.route.Pattern, "/") {
+		if isSubtreePattern(o.route.Pattern) {
 			fmt.Fprintf(&b, " [subtree: pass \"path\" (e.g. %s) or \"id\"]", pathExample(o.route))
 		}
 	}
@@ -514,7 +514,7 @@ func schemaForGrouped(ops []op) map[string]any {
 	subtree := false
 	for _, o := range ops {
 		names = append(names, o.name)
-		if strings.HasSuffix(o.route.Pattern, "/") {
+		if isSubtreePattern(o.route.Pattern) {
 			subtree = true
 		}
 	}
@@ -645,12 +645,44 @@ func resolveOp(t tool, args callArgs) (op, error) {
 	}
 	o, ok := t.byOp[name]
 	if !ok {
+		o, ok = t.byOp[remainderSpelling(name)]
+	}
+	if !ok {
 		return op{}, fmt.Errorf("%q is not an operation of the %s tool; it fronts %s", args.Op, t.Name, strings.Join(opNames(t.ops), ", "))
 	}
 	if m := strings.ToUpper(strings.TrimSpace(args.Method)); m != "" && m != o.method {
 		return op{}, fmt.Errorf("method %s contradicts the operation %s; the operation names its own verb", m, o.name)
 	}
 	return o, nil
+}
+
+// remainderSpelling maps the pre-fxxm subtree spelling of an op ("GET /api/datasets/") onto the
+// remainder-wildcard key that replaced it ("GET /api/datasets/{rest...}"), so an agent that
+// states the old op name keeps working. A name without a trailing slash is returned unchanged
+// (it then misses, as any unknown op does).
+func remainderSpelling(name string) string {
+	verb, pattern, ok := strings.Cut(name, " ")
+	if !ok || !strings.HasSuffix(pattern, "/") {
+		return name
+	}
+	return verb + " " + pattern + "{rest...}"
+}
+
+// subtreeForm maps a remainder-wildcard key ("/api/datasets/{rest...}") onto the trailing-slash
+// subtree spelling it replaced ("/api/datasets/"); any other pattern is returned unchanged. Tool
+// names, path arguments and id joins are derived from the subtree spelling, so rekeying a route to
+// a remainder wildcard does not rename its tool or change how an agent addresses it.
+func subtreeForm(pattern string) string {
+	if strings.HasSuffix(pattern, "...}") {
+		if i := strings.LastIndex(pattern, "/"); i >= 0 {
+			return pattern[:i+1]
+		}
+	}
+	return pattern
+}
+
+func isSubtreePattern(pattern string) bool {
+	return strings.HasSuffix(subtreeForm(pattern), "/")
 }
 
 func opNames(ops []op) []string {
@@ -820,8 +852,8 @@ func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
 		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" {
 			id := strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
 			switch {
-			case strings.HasSuffix(route.Pattern, "/"):
-				args.Path = route.Pattern + id
+			case isSubtreePattern(route.Pattern):
+				args.Path = subtreeForm(route.Pattern) + id
 			case strings.Contains(route.Pattern, "{id}"):
 				args.Path = strings.Replace(route.Pattern, "{id}", id, 1)
 			}
@@ -889,7 +921,7 @@ func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (st
 		}
 	}
 
-	if !strings.HasSuffix(r.Pattern, "/") && !strings.Contains(r.Pattern, "{") {
+	if !isSubtreePattern(r.Pattern) && !strings.Contains(r.Pattern, "{") {
 		if raw == "" {
 			raw = r.Pattern
 		}
