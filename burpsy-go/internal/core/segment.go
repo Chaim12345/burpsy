@@ -48,7 +48,11 @@ type SegmentLog struct {
 
 // NewSegmentLog creates a new segment log in the given directory.
 func NewSegmentLog(dir string, targetBytes uint64) (*SegmentLog, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Owner-only (burpsy-react-ui-data-at-rest-perms): segments are captured traffic, cookies and
+	// tokens included. MkdirAll applies the mode only to directories it creates; an existing
+	// directory the operator named is left as they set it, because chmod-ing a directory burpsy did
+	// not create (a shared capture root, /tmp) is not this package's decision.
+	if err := os.MkdirAll(dir, segmentDirMode); err != nil {
 		return nil, fmt.Errorf("failed to create segment directory: %w", err)
 	}
 
@@ -118,7 +122,7 @@ func (sl *SegmentLog) resume() error {
 		// could write the header. It holds no records, so adopting it destroys
 		// nothing, where refusing would cost a restart over a file that has
 		// nothing in it to lose.
-		file, err := os.OpenFile(sl.currentName, os.O_APPEND|os.O_WRONLY, 0644)
+		file, err := openSegmentForAppend(sl.currentName)
 		if err != nil {
 			return fmt.Errorf("failed to open current segment: %w", err)
 		}
@@ -147,13 +151,38 @@ func (sl *SegmentLog) resume() error {
 		return fmt.Errorf("%w — refusing to append to it", err)
 	}
 
-	file, err := os.OpenFile(sl.currentName, os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := openSegmentForAppend(sl.currentName)
 	if err != nil {
 		return fmt.Errorf("failed to open current segment: %w", err)
 	}
 	sl.currentFile = file
 	sl.currentOffset = info.Size()
 	return nil
+}
+
+// segmentDirMode and segmentFileMode are owner-only: a capture directory holds every request and
+// response the proxy recorded, and 0755/0644 handed it to every other account on the machine.
+const (
+	segmentDirMode  os.FileMode = 0o700
+	segmentFileMode os.FileMode = 0o600
+)
+
+// openSegmentForAppend reopens an existing segment for appending and tightens it to owner-only.
+//
+// The mode argument of OpenFile only applies to a file it creates, so a segment written by an
+// earlier build keeps its 0644 unless it is changed here. The file has just been verified as one of
+// ours (resume checks the header), so tightening it is not touching someone else's file. A failed
+// chmod is not fatal — a filesystem without modes still records traffic — and leaves the mode as it
+// was.
+func openSegmentForAppend(name string) (*os.File, error) {
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, segmentFileMode)
+	if err != nil {
+		return nil, err
+	}
+	if info, serr := file.Stat(); serr == nil && info.Mode().Perm()&0o077 != 0 {
+		_ = file.Chmod(info.Mode().Perm() & 0o700)
+	}
+	return file, nil
 }
 
 // writeFileHeader puts the magic and format version at the start of a segment
@@ -283,7 +312,8 @@ func (sl *SegmentLog) rotate() error {
 	// writing into the handle that was just closed.
 	sl.currentFile = nil
 	sl.currentName = filepath.Join(sl.dir, fmt.Sprintf(segmentNameFormat, segNum))
-	file, err := os.Create(sl.currentName)
+	// os.Create would make it 0666 less the umask — 0644 in practice. Same flags, owner-only mode.
+	file, err := os.OpenFile(sl.currentName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, segmentFileMode)
 	if err != nil {
 		return fmt.Errorf("failed to create new segment: %w", err)
 	}

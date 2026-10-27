@@ -20,9 +20,10 @@ package web
 //
 // # The two scope gates, same as the HTTP send
 //
-// prepareRepeaterSend applies the host-level gate; the WS send applies the same gate at
-// prepare time and then hands the handshake's raw bytes to sender.AuthorisedSender, which
-// runs AuthoriseRaw on the bytes about to go out — the same two layers, because a WS resend
+// prepareRepeaterSend runs AuthoriseRaw on the HTTP request about to go out; the WS send
+// applies the host-level gate at prepare time and then hands the handshake's raw bytes to
+// sender.AuthorisedSender, which runs AuthoriseRaw on the bytes about to go out — the same
+// per-request decision, because a WS resend
 // is a send and the same scope the operator set to constrain outbound traffic must not be
 // bypassable by framing instead of requesting.
 //
