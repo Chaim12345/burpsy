@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 // The boundary is the materialised page script, not private helper functions.
@@ -75,7 +76,7 @@ func (g fixtureGate) AllowAuthority(host string, port uint16, tls bool) error { 
 func TestPollutionScanRunsTheActualPageParserAndReportsSourceSeparateFromGadget(t *testing.T) {
 	b, err := domexec.NewBrowser(context.Background(), domexec.Options{Timeout: 15 * time.Second})
 	if err != nil {
-		t.Fatal(err)
+		domexectest.Skipf(t, "no browser could be launched: %v", err)
 	}
 	defer b.Close()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +124,7 @@ var settings={};if(settings.html)document.body.innerHTML=settings.html;
 func TestPollutionScanExercisesHashJSONAndNestedInputsWithoutLeakingBetweenProbes(t *testing.T) {
 	b, err := domexec.NewBrowser(context.Background(), domexec.Options{Timeout: 15 * time.Second})
 	if err != nil {
-		t.Fatal(err)
+		domexectest.Skipf(t, "no browser could be launched: %v", err)
 	}
 	defer b.Close()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

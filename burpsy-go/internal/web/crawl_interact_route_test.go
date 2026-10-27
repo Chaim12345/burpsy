@@ -12,6 +12,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 // burpsy-react-ui-spa1: POST /api/crawl's interact switch reaches the crawl the operator started, and
@@ -91,7 +92,7 @@ func startInteractCrawl(t *testing.T, s *Server, seed string, interact bool) cra
 // happened to carry.
 func TestTheCrawlRouteClicksThroughToAScriptRoutedPage(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
 	t.Cleanup(func() { _ = provider.Close() })
@@ -132,7 +133,7 @@ func loopbackScope() *core.Scope {
 // it). The click-revealed route is still crawled, so the pass ran.
 func TestTheCrawlInteractionPassIsScopeGated(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
 	t.Cleanup(func() { _ = provider.Close() })
