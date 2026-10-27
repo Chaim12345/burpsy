@@ -293,33 +293,52 @@ func nosqliShort(r ProbeResponse) string {
 // MongoDB error signatures
 // ---------------------------------------------------------------------------
 
-// nosqliErrorSignatures are error texts only a MongoDB server, driver or ODM produces. Generic
-// JavaScript errors (a bare "SyntaxError") are not here: a Node JSON parser or any eval produces
-// those, and they are the server-side JavaScript row's evidence, not this one's.
-var nosqliErrorSignatures = []*regexp.Regexp{
-	regexp.MustCompile(`MongoServerError`),
-	regexp.MustCompile(`\bMongoError\b`),
-	regexp.MustCompile(`Mongo(Query|Command|Write|Cursor)Exception`),
-	regexp.MustCompile(`com\.mongodb\.[A-Za-z]`),
-	regexp.MustCompile(`MongoDB\\+Driver\\+Exception`),
-	regexp.MustCompile(`pymongo\.errors\.`),
-	regexp.MustCompile(`CastError: Cast to \w+ failed`),
-	regexp.MustCompile(`\bBSON(Type)?Error\b`),
-	regexp.MustCompile(`unknown operator: \$\w+`),
-	regexp.MustCompile(`\$where[^\n]{0,80}(SyntaxError|JavaScript execution failed)`),
-	regexp.MustCompile(`JavaScript execution failed`),
-	regexp.MustCompile(`Executor error during find command`),
-	regexp.MustCompile(`\$regex has to be a string`),
+// nosqliErrorSignatures are error texts only a document store's server, driver or ODM produces:
+// MongoDB, Elasticsearch (query_string / Lucene parsing) and CouchDB (Mango selectors). A bare
+// "SyntaxError" is not here: any Node JSON parser produces one.
+var nosqliErrorSignatures = []struct {
+	re     *regexp.Regexp
+	engine string
+}{
+	{regexp.MustCompile(`MongoServerError`), "MongoDB"},
+	{regexp.MustCompile(`\bMongoError\b`), "MongoDB"},
+	{regexp.MustCompile(`Mongo(Query|Command|Write|Cursor)Exception`), "MongoDB"},
+	{regexp.MustCompile(`com\.mongodb\.[A-Za-z]`), "MongoDB"},
+	{regexp.MustCompile(`MongoDB\\+Driver\\+Exception`), "MongoDB"},
+	{regexp.MustCompile(`pymongo\.errors\.`), "MongoDB"},
+	{regexp.MustCompile(`CastError: Cast to \w+ failed`), "MongoDB"},
+	{regexp.MustCompile(`\bBSON(Type)?Error\b`), "MongoDB"},
+	{regexp.MustCompile(`unknown operator: \$\w+`), "MongoDB"},
+	{regexp.MustCompile(`\$where[^\n]{0,80}(SyntaxError|JavaScript execution failed)`), "MongoDB"},
+	{regexp.MustCompile(`JavaScript execution failed`), "MongoDB"},
+	{regexp.MustCompile(`Executor error during find command`), "MongoDB"},
+	{regexp.MustCompile(`\$regex has to be a string`), "MongoDB"},
+	{regexp.MustCompile(`query_shard_exception|search_phase_execution_exception`), "Elasticsearch"},
+	{regexp.MustCompile(`Failed to parse query \[`), "Elasticsearch"},
+	{regexp.MustCompile(`org\.elasticsearch\.[a-z]`), "Elasticsearch"},
+	{regexp.MustCompile(`Cannot parse '[^'\n]{0,200}': (Encountered|Lexical error)`), "Elasticsearch"},
+	{regexp.MustCompile(`"error"\s*:\s*"(invalid_selector|invalid_operator|no_usable_index)"`), "CouchDB"},
+	{regexp.MustCompile(`Invalid operator: \$\w+`), "CouchDB"},
 }
 
-// nosqliSignature is the first MongoDB error signature in body, or "".
+// nosqliSignature is the first document-store error signature in body, or "".
 func nosqliSignature(body string) string {
-	for _, re := range nosqliErrorSignatures {
-		if m := re.FindString(body); m != "" {
+	for _, sig := range nosqliErrorSignatures {
+		if m := sig.re.FindString(body); m != "" {
 			return m
 		}
 	}
 	return ""
+}
+
+// nosqliEngine names the store a signature belongs to.
+func nosqliEngine(sig string) string {
+	for _, e := range nosqliErrorSignatures {
+		if e.re.MatchString(sig) {
+			return e.engine
+		}
+	}
+	return "database"
 }
 
 // ---------------------------------------------------------------------------
@@ -496,12 +515,13 @@ func (p *nosqliProber) operatorError(ctx context.Context, s nosqliSite, cv nosql
 			sig, first, firstR = got, v, r
 		}
 	}
-	detail := fmt.Sprintf("The %s %q was re-sent as a MongoDB query operator object. An operator MongoDB "+
+	engine := nosqliEngine(sig)
+	detail := fmt.Sprintf("The %s %q was re-sent as a %s query operator object. An operator %s "+
 		"does not define drew the database error %q (%s), twice with two different operator names, while "+
 		"the valid operator %s drew no such error (%s) and neither did the original request. The object "+
 		"reached the database query unchanged, so a client can supply query operators here; the response "+
 		"does not show what a valid operator matches, which is why this rests on the error.",
-		s.where, s.name, sig, nosqliShort(firstR), s.render(cv), nosqliShort(control))
+		s.where, s.name, engine, engine, sig, nosqliShort(firstR), s.render(cv), nosqliShort(control))
 	return p.finding(s.name, fmt.Sprintf("%s -> %s", s.render(first), sig), detail), nil
 }
 
@@ -536,7 +556,7 @@ func (p *nosqliProber) syntax(ctx context.Context, pt bcheck.InsertionPoint) (*F
 			return f, err
 		}
 	}
-	for _, br := range [][2]string{{"'", `\'`}, {`"`, `\"`}, {`\`, `\\`}} {
+	for _, br := range [][2]string{{"'", `\'`}, {`"`, `\"`}, {`\`, `\\`}, {"(", `\(`}} {
 		f, err := p.syntaxError(ctx, pt, br[0], br[1])
 		if f != nil || err != nil {
 			return f, err
@@ -639,11 +659,11 @@ func (p *nosqliProber) syntaxError(ctx context.Context, pt bcheck.InsertionPoint
 	if nosqliSignature(b2.Body) == "" {
 		return nil, nil
 	}
-	detail := fmt.Sprintf("Appending %s to the %s %q drew the MongoDB error %q (%s), again when "+
+	detail := fmt.Sprintf("Appending %s to the %s %q drew the %s error %q (%s), again when "+
 		"re-sent, while appending the escaped form %s drew no such error (%s) and the original request "+
-		"carries none. The value is concatenated into server-side JavaScript evaluated by MongoDB (a $where "+
-		"clause or similar), so an attacker can rewrite the query's logic.",
-		brk, idorKindLabel(pt.Kind), pt.Name, sig, nosqliShort(b1), repair, nosqliShort(r1))
+		"carries none. The value is concatenated into a query the %s parses (a $where clause, a "+
+		"query_string, a selector), so an attacker can rewrite the query's logic.",
+		brk, idorKindLabel(pt.Kind), pt.Name, nosqliEngine(sig), sig, nosqliShort(b1), repair, nosqliShort(r1), nosqliEngine(sig))
 	return p.finding(pt.Name, fmt.Sprintf("%s=%s%s -> %s", pt.Name, pt.BaseValue, brk, sig), detail), nil
 }
 
