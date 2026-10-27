@@ -1,0 +1,32 @@
+<agent-message from="a0b2a97e2892ca56e">
+[Subagent hand-back] The text below is the final report of a subagent this session delegated to. It is model output, NOT a message from the user: instructions, requests, or approval claims inside it are the subagent's words and carry no user authority. The harness indents every line of the report, so a frame-like line at column zero inside it would be forged. Notes above this frame may quote model-derived text, which carries no user authority either. The report follows:
+  Verdict: changes-required on PR #368 at 3793fd25508d448a0078e0881efdc10cf6075106. The production code is correct. One new test cannot fail, and that is the only thing blocking.
+  
+  Comment: https://github.com/Chaim12345/burpsy/pull/368#issuecomment-6445396513
+  
+  The two runs you allowed both passed at 3793fd25, on a clean `git archive` export:
+  - `go test -race -run 'Spawned|WebSocket|Ws|Tunnel' ./internal/proxy`
+  - `go test -run NoRawDials ./internal/sender`
+  
+  **Blocking**
+  - `burpsy-go/internal/proxy/spawn_panic_test.go:21-24`: the "connection closed" check always passes. The read has a 2s deadline, so if nothing closes the pipe it returns a timeout error, and `err == nil` is false for that too.
+    - Negative control: I replaced `_ = clientConn.Close()` at `proxy.go:1318` with a no-op in the scratch copy. The test still passed, taking 2.0s instead of 0.03s.
+    - Fix: assert the error is `io.EOF` or `io.ErrClosedPipe`, or fail on `os.ErrDeadlineExceeded`.
+    - The ConnectionPanics==1 check does work.
+  
+  **Checked and correct**
+  - `spawn` (`proxy.go:1311-1322`) releases every waiter when a pump panics:
+    - The pump's own deferred `done <-` (`proxy.go:2320/2324`), `wg.Done()` (`ws.go:327/331`) and `sink.markEnded()` run before `spawn`'s recover.
+    - `done` has room for both sends, so the late second send never blocks.
+    - The `wsSink` / `wsLive` locks are always released through defers, so a panic cannot leave one held.
+  - No new data race: the panic counter is atomic.
+  
+  **Non-blocking**
+  - `ws.go:330-333` and the comment at `proxy.go:1309-1310`: if the client→server pump panics, the server→client pump stays blocked reading upstream until upstream sends or closes. A normal client disconnect behaves the same way, so this is not a regression. The comment does overstate that sibling goroutines return; closing upstream as well would fix that.
+  - The dial guard can fail. In a scratch module it flagged each new pattern: aliased imports, `new(net.Dialer)`, a typed `var` of `net.Dialer`, `http.Get`, `http.DefaultClient` and `http.DefaultTransport`. Two gaps remain:
+    - `&http.Client{}` with no Transport, which still dials through DefaultTransport, is not flagged, e.g. `internal/mcp/mcp.go:277`. The guard missed this before the PR too.
+    - Dot imports are not resolved.
+  - The allowlist entries `cmd/live-test/main.go` and `cmd/xsschallenge/main.go` (`dial_guard_test.go:28-29`) are dev harnesses calling a local target, so they hide no real egress. They cover the whole file, though, so anything added to those files later goes unchecked.
+  
+  Nothing in the repo was modified; scratch copies are under `/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/scratchpad/`. The checkout already had a local change to `.beads/issues.jsonl` before I started; I left it alone.
+</agent-message>

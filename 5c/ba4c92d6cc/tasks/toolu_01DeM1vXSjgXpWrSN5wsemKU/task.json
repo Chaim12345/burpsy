@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01DeM1vXSjgXpWrSN5wsemKU",
+  "agent_id": "a0b2a97e2892ca56e",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review risk delta for gate",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 78667,
+    "cache_read_tokens": 1011135,
+    "output_tokens": 8905,
+    "api_call_count": 16
+  },
+  "started_at": "2026-10-27T14:57:10.15972832Z",
+  "completed_at": "2026-10-27T15:00:55.022140756Z"
+}
