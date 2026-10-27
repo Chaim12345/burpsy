@@ -56,6 +56,9 @@ let lastDecode: SmartResp | ExplicitResp | null = null;
  */
 let paneShowsDecode = false;
 
+/** The raw, unformatted text value of the last computed output (decoded, encoded, or hashed). */
+let lastRawOutput = "";
+
 export function initDecoder(): void {
   const el = $("#decoder");
   if (!el) return;
@@ -90,17 +93,41 @@ export function initDecoder(): void {
           <span class="hint">one-way — there is no decode back</span>
         </div>
       </div>
-      <div><pre id="dec-output"></pre></div>
+      <div class="stack">
+        <div class="row" style="justify-content: space-between;">
+          <b class="muted">Decoded Output</b>
+          <button class="ghost small" id="dec-copy" aria-label="Copy raw output to clipboard" disabled>Copy</button>
+        </div>
+        <pre id="dec-output"></pre>
+      </div>
     </div>
   `;
   $("#dec-run")!.addEventListener("click", () => void runDecode());
   $("#enc-run")!.addEventListener("click", () => void runEncode());
   $("#hash-run")!.addEventListener("click", () => void runHash());
+  $("#dec-copy")!.addEventListener("click", () => void copyOutput());
   $all<HTMLInputElement>('input[name="dec-view"]').forEach((r) => {
     r.addEventListener("change", () => {
       if (paneShowsDecode && lastDecode) $("#dec-output")!.innerHTML = renderDecodeResp(lastDecode);
     });
   });
+}
+
+async function copyOutput(): Promise<void> {
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
+  if (!lastRawOutput || btn.disabled) return;
+  try {
+    await navigator.clipboard.writeText(lastRawOutput);
+    const orig = btn.textContent;
+    btn.textContent = "Copied!";
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.disabled = false;
+    }, 1500);
+  } catch (e) {
+    console.error("Failed to copy text", e);
+  }
 }
 
 function viewMode(): ViewMode {
@@ -184,7 +211,9 @@ async function runDecode(): Promise<void> {
   const encoding = $<HTMLSelectElement>("#dec-encoding")!.value;
   const guess = $<HTMLInputElement>("#dec-guess")!.checked;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   out.textContent = "decoding…";
+  btn.disabled = true;
   try {
     const resp = await postJSON<SmartResp | ExplicitResp>("/api/tools/decode", {
       input,
@@ -193,10 +222,14 @@ async function runDecode(): Promise<void> {
     });
     lastDecode = resp;
     paneShowsDecode = true;
+    lastRawOutput = resp.output.text;
     out.innerHTML = renderDecodeResp(resp);
+    btn.disabled = !lastRawOutput;
   } catch (e) {
     paneShowsDecode = false;
+    lastRawOutput = "";
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    btn.disabled = true;
   }
 }
 
@@ -204,13 +237,19 @@ async function runEncode(): Promise<void> {
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const encoding = $<HTMLSelectElement>("#enc-encoding")!.value;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   paneShowsDecode = false;
   out.textContent = "encoding…";
+  btn.disabled = true;
   try {
     const resp = await postJSON<EncodeResp>("/api/tools/encode", { input, encoding });
+    lastRawOutput = resp.output.text;
     out.innerHTML = `<b>${esc(resp.encoding)}:</b>\n${bytesLine(resp.output)}`;
+    btn.disabled = !lastRawOutput;
   } catch (e) {
+    lastRawOutput = "";
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    btn.disabled = true;
   }
 }
 
@@ -218,15 +257,21 @@ async function runHash(): Promise<void> {
   const input = $<HTMLTextAreaElement>("#dec-input")!.value;
   const algorithm = $<HTMLSelectElement>("#hash-algorithm")!.value;
   const out = $("#dec-output")!;
+  const btn = $<HTMLButtonElement>("#dec-copy")!;
   // A digest has no layers to unwind and no Text/Hex choice worth making — hex is the only form
   // worth printing — so the view radio deliberately does not apply here.
   paneShowsDecode = false;
   out.textContent = "hashing…";
+  btn.disabled = true;
   try {
     const resp = await postJSON<HashResp>("/api/tools/hash", { input, algorithm });
     const bytes = resp.output.len / 2;
+    lastRawOutput = resp.output.text;
     out.innerHTML = `<b>${esc(resp.algorithm)}:</b>\n${esc(resp.output.text)}\n<span class="hint">(${bytes} bytes, hex)</span>`;
+    btn.disabled = !lastRawOutput;
   } catch (e) {
+    lastRawOutput = "";
     out.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    btn.disabled = true;
   }
 }
