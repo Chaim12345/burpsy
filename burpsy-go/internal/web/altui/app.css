@@ -84,7 +84,7 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
 .sev-Medium { background: #7a5b13; color: #ffe9a8; }
 .sev-Low { background: #1d4e89; color: #cae8ff; }
 .sev-Info, .sev-Informational { background: #2b3a4d; color: #c3d0e0; }
-.hl { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.hl { width: 10px; height: 10px; border-radius: 3px; display: inline-block; background: var(--mut, #667); }
 
 /* ---- map view ---- */
 #view-map { flex-direction: row; }
@@ -301,3 +301,11 @@ table.srows tr.data:hover { background: var(--bg-hover); }
 #pv-catbar input[type=search] { flex: 1; min-width: 140px; }
 
 .issue-row .sev { flex: 0 0 auto; }
+
+/* keyboard shortcuts affordance and dialog */
+.keys-btn { background: none; border: 1px solid var(--line); color: var(--mut); border-radius: 6px; width: 22px; height: 22px; cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
+.keys-btn:hover, .keys-btn:focus-visible { color: var(--fg); border-color: var(--fg); }
+.keys-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; font-size: 13px; }
+.keys-list kbd { background: var(--bg-panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; font-family: var(--mono); font-size: 12px; }
+.keys-list span { margin-left: 10px; color: var(--mut); }
+.rep-bar { display: flex; gap: 6px; align-items: center; margin-left: auto; flex-wrap: wrap; }

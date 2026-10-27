@@ -1,5 +1,5 @@
 import { api, esc, fmtTime, fmtBytes } from '../api.js';
-import { toast, runGated, hlDot, sevChip } from '../components.js';
+import { toast, runGated, hlDot, sevChip, wireDrawer } from '../components.js';
 
 // MAP - what do we know: live sitemap tree + HTTP history with filters.
 
@@ -22,6 +22,8 @@ export async function renderMap(el) {
         <select id="f-method"><option value="">any method</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
         <select id="f-status"><option value="">any status</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option></select>
         <label class="mut" style="font-size:12px"><input type="checkbox" id="f-scope"> in scope</label>
+        <button class="act" id="f-import" title="Import a HAR file (HTTP Archive) into recorded history: the entries are recorded as rows, nothing is sent to any target">Import</button>
+        <input type="file" id="f-import-file" accept=".har,application/json" hidden>
         <button class="act" id="f-export" title="Download the visible rows as one JSON file: request/response bytes from the store, base64, by message id">Export</button>
       </div>
       <div class="pane-body"><div id="map-rows"><div class="spin">loading…</div></div></div>
@@ -31,6 +33,9 @@ export async function renderMap(el) {
   el.querySelector('#f-status').onchange = (e) => { state.filters.status = e.target.value; drawRows(); };
   el.querySelector('#f-scope').onchange = (e) => { state.filters.inScopeOnly = e.target.checked; drawRows(); };
   el.querySelector('#f-export').onclick = exportVisible;
+  const fi = el.querySelector('#f-import-file');
+  el.querySelector('#f-import').onclick = () => fi.click();
+  fi.onchange = () => importHAR(fi);
   await refreshMap();
 }
 
@@ -199,7 +204,7 @@ function showDrawer(ex, req, resp, container) {
       </div>
     </div>`;
   (container || document.getElementById('view-map')).appendChild(d);
-  d.querySelector('#dx-close').onclick = () => d.remove();
+  wireDrawer(d, `Exchange ${ex.method || ''} ${ex.host || ''}:${ex.port || ''}${ex.path || ''}`);
   d.querySelector('#dx-hl').value = ex.highlight || '';
   d.querySelector('#dx-probe').onclick = () => {
     window.dispatchEvent(new CustomEvent('altui:probe-load', { detail: { exchange: ex.id } }));
@@ -220,6 +225,36 @@ function showDrawer(ex, req, resp, container) {
       if (r !== undefined) toast(`${ex.host}:${ex.port} added to scope`);
     } catch (e) { toast(e.message, true); }
   };
+}
+
+// importHAR records a HAR (HTTP Archive 1.2) file into history via
+// POST /api/history/import/har (riskLocal): the backend renders each entry
+// into stored request/response bytes and lists it as an ordinary row. Nothing
+// is replayed or sent to any target; the import is how traffic captured
+// elsewhere reaches Map, Search and Prove.
+async function importHAR(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  if (file.size > 64 * 1024 * 1024) { toast('that HAR is over the 64 MB import limit', true); return; }
+  let text;
+  try { text = await file.text(); } catch { toast('import: the file could not be read', true); return; }
+  let res;
+  try {
+    res = await fetch('/api/history/import/har', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: text,
+    });
+  } catch (e) { toast(`import failed: ${e.message}`, true); return; }
+  const raw = await res.text();
+  let data = null;
+  try { data = JSON.parse(raw); } catch { data = null; }
+  if (!res.ok) { toast(`import refused: ${(data && data.error) || raw.trim() || res.statusText}`, true); return; }
+  const skipped = data.skipped ? `, ${data.skipped} skipped` : '';
+  toast(`imported ${data.imported} exchange${data.imported === 1 ? '' : 's'} from ${file.name}${skipped}`);
+  if (data.errors && data.errors.length) toast(`first import problem: ${data.errors[0]}`, true);
+  refreshMap();
 }
 
 // exportVisible downloads the rows the history table currently shows as one

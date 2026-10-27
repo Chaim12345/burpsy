@@ -20,7 +20,7 @@
       <span class="rail-ico">&#8982;</span><span class="rail-label">Search</span>
     </button>
     <button class="rail-item" data-view="probe" title="Probe - poke it and see">
-      <span class="rail-ico">⌖</span><span class="rail-label">Probe</span>
+      <span class="rail-ico">&#10148;</span><span class="rail-label">Probe</span>
     </button>
     <button class="rail-item rail-held" data-view="attack" title="Attack - not built in this console yet">
       <span class="rail-ico">⚔</span><span class="rail-label">Attack</span>
@@ -29,13 +29,14 @@
       <span class="rail-ico">✓</span><span class="rail-label">Prove</span>
     </button>
     <button class="rail-item" data-view="scope" title="Scope - what may be reached">
-      <span class="rail-ico">&#9678;</span><span class="rail-label">Scope</span>
+      <span class="rail-ico">&#9673;</span><span class="rail-label">Scope</span>
     </button>
     <button class="rail-item" data-view="tools" title="Tools - decode, encode, hash, compare">
       <span class="rail-ico">&#9881;</span><span class="rail-label">Tools</span>
     </button>
     <div class="rail-spacer"></div>
     <a class="rail-item" href="/legacy" title="The original burpsy console"><span class="rail-ico">&#8617;</span><span class="rail-label">Legacy</span></a>
+    <button id="keys-btn" class="keys-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
     <div id="live-badge" class="live" title="Backend connection">
       <span class="live-dot"></span><span id="live-text">connecting</span>
     </div>
@@ -51,7 +52,7 @@
   </main>
 </div>
 <div id="modal-root"></div>
-<div id="toast-root"></div>
+<div id="toast-root" aria-live="polite"></div>
 <script type="module" src="/alt/app.js"></script>
 </body>
 </html>

@@ -4,9 +4,51 @@ export function toast(msg, isErr = false) {
   const root = document.getElementById('toast-root');
   const el = document.createElement('div');
   el.className = 'toast' + (isErr ? ' err' : '');
+  if (isErr) el.setAttribute('role', 'alert');
   el.textContent = msg;
   root.appendChild(el);
   setTimeout(() => el.remove(), 4200);
+}
+
+// Drawers are dialogs: give them an accessible name, move focus to the close
+// button when one opens, and return focus to whatever opened it when it
+// closes. The global Escape handler clicks the close button so every close
+// path (button, Escape, code) returns focus the same way.
+export function wireDrawer(d, label) {
+  d.setAttribute('role', 'dialog');
+  d.setAttribute('aria-label', label);
+  const prev = document.activeElement;
+  const closeBtn = d.querySelector('[id$=-close]');
+  if (closeBtn) {
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.onclick = () => { d.remove(); if (prev && prev.isConnected) prev.focus(); };
+    closeBtn.focus();
+  }
+}
+
+// The shortcuts that already exist, listed somewhere discoverable: the "?" key
+// and the "?" button next to the connection badge both open this.
+export function shortcutsDialog() {
+  const root = document.getElementById('modal-root');
+  const prev = document.activeElement;
+  root.innerHTML = `
+    <div class="modal-back">
+      <div class="modal" id="keys-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <h3>Keyboard shortcuts</h3>
+        <div class="keys-list">
+          <div><kbd>g</kbd> then <kbd>m</kbd> <kbd>s</kbd> <kbd>p</kbd> <kbd>v</kbd> <kbd>c</kbd> <kbd>t</kbd><span>switch lane: Map, Search, Probe, Prove, Scope, Tools</span></div>
+          <div><kbd>j</kbd> / <kbd>k</kbd><span>move the selected history row</span></div>
+          <div><kbd>Enter</kbd><span>open the selected row</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd><span>send, in Probe</span></div>
+          <div><kbd>Esc</kbd><span>close the open drawer or this dialog</span></div>
+          <div><kbd>?</kbd><span>show this list</span></div>
+        </div>
+        <div class="modal-btns"><button class="act primary" data-x="ok">Done</button></div>
+      </div>
+    </div>`;
+  const done = root.querySelector('#keys-dialog [data-x=ok]');
+  done.onclick = () => { root.innerHTML = ''; if (prev && prev.isConnected) prev.focus(); };
+  done.focus();
 }
 
 // Human-confirmation dialog for gated calls. Shows the exact call; the human's
@@ -43,9 +85,15 @@ export function sevChip(sev) {
   return `<span class="sev sev-${esc(sev)}">${esc(sev)}</span>`;
 }
 
+// Highlight colours come back from the store, so treat them as data: only the
+// known annotate palette is allowed into the inline style; anything else gets
+// the neutral default from .hl.
+const HL_COLORS = new Set(['red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'pink', 'gray']);
 export function hlDot(color) {
   if (!color) return '';
-  return `<span class="hl" style="background:${esc(color)}" title="${esc(color)}"></span>`;
+  const c = String(color).toLowerCase();
+  const style = HL_COLORS.has(c) ? ` style="background:${c}"` : '';
+  return `<span class="hl"${style} title="${esc(color)}"></span>`;
 }
 
 // Run a possibly-gated call: on a 428 challenge show the human the exact call,

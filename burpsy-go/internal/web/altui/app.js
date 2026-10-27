@@ -5,6 +5,7 @@ import { renderProve, refreshProve } from './views/prove.js';
 import { renderScope, refreshScope } from './views/scope.js';
 import { renderTools } from './views/tools.js';
 import { api } from './api.js';
+import { shortcutsDialog } from './components.js';
 
 const rendered = new Set();
 
@@ -72,7 +73,7 @@ function events() {
 
 // Keyboard-first (spec): g then letter switches workflow lane; Enter opens the
 // selected history row; j/k move the selection; ctrl/cmd+Enter sends in Probe.
-const laneKeys = { m: 'map', s: 'search', p: 'probe', v: 'prove' };
+const laneKeys = { m: 'map', s: 'search', p: 'probe', v: 'prove', c: 'scope', t: 'tools' };
 let gPending = false;
 window.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
@@ -82,7 +83,15 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing) return;
-  if (e.key === 'Escape') { document.querySelector('.drawer')?.remove(); return; }
+  if (e.key === 'Escape') {
+    // Close through the wired close button so focus returns to what opened it.
+    const dc = document.querySelector('.drawer [id$=-close]');
+    if (dc) { dc.click(); return; }
+    const kd = document.querySelector('#keys-dialog [data-x=ok]');
+    if (kd) { kd.click(); return; }
+    return;
+  }
+  if (e.key === '?') { shortcutsDialog(); return; }
   if (gPending) {
     gPending = false;
     const lane = laneKeys[e.key];
@@ -104,6 +113,8 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
 });
+
+document.getElementById('keys-btn').onclick = shortcutsDialog;
 
 health();
 setInterval(health, 10000);

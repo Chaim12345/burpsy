@@ -110,3 +110,20 @@ func TestAltUIIsNotServedForMutatingVerbs(t *testing.T) {
 		}
 	}
 }
+
+func TestAltDirectoriesAreNotListed(t *testing.T) {
+	s := newAuthServer(t)
+	hdr := authBasic("u", testAuthToken)
+	// Directory paths under /alt/ answer 404: the console ships a fixed set of
+	// files and a FileServer listing of the embedded tree tells an operator
+	// (or a scanner) nothing useful.
+	for _, path := range []string{"/alt/", "/alt/views", "/alt/views/"} {
+		if rec := authDoReq(s, http.MethodGet, path, "burpsy.example.com", hdr, ""); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 (no directory listing)", path, rec.Code)
+		}
+	}
+	// The files themselves still serve.
+	if rec := authDoReq(s, http.MethodGet, "/alt/views/map.js", "burpsy.example.com", hdr, ""); rec.Code != http.StatusOK {
+		t.Errorf("GET /alt/views/map.js = %d, want 200", rec.Code)
+	}
+}

@@ -40,6 +40,19 @@ func serveAlt(w http.ResponseWriter, r *http.Request) bool {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return true
 		}
+		// The console's assets are a fixed set of files; directories under /alt/
+		// answer 404 rather than a FileServer listing of the embedded tree.
+		f, err := sub.Open(strings.TrimPrefix(r.URL.Path, "/alt/"))
+		if err != nil {
+			http.NotFound(w, r)
+			return true
+		}
+		st, serr := f.Stat()
+		f.Close()
+		if serr != nil || st.IsDir() {
+			http.NotFound(w, r)
+			return true
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		http.StripPrefix("/alt/", http.FileServer(http.FS(sub))).ServeHTTP(w, r)
 		return true

@@ -1,5 +1,5 @@
 import { api, esc } from '../api.js';
-import { toast, sevChip } from '../components.js';
+import { toast, sevChip, wireDrawer } from '../components.js';
 
 // PROVE - the evidence. Two read-only lanes:
 //   Findings: consolidated findings with severity counts, full advisory detail
@@ -23,6 +23,14 @@ export async function renderProve(el) {
         <button class="act tools-tab" role="tab" data-tab="catalogue">Issue catalogue</button>
       </div>
       <span class="countbar" id="pv-counts"></span>
+      <span class="rep-bar">
+        <label class="mut" for="pv-repfmt" style="font-size:12px">report</label>
+        <select id="pv-repfmt" title="Findings report format">
+          <option value="json">JSON</option><option value="sarif">SARIF</option>
+          <option value="html">HTML</option><option value="xml">Burp XML</option>
+        </select>
+        <button class="act" id="pv-repgo" title="Download the current findings as a report file. Read-only: it changes nothing">Download</button>
+      </span>
     </div>
     <div id="pv-catbar" class="pane-head filters" hidden>
       <input type="search" id="pv-catq" placeholder="search name and description…" spellcheck="false" autocomplete="off">
@@ -37,6 +45,7 @@ export async function renderProve(el) {
   el.querySelector('#pv-catq').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); state.catQ = e.target.value.trim(); loadCatalogue(); } });
   el.querySelector('#pv-catq').addEventListener('search', (e) => { state.catQ = e.target.value.trim(); loadCatalogue(); });
   el.querySelector('#pv-catsev').onchange = (e) => { state.catSev = e.target.value; loadCatalogue(); };
+  el.querySelector('#pv-repgo').onclick = downloadReport;
   await refreshProve();
 }
 
@@ -149,7 +158,7 @@ function showDetail(f) {
       <div><div class="section-label">Occurrences</div>${occ}</div>
     </div>`;
   root.appendChild(d);
-  d.querySelector('#id-close').onclick = () => d.remove();
+  wireDrawer(d, `Finding: ${f.check_name || 'finding'}`);
   d.querySelectorAll('[data-ex]').forEach((b) => {
     b.onclick = () => {
       d.remove();
@@ -159,6 +168,25 @@ function showDetail(f) {
       }, 300);
     };
   });
+}
+
+// downloadReport saves the current findings as a report file
+// (GET /api/report/{json|sarif|html|xml}, riskRead): the backend renders the
+// same findings Prove lists into the chosen format. Read-only.
+async function downloadReport() {
+  const fmt = root.querySelector('#pv-repfmt').value;
+  let res;
+  try { res = await fetch(`/api/report/${fmt}`); } catch (e) { toast(`report failed: ${e.message}`, true); return; }
+  if (!res.ok) { toast(`report refused: ${(await res.text()).trim() || res.statusText}`, true); return; }
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const name = (cd.match(/filename="([^"]+)"/) || [])[1] || `burpsy-report.${fmt}`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`report downloaded (${name})`);
 }
 
 // ---- issue catalogue ----
@@ -227,6 +255,6 @@ async function openAdvisory(a) {
         ${linksBlock('Classifications', d.classifications)}
       </div>`;
     root.appendChild(el);
-    el.querySelector('#ad-close').onclick = () => el.remove();
+    wireDrawer(el, `Advisory: ${d.name || d.type_index || ''}`);
   } catch (e) { toast(`advisory: ${e.message}`, true); }
 }
