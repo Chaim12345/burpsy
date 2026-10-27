@@ -621,7 +621,11 @@ func speculativeURLFields(text string) []string {
 		if strings.HasSuffix(raw, "}") && strings.Count(raw, "{") > strings.Count(raw, "}") {
 			raw = strings.TrimRight(raw, ".,;:!?") + "}"
 		}
-		if raw == "" {
+		// A template literal's ${...} is a runtime value: `/users/${e.id}/orders` is queued as the
+		// whole segment before it, /users/, the same cut the JS extractor makes. The raw `${e.id}`
+		// text is a URL no client ever sends.
+		raw, ok := cutAtPlaceholder(raw, "${")
+		if !ok || raw == "" {
 			continue
 		}
 		isAbs := strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")

@@ -51,6 +51,16 @@ func TestTheSpeculativePhaseFindsTheStraightQuotedRoutes(t *testing.T) {
 			t.Errorf("%q was not extracted from a path-valued constant; got %v", want, got)
 		}
 	}
+	// A template literal's interpolation is never queued as text (burpsy-react-ui-crawl-template-literal):
+	// fetch(`/users/${e.id}/orders`) yields its whole leading segment, /users/, as the JS extractor does.
+	if !containsStr(got, "/users/") {
+		t.Errorf("the template literal's whole leading segment /users/ was not extracted; got %v", got)
+	}
+	for _, g := range got {
+		if strings.Contains(g, "${") {
+			t.Errorf("a raw template interpolation was extracted as a URL: %q", g)
+		}
+	}
 	// The bundle's own filename is NOT a path and must not become one. A .js file sitting at the site
 	// root is not a location, and admitting it is exactly the invented-URL failure the package refuses.
 	if containsStr(got, "static/js/main.a1b2c3.js") {
