@@ -325,6 +325,10 @@ func coreEndpoints() []Endpoint {
 			Note: "evaluates an arithmetic expression inside expression-language delimiters"},
 		{Path: "/include?tpl=seed", Row: "SSI injection",
 			Note: "runs reflected input through a Server-Side Includes processor"},
+		{Path: "/esi?tpl=seed", Row: "SSI injection",
+			Note: "reflects input through an Edge Side Includes processor, which deletes <!--esi--> comments"},
+		{Path: "/safe/esi?tpl=seed", Row: "SSI injection", Safe: true,
+			Note: "strips every HTML comment, so <!--esi--> vanishes without any ESI processor"},
 
 		// The stored pair. /comment persists and declares no row of its own - storing untrusted
 		// input is not the defect. /comments renders it, and is listed as a crawlable target so the
@@ -418,6 +422,8 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/profile", safeProfileLink)
 	mux.HandleFunc("/safe/note", safeEvalNote)
 	mux.HandleFunc("/safe/include", safeIncludePage)
+	mux.HandleFunc("/esi", esiPage)
+	mux.HandleFunc("/safe/esi", safeESIPage)
 
 	// Run-configuration fixtures: served, deliberately not in the manifest (vulnapp_runconfig.go).
 	registerRunConfigFixtures(mux)
@@ -1273,6 +1279,19 @@ func includePage(w http.ResponseWriter, r *http.Request) {
 		return p[3]
 	})
 	fmt.Fprintf(w, "<!DOCTYPE html><html><body>%s</body></html>", out)
+}
+
+var esiComment = regexp.MustCompile(`(?s)<!--esi(.*?)-->`)
+var anyComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+func esiPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<html><body>%s</body></html>", esiComment.ReplaceAllString(r.URL.Query().Get("tpl"), "$1"))
+}
+
+func safeESIPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, "<html><body>%s</body></html>", anyComment.ReplaceAllString(r.URL.Query().Get("tpl"), ""))
 }
 
 // safeIncludePage reflects the same value without running it through the processor. The literal
