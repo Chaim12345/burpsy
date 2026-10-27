@@ -409,19 +409,25 @@ type variant struct {
 	label       string
 	name        func(token, ext, safe string) string
 	contentType func(c fileClass, safe string) string
+	// prefix is written before the file's content: image magic bytes for a validator that sniffs them.
+	prefix string
 }
 
 var uploadVariants = []variant{
 	{"plain extension", func(t, e, _ string) string { return t + "." + e },
-		func(c fileClass, _ string) string { return c.contentType }},
+		func(c fileClass, _ string) string { return c.contentType }, ""},
 	{"declared Content-Type of an image", func(t, e, _ string) string { return t + "." + e },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
+		func(_ fileClass, s string) string { return mimeForExt(s) }, ""},
 	{"double extension", func(t, e, s string) string { return t + "." + s + "." + e },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
+		func(_ fileClass, s string) string { return mimeForExt(s) }, ""},
 	{"mixed-case extension", func(t, e, _ string) string { return t + "." + mixedCase(e) },
-		func(c fileClass, _ string) string { return c.contentType }},
+		func(c fileClass, _ string) string { return c.contentType }, ""},
 	{"null byte before an allowed extension", func(t, e, s string) string { return t + "." + e + "\x00." + s },
-		func(_ fileClass, s string) string { return mimeForExt(s) }},
+		func(_ fileClass, s string) string { return mimeForExt(s) }, ""},
+	{"GIF/content polyglot", func(t, e, _ string) string { return t + "." + e },
+		func(fileClass, string) string { return "image/gif" }, "GIF89a;\n"},
+	{"JPEG/content polyglot", func(t, e, _ string) string { return t + "." + e },
+		func(fileClass, string) string { return "image/jpeg" }, "\xff\xd8\xff\xe0\x00\x10JFIF\x00\n"},
 }
 
 func mixedCase(s string) string {
@@ -480,6 +486,7 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 				token := uploadToken()
 				marker := uploadMarker(token)
 				body, canary := c.content(marker)
+				body = v.prefix + body
 				a, err := p.upload(ctx, v.name(token, ext, safe), v.contentType(c, safe), body, token, marker)
 				if err != nil {
 					if errors.Is(err, errUploadBudget) {
@@ -527,7 +534,8 @@ func (p *uploadProber) run(ctx context.Context) ([]*Finding, error) {
 			fmt.Sprintf("%s %q accepts files whose extension is active content or a server-side script, "+
 				"and the application reports storing them under that extension. Every file sent was an "+
 				"inert marker string: this shows the extension filter is missing or bypassable, NOT that "+
-				"anything executes - whether a handler would run a stored server-script file was not tested.",
+				"anything executes - whether a handler would run a stored server-script file was not tested. "+
+				"The files were left where listed above; remove them after the test.",
 				p.point.Kind, p.point.Name)))
 	}
 	return findings, nil
