@@ -303,9 +303,10 @@ func (sm *SiteMap) Record(ex *core.Exchange) RecordResult {
 // did you add this" is a fact about the first time, and a re-add that moved it would make the
 // timestamp a record of the last click rather than of the decision.
 //
-// An inserted path that is ALREADY observed is recorded as nothing new: the observation is the
-// stronger fact about that node, the caller is told so, and the map does not gain a second entry
-// claiming a URL was never looked at when it was.
+// An inserted path that traffic ALREADY accounts for - the node itself, or a folder some observed
+// node sits beneath - is recorded as nothing new: the observation is the stronger fact about that
+// place on the map, the caller is told so, and the map does not gain an entry the read would hide
+// (burpsy-react-ui-86l0: a folder insert was stored, hidden, and answered already_seen:false).
 func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added time.Time) (alreadyObserved bool) {
 	if host == "" {
 		return false
@@ -317,7 +318,7 @@ func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if sm.observedLocked(host, port, tls, path) {
+	if sm.coveredLocked(host, port, tls, path) {
 		return true
 	}
 	key := insertKey(host, port, tls, path)

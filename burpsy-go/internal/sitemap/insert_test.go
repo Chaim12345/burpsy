@@ -112,3 +112,23 @@ func sitemapExchange(t *testing.T, host string, port uint16, tls bool, path stri
 	status := uint16(200)
 	return &core.Exchange{Request: core.MsgPtr(id), Host: host, Port: port, TLS: tls, Method: "GET", Path: path, Status: &status}
 }
+
+// A folder with observed traffic beneath it is already on the map: the read hides an insert there,
+// so storing one would be a hidden row and an already_seen:false answer for a change nobody can see
+// (burpsy-react-ui-86l0).
+func TestAnInsertAtAnObservedFolderSaysSo(t *testing.T) {
+	sm := New()
+	sm.Add(sitemapExchange(t, "seen.test", 443, true, "/app/users/7"))
+	for _, folder := range []string{"/app", "/app/users", "/"} {
+		if observed := sm.Insert("seen.test", 443, true, folder, time.Now()); !observed {
+			t.Errorf("inserting %s, which observed traffic sits beneath, reported it as new", folder)
+		}
+	}
+	if len(sm.Inserts()) != 0 {
+		t.Errorf("Inserts = %+v, want none: every one of those folders is already covered", sm.Inserts())
+	}
+	// A sibling nothing was observed under is still a new insert.
+	if observed := sm.Insert("seen.test", 443, true, "/admin", time.Now()); observed {
+		t.Error("an uncovered sibling was reported as already observed")
+	}
+}
