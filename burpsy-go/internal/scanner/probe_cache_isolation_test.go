@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 func TestWithCacheBusterRawRewritesOnlyTheRequestTarget(t *testing.T) {
@@ -116,7 +117,7 @@ func TestCachePoisonCookieInputsReplaceOneCookieAndKeepTheRest(t *testing.T) {
 func TestReflectedXSSBehindARouteKeyedCacheInAJSONEnvelope(t *testing.T) {
 	rt := startRuntimeTarget(t)
 	if !rt.chrome {
-		t.Skip("no Chrome on PATH: the fragment render is NOT exercised in this run")
+		domexectest.Skip(t, "no Chrome on PATH: the fragment render is untested")
 	}
 	got := rt.findingsFor(t, "/cx/banner/view?banner=hello", true)
 	f := got[xssReflectedIssue]

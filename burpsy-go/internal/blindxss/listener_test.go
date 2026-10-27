@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 // newTestListener binds an ephemeral loopback port and closes it with the test.
@@ -69,7 +70,7 @@ func TestGeneratePayloadMintsDistinctTokens(t *testing.T) {
 func TestCaptureThroughRealBrowser(t *testing.T) {
 	browser, err := domexec.NewBrowser(context.Background(), domexec.Options{Timeout: 30 * time.Second})
 	if err != nil {
-		t.Skipf("no headless browser available: %v", err)
+		domexectest.Skipf(t, "no headless browser could be launched: %v", err)
 	}
 	t.Cleanup(func() { _ = browser.Close() })
 
@@ -140,7 +141,7 @@ func TestCaptureThroughRealBrowser(t *testing.T) {
 func TestDOMSnippetIsCapped(t *testing.T) {
 	browser, err := domexec.NewBrowser(context.Background(), domexec.Options{Timeout: 30 * time.Second})
 	if err != nil {
-		t.Skipf("no headless browser available: %v", err)
+		domexectest.Skipf(t, "no headless browser could be launched: %v", err)
 	}
 	t.Cleanup(func() { _ = browser.Close() })
 

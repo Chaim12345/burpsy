@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"html"
 	"strings"
 	"testing"
@@ -107,7 +108,7 @@ func TestTheNullByteVariantFindsTheGalleryAndNotItsSafeTwin(t *testing.T) {
 func TestTheNullByteFragmentsAreConfirmedInTheBrowser(t *testing.T) {
 	rt := startRuntimeTarget(t)
 	if !rt.chrome {
-		t.Skip("no Chrome on PATH: the fragment rows are NOT exercised in this run")
+		domexectest.Skip(t, "no Chrome on PATH: the fragment rows are untested")
 	}
 	for _, tc := range []struct{ path, row string }{
 		{"/nullbyte/img?src=owl.jpg", xssReflectedIssue},

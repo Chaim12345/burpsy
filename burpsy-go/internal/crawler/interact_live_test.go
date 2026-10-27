@@ -6,34 +6,28 @@ package crawler
 // stub out, so a regression in the engine or in how the crawler calls it fails here.
 //
 // Untagged, matching internal/domexec's own tests, which launch Chrome in the normal suite. Chrome's
-// absence is a skip with a reason when BURPSY_ALLOW_NO_CHROME=1 is set and a failure otherwise — the
-// same convention internal/scanner uses, because a silent skip here would report the SPA capability
-// green while nothing about it was exercised.
+// absence (or a Chrome that cannot start) is a counted skip: the test says why, and TestMain fails
+// the package unless BURPSY_ALLOW_NO_CHROME=1 — the same ledger every browser-driving package uses
+// (internal/domexec/domexectest), because a silent skip here would report the SPA capability green
+// while nothing about it was exercised. This helper used to name the escape hatch in its failure
+// message without honouring it.
 
 import (
 	"context"
-	"os/exec"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 func chromeForCrawl(t *testing.T) *domexec.Browser {
 	t.Helper()
-	found := false
-	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable", "chrome"} {
-		if _, err := exec.LookPath(name); err == nil {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatal("no Chrome binary on PATH: the SPA interaction capability would go untested. Install " +
-			"Chrome/Chromium, or set BURPSY_ALLOW_NO_CHROME=1 to accept that this run does not exercise it.")
+	if !domexectest.ChromeOnPath() {
+		domexectest.Skip(t, "no Chrome binary on PATH: the SPA interaction capability is untested")
 	}
 	b, err := domexec.NewBrowser(context.Background(), domexec.Options{})
 	if err != nil {
-		t.Fatalf("launching Chrome: %v", err)
+		domexectest.Skipf(t, "Chrome is on PATH but could not be launched: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
 	return b

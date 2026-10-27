@@ -47,8 +47,12 @@ echo "found $chrome: $("$chrome" --version 2>&1 | head -1)"
 # as root in containers and as the runner user here), so a shard's first test does not pay for a
 # cold start, and so a Chrome that cannot start at all is visible here with its own error output
 # instead of only as "websocket url timeout reached" deep in a test (bead burpsy-react-ui-2o0c).
-# The time is printed; a failed warm-up warns (the tests decide) and shows the tail of what Chrome
-# said.
+# The time is printed; a failed warm-up FAILS this script and shows the tail of what Chrome said. It
+# used to only warn and leave it to the tests, but a browser test that cannot launch Chrome skips,
+# and before the skip ledger (internal/domexec/domexectest, bead burpsy-react-ui-chrome-skip-green)
+# that skip was green: ~35 domexec tests reported "ok" having run nothing. The ledger now fails the
+# package too, but failing here names the real cause once, with Chrome's own output, instead of as a
+# list of skipped tests in every shard.
 #
 # It runs in the BACKGROUND while xmllint and the pinned tools install, and is reported (time, exit
 # status, stderr tail) by warm_report at the end of this script. On GitHub runners the warm-up took
@@ -69,13 +73,16 @@ warm_report() {
   read -r rc secs <"$warm_rc" || { rc=unknown; secs="?"; }
   if [ "$rc" = 0 ]; then
     echo "$chrome warm-up: ${secs}s (in parallel with the installs)"
-  else
-    echo "ci-install-tools: warning: $chrome warm-up failed (exit $rc) after ${secs}s; its last output:" >&2
-    tail -n 25 "$warm_log" >&2
+    rm -f "$warm_log" "$warm_rc"
+    return 0
   fi
+  echo "ci-install-tools: $chrome warm-up failed (exit $rc) after ${secs}s, so the browser tests cannot run; its last output:" >&2
+  tail -n 25 "$warm_log" >&2
   rm -f "$warm_log" "$warm_rc"
+  return 1
 }
-# A failing install below must not swallow the warm-up's diagnostics.
+# A failing install below must not swallow the warm-up's diagnostics. (As the EXIT trap its return
+# status is ignored: the script is already failing for the install's reason.)
 trap warm_report EXIT
 
 # xmllint validates the Burp-XML export against the DTD in internal/report/burpxml.go. Without it
@@ -171,7 +178,7 @@ if ! current templates "$TEMPLATES_SHA256" "$templates/http"; then
 fi
 test -d "$templates/http" || { echo "ci-install-tools: nuclei template corpus did not land in $templates" >&2; exit 1; }
 
-warm_report
+warm_report || exit 1
 
 if [ -n "${GITHUB_PATH:-}" ]; then echo "$bin" >> "$GITHUB_PATH"; fi
 export PATH="$bin:$PATH"

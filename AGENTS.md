@@ -130,6 +130,18 @@ go vet ./...                   # must be clean
 ../e2e-go.sh                   # end-to-end against the Go binary
 ```
 
+A missing capability fails a package; it does not skip it green. Tests that need something the
+machine may lack skip with a counted reason, and the package then fails unless the matching escape
+hatch says the reduced run is deliberate. CI sets none of these:
+
+- `BURPSY_ALLOW_NO_CHROME=1`: browser-driving packages (domexec, dominvader, blindxss, browser,
+  crawler, scanner, web) pass with their Chrome tests skipped, listing them on stderr. The ledger is
+  `burpsy-go/internal/domexec/domexectest`; Playwright's Chromium works if it is on PATH as `chromium`.
+- `BURPSY_ALLOW_UNVERIFIED_COVERAGE=1`: `internal/scanner`'s runtime coverage pin accepts rows
+  skipped for a missing capability.
+- `BURPSY_ALLOW_UNVERIFIED_EXTSCAN=1`: `internal/extscan` and `internal/web`'s discovery tests pass
+  without ffuf, nuclei or the template corpus.
+
 UI changes (anything under `burpsy-go/internal/web/ui/`): CI's `ui` job runs `bun run check`,
 `bun run build` and fails when the committed bundle differs from a fresh build; run `bun run check`
 yourself first (T1). The live browser pass is manual — no CI runs it:
