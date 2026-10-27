@@ -105,7 +105,7 @@ func concretePath(pattern, subPath string) string {
 var manifest = map[string]route{
 	"/": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "the operator console: index.html, app.js, style.css, and the SPA catch-all",
+		summary: "the operator console: / is the alternative console (index.html), /alt/ its embedded assets, /legacy the original console, root app.js and style.css the original assets, and the SPA catch-all",
 	},
 	"/api/advisories": {
 		methods: []string{"GET"}, risk: riskRead,
