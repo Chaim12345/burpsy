@@ -21,10 +21,10 @@ function switchView(name) {
     if (name === 'tools') renderTools(el);
     if (name === 'scope') renderScope(el);
     if (name === 'attack') el.innerHTML = `<div class="empty" style="margin:auto">
-      <b>Attack is held in this build.</b><br><br>
-      Active scanning, intruder runs and crawls send unbounded traffic at a target.
-      That lane is held by project policy, so this MVP does not surface those controls.
-      Probe (single deliberate requests) and Map (observed traffic) are the live lanes.</div>`;
+      <b>Attack is not built in this console yet.</b><br><br>
+      Active scanning, intruder runs and crawls send unbounded traffic at a target,
+      so those controls get their own careful build. Probe (single deliberate
+      requests) and Map (observed traffic) are the live lanes.</div>`;
   } else {
     if (name === 'map') refreshMap();
     if (name === 'prove') refreshProve();
@@ -33,7 +33,7 @@ function switchView(name) {
 }
 
 document.querySelectorAll('.rail-item').forEach((b) => {
-  b.onclick = () => { if (!b.classList.contains('rail-held')) switchView(b.dataset.view); };
+  b.onclick = () => switchView(b.dataset.view);
 });
 
 window.addEventListener('altui:probe-load', (ev) => {

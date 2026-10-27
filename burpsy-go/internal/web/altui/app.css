@@ -299,3 +299,5 @@ table.srows tr.data:hover { background: var(--bg-hover); }
 .adv-link { color: var(--info); font-size: 12.5px; word-break: break-all; }
 #pv-catbar { flex: 0 0 auto; }
 #pv-catbar input[type=search] { flex: 1; min-width: 140px; }
+
+.issue-row .sev { flex: 0 0 auto; }

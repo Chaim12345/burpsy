@@ -28,6 +28,7 @@ export async function renderProve(el) {
       <input type="search" id="pv-catq" placeholder="search name and description…" spellcheck="false" autocomplete="off">
       <select id="pv-catsev"><option value="">any severity</option></select>
       <span class="mut" id="pv-catmeta"></span>
+      <span class="mut" style="flex-basis:100%;font-size:11px">Reference text from the issue-definition catalogue. A definition existing here does not mean burpsy runs a check for it.</span>
     </div>
     <div class="pane-body" id="pv-list"><div class="spin">loading…</div></div>`;
   el.querySelectorAll('.tools-tab').forEach((b) => {
