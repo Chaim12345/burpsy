@@ -244,125 +244,124 @@ func ResponseFraming(head []byte) (transferEncoding, contentLength string) {
 // head's framing. head must be exactly what ReadResponseHead returned. A head
 // that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
 // nothing and returns an empty body, leaving whatever follows in br.
+//
+// A *TruncatedBodyError comes back WITH the bytes that arrived: the peer closed
+// short of its declared Content-Length.
+//
+// A chunk size that is not one (a sign, a non-hex byte, too many digits — see
+// ParseChunkSize) is an ordinary error with no body.
 func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 	var body bytes.Buffer
-	if responseHasBody(head) {
-		te, cl := ResponseFraming(head)
-
-		// remaining bounds the total body we will buffer, so a malicious upstream
-		// that declares a huge Content-Length or streams endless chunks cannot
-		// exhaust the proxy's memory. Reads past the cap are truncated.
-		remaining := MaxResponseBodyBytes
-
-		if strings.EqualFold(te, "chunked") {
-			// Read chunked body until the terminating zero chunk.
-			for {
-				sizeLine, err := br.ReadString('\n')
-				if err != nil {
-					return nil, fmt.Errorf("reading chunk size: %w", err)
-				}
-				body.WriteString(sizeLine)
-				sizeStr := strings.TrimSpace(strings.SplitN(sizeLine, ";", 2)[0])
-				size, err := strconv.ParseInt(sizeStr, 16, 64)
-				if err != nil {
-					return nil, fmt.Errorf("bad chunk size %q: %w", sizeStr, err)
-				}
-				if size == 0 {
-					// Trailer until blank line.
-					for {
-						line, err := br.ReadString('\n')
-						if err != nil {
-							return nil, fmt.Errorf("reading chunk trailer: %w", err)
-						}
-						body.WriteString(line)
-						if line == "\r\n" || line == "\n" {
-							break
-						}
-					}
-					break
-				}
-				// Cap the chunk size before allocating: a malicious upstream can
-				// declare a multi-exabyte chunk to OOM the proxy. We read at most
-				// `remaining` of it and drop the rest of this chunk.
-				readSize := size
-				if readSize > int64(remaining) {
-					readSize = int64(remaining)
-				}
-				chunk := make([]byte, readSize)
-				if readSize > 0 {
-					if _, err := io.ReadFull(br, chunk); err != nil {
-						return nil, fmt.Errorf("reading chunk data: %w", err)
-					}
-					remaining -= int(readSize)
-				}
-				body.Write(chunk)
-				// Drain the chunk bytes we chose not to keep, plus the trailing
-				// CRLF, so the stream stays framed for any bytes after the cap.
-				drop := int64(size - readSize)
-				if drop > 0 {
-					if _, err := io.CopyN(io.Discard, br, drop); err != nil {
-						return nil, fmt.Errorf("discarding oversized chunk: %w", err)
-					}
-				}
-				// Chunk data is followed by CRLF.
-				crlf := make([]byte, 2)
-				if _, err := io.ReadFull(br, crlf); err != nil {
-					return nil, fmt.Errorf("reading chunk terminator: %w", err)
-				}
-				body.Write(crlf)
-				if remaining <= 0 {
-					// At the cap: stop reading further chunks rather than looping
-					// forever on an endless stream.
-					break
-				}
-			}
-		} else if cl != "" {
-			n, err := strconv.ParseInt(cl, 10, 64)
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("bad Content-Length %q", cl)
-			}
-			if n > 0 {
-				// Cap the allocation: a declared Content-Length in the exabytes
-				// must not allocate that much before we read a byte.
-				readN := n
-				if readN > int64(remaining) {
-					readN = int64(remaining)
-				}
-				buf := make([]byte, readN)
-				if n, err := io.ReadFull(br, buf); err != nil {
-					// Only a clean end-of-stream shortage is a truncated body to
-					// salvage: the peer closed short, so the partial is everything it
-					// ever sent — OWASP Juice Shop's serve-index /ftp/ listing
-					// declares 59 more bytes than it ever writes. Hand the partial
-					// body back with a typed error so a caller that can frame it
-					// honestly (close-delimited, see CloseDelimitedHead) may use it;
-					// callers that cannot discard it on err exactly as before.
-					//
-					// Any other failure — a timeout, a cancellation, a reset — means
-					// the origin was still writing when the read died, and salvaging
-					// that partial as if the reply had completed would invent bytes
-					// the origin never sent (PR #363 review: a body read that hits
-					// the caller's deadline mid-stream must fail the send, not
-					// complete it).
-					if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-						return nil, fmt.Errorf("reading body: %w", err)
-					}
-					body.Write(buf[:n])
-					return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
-				}
-				remaining -= int(readN)
-				body.Write(buf)
-			}
-		} else {
-			// No framing: body runs until EOF (HTTP/1.0 style), capped.
-			if _, err := io.CopyN(&body, br, int64(remaining)); err != nil && err != io.EOF {
-				return nil, fmt.Errorf("reading EOF-delimited body: %w", err)
-			}
-		}
+	if !responseHasBody(head) {
+		return body.Bytes(), nil
 	}
+	te, cl := ResponseFraming(head)
 
-	return body.Bytes(), nil
+	// remaining bounds the total body we will buffer, so a malicious upstream
+	// that declares a huge Content-Length or streams endless chunks cannot
+	// exhaust the proxy's memory. Reads past the cap are truncated.
+	remaining := maxResponseBodyBytes
+
+	switch {
+	case strings.EqualFold(te, "chunked"):
+		// The body keeps its chunk framing verbatim: callers forward and record
+		// the wire bytes, and dechunk later where they need the payload.
+		for {
+			sizeLine, err := readChunkLine(br, MaxChunkLineBytes)
+			if err != nil {
+				return nil, fmt.Errorf("reading chunk size: %w", err)
+			}
+			size, err := ParseChunkSize(sizeLine)
+			if err != nil {
+				return nil, err
+			}
+			if size == 0 {
+				body.WriteString(sizeLine)
+				if err := readChunkTrailers(br, func(line string) { body.WriteString(line) }); err != nil {
+					return nil, err
+				}
+				return body.Bytes(), nil
+			}
+			if remaining == 0 {
+				// The cap fell exactly on a chunk boundary and the peer has another
+				// non-empty chunk: the body is longer than the cap. The size line
+				// just read is not kept — the prefix ends on a whole chunk.
+				return body.Bytes(), nil
+			}
+			body.WriteString(sizeLine)
+			// Cap the read before allocating: a declared multi-exabyte chunk must
+			// not allocate that much. ParseChunkSize already bounds size to 2^60.
+			readSize := size
+			if readSize > int64(remaining) {
+				readSize = int64(remaining)
+			}
+			if _, err := io.CopyN(&body, br, readSize); err != nil {
+				return nil, fmt.Errorf("reading chunk data: %w", err)
+			}
+			remaining -= int(readSize)
+			if readSize < size {
+				// The rest of this chunk is past the cap. It is deliberately not
+				// drained: draining would only let a peer declaring an enormous
+				// chunk keep this read busy for nothing.
+				return body.Bytes(), nil
+			}
+			// Chunk data is followed by CRLF.
+			var crlf [2]byte
+			if _, err := io.ReadFull(br, crlf[:]); err != nil {
+				return nil, fmt.Errorf("reading chunk terminator: %w", err)
+			}
+			body.Write(crlf[:])
+		}
+	case cl != "":
+		n, err := strconv.ParseInt(cl, 10, 64)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("bad Content-Length %q", cl)
+		}
+		if n == 0 {
+			return body.Bytes(), nil
+		}
+		// Cap the allocation: a declared Content-Length in the exabytes
+		// must not allocate that much before we read a byte.
+		readN := n
+		if readN > int64(remaining) {
+			readN = int64(remaining)
+		}
+		buf := make([]byte, readN)
+		if n, err := io.ReadFull(br, buf); err != nil {
+			// Only a clean end-of-stream shortage is a truncated body to
+			// salvage: the peer closed short, so the partial is everything it
+			// ever sent — OWASP Juice Shop's serve-index /ftp/ listing
+			// declares 59 more bytes than it ever writes. Hand the partial
+			// body back with a typed error so a caller that can frame it
+			// honestly (close-delimited, see CloseDelimitedHead) may use it;
+			// callers that cannot discard it on err exactly as before.
+			//
+			// Any other failure — a timeout, a cancellation, a reset — means
+			// the origin was still writing when the read died, and salvaging
+			// that partial as if the reply had completed would invent bytes
+			// the origin never sent (PR #363 review: a body read that hits
+			// the caller's deadline mid-stream must fail the send, not
+			// complete it).
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, fmt.Errorf("reading body: %w", err)
+			}
+			body.Write(buf[:n])
+			return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
+		}
+		body.Write(buf)
+		return body.Bytes(), nil
+	default:
+		// No framing: body runs until EOF (HTTP/1.0 style), capped.
+		if _, err := io.CopyN(&body, br, int64(remaining)); err != nil && err != io.EOF {
+			return nil, fmt.Errorf("reading EOF-delimited body: %w", err)
+		}
+		return body.Bytes(), nil
+	}
 }
+
+// maxResponseBodyBytes is the cap ReadResponseBody applies: MaxResponseBodyBytes, held in a
+// variable so this package's tests can lower it rather than push 64 MiB through every case.
+var maxResponseBodyBytes = MaxResponseBodyBytes
 
 // ResponseStatus parses the numeric status code from a raw response's first
 // line, or nil when the line cannot be read. It exists so senders that talk in
