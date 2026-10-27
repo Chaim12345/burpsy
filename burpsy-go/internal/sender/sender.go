@@ -371,8 +371,16 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 				Resolver:           settings.dialer().Resolver,
 				ClientCerts:        config.ClientCerts,
 			}
-			if policy != nil && !policy.Empty() {
-				dialer.Carry = upstream.Dialer{Policy: policy, Timeout: config.Timeout, Base: settings.dialer()}.DialContext
+			// Policy OR carrier, the raw path's rule (dialTLS; dialIdentity.wrap). Gating on the policy
+			// alone, and building the Dialer without the carrier, sent a client-cert TLS send straight
+			// to the origin when only a SOCKS hop was configured (burpsy-react-ui-socks-tls-bypass).
+			if (policy != nil && !policy.Empty()) || carrier != nil {
+				dialer.Carry = upstream.Dialer{
+					Policy:  policy,
+					Timeout: config.Timeout,
+					Base:    settings.dialer(),
+					Carrier: carrier,
+				}.DialContext
 			}
 			addr = settings.overrideAddr(addr)
 			// The offer matches ForceAttemptHTTP2 above: the transport inspects the negotiated protocol
