@@ -9,22 +9,22 @@
   <body>
     <header>
       <h1>burpsy</h1>
-      <nav>
-        <button class="on" data-t="dashboard">Dashboard</button>
-        <button data-t="history">History</button>
-        <button data-t="wshistory">WS History</button>
-        <button data-t="sitemap">Site map</button>
-        <button data-t="repeater">Repeater</button>
-        <button data-t="intruder">Intruder</button>
-        <button data-t="intercept">Intercept</button>
-        <button data-t="scanner">Scanner</button>
-        <button data-t="decoder">Decoder</button>
-        <button data-t="comparer">Comparer</button>
-        <button data-t="logger">Logger</button>
-        <button data-t="organizer">Organizer</button>
-        <button data-t="matchreplace">Match/Replace</button>
-        <button data-t="session">Session</button>
-        <button data-t="sequencer">Sequencer</button>
+      <nav role="tablist" aria-label="Main Navigation">
+        <button role="tab" aria-selected="true" class="on" data-t="dashboard">Dashboard</button>
+        <button role="tab" aria-selected="false" data-t="history">History</button>
+        <button role="tab" aria-selected="false" data-t="wshistory">WS History</button>
+        <button role="tab" aria-selected="false" data-t="sitemap">Site map</button>
+        <button role="tab" aria-selected="false" data-t="repeater">Repeater</button>
+        <button role="tab" aria-selected="false" data-t="intruder">Intruder</button>
+        <button role="tab" aria-selected="false" data-t="intercept">Intercept</button>
+        <button role="tab" aria-selected="false" data-t="scanner">Scanner</button>
+        <button role="tab" aria-selected="false" data-t="decoder">Decoder</button>
+        <button role="tab" aria-selected="false" data-t="comparer">Comparer</button>
+        <button role="tab" aria-selected="false" data-t="logger">Logger</button>
+        <button role="tab" aria-selected="false" data-t="organizer">Organizer</button>
+        <button role="tab" aria-selected="false" data-t="matchreplace">Match/Replace</button>
+        <button role="tab" aria-selected="false" data-t="session">Session</button>
+        <button role="tab" aria-selected="false" data-t="sequencer">Sequencer</button>
       </nav>
       <a id="ca-link" href="/ca.crt" download style="display: none">CA cert</a>
       <span id="scope-badge" class="badge" title=""></span>
