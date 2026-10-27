@@ -2626,6 +2626,15 @@ algorithms are not in the documentation, burpsy's stated rules are recorded here
   except for…" (the always-test extension list is the `extensions` field) and the case-sensitivity
   mode (ffuf matches paths as the target serves them). Neither is in this bead's scope; both are
   one-option follow-ups if an engagement needs them.
+- **Every ffuf/nuclei request goes through a scope gate (burpsy-react-ui-extscan-egress, 2026-10-27).**
+  Each run starts a burpsy-owned loopback forward proxy (`internal/egressgate`) and passes it as ffuf
+  `-x` / nuclei `-proxy`; it refuses out-of-scope requests before they are dialled (counted and sampled
+  on the result as `GateRefused`/`GateRefusals`; a nuclei run with refusals is `partial`) and dials the
+  rest through the sender's egress route. nuclei runs HTTP templates only (`-pt http`) because its other
+  protocols dial around an HTTP proxy, and its default rate is 50 req/s, not nuclei's 150. Limits: an
+  HTTPS target is gated per tunnel (host:port), so the whole host must be in scope and path-scoped
+  excludes inside it are not visible (TLS interception in the gate would close this); ffuf has no default
+  rate cap; `tlsprobe` and `oob` (public OAST pool by default) still dial on their own.
 - **A running run's `by_status` serialises as []** — a pre-existing null that crashed the console's
   status chips the first time an e2e sweep rendered a running run (the tool had never been
   allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:

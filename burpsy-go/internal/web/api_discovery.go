@@ -271,6 +271,10 @@ func discoverySummary(res extscan.FFUFResult) string {
 		fmt.Fprintf(&b, "; %d were dropped as outside the engagement scope, leaving %d",
 			res.OutOfScope, len(res.Discoveries))
 	}
+	if res.GateRefused > 0 {
+		fmt.Fprintf(&b, "; burpsy's egress gate refused %d out-of-scope request(s) before they were sent",
+			res.GateRefused)
+	}
 	b.WriteString(". A path this wordlist does not contain was never asked for, so an absence here is " +
 		"an absence of guesses rather than of content.")
 	return b.String()
@@ -332,11 +336,16 @@ type discoveryStartReq struct {
 	VariantExtensions string `json:"variant_extensions"`
 }
 
-// extscanConfig is the delegated-tool configuration for this process: the operator's allowlist and
-// nothing else. Bounds fall through to extscan's documented defaults so "what bounds a delegated run"
-// has one answer.
+// extscanConfig is the delegated-tool configuration for this process: the operator's allowlist, and
+// the sender's egress dialer for the run's scope-gating proxy (so a delegated scan leaves through the
+// operator's upstream proxy, SOCKS carrier and resolution table). Bounds fall through to extscan's
+// documented defaults so "what bounds a delegated run" has one answer.
 func (s *Server) extscanConfig() extscan.Config {
-	return extscan.Config{Tools: s.externalTools}
+	cfg := extscan.Config{Tools: s.externalTools}
+	if s.sender != nil {
+		cfg.EgressDial = s.sender.EgressDialContext
+	}
+	return cfg
 }
 
 // handleDiscovery serves POST /api/discovery (start) and GET /api/discovery (list, or one by ?task=).

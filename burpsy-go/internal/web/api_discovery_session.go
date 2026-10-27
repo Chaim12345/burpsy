@@ -342,10 +342,15 @@ const (
 func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, target extscan.Target, req discoveryStartReq, wordlist string) discoverySession {
 	session := discoverySession{}
 	runs := 0
+	// Every sweep's egress-gate refusals, summed onto the session result at the end so the summary
+	// counts the whole session's, not the base sweep's alone.
+	gateRefused := 0
 	sweep := func(t extscan.Target, opts extscan.FFUFOptions) extscan.FFUFResult {
 		runs++
 		opts.MatchCodes, opts.Threads, opts.Rate = req.MatchCodes, req.Threads, req.Rate
-		return extscan.RunFFUF(ctx, cfg, s.scope, t, opts)
+		r := extscan.RunFFUF(ctx, cfg, s.scope, t, opts)
+		gateRefused += r.GateRefused
+		return r
 	}
 
 	// The base sweep: exactly the flat run, with the merged wordlist.
@@ -485,6 +490,7 @@ func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, ta
 	}
 
 	session.Result.OutOfScope += levelScopeDrops(session.Levels)
+	session.Result.GateRefused = gateRefused
 	return session
 }
 
