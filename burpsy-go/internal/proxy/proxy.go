@@ -1725,6 +1725,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		}
 
 		requestData := readFullRequest(requestLine, br)
+		if requestData == nil {
+			writeHeadTooLarge(tlsClient)
+			return
+		}
 		startTime := time.Now()
 
 		// reqTLS is the destination's scheme, and it is a variable rather than the literal `true` this
@@ -2324,6 +2328,10 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// said so. Reading the message once and parsing the Host out of the bytes keeps a
 	// single reader position and one copy of the request.
 	requestData := readFullRequest(requestLine, reader)
+	if requestData == nil {
+		writeHeadTooLarge(clientConn)
+		return
+	}
 	if host == "" {
 		// The fallback is what "invisible proxying" means here, and it is gated:
 		// with the option off a listener that was sent an origin-form request it
@@ -3181,13 +3189,42 @@ func parseRequestLine(requestLine string) (method, target string, ok bool) {
 // be decoded again at each of those. The rewiring is a rewrite of `Content-Length` alone; the
 // original chunk-size and chunk extensions are not preserved, because the head no longer advertises
 // them.
+// maxRequestHeadBytes bounds a request's line plus header block, as httputil.MaxResponseHeadBytes
+// bounds a response head.
+const maxRequestHeadBytes = httputil.MaxResponseHeadBytes
+
+var errRequestHeadTooLarge = errors.New("proxy: request head exceeds the size limit")
+
+// readHeadLine reads one line through its '\n', refusing to buffer more than limit bytes of it.
+func readHeadLine(br *bufio.Reader, limit int) (string, error) {
+	var line []byte
+	for {
+		frag, err := br.ReadSlice('\n')
+		if len(line)+len(frag) > limit {
+			return "", errRequestHeadTooLarge
+		}
+		line = append(line, frag...)
+		if err != bufio.ErrBufferFull {
+			return string(line), err
+		}
+	}
+}
+
+// readFullRequest returns nil when the request head is larger than maxRequestHeadBytes; the caller
+// answers 431 and closes the connection.
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(requestLine)
 
-	// Read headers
+	// Read headers, bounded in total (burpsy-react-ui-proxy-no-timeouts): a client streaming header
+	// lines without end used to grow this buffer until the process ran out of memory, and on a
+	// non-loopback listener that client need not be the operator. A head past the cap is refused
+	// (nil), the same bound MaxResponseHeadBytes puts on what an origin can send back.
 	for {
-		line, err := reader.ReadString('\n')
+		line, err := readHeadLine(reader, maxRequestHeadBytes-buf.Len())
+		if err == errRequestHeadTooLarge {
+			return nil
+		}
 		if err != nil {
 			break
 		}
@@ -3899,3 +3936,9 @@ func isInterimResponseHead(head []byte) bool {
 // in this package could only ever be a way for the row and the message it
 // indexes to disagree about the same bytes. Its three test cases moved with it,
 // to internal/scanner/capture_test.go.
+
+// writeHeadTooLarge answers a request whose head passed maxRequestHeadBytes. Best effort: the caller
+// closes the connection either way, and the unread remainder of the head makes it unusable.
+func writeHeadTooLarge(conn net.Conn) {
+	_, _ = conn.Write([]byte("HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"))
+}
