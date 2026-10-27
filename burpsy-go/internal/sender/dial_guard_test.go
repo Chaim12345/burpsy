@@ -25,9 +25,13 @@ var rawDialAllowed = map[string]string{
 	"internal/web/api_collaborator_health.go":        "operator-configured collaborator, not the target",
 	"internal/scanner/checks_pwreset.go":             "operator-configured mailbox, not the target",
 	"internal/vulnapp/vulnapp_ssrf.go":               "the intentionally vulnerable test app",
+	"cmd/live-test/main.go":                          "dev harness against a local target",
+	"cmd/xsschallenge/main.go":                       "dev harness against a local challenge server",
 }
 
-var rawDialCalls = map[string]bool{"net.Dial": true, "net.DialTimeout": true, "tls.Dial": true, "tls.DialWithDialer": true}
+var rawDialCalls = map[string]bool{"net.Dial": true, "net.DialTimeout": true, "tls.Dial": true, "tls.DialWithDialer": true,
+	"http.Get": true, "http.Head": true, "http.Post": true, "http.PostForm": true}
+var rawDialVars = map[string]bool{"http.DefaultClient": true, "http.DefaultTransport": true}
 var rawDialTypes = map[string]bool{"http.Transport": true, "http3.Transport": true, "net.Dialer": true, "tls.Dialer": true}
 
 func TestNoRawDialsOutsideTheDialPath(t *testing.T) {
@@ -52,15 +56,26 @@ func TestNoRawDialsOutsideTheDialPath(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		pkgs := importNames(f)
 		ast.Inspect(f, func(n ast.Node) bool {
 			var name string
 			switch x := n.(type) {
 			case *ast.CallExpr:
-				if s := selName(x.Fun); rawDialCalls[s] {
+				if s := selName(pkgs, x.Fun); rawDialCalls[s] {
 					name = s
+				} else if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "new" && len(x.Args) == 1 && rawDialTypes[selName(pkgs, x.Args[0])] {
+					name = selName(pkgs, x.Args[0])
 				}
 			case *ast.CompositeLit:
-				if s := selName(x.Type); rawDialTypes[s] {
+				if s := selName(pkgs, x.Type); rawDialTypes[s] {
+					name = s
+				}
+			case *ast.ValueSpec:
+				if s := selName(pkgs, x.Type); rawDialTypes[s] {
+					name = s
+				}
+			case *ast.SelectorExpr:
+				if s := selName(pkgs, x); rawDialVars[s] {
 					name = s
 				}
 			}
@@ -78,10 +93,31 @@ func TestNoRawDialsOutsideTheDialPath(t *testing.T) {
 	}
 }
 
-func selName(e ast.Expr) string {
+// importNames maps each import's local name to its package's last path element, so an alias
+// (stdhttp "net/http") still reads as http.
+func importNames(f *ast.File) map[string]string {
+	out := map[string]string{}
+	for _, im := range f.Imports {
+		p := strings.Trim(im.Path.Value, `"`)
+		base := p[strings.LastIndex(p, "/")+1:]
+		local := base
+		if im.Name != nil {
+			local = im.Name.Name
+		}
+		switch p {
+		case "net", "crypto/tls", "net/http", "github.com/quic-go/quic-go/http3":
+			out[local] = base
+		}
+	}
+	return out
+}
+
+func selName(pkgs map[string]string, e ast.Expr) string {
 	if s, ok := e.(*ast.SelectorExpr); ok {
 		if id, ok := s.X.(*ast.Ident); ok {
-			return id.Name + "." + s.Sel.Name
+			if base, ok := pkgs[id.Name]; ok {
+				return base + "." + s.Sel.Name
+			}
 		}
 	}
 	return ""

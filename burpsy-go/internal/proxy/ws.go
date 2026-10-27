@@ -323,14 +323,14 @@ func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn,
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() {
+	s.spawn(clientConn, func() {
 		defer wg.Done()
 		faults[0] = s.wsDirectionSink(exchangeID, clientReader, toServer, true, peer, capture, &stats)
-	}()
-	go func() {
+	})
+	s.spawn(clientConn, func() {
 		defer wg.Done()
 		faults[1] = s.wsDirectionSink(exchangeID, upstreamReader, toClient, false, peer, capture, &stats)
-	}()
+	})
 	wg.Wait()
 
 	// The skipped count is named unconditionally, including when it is zero:
