@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01MC5LdjXRNW5LRUskDNN2Nd",
+  "agent_id": "ac36ba8b0fd273379",
+  "subagent_type": "general-purpose",
+  "task_description": "Re-review gate delta after fix",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 32681,
+    "cache_read_tokens": 669625,
+    "output_tokens": 6714,
+    "api_call_count": 11
+  },
+  "started_at": "2026-10-27T15:04:26.111646259Z",
+  "completed_at": "2026-10-27T15:07:15.304972146Z"
+}
