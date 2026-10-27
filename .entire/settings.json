@@ -2,7 +2,7 @@
   "enabled": true,
   "checkpoints": {
     "primary": {
-      "type": "git-refs"
+      "type": "git-branch"
     }
   }
 }
