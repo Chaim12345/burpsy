@@ -19,7 +19,8 @@ name: Go
 #                                      skipped and `gate` reports success. The one Go test such a
 #                                      change could break (no tracked text file holds a raw control
 #                                      byte) is re-checked by the changes job itself.
-#   nightly (nightly.yml)              e2e-go.sh, and every shard but race-web and race-core under
+#   nightly (nightly.yml)              e2e-go.sh, the full Playwright console suite (ui/e2e/specs,
+#                                      e2e-ui), and every shard but race-web and race-core under
 #                                      -race: the whole
 #                                      module under the race detector, internal/web's part of it and
 #                                      race-core's being here.
@@ -419,7 +420,9 @@ jobs:
   # find the exchange. The served console is the embedded ui/dist, so it is rebuilt first with the
   # pinned bun. Chrome start-up has failed on runners before (bead 2o0c), so: Playwright's own
   # Chromium, BURPSY_UAT_NO_SANDBOX=1, a 60s launch timeout, and no retries (a retry that goes green
-  # hides a flake). Trace and screenshot on failure, and JUnit, are uploaded.
+  # hides a flake). Trace and screenshot on failure, and JUnit, are uploaded. This is
+  # playwright.uat.config.ts (specs-uat/, 2 specs); the full console suite (playwright.config.ts,
+  # specs/) runs nightly as nightly.yml's e2e-ui job.
   uat-ui:
     needs: changes
     if: needs.changes.outputs.code == 'true'

@@ -1,4 +1,4 @@
-import { expect, gotoRoute, test } from "../harness/fixtures";
+import { expect, gotoRoute, scopeCall, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
 
@@ -12,6 +12,13 @@ const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
  * directory list and two levels of recursion, whose results show the second level.
  */
 test.describe("Content discovery — built-in lists and recursion", () => {
+ // One shared burpsy serves the whole run: an include left here was a second "Include 127.0.0.1" in
+ // every later spec's scope (found when the suite first ran in CI, bead e2eorph). Cleared however
+ // the test ends.
+ test.afterEach(async ({ page }) => {
+  await scopeCall(page, { action: "clear" });
+ });
+
  test("a sweep with the built-in short list and 2 levels recurses and shows both levels", async ({
   page,
   consoleErrors,
@@ -23,16 +30,9 @@ test.describe("Content discovery — built-in lists and recursion", () => {
   // thing to screenshot. /api/scope is an unattended-caller-gated route, so the
   // include goes through the one-time confirmation the gate exists for — the
   // same flow a scripted caller uses in production.
-  // The token is bound to the exact call (burpsy-react-ui-e0yq), so the mint describes it.
-  const include = JSON.stringify({ action: "include", pattern: "127.0.0.1" });
-  const confirm = await page.request.post("/api/scope/confirm", { data: { method: "POST", url: "/api/scope", body: include } });
-  expect(confirm.ok(), "minting the scope confirmation").toBe(true);
-  const { token } = (await confirm.json()) as { token: string };
-  const scoped = await page.request.post("/api/scope", {
-   data: include,
-   headers: { "X-Burpsy-Confirm": token, "content-type": "application/json" },
-  });
-  expect(scoped.ok(), "the scope include must be accepted").toBe(true);
+  // The token is bound to the exact call (burpsy-react-ui-e0yq); scopeCall mints it per call.
+  // afterEach below clears it again.
+  await scopeCall(page, { action: "include", pattern: "127.0.0.1" });
 
   await gotoRoute(page, route("contentdiscovery"));
 

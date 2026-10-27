@@ -5,7 +5,7 @@
 // attribute no stylesheet consumes would satisfy the second and change nothing on screen.
 
 import { request as httpRequest } from "node:http";
-import { activePane, expect, gotoApp, gotoRoute, pinTheme, test } from "../harness/fixtures";
+import { activePane, expect, gotoApp, gotoRoute, pinTheme, confirmedPost, scopeCall, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
 
@@ -332,7 +332,7 @@ test.describe("data views", () => {
   const patterns = JSON.stringify(scope);
   expect(patterns).toContain("127.0.0.1");
   // Leaving the rule behind would put every later test's traffic in scope; remove what we added.
-  await page.request.post("/api/scope", { data: { action: "clear" } });
+  await scopeCall(page, { action: "clear" });
 
   // The crawl path, and specifically its RETENTION clause (the dpk regression): the node path IS
   // the branch, so the keep-filter must be `path ~ "/r10e-branch/"` — not the parent ("/" for a
@@ -392,9 +392,15 @@ test.describe("data views", () => {
   // The New scan dialog would need a live origin; the harness origin IS live, so use the UI's own
   // API with the throwaway path.
   const { targetPort } = readHarness();
-  const started = await page.request
-   .post("/api/crawl", { data: { seeds: [`http://127.0.0.1:${targetPort}/r6q-disposable/`], max_requests: 1 } })
-   .then((r) => r.json());
+  // /api/crawl is behind the unattended-caller gate (428 without a confirmation), so the start goes
+  // through the same mint-and-spend flow a scripted caller uses. A refused start used to surface as
+  // "task=undefined" and a JSON parse error two calls later; it is asserted here instead.
+  const response = await confirmedPost(page, "/api/crawl", {
+   seeds: [`http://127.0.0.1:${targetPort}/r6q-disposable/`],
+   max_requests: 1,
+  });
+  expect(response.ok(), `POST /api/crawl: ${response.status()} ${await response.text()}`).toBe(true);
+  const started = await response.json();
   const taskId = started.task_id as number;
   // The crawl runs against the one-request origin; wait for it to finish so Delete is legal.
   for (let i = 0; i < 40; i++) {
@@ -755,7 +761,7 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
   // bare 127.0.0.1, so a single exclude rule on that host takes the whole capture out of scope —
   // a plain hostname with no wildcard, which is exactly the case the DSL can express exactly.
   try {
-   await page.request.post("/api/scope", { data: { action: "exclude", pattern: "127.0.0.1" } });
+   await scopeCall(page, { action: "exclude", pattern: "127.0.0.1" });
 
    const queryBox = page.getByRole("textbox", { name: "Filter history" });
    await page.getByRole("button", { name: "In scope only" }).click();
@@ -773,14 +779,14 @@ test.describe("History row annotation and scope filter — UX-15, UX-18", () => 
   } finally {
    // Single shared server for the whole file (workers: 1) — leaving this rule in place would take
    // every later test's traffic out of scope too.
-   await page.request.post("/api/scope", { data: { action: "clear" } });
+   await scopeCall(page, { action: "clear" });
   }
 
   expect(consoleErrors).toEqual([]);
  });
 });
 
-test.describe("History delete and clear — r6li", () => {
+test.describe("History delete — r6li", () => {
  // One shared burpsy holds one exchange store, so every row this describe removes is gone for the
  // tests after it. Rather than repair counts, each test seeds its own row through the proxy and
  // asserts against THAT row — the pre-seeded five belong to the describes above.
@@ -809,28 +815,8 @@ test.describe("History delete and clear — r6li", () => {
   expect(consoleErrors).toEqual([]);
  });
 
- test("Clear empties the table and Delete items is disabled with nothing ticked", async ({
-  page,
-  consoleErrors,
- }) => {
-  const { proxyPort, targetPort } = readHarness();
-  const origin = `http://127.0.0.1:${targetPort}`;
-  const marker = `/r6li-clear-${Date.now()}`;
-  await proxyGet(proxyPort, `${origin}${marker}`);
-
-  await gotoRoute(page, route("history"));
-  const markerRow = page.locator("tr.data-row", { hasText: marker });
-  await expect(markerRow).toHaveCount(1);
-  await expect(page.locator("tr.data-row")).not.toHaveCount(0);
-
-  await expect(page.getByRole("button", { name: "Delete items", exact: true })).toBeDisabled();
-
-  await page.getByRole("button", { name: "Clear", exact: true }).click();
-  await page.getByRole("button", { name: /^Clear \d/ }).click();
-
-  await expect(page.locator("tr.data-row")).toHaveCount(0);
-  expect(consoleErrors).toEqual([]);
- });
+ // The Clear test is in zz-history-clear.spec.ts: it empties the shared store, seeded traffic
+ // included, so it has to run after every spec that reads that traffic (bead e2eorph).
 });
 
 /**
@@ -883,12 +869,12 @@ test.describe("the editable Inspector — Unit 14", () => {
   const inspector = page.locator(".inspector");
   const targetField = inspector.getByLabel("Request attributes value for Target");
   await targetField.fill("/inspector-edited");
-  await inspector.getByRole("button", { name: "Apply" }).click();
+  await inspector.getByRole("button", { name: "Apply", exact: true }).click();
 
   // First: the edit reached the raw bytes, spliced rather than reflowed.
   await expect(requestEditor).toContainText("GET /inspector-edited HTTP/1.1");
   // And the field is no longer dirty, so Apply has gone.
-  await expect(inspector.getByRole("button", { name: "Apply" })).toHaveCount(0);
+  await expect(inspector.getByRole("button", { name: "Apply", exact: true })).toHaveCount(0);
 
   // Then the assertion that matters: send it, and let the ORIGIN say what it received.
   // A console that displayed the edit but sent the old bytes passes the check above
@@ -962,7 +948,7 @@ test.describe("extender", () => {
   await headers.getByRole("button", { name: "Add" }).click();
   await headers.getByLabel("New Request headers name").fill("X-Inspector");
   await headers.getByLabel("New Request headers value").fill("unit-14");
-  await headers.getByRole("button", { name: "Apply" }).click();
+  await headers.getByRole("button", { name: "Apply", exact: true }).click();
 
   const requestEditor = page.locator(".editor-grid-inspected > *").first();
   await expect(requestEditor).toContainText("X-Inspector: unit-14");
@@ -1013,7 +999,7 @@ test.describe("extender", () => {
   await query.getByRole("button", { name: "Add" }).click();
   await query.getByLabel("New Query parameters name").fill("next");
   await query.getByLabel("New Query parameters value").fill("%2Fhome%3Fa%3D1");
-  await query.getByRole("button", { name: "Apply" }).click();
+  await query.getByRole("button", { name: "Apply", exact: true }).click();
 
   // Encoding the value on the way in is the writers' job, so what is stored is the
   // double-encoded form; the row reads back the once-decoded text.
@@ -1030,7 +1016,7 @@ test.describe("extender", () => {
   await expect(selection.getByLabel("Selection text")).toHaveValue("/home?a=1");
 
   // Apply writes the DECODED text back into the parameter it came from.
-  await selection.getByRole("button", { name: "Apply" }).click();
+  await selection.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(query.getByLabel("Query parameters value for next")).toHaveValue("/home?a=1");
 
   expect(consoleErrors).toEqual([]);
@@ -1093,7 +1079,7 @@ test.describe("extender", () => {
 
    const inspector = page.locator(".inspector");
    await inspector.getByLabel("Request attributes value for Target").fill("/forwarded-by-inspector");
-   await inspector.getByRole("button", { name: "Apply" }).click();
+   await inspector.getByRole("button", { name: "Apply", exact: true }).click();
 
    // The held-bytes editor is the buffer Forward sends, so the edit has to show there.
    await expect(page.locator(".held-grid-inspected > *").first()).toContainText("GET /forwarded-by-inspector");
@@ -1137,8 +1123,14 @@ test.describe("extender", () => {
   for (const method of contract.methods as { name: string }[]) {
    await expect(page.locator("code", { hasText: method.name }).first()).toBeVisible();
   }
-  // Three registration points, and the tab says why the other ten are absent.
-  expect(contract.kinds).toHaveLength(3);
+  // Every registration point the server dispatches is a row. This was a literal 3 when the host had
+  // three; it has ten now, and a hardcoded count only re-tests the number, not the page.
+  expect(contract.kinds.length).toBeGreaterThan(0);
+  for (const kind of contract.kinds as { kind: string; method: string }[]) {
+   const row = page.locator("tr", { has: page.locator("code", { hasText: new RegExp(`^${kind.kind}$`) }) });
+   await expect(row).toHaveCount(1);
+   await expect(row).toContainText(kind.method);
+  }
   // By role, not by text: the heading, its own detail line and one row of the unsupported table all
   // talk about the ten registration points that hand Burp a Swing object, which is the point of the
   // section — matching on the words would resolve to three elements.
@@ -1147,5 +1139,19 @@ test.describe("extender", () => {
   await expect(page.getByRole("heading", { name: "What a plugin cannot do" })).toBeVisible();
 
   expect(consoleErrors).toEqual([]);
+ });
+
+ test("the Registration points prose agrees with the table under it", async ({ page }) => {
+  // KNOWN PRODUCT DEFECT, found when this suite was first run in CI (bead e2eorph, 2026-10-27):
+  // pages/extensions.tsx still says "Three, and only three" above a table the server now fills
+  // with ten registration points. test.fail keeps the check running: it reports expected-failure
+  // while the defect stands, and turns red the day the prose is fixed, so this marker is removed
+  // then rather than forgotten.
+  test.fail(true, "extensions.tsx Registration points detail says 'Three, and only three' over ten rows");
+  const contract = await page.request.get("/api/extensions/apis").then((response) => response.json());
+  await gotoRoute(page, route("extenderapis"));
+  const section = page.locator(".section-heading", { hasText: "Registration points" });
+  await expect(section).toBeVisible();
+  if (contract.kinds.length !== 3) await expect(section).not.toContainText("Three, and only three");
  });
 });
