@@ -1307,15 +1307,17 @@ func (s *Server) recoverConnection(clientConn net.Conn) {
 }
 
 // spawn runs fn on a connection's child goroutine under the same containment as its root. A panic
-// also closes clientConn, so the sibling goroutines blocked on it return.
-func (s *Server) spawn(clientConn net.Conn, fn func()) {
+// also closes conns, so the sibling goroutines blocked on either side return.
+func (s *Server) spawn(fn func(), conns ...net.Conn) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				s.connPanics.Add(1)
 				s.config.logger.Error("proxy relay goroutine panicked; connection closed",
 					zap.Any("panic", r), zap.ByteString("stack", debug.Stack()))
-				_ = clientConn.Close()
+				for _, c := range conns {
+					_ = c.Close()
+				}
 			}
 		}()
 		fn()
@@ -2316,14 +2318,14 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 
 	// Bidirectional copy
 	done := make(chan struct{}, 2)
-	s.spawn(clientConn, func() {
+	s.spawn(func() {
 		defer func() { done <- struct{}{} }()
 		io.Copy(upstreamConn, clientConn)
-	})
-	s.spawn(clientConn, func() {
+	}, clientConn, upstreamConn)
+	s.spawn(func() {
 		defer func() { done <- struct{}{} }()
 		io.Copy(clientConn, upstreamConn)
-	})
+	}, clientConn, upstreamConn)
 
 	<-done
 }
