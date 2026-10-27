@@ -230,7 +230,15 @@ func NewSender(config *SenderConfig) *Sender {
 	policy, policyErr := resolveUpstream(config)
 	carrier := config.UpstreamCarrier
 	return &Sender{
-		client:      buildClient(config, settings, carrier),
+		client: buildClient(config, settings, carrier),
+		// The configured carrier reaches every path WithUpstreamCarrier would have reached, not only
+		// the typed client. The raw paths (dialTLS/dialPlain via captureDialIdentity), HTTP/3's
+		// carrier refusal, connection-bound auth and DeriveWithTimeouts all read s.carrier; leaving
+		// it nil sent every raw send from a config-only Sender around the carrier, and the next
+		// ApplyNetwork rebuilt the typed client from s.carrier and dropped it there too
+		// (burpsy-react-ui-newsender-carrier). No pool flush or generation bump is needed: a new
+		// Sender has no connections dialled under any other layer.
+		carrier:     carrier,
 		config:      config,
 		net:         settings,
 		protocols:   newProtocolCache(),
@@ -371,8 +379,16 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 				Resolver:           settings.dialer().Resolver,
 				ClientCerts:        config.ClientCerts,
 			}
-			if policy != nil && !policy.Empty() {
-				dialer.Carry = upstream.Dialer{Policy: policy, Timeout: config.Timeout, Base: settings.dialer()}.DialContext
+			// Policy OR carrier, the raw path's rule (dialTLS; dialIdentity.wrap). Gating on the policy
+			// alone, and building the Dialer without the carrier, sent a client-cert TLS send straight
+			// to the origin when only a SOCKS hop was configured (burpsy-react-ui-socks-tls-bypass).
+			if (policy != nil && !policy.Empty()) || carrier != nil {
+				dialer.Carry = upstream.Dialer{
+					Policy:  policy,
+					Timeout: config.Timeout,
+					Base:    settings.dialer(),
+					Carrier: carrier,
+				}.DialContext
 			}
 			addr = settings.overrideAddr(addr)
 			// The offer matches ForceAttemptHTTP2 above: the transport inspects the negotiated protocol

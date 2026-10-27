@@ -135,7 +135,12 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (n
 	// The pool and the protocol floor come from the same policy as the verify switch, so an operator
 	// who turned verification off and then on again has not silently lost the custom CA they added.
 	policy.applyTo(&dialer)
-	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
+	// Carried whenever an upstream policy OR the global SOCKS carrier is configured — the rule the
+	// sender's raw path states (sender.go dialTLS, burpsy-react-ui-mr83 part 3). Gating on the policy
+	// alone was burpsy-react-ui-socks-tls-bypass: an operator who set only a SOCKS hop had every
+	// intercepted HTTPS leg dialled straight at the origin, because alpn.Dialer with no Carry opens
+	// its own socket. A nil carrier with an empty policy keeps the direct dial byte for byte.
+	if policy := s.upstreamPolicy(); (policy != nil && !policy.Empty()) || s.carrier() != nil {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}
 	conn, negotiated, err := dialer.Dial(context.Background(), serverName, addr, alpnOffer)
