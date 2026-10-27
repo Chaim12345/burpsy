@@ -3329,7 +3329,7 @@ func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		size := uint64(parsed)
+		size := uint64(parsed) //nolint:gosec // G115: ParseChunkSize never returns a negative size
 		if size == 0 {
 			// The terminal chunk. Trailers, if any, run to the blank line; read and discard them so
 			// the next request on this connection starts at a message boundary.

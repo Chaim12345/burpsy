@@ -188,13 +188,13 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		upstream.Close()
+		_ = upstream.Close()
 		http.Error(w, "hijack unsupported", http.StatusInternalServerError)
 		return
 	}
 	client, buf, err := hj.Hijack()
 	if err != nil {
-		upstream.Close()
+		_ = upstream.Close()
 		return
 	}
 	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
@@ -206,7 +206,7 @@ func pipe(dst, src net.Conn, buffered *bufio.ReadWriter) {
 	defer dst.Close()
 	defer src.Close()
 	if buffered != nil && buffered.Reader.Buffered() > 0 {
-		pending, _ := buffered.Reader.Peek(buffered.Reader.Buffered())
+		pending, _ := buffered.Peek(buffered.Reader.Buffered())
 		if _, err := dst.Write(pending); err != nil {
 			return
 		}

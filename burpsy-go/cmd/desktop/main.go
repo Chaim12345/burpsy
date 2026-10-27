@@ -286,12 +286,11 @@ func main() {
 	// in-process web.Server started in startup(), so the desktop window and a
 	// remote browser at the same address render byte-identical UI and hit the
 	// same API — one build, one server, two ways to reach it.
-	proxyHandler := httputil.NewSingleHostReverseProxy(target)
 	// The webview's own requests arrive with the asset server's Host (wails / wails.localhost), and
 	// the console refuses any Host it was not bound to on EVERY method, reads included
 	// (burpsy-react-ui-rebind-read). This handler only ever carries the in-process webview's
 	// requests, so it forwards them as what they are: requests for the bound console.
-	proxyHandler.Director = consoleDirector(proxyHandler.Director, target.Host)
+	proxyHandler := &httputil.ReverseProxy{Rewrite: consoleRewrite(target)}
 
 	err = wails.Run(&options.App{
 		Title:  "burpsy",
@@ -321,18 +320,18 @@ var webviewOrigins = map[string]bool{
 	"https://wails.localhost": true,
 }
 
-// consoleDirector forwards the webview's requests as requests for the bound console. The console
+// consoleRewrite forwards the webview's requests as requests for the bound console. The console
 // refuses any Host it was not bound to on every method (burpsy-react-ui-rebind-read), and on a
 // POST/PUT/PATCH/DELETE it also refuses an Origin that does not match the Host — which the webview's
 // own origin never does, so every write from the desktop window was refused
 // (burpsy-react-ui-desktop-origin). Only the webview's known origins are rewritten: anything else
 // is passed through for the console to judge, so this handler never launders a foreign origin.
-func consoleDirector(direct func(*http.Request), consoleHost string) func(*http.Request) {
-	return func(r *http.Request) {
-		direct(r)
-		r.Host = consoleHost
-		if webviewOrigins[r.Header.Get("Origin")] {
-			r.Header.Set("Origin", "http://"+consoleHost)
+func consoleRewrite(target *url.URL) func(*httputil.ProxyRequest) {
+	return func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = target.Host
+		if webviewOrigins[pr.In.Header.Get("Origin")] {
+			pr.Out.Header.Set("Origin", "http://"+target.Host)
 		}
 	}
 }

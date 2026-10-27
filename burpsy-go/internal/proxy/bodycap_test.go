@@ -43,9 +43,9 @@ func serveOverCap(conn net.Conn) {
 		}
 	}
 	fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n", httputil.MaxResponseBodyBytes+16)
-	conn.Write(bytes.Repeat([]byte("a"), httputil.MaxResponseBodyBytes))
+	_, _ = conn.Write(bytes.Repeat([]byte("a"), httputil.MaxResponseBodyBytes))
 	time.Sleep(300 * time.Millisecond)
-	conn.Write([]byte(strings.Repeat("z", 16)))
+	_, _ = conn.Write([]byte(strings.Repeat("z", 16)))
 	// Held open until the proxy closes it (or the test's cleanup does).
 	_, _ = io.Copy(io.Discard, br)
 }
@@ -118,6 +118,7 @@ func TestAPlainResponsePastTheCapIsForwardedCloseDelimitedAndNoted(t *testing.T)
 	if err != nil {
 		t.Fatalf("reading the forwarded response: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.ContentLength != -1 {
 		t.Errorf("the forwarded head still declares Content-Length %d for a cut body", resp.ContentLength)
 	}

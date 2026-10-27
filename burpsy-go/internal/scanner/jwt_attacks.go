@@ -442,7 +442,7 @@ func jwtKidForgeries(t JWTToken) []jwtForgery {
 // runs an arithmetic command and the token is signed with its output, a product that is in neither
 // the kid nor the request, so acceptance proves the command ran.
 func jwtKidCommandForgeries(t JWTToken) []jwtForgery {
-	a, b := 1000+mathrand.IntN(9000), 1000+mathrand.IntN(9000)
+	a, b := 1000+mathrand.IntN(9000), 1000+mathrand.IntN(9000) //nolint:gosec // G404: probe operands, not a secret
 	product := strconv.Itoa(a * b)
 	expr := fmt.Sprintf("$((%d*%d))", a, b)
 	var out []jwtForgery

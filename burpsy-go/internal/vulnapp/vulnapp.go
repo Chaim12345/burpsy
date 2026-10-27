@@ -1286,12 +1286,12 @@ var anyComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 func esiPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body>%s</body></html>", esiComment.ReplaceAllString(r.URL.Query().Get("tpl"), "$1"))
+	fmt.Fprintf(w, "<html><body>%s</body></html>", esiComment.ReplaceAllString(r.URL.Query().Get("tpl"), "$1")) //nolint:gosec // G705: deliberately vulnerable fixture
 }
 
 func safeESIPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, "<html><body>%s</body></html>", anyComment.ReplaceAllString(r.URL.Query().Get("tpl"), ""))
+	fmt.Fprintf(w, "<html><body>%s</body></html>", anyComment.ReplaceAllString(r.URL.Query().Get("tpl"), "")) //nolint:gosec // G705: deliberately vulnerable fixture
 }
 
 // safeIncludePage reflects the same value without running it through the processor. The literal

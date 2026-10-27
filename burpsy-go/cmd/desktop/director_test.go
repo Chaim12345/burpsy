@@ -12,7 +12,7 @@ import (
 // origin must reach the console unchanged so the same-origin check still refuses it.
 func TestTheDesktopDirectorRewritesOnlyTheWebviewOrigin(t *testing.T) {
 	target, _ := url.Parse("http://127.0.0.1:8081")
-	d := consoleDirector(httputil.NewSingleHostReverseProxy(target).Director, target.Host)
+	rw := consoleRewrite(target)
 	for origin, want := range map[string]string{
 		"wails://wails":          "http://127.0.0.1:8081",
 		"http://wails.localhost": "http://127.0.0.1:8081",
@@ -23,11 +23,12 @@ func TestTheDesktopDirectorRewritesOnlyTheWebviewOrigin(t *testing.T) {
 		if origin != "" {
 			r.Header.Set("Origin", origin)
 		}
-		d(r)
-		if r.Host != "127.0.0.1:8081" {
-			t.Errorf("Host = %q, want the console's", r.Host)
+		pr := &httputil.ProxyRequest{In: r, Out: r.Clone(r.Context())}
+		rw(pr)
+		if pr.Out.Host != "127.0.0.1:8081" {
+			t.Errorf("Host = %q, want the console's", pr.Out.Host)
 		}
-		if got := r.Header.Get("Origin"); got != want {
+		if got := pr.Out.Header.Get("Origin"); got != want {
 			t.Errorf("Origin %q forwarded as %q, want %q", origin, got, want)
 		}
 	}

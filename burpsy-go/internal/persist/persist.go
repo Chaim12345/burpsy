@@ -153,7 +153,7 @@ func (s *Store) Backup(dest string) error {
 	// the no-overwrite rule above with VACUUM INTO, which refuses a non-empty destination itself.
 	created := false
 	if f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, ownerOnlyFile); err == nil {
-		f.Close()
+		_ = f.Close()
 		created = true
 	}
 	// The parameter is bound rather than interpolated. VACUUM INTO takes an expression, so a bound
@@ -162,7 +162,7 @@ func (s *Store) Backup(dest string) error {
 		if created {
 			// The empty file is ours; leaving it would make the next attempt at this name look like
 			// a backup that exists.
-			os.Remove(dest)
+			_ = os.Remove(dest)
 		}
 		return fmt.Errorf("backup to %s: %w", dest, err)
 	}

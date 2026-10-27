@@ -362,7 +362,7 @@ func NewRateLimiter(limit *RateLimit) *RateLimiter {
 		l.variation = &variationState{
 			jitter: v.Jitter,
 			inc:    time.Duration(v.IncrementMS) * time.Millisecond,
-			rnd:    rand.New(rand.NewPCG(v.Seed, v.Seed^variationSeedStream)),
+			rnd:    rand.New(rand.NewPCG(v.Seed, v.Seed^variationSeedStream)), //nolint:gosec // G404: seeded, reproducible timing jitter, not a secret
 		}
 	}
 	return l

@@ -31,13 +31,13 @@ func overCapServer(t *testing.T, framing string) (host string, port uint16, conn
 			switch framing {
 			case "content-length":
 				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n", len(payload)+len(tail))
-				conn.Write(payload)
+				_, _ = conn.Write(payload)
 				time.Sleep(300 * time.Millisecond)
-				conn.Write([]byte(tail))
+				_, _ = conn.Write([]byte(tail))
 			case "chunked":
 				fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n%x\r\n", len(payload))
-				conn.Write(payload)
-				conn.Write([]byte("\r\n"))
+				_, _ = conn.Write(payload)
+				_, _ = conn.Write([]byte("\r\n"))
 				time.Sleep(300 * time.Millisecond)
 				fmt.Fprintf(conn, "%x\r\n%s\r\n0\r\n\r\n", len(tail), tail)
 			}
