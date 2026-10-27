@@ -6,6 +6,7 @@ name: Nightly
 # Not required by branch protection: a scheduled run is attached to no pull request.
 #
 #   e2e-go   e2e-go.sh against a local target.
+#   e2e-ui   the Playwright console suite (ui/e2e/specs) against a harness-built burpsy-go.
 #   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
 #   fuzz     every listed fuzz target for 5 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
@@ -59,6 +60,55 @@ jobs:
         run: |
           tail -100 /tmp/burpsy-go.log || true
           cat /tmp/burpsy-go-e2e-build.log 2>/dev/null || true
+
+  # The Playwright console suite (bead e2eorph): ui/e2e/specs, run by ui/e2e/playwright.config.ts.
+  # Until this job it ran in no workflow and rotted unseen. Which config runs where:
+  #   playwright.uat.config.ts  specs-uat/ (2 specs)  go.yml uat-ui, every code change
+  #   playwright.config.ts      specs/ (27 specs)     here, nightly
+  # The setup mirrors go.yml's uat-ui: the harness (ui/e2e/harness) builds and seeds a real
+  # burpsy-go, which serves the embedded ui/dist, so the console is rebuilt with the pinned bun
+  # first; Playwright's own Chromium, BURPSY_UAT_NO_SANDBOX=1, no retries (a retry that goes green
+  # hides a flake). npx playwright test is called directly, not through e2e-ui.sh: that wrapper
+  # turns a missing browser into exit 0 for verify.sh, which in CI would be a green job that ran
+  # nothing. A spec disabled with test.fixme says why in the spec; the list reporter prints each
+  # one as skipped, so the count is visible in the log. The HTML report, traces and screenshots
+  # (failures, plus the 68 screenshots.spec.ts captures) are uploaded.
+  e2e-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: burpsy-go/internal/web/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Build the console (bun)
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Install the e2e dependencies and Chromium
+        working-directory: burpsy-go/internal/web/ui/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Playwright console suite
+        working-directory: burpsy-go/internal/web/ui/e2e
+        env:
+          BURPSY_UAT_NO_SANDBOX: "1"
+        run: npx playwright test
+      - name: Results (HTML report, traces, screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ui-artifacts
+          path: burpsy-go/internal/web/ui/e2e/artifacts
+          if-no-files-found: warn
 
   # The race detector beyond internal/web (which go.yml runs under -race on every push to master).
   # Until 2026-10-13 this was one job over the module minus three exclusions, and two of them

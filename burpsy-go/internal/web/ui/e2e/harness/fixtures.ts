@@ -93,6 +93,29 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * POST /api/scope from a test, through the unattended-caller gate (internal/web/confirm_gate.go,
+ * burpsy-react-ui-ejp5): a token minted for exactly this call at /api/scope/confirm, spent in the
+ * X-Burpsy-Confirm header — the flow a scripted caller uses in production.
+ *
+ * Every test-side scope write goes through here, and the result is asserted. Before the gate existed
+ * a bare `page.request.post("/api/scope", ...)` worked; after it, the same call was refused and
+ * nothing looked at the status, so a "clear" in a finally block quietly cleared nothing and one
+ * spec's include rule leaked into every later spec (found when the suite first ran in CI, bead
+ * e2eorph: the Scope specs saw 2 rules where they expected 0).
+ */
+export async function scopeCall(page: Page, action: Record<string, unknown>): Promise<void> {
+  const body = JSON.stringify(action);
+  const confirm = await page.request.post("/api/scope/confirm", { data: { method: "POST", url: "/api/scope", body } });
+  expect(confirm.ok(), `minting a confirmation for /api/scope ${body}: ${confirm.status()}`).toBe(true);
+  const { token } = (await confirm.json()) as { token: string };
+  const response = await page.request.post("/api/scope", {
+    data: body,
+    headers: { "X-Burpsy-Confirm": token, "content-type": "application/json" },
+  });
+  expect(response.ok(), `POST /api/scope ${body}: ${response.status()} ${await response.text()}`).toBe(true);
+}
+
 /** Wait for the shell itself — used by tests that do not care which route they land on. */
 export async function gotoApp(page: Page, route = ROUTES[0]!): Promise<void> {
   await page.goto(`/#${route.id}`);

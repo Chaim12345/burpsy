@@ -15,6 +15,13 @@
 
 import { defineConfig, devices } from "@playwright/test";
 
+// The same two switches as playwright.uat.config.ts, under the same names so one environment serves
+// both configs: BURPSY_UAT_CHROME points at a Chromium other than the revision this Playwright
+// pins (a machine with a preinstalled browser), BURPSY_UAT_NO_SANDBOX=1 is what CI runners need to
+// start it (nightly.yml's e2e-ui job sets it, as go.yml's uat-ui job does).
+const executablePath = process.env.BURPSY_UAT_CHROME || undefined;
+const args = process.env.BURPSY_UAT_NO_SANDBOX ? ["--no-sandbox", "--disable-dev-shm-usage"] : [];
+
 export default defineConfig({
   testDir: "./specs",
   // Kept out of the tree's committed content; .gitignore has the matching entries.
@@ -50,5 +57,14 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+        launchOptions: { executablePath, args, timeout: 60_000 },
+      },
+    },
+  ],
 });
