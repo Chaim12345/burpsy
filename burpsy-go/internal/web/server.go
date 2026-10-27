@@ -70,6 +70,8 @@ type Server struct {
 	// nothing, because a flag nobody sets cannot be the thing standing between a hostile page and an
 	// attack.
 	allowedHosts map[string]bool
+	// authDigest is the SHA-256 of the console token, or nil when no token is set (api_auth.go).
+	authDigest []byte
 	// guarded is mux behind the cross-site gate, and it is what ListenAndServe serves. A separate
 	// field rather than reassigning mux, because every test in this package drives s.mux directly and
 	// must keep doing so: those tests are about handler behaviour, and the gate has its own.
@@ -1452,7 +1454,7 @@ func (s *Server) setupRoutes() {
 	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
 	// to keep them out of this file rather than to weaken the test.
 	s.confirmMux = s.registerConfirmationRoutes()
-	s.guarded = s.sameOriginOnly(s.confirmationGate(s.mux, s.confirmMux))
+	s.guarded = s.authGate(s.sameOriginOnly(s.confirmationGate(s.mux, s.confirmMux)))
 }
 
 // gatedRoutePatterns is every manifest pattern whose risk class needs confirmation.

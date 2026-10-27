@@ -125,7 +125,23 @@ func main() {
 	upstreamProxyRules := flag.String("upstream-proxy-rule", "",
 		"per-destination upstream proxy rules, comma-separated pattern=URL (e.g. '*.internal=socks5://127.0.0.1:1080,api.example.com=direct'); first match wins, ahead of -upstream-proxy")
 
+	allowHost := flag.String("allow-host", "", "Host header values the web console answers to for mutating requests when it is reached through a name other than loopback (comma-separated, e.g. burpsy.example.com); requires "+authTokenEnv)
+
 	flag.Parse()
+
+	// The console credential and the exposure check, before anything is built or listening: a web bind
+	// beyond loopback with no token, or a named Host with no token, stops here. The token is read from
+	// the environment and removed from it (webauth.go); it is never logged.
+	consoleToken := takeAuthToken()
+	allowedHosts := parseAllowHosts(*allowHost)
+	if err := webExposureError(*webBind, consoleToken, allowedHosts); err != nil {
+		log.Fatal(err)
+	}
+	if consoleToken != "" {
+		if err := web.ValidateAuthToken(consoleToken); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	// Before anything is built: this either prints a list and exits, or resolves a name, or refuses one
 	// that does not exist. Resolving it late — after the proxy is listening — would mean a typo takes
@@ -832,6 +848,9 @@ func main() {
 		// makes the import endpoint refuse rather than store a setting nothing reads.
 		WithTLSEngine(tlsEngine, *caDir).
 		WithBindAddrs(*proxyBind, *webBind).
+		// The console credential and the Hosts it answers to (webauth.go, api_auth.go). Both are no-ops
+		// when unset, which is the loopback default.
+		WithAllowedHosts(allowedHosts...).
 		WithDOMEngine(*domEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
@@ -938,6 +957,13 @@ func main() {
 	// Live active audit: the sweep loop owns the context; cancelling ctx (on
 	// shutdown) stops it at the next tick. It creates and wires the state if
 	// none was attached, so the /api/scanner/live surface is always present.
+	if consoleToken != "" {
+		if err := webServer.SetAuthToken(consoleToken); err != nil {
+			log.Fatal(err)
+		}
+		logger.Info("web console requires a credential")
+	}
+	consoleToken = ""
 	webServer.StartLiveAuditSweep(ctx)
 	go func() {
 		logger.Info("Starting web UI", zap.String("bind", *webBind))
