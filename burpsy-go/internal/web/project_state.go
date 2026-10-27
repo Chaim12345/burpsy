@@ -25,7 +25,9 @@ func (s *Server) restoreProjectScanState(p *persist.Store) {
 			s.scanBaseline = &base
 		}
 		next := cloneScanConfig(*s.scanBaseline)
-		if saved, err := p.LoadScanConfig(); err != nil {
+		// The saved document is decoded ONTO the launch baseline: a key the project never saved (a
+		// switch added or made default-on since) keeps its launch default instead of reading as off.
+		if saved, err := p.LoadScanConfig(next); err != nil {
 			s.logger.Warn("failed to load the project's scan configuration; using launch defaults", zap.Error(err))
 		} else if saved != nil {
 			next = cloneScanConfig(*saved)

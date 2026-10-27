@@ -130,14 +130,14 @@ func TestConfigPutSurvivesARestartThroughPersistedOverrides(t *testing.T) {
 	// Phase two plays main.go's startup role: load what was saved and apply it onto a fresh
 	// scanner, because restoring policy is a boot-time decision, not something the HTTP server
 	// does implicitly behind callers' backs.
-	loaded, err := p2.LoadScanConfig()
+	s2 := newScannerServer()
+	loaded, err := p2.LoadScanConfig(s2.wiredScanner().ConfigSnapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loaded == nil {
 		t.Fatal("LoadScanConfig returned nil after a PUT saved it; absence and presence got confused")
 	}
-	s2 := newScannerServer()
 	s2.wiredScanner().UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *loaded })
 	if got := getScannerConfig(t, s2)["check_stored"]; got != true {
 		t.Fatalf("check_stored after restart = %v; a policy the operator set that dies with the process was never really set", got)
@@ -384,7 +384,7 @@ func TestConfigXSSBrowserTargetsRoundTrip(t *testing.T) {
 		t.Fatalf("routes after an unrelated patch = %d, want 1", n)
 	}
 	// The persisted copy carries them, so a restart keeps them.
-	loaded, err := p.LoadScanConfig()
+	loaded, err := p.LoadScanConfig(scanner.ScanConfig{})
 	if err != nil || loaded == nil || len(loaded.XSSBrowserTargets) != 1 || loaded.XSSBrowserTargets[0] != want {
 		t.Fatalf("persisted routes = %+v (err %v), want [%+v]", loaded, err, want)
 	}
@@ -522,7 +522,7 @@ func TestConfigOnlyRowsRoundTripAndValidation(t *testing.T) {
 	if l, _ := getScannerConfig(t, s)["only_rows"].([]any); len(l) != 2 {
 		t.Fatalf("GET only_rows = %v", l)
 	}
-	if loaded, err := p.LoadScanConfig(); err != nil || loaded == nil || strings.Join(loaded.OnlyRows, "|") != want {
+	if loaded, err := p.LoadScanConfig(scanner.ScanConfig{}); err != nil || loaded == nil || strings.Join(loaded.OnlyRows, "|") != want {
 		t.Fatalf("persisted only_rows = %+v (err %v)", loaded, err)
 	}
 

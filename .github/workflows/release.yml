@@ -1,8 +1,17 @@
 name: Release
 
-# Builds the `burpsy` binary for Linux, macOS, and Windows and attaches each archive to a GitHub
-# Release. Fires on any `v*` tag push; `workflow_dispatch` exists for a manual dry run (build only,
-# no release) so the matrix can be exercised without cutting a tag.
+# Builds the Go binaries — `burpsy` (cmd/burpsy) and `burpsy-mcp` (cmd/burpsy-mcp) — for Linux,
+# macOS and Windows and attaches one archive per platform, plus a SHA256SUMS file covering every
+# archive, to a GitHub Release. Fires on any `v*` tag push; `workflow_dispatch` exists for a manual
+# dry run (build only, no release) so the matrix can be exercised without cutting a tag.
+#
+# burpsy-go is the shipped implementation. This workflow used to build the frozen Rust reference
+# (`cargo build -p burpsy-cli`), so a tag published a binary nobody develops any more
+# (burpsy-react-ui-release-ships-rust).
+#
+# Every target is cross-compiled from one Linux runner with CGO_ENABLED=0: the SQLite driver is
+# modernc.org/sqlite (pure Go), so no target needs a C toolchain. The console's bundle
+# (internal/web/ui/dist) is committed and go:embed-ed, so the build needs no bun step either.
 
 on:
   push:
@@ -19,63 +28,93 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+          - goos: linux
+            goarch: amd64
             archive: tar.gz
-          - os: macos-latest
-            target: aarch64-apple-darwin
+          - goos: linux
+            goarch: arm64
             archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          - goos: darwin
+            goarch: arm64
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
             archive: zip
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      PKG: burpsy-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The version comes from go.mod (its toolchain line when present, else the go line), the same
+      # source the test gate's setup uses, so a release is built by the toolchain the suite ran on.
+      - uses: actions/setup-go@v5
         with:
-          targets: ${{ matrix.target }}
-
-      # Build-time only (crates/web/build.rs bundles the TypeScript UI with it) — never a runtime
-      # dependency of the built binary.
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+          go-version-file: burpsy-go/go.mod
+          cache-dependency-path: burpsy-go/go.sum
 
       - name: Build
-        run: cargo build --release --locked -p burpsy-cli --target ${{ matrix.target }}
+        working-directory: burpsy-go
+        shell: bash
+        run: |
+          ext=""
+          [ "$GOOS" = windows ] && ext=".exe"
+          mkdir -p "../dist/$PKG"
+          go build -trimpath -ldflags="-s -w" -o "../dist/$PKG/burpsy$ext" ./cmd/burpsy
+          go build -trimpath -ldflags="-s -w" -o "../dist/$PKG/burpsy-mcp$ext" ./cmd/burpsy-mcp
+          cp ../LICENSE "../dist/$PKG/"
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'
         shell: bash
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/burpsy dist/
-          tar -C dist -czf burpsy-${{ github.ref_name }}-${{ matrix.target }}.tar.gz burpsy
+        run: tar -C dist -czf "$PKG.tar.gz" "$PKG"
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/burpsy.exe dist/
-          Compress-Archive -Path dist/burpsy.exe -DestinationPath burpsy-${{ github.ref_name }}-${{ matrix.target }}.zip
+        shell: bash
+        run: (cd dist && zip -r "../$PKG.zip" "$PKG")
 
-      - name: Upload build artifact (workflow_dispatch dry run)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: burpsy-${{ matrix.target }}
-          path: burpsy-${{ github.ref_name }}-${{ matrix.target }}.*
+          name: ${{ env.PKG }}
+          path: ${{ env.PKG }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  # One job attaches every archive, so the release is created once (not raced by four matrix legs)
+  # and SHA256SUMS covers the complete set. A missing archive fails the release rather than
+  # publishing a partial one: `needs` waits for every build leg, and fail_on_unmatched_files guards
+  # the glob.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        working-directory: artifacts
+        run: |
+          shopt -s nullglob
+          files=(burpsy-*.tar.gz burpsy-*.zip)
+          [ "${#files[@]}" -eq 4 ] || { echo "expected 4 archives, found ${#files[@]}: ${files[*]}"; exit 1; }
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          files: burpsy-${{ github.ref_name }}-${{ matrix.target }}.*
+          files: |
+            artifacts/burpsy-${{ github.ref_name }}-*
+            artifacts/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true

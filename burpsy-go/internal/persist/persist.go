@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -2614,19 +2615,56 @@ func (s *Store) SaveScanConfig(cfg scanner.ScanConfig) error {
 	return s.setSetting("scanconfig.overrides", string(encoded))
 }
 
-// LoadScanConfig restores the persisted overrides. Absence of state yields a nil config and no
-// error — an old database simply means "use NewActiveScanner's defaults", and a nil lets the
-// caller skip the apply instead of clobbering those defaults with a zero struct.
-func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
+// LoadScanConfig restores the persisted overrides ON TOP OF base, which is the configuration the
+// caller would run with had nothing been saved (the launch defaults). Absence of state yields a nil
+// config and no error, so the caller keeps base as it is.
+//
+// # Why the document is decoded onto base, not onto a zero ScanConfig
+//
+// The stored document is json.Marshal(ScanConfig): the Go field names are the keys. A project saved
+// by an older build has no key for a switch added (or flipped to default-on) since, and decoding
+// into &ScanConfig{} turned every such switch into Go's zero value — so a check that defaults ON
+// came back OFF for no reason the operator could see (burpsy-react-ui-scanconfig-persist-format).
+// encoding/json leaves a field whose key is absent untouched, so decoding onto a copy of base keeps
+// the launch default for exactly the keys the document does not mention, and the saved value for
+// every key it does.
+//
+// A key the current struct no longer has (a renamed or removed field) is ignored, as encoding/json
+// does for any unknown key: the renamed field keeps base's value. A document that does not decode
+// (malformed, or a key holding the wrong JSON type) is an error and yields nil, never a partially
+// applied config — the caller then runs on base and says so.
+//
+// The fields tagged json:"-" (SecondIdentity's credentials, the DNS resolver) are never stored, so
+// they always come from base.
+//
+// The stored keys stay the Go field names rather than the snake_case wire view of
+// /api/scanner/config: that view does not carry every ScanConfig field (CustomPayloads, IssueTypes,
+// PendingDeadline, DisableGraphQLIngest and several check switches), so storing it would drop
+// state that is saved today.
+func (s *Store) LoadScanConfig(base scanner.ScanConfig) (*scanner.ScanConfig, error) {
 	v, err := s.getSetting("scanconfig.overrides")
 	if err != nil || v == "" {
 		return nil, err
 	}
-	cfg := &scanner.ScanConfig{}
-	if err := json.Unmarshal([]byte(v), cfg); err != nil {
+	cfg := unaliasScanConfig(base)
+	if err := json.Unmarshal([]byte(v), &cfg); err != nil {
 		return nil, err
 	}
-	return cfg, nil
+	return &cfg, nil
+}
+
+// unaliasScanConfig gives c fresh copies of every slice it holds. encoding/json decodes a JSON array
+// into a non-nil slice by truncating it and appending, which writes through the caller's backing
+// array: without this, loading a project could rewrite the caller's baseline in place.
+// TestUnaliasScanConfigCoversEverySliceField fails when a slice or map field is added and not
+// handled here.
+func unaliasScanConfig(c scanner.ScanConfig) scanner.ScanConfig {
+	c.XSSBrowserTargets = slices.Clone(c.XSSBrowserTargets)
+	c.ResetTestIdentities = slices.Clone(c.ResetTestIdentities)
+	c.CustomPayloads = slices.Clone(c.CustomPayloads)
+	c.IssueTypes = slices.Clone(c.IssueTypes)
+	c.OnlyRows = slices.Clone(c.OnlyRows)
+	return c
 }
 
 // SaveProxyOptions persists the proxy response-modification switches as one settings value.
