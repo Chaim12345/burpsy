@@ -39,9 +39,8 @@ That means:
 rather than importing a shared helper from `cmd/burpsy`. `cmd/burpsy` owns the full CLI
 dispatcher, flag surface and store-verify / scan-config-list early-exit paths
 (`cmd/AGENTS.md`); factoring that apart from its wiring is a larger refactor than this
-shell needs. The duplication is bounded to the wiring block in `startup()` and is
-deliberately not persistence-backed (`-db` is accepted but not yet wired — see Known gaps)
-so this file stays small enough that the two entry points can be diffed by eye. A change
+shell needs. The duplication is bounded to the wiring block in `startup()` (which opens,
+restores and mirrors a `-db` project the way `cmd/burpsy` does) so this file stays small enough that the two entry points can be diffed by eye. A change
 to the proxy or web wiring in `cmd/burpsy/main.go` must be mirrored here until a shared
 wiring package exists.
 
@@ -101,10 +100,9 @@ pkg-config --exists gtk+-3.0 && echo ok
 
 ## Known gaps (honest, not silently deferred)
 
-- **`-db` is accepted but not wired.** The flag exists for CLI-compatible invocation but
-  `startup()` does not open a `persist.Store` or restore from it — every desktop session
-  starts with an empty `TrafficStore`/`Scope`/`FindingStore`, same as `cmd/burpsy` without
-  `-db`. Wiring persistence is unfinished follow-up work, not a design decision.
+- **`-db` restores history, findings and scope and mirrors writes**, and the console's project
+  switcher works. The CLI's other restores (network settings, upstream proxy, custom checks,
+  TLS pass-through, file logging) are not wired here yet (bead desktop-composition-drift).
 - **No native OS notification**, only the in-app toast via the `burpsy:notify` event (see
   above) — this is a deliberate choice given the Linux native-notification wiring cost, not
   an oversight.

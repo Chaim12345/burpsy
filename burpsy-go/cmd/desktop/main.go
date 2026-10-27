@@ -35,6 +35,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
@@ -50,6 +51,8 @@ type App struct {
 	proxyBind string
 	webBind   string
 	dbFile    string
+	// closeProject closes the open -db project on shutdown.
+	closeProject func()
 
 	logger *zap.Logger
 	store  *core.TrafficStore
@@ -82,6 +85,19 @@ func (a *App) startup(ctx context.Context) {
 	findingStore := core.NewFindingStore()
 	interceptEngine := intercept.NewEngine()
 	passiveScanner := scanner.NewPassiveScanner(a.store, logger)
+
+	// -db, as in cmd/burpsy: restore history, findings and scope, then mirror every write.
+	var persistStore *persist.Store
+	if a.dbFile != "" {
+		persistStore, err = persist.Open(a.dbFile, logger)
+		if err != nil {
+			logger.Fatal("open project database", zap.String("db", a.dbFile), zap.Error(err))
+		}
+		if err := persistStore.Restore(a.store, findingStore, a.scope, nil, nil, nil, nil); err != nil {
+			logger.Fatal("restore project", zap.Error(err))
+		}
+		web.InstallCaptureSinks(a.store, findingStore, persistStore)
+	}
 
 	// One log for the listener and the console, created before either is built: the relay
 	// goroutines read it as soon as the proxy serves (burpsy-react-ui-6dt).
@@ -147,6 +163,10 @@ func (a *App) startup(ctx context.Context) {
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
 		WithBindAddrs(a.proxyBind, a.webBind)
+	if persistStore != nil {
+		webServer.WithPersist(persistStore)
+		a.closeProject = webServer.CloseProject
+	}
 	webServer.StartLiveAuditSweep(runCtx)
 	go func() {
 		if err := webServer.ListenAndServe(runCtx, a.webBind); err != nil && err != context.Canceled {
@@ -166,6 +186,9 @@ func (a *App) shutdown(ctx context.Context) {
 		if err := a.store.Sync(); err != nil && a.logger != nil {
 			a.logger.Error("failed to seal capture on shutdown", zap.Error(err))
 		}
+	}
+	if a.closeProject != nil {
+		a.closeProject()
 	}
 }
 
