@@ -1,0 +1,12 @@
+<task-notification>
+<task-id>a20fcfb5baa3585cf</task-id>
+<tool-use-id>toolu_0116xeQQxygs5j295Vqbu2H4</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a20fcfb5baa3585cf.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement nulbyte XSS payload variants" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This agent has not reported yet: it is waiting on its own background work and will deliver its report through SubagentHandback when that finishes.
+</result>
+<usage><subagent_tokens>175086</subagent_tokens><tool_uses>56</tool_uses><duration_ms>681297</duration_ms></usage>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a20fcfb5baa3585cf</worktreePath><worktreeBranch>worktree-agent-a20fcfb5baa3585cf</worktreeBranch></worktree>
+</task-notification>
