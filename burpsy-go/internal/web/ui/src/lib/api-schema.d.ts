@@ -73,10 +73,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * fetch an API definition from a URL for the API-only scan (Upload from URL), with optional Basic, Bearer or OAuth2 client-credentials auth; scope-gated, size- and time-bounded, and reports whether the document is OpenAPI, Swagger, Postman, WSDL or unrecognised
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** fetch an API definition from a URL for the API-only scan (Upload from URL), with optional Basic, Bearer or OAuth2 client-credentials auth; scope-gated, size- and time-bounded, and reports whether the document is OpenAPI, Swagger, Postman, WSDL or unrecognised */
         post: operations["postApiApiscanFetch"];
         delete?: never;
         options?: never;
@@ -131,15 +128,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the access-control test identities (burpsy-react-ui-cr37): named cookie/header role bundles saved with the project, one marked the high-privilege baseline the others are compared against
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the access-control test identities (burpsy-react-ui-cr37): named cookie/header role bundles saved with the project, one marked the high-privilege baseline the others are compared against */
         get: operations["getApiAuthzIdentities"];
-        /**
-         * the access-control test identities (burpsy-react-ui-cr37): named cookie/header role bundles saved with the project, one marked the high-privilege baseline the others are compared against
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the access-control test identities (burpsy-react-ui-cr37): named cookie/header role bundles saved with the project, one marked the high-privilege baseline the others are compared against */
         put: operations["putApiAuthzIdentities"];
         post?: never;
         delete?: never;
@@ -195,15 +186,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * read or set the automatic-backup settings — the interval that drives a managed backup schedule, and the delete-on-clean-shutdown switch; refuses with 503 when the instance has no -db
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set the automatic-backup settings — the interval that drives a managed backup schedule, and the delete-on-clean-shutdown switch; refuses with 503 when the instance has no -db */
         get: operations["getApiBackupConfig"];
-        /**
-         * read or set the automatic-backup settings — the interval that drives a managed backup schedule, and the delete-on-clean-shutdown switch; refuses with 503 when the instance has no -db
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set the automatic-backup settings — the interval that drives a managed backup schedule, and the delete-on-clean-shutdown switch; refuses with 503 when the instance has no -db */
         put: operations["putApiBackupConfig"];
         post?: never;
         delete?: never;
@@ -241,10 +226,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * mint one blind-XSS correlation payload to plant: the token, the script URL and the script tag carrying it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** mint one blind-XSS correlation payload to plant: the token, the script URL and the script tag carrying it */
         post: operations["postApiBlindxssPayload"];
         delete?: never;
         options?: never;
@@ -281,10 +263,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * open the operator's browser: Chromium on its own profile, routed through the first usable proxy listener and trusting burpsy's CA by SPKI pin for that profile only; refuses by name with no listener, no Chromium, root with the sandbox on, or no display. With url, opens it (in the running browser when there is one)
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** open the operator's browser: Chromium on its own profile, routed through the first usable proxy listener and trusting burpsy's CA by SPKI pin for that profile only; refuses by name with no listener, no Chromium, root with the sandbox on, or no display. With url, opens it (in the running browser when there is one) */
         post: operations["postApiBrowserLaunch"];
         delete?: never;
         options?: never;
@@ -299,15 +278,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the browser's settings under Burp's keys (browser_data_directory, allow_saving_browser_settings, allow_running_without_sandbox, disable_gpu), saved with the project, plus the profile and listener a launch would use
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the browser's settings under Burp's keys (browser_data_directory, allow_saving_browser_settings, allow_running_without_sandbox, disable_gpu), saved with the project, plus the profile and listener a launch would use */
         get: operations["getApiBrowserSettings"];
-        /**
-         * the browser's settings under Burp's keys (browser_data_directory, allow_saving_browser_settings, allow_running_without_sandbox, disable_gpu), saved with the project, plus the profile and listener a launch would use
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the browser's settings under Burp's keys (browser_data_directory, allow_saving_browser_settings, allow_running_without_sandbox, disable_gpu), saved with the project, plus the profile and listener a launch would use */
         put: operations["putApiBrowserSettings"];
         post?: never;
         delete?: never;
@@ -325,10 +298,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * Burp's Collaborator health check: eight connection items against a fresh address on the registered domain, then whether each protocol's interaction came back through polling
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's Collaborator health check: eight connection items against a fresh address on the registered domain, then whether each protocol's interaction came back through polling */
         post: operations["postApiCollaboratorHealth"];
         delete?: never;
         options?: never;
@@ -379,10 +349,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * mint one out-of-band payload address; refuses with 409 and no address when no interaction server is configured
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** mint one out-of-band payload address; refuses with 409 and no address when no interaction server is configured */
         post: operations["postApiCollaboratorPayload"];
         delete?: never;
         options?: never;
@@ -659,15 +626,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent */
         get: operations["getApiDominvader"];
-        /**
-         * the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent */
         put: operations["putApiDominvader"];
         post?: never;
         delete?: never;
@@ -685,10 +646,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * the endpoint burpsy's own DOM-auditor extension reports one source/sink flow to; records a hit the operator's browser produced
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the endpoint burpsy's own DOM-auditor extension reports one source/sink flow to; records a hit the operator's browser produced */
         post: operations["postApiDominvaderHit"];
         delete?: never;
         options?: never;
@@ -706,10 +664,7 @@ export type paths = {
         get?: never;
         put?: never;
         post?: never;
-        /**
-         * clear the DOM auditor's reported hits
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** clear the DOM auditor's reported hits */
         delete: operations["deleteApiDominvaderHits"];
         options?: never;
         head?: never;
@@ -725,10 +680,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * run the finite opt-in DOM pollution probe plan in an isolated context, same-origin and live engagement-scope gated on each request; workers and frames are not exercised
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** run the finite opt-in DOM pollution probe plan in an isolated context, same-origin and live engagement-scope gated on each request; workers and frames are not exercised */
         post: operations["postApiDominvaderScan"];
         delete?: never;
         options?: never;
@@ -811,20 +763,14 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * one exchange row by id; PATCH sets its notes and/or highlight (UX-15)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one exchange row by id; PATCH sets its notes and/or highlight (UX-15) */
         get: operations["getApiExchangeById"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /**
-         * one exchange row by id; PATCH sets its notes and/or highlight (UX-15)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one exchange row by id; PATCH sets its notes and/or highlight (UX-15) */
         patch: operations["patchApiExchangeById"];
         trace?: never;
     };
@@ -922,10 +868,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * run one registration a loaded plugin declared: a context-menu item, a menu action, or an editor tab
-         * @description Risk class execute: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** run one registration a loaded plugin declared: a context-menu item, a menu action, or an editor tab */
         post: operations["postApiExtensionsInvoke"];
         delete?: never;
         options?: never;
@@ -942,10 +885,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * start one allowlisted plugin as a child process and complete the JSON-RPC handshake
-         * @description Risk class execute: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** start one allowlisted plugin as a child process and complete the JSON-RPC handshake */
         post: operations["postApiExtensionsLoad"];
         delete?: never;
         options?: never;
@@ -962,10 +902,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * move one allowlisted plugin one place in the order its registrations are offered and invoked in
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** move one allowlisted plugin one place in the order its registrations are offered and invoked in */
         post: operations["postApiExtensionsOrder"];
         delete?: never;
         options?: never;
@@ -982,10 +919,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * stop a running plugin: ask it to exit, then close its stdin, then kill it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** stop a running plugin: ask it to exit, then close its stdin, then kill it */
         post: operations["postApiExtensionsUnload"];
         delete?: never;
         options?: never;
@@ -1019,10 +953,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * Save GraphQL queries to site map: one unsent request per query/mutation an introspection answer declares
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Save GraphQL queries to site map: one unsent request per query/mutation an introspection answer declares */
         post: operations["postApiGraphqlSitemap"];
         delete?: never;
         options?: never;
@@ -1037,15 +968,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the header names the Comparer discounts, per direction, with the response-side defaults and the list of surfaces that consult them
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the header names the Comparer discounts, per direction, with the response-side defaults and the list of surfaces that consult them */
         get: operations["getApiHeadersUninteresting"];
-        /**
-         * the header names the Comparer discounts, per direction, with the response-side defaults and the list of surfaces that consult them
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the header names the Comparer discounts, per direction, with the response-side defaults and the list of surfaces that consult them */
         put: operations["putApiHeadersUninteresting"];
         post?: never;
         delete?: never;
@@ -1104,10 +1029,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * run the saved extractors against the responses of the named exchange ids (history) or response message ids (Intruder) and return each captured value, so the console can fill the derived columns for the rows it is showing
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** run the saved extractors against the responses of the named exchange ids (history) or response message ids (Intruder) and return each captured value, so the console can fill the derived columns for the rows it is showing */
         post: operations["postApiHistoryExtract"];
         delete?: never;
         options?: never;
@@ -1122,15 +1044,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the custom extractor columns (burpsy-react-ui-28n8): named regex-group or json-path extractors saved with the project and rendered as derived columns in history and Intruder results
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the custom extractor columns (burpsy-react-ui-28n8): named regex-group or json-path extractors saved with the project and rendered as derived columns in history and Intruder results */
         get: operations["getApiHistoryExtractors"];
-        /**
-         * the custom extractor columns (burpsy-react-ui-28n8): named regex-group or json-path extractors saved with the project and rendered as derived columns in history and Intruder results
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the custom extractor columns (burpsy-react-ui-28n8): named regex-group or json-path extractors saved with the project and rendered as derived columns in history and Intruder results */
         put: operations["putApiHistoryExtractors"];
         post?: never;
         delete?: never;
@@ -1148,10 +1064,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable and resendable in Repeater; nothing is sent to any target — the requests are recorded, not replayed
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable and resendable in Repeater; nothing is sent to any target — the requests are recorded, not replayed */
         post: operations["postApiHistoryImportHar"];
         delete?: never;
         options?: never;
@@ -1205,10 +1118,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * send a raw HTTP/2 frame program: the pseudo-header and frame-level surface
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** send a raw HTTP/2 frame program: the pseudo-header and frame-level surface */
         post: operations["postApiHttp2Program"];
         delete?: never;
         options?: never;
@@ -1242,10 +1152,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * resolve one held message: forward, drop, or forward edited bytes
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** resolve one held message: forward, drop, or forward edited bytes */
         post: operations["postApiInterceptById"];
         delete?: never;
         options?: never;
@@ -1262,10 +1169,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * resolve one held message: forward, drop, or forward edited bytes
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** resolve one held message: forward, drop, or forward edited bytes */
         post: operations["postApiInterceptByIdDrop"];
         delete?: never;
         options?: never;
@@ -1282,10 +1186,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * resolve one held message: forward, drop, or forward edited bytes
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** resolve one held message: forward, drop, or forward edited bytes */
         post: operations["postApiInterceptByIdForward"];
         delete?: never;
         options?: never;
@@ -1302,10 +1203,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * annotate one held message: set or clear its operator comment and highlight
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** annotate one held message: set or clear its operator comment and highlight */
         post: operations["postApiInterceptAnnotateById"];
         delete?: never;
         options?: never;
@@ -1322,10 +1220,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * drop every held message in one round trip; answers the count actually dropped
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** drop every held message in one round trip; answers the count actually dropped */
         post: operations["postApiInterceptDropAll"];
         delete?: never;
         options?: never;
@@ -1342,10 +1237,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * turn interception on or off
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** turn interception on or off */
         post: operations["postApiInterceptEnable"];
         delete?: never;
         options?: never;
@@ -1362,10 +1254,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * forward every held message unmodified in one round trip; answers the count actually forwarded
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** forward every held message unmodified in one round trip; answers the count actually forwarded */
         post: operations["postApiInterceptForwardAll"];
         delete?: never;
         options?: never;
@@ -1382,10 +1271,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * Burp's "Only intercept in-scope messages": filter the hold queue to the engagement scope
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's "Only intercept in-scope messages": filter the hold queue to the engagement scope */
         post: operations["postApiInterceptInScopeOnly"];
         delete?: never;
         options?: never;
@@ -1400,15 +1286,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body */
         get: operations["getApiInterceptNewlineCorrection"];
-        /**
-         * Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body */
         put: operations["putApiInterceptNewlineCorrection"];
         post?: never;
         delete?: never;
@@ -1424,15 +1304,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the match rules deciding which messages are held, per direction
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the match rules deciding which messages are held, per direction */
         get: operations["getApiInterceptRulesRequests"];
-        /**
-         * the match rules deciding which messages are held, per direction
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the match rules deciding which messages are held, per direction */
         put: operations["putApiInterceptRulesRequests"];
         post?: never;
         delete?: never;
@@ -1448,16 +1322,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * read or set the startup interception preference: on, off, or restore-last-state
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set the startup interception preference: on, off, or restore-last-state */
         get: operations["getApiInterceptStartup"];
         put?: never;
-        /**
-         * read or set the startup interception preference: on, off, or restore-last-state
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set the startup interception preference: on, off, or restore-last-state */
         post: operations["postApiInterceptStartup"];
         delete?: never;
         options?: never;
@@ -1511,10 +1379,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * no task id: answers the 404 that names the expected form
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** no task id: answers the 404 that names the expected form */
         post: operations["postApiIntruderAttacksBy$"];
         delete?: never;
         options?: never;
@@ -1531,10 +1396,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * no action segment: answers the 404 that names the expected form
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** no action segment: answers the 404 that names the expected form */
         post: operations["postApiIntruderAttacksById"];
         delete?: never;
         options?: never;
@@ -1551,10 +1413,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, an attack past acting on answers 409
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, an attack past acting on answers 409 */
         post: operations["postApiIntruderAttacksByIdStop"];
         delete?: never;
         options?: never;
@@ -1571,10 +1430,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * upload a payload wordlist (one per line); answers with the stored path the file payload source resolves
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** upload a payload wordlist (one per line); answers with the stored path the file payload source resolves */
         post: operations["postApiIntruderPayloadFiles"];
         delete?: never;
         options?: never;
@@ -1671,15 +1527,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the issue consolidation policy — keep existing (merge), keep both or keep new on a duplicate, for every issue type with per-type overrides — and how many collisions each run resolved which way
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the issue consolidation policy — keep existing (merge), keep both or keep new on a duplicate, for every issue type with per-type overrides — and how many collisions each run resolved which way */
         get: operations["getApiIssuesConsolidation"];
-        /**
-         * the issue consolidation policy — keep existing (merge), keep both or keep new on a duplicate, for every issue type with per-type overrides — and how many collisions each run resolved which way
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the issue consolidation policy — keep existing (merge), keep both or keep new on a duplicate, for every issue type with per-type overrides — and how many collisions each run resolved which way */
         put: operations["putApiIssuesConsolidation"];
         post?: never;
         delete?: never;
@@ -1697,10 +1547,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * record an issue by hand against one exchange (Burp's 'Record an issue')
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** record an issue by hand against one exchange (Burp's 'Record an issue') */
         post: operations["postApiIssuesRecord"];
         delete?: never;
         options?: never;
@@ -1717,10 +1564,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * the LLM post-scan second look over gated findings (Standard profile: High any-confidence, Medium tentative-or-better) — advice attached to findings, never a promotion
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the LLM post-scan second look over gated findings (Standard profile: High any-confidence, Medium tentative-or-better) — advice attached to findings, never a promotion */
         post: operations["postApiIssuesTriage"];
         delete?: never;
         options?: never;
@@ -1784,17 +1628,11 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * platform-authentication failures waiting for credentials: list them, or dismiss one by host
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** platform-authentication failures waiting for credentials: list them, or dismiss one by host */
         get: operations["getApiNetworkAuthFailures"];
         put?: never;
         post?: never;
-        /**
-         * platform-authentication failures waiting for credentials: list them, or dismiss one by host
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** platform-authentication failures waiting for credentials: list them, or dismiss one by host */
         delete: operations["deleteApiNetworkAuthFailures"];
         options?: never;
         head?: never;
@@ -1836,21 +1674,12 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true */
         get: operations["getApiNetworkProxy"];
         put?: never;
-        /**
-         * the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true */
         post: operations["postApiNetworkProxy"];
-        /**
-         * the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern (404 when absent) or clears all with ?all=true */
         delete: operations["deleteApiNetworkProxy"];
         options?: never;
         head?: never;
@@ -1864,17 +1693,11 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears */
         get: operations["getApiNetworkServerCertificates"];
         put?: never;
         post?: never;
-        /**
-         * the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears */
         delete: operations["deleteApiNetworkServerCertificates"];
         options?: never;
         head?: never;
@@ -2018,15 +1841,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * read or rename the project; the name is stored with the database, so it travels with the project file and survives a restart. A blank name is refused rather than stored, because a stored placeholder would be indistinguishable from a real name
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or rename the project; the name is stored with the database, so it travels with the project file and survives a restart. A blank name is refused rather than stored, because a stored placeholder would be indistinguishable from a real name */
         get: operations["getApiProjectName"];
-        /**
-         * read or rename the project; the name is stored with the database, so it travels with the project file and survives a restart. A blank name is refused rather than stored, because a stored placeholder would be indistinguishable from a real name
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or rename the project; the name is stored with the database, so it travels with the project file and survives a restart. A blank name is refused rather than stored, because a stored placeholder would be indistinguishable from a real name */
         put: operations["putApiProjectName"];
         post?: never;
         delete?: never;
@@ -2081,10 +1898,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * decode a protobuf or gRPC-framed body into a field tree without a .proto (burpsy-react-ui-3x2g), so an operator can read an otherwise opaque binary body; a pure transform that sends nothing
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** decode a protobuf or gRPC-framed body into a field tree without a .proto (burpsy-react-ui-3x2g), so an operator can read an otherwise opaque binary body; a pure transform that sends nothing */
         post: operations["postApiProtobufDecode"];
         delete?: never;
         options?: never;
@@ -2101,10 +1915,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * re-encode an edited protobuf field tree back to body bytes, re-framing it when it was gRPC (burpsy-react-ui-3x2g)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** re-encode an edited protobuf field tree back to body bytes, re-framing it when it was gRPC (burpsy-react-ui-3x2g) */
         post: operations["postApiProtobufEncode"];
         delete?: never;
         options?: never;
@@ -2121,10 +1932,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * fetch a target's schema via gRPC server reflection the operator explicitly named, then decode the body with it (burpsy-react-ui-47id); one bounded exchange to the target per call, scope-authorised before any dial, and the response marks the target-served names as reflection-sourced
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** fetch a target's schema via gRPC server reflection the operator explicitly named, then decode the body with it (burpsy-react-ui-47id); one bounded exchange to the target per call, scope-authorised before any dial, and the response marks the target-served names as reflection-sourced */
         post: operations["postApiProtobufReflectDecode"];
         delete?: never;
         options?: never;
@@ -2233,16 +2041,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing */
         get: operations["getApiProxyHistoryLogging"];
         put?: never;
-        /**
-         * read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing */
         post: operations["postApiProxyHistoryLogging"];
         delete?: never;
         options?: never;
@@ -2257,25 +2059,13 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot */
         get: operations["getApiProxyListener"];
-        /**
-         * the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot */
         put: operations["putApiProxyListener"];
-        /**
-         * the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot */
         post: operations["postApiProxyListener"];
-        /**
-         * the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot */
         delete: operations["deleteApiProxyListener"];
         options?: never;
         head?: never;
@@ -2289,15 +2079,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters */
         get: operations["getApiProxyOptions"];
-        /**
-         * the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters */
         put: operations["putApiProxyOptions"];
         post?: never;
         delete?: never;
@@ -2313,25 +2097,13 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection) */
         get: operations["getApiProxyPassthrough"];
-        /**
-         * the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection) */
         put: operations["putApiProxyPassthrough"];
-        /**
-         * the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection) */
         post: operations["postApiProxyPassthrough"];
-        /**
-         * the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection) */
         delete: operations["deleteApiProxyPassthrough"];
         options?: never;
         head?: never;
@@ -2347,10 +2119,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * mint two one-shot URLs that re-issue a stored exchange in the original and in the current session, for the operator's own browser to open
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** mint two one-shot URLs that re-issue a stored exchange in the original and in the current session, for the operator's own browser to open */
         post: operations["postApiRepeaterBrowserReissue"];
         delete?: never;
         options?: never;
@@ -2418,10 +2187,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * send one operator-authored request and record the exchange
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** send one operator-authored request and record the exchange */
         post: operations["postApiRepeaterSend"];
         delete?: never;
         options?: never;
@@ -2438,10 +2204,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * send a Repeater tab group in tab order on one shared socket, in tab order on separate connections, or all at once in parallel; every raw request is authorised individually
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** send a Repeater tab group in tab order on one shared socket, in tab order on separate connections, or all at once in parallel; every raw request is authorised individually */
         post: operations["postApiRepeaterSendGroup"];
         delete?: never;
         options?: never;
@@ -2458,10 +2221,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * write one WebSocket frame into a connection open through the proxy (Repeater attach), to the server or to the client; scope-gated on the connection's target, recorded on its history
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** write one WebSocket frame into a connection open through the proxy (Repeater attach), to the server or to the client; scope-gated on the connection's target, recorded on its history */
         post: operations["postApiRepeaterWsAttach"];
         delete?: never;
         options?: never;
@@ -2495,10 +2255,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * resend one WebSocket frame on a freshly dialled connection (or, with clone, one opened with a captured connection's own handshake), recording the handshake exchange and the reply frames; to-client is refused with its reason
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** resend one WebSocket frame on a freshly dialled connection (or, with clone, one opened with a captured connection's own handshake), recording the handshake exchange and the reply frames; to-client is refused with its reason */
         post: operations["postApiRepeaterWsSend"];
         delete?: never;
         options?: never;
@@ -2625,10 +2382,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * enable or disable one corpus check by name; a name the corpus does not contain is refused before anything is recorded
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** enable or disable one corpus check by name; a name the corpus does not contain is refused before anything is recorded */
         put: operations["putApiScannerChecksEnable"];
         post?: never;
         delete?: never;
@@ -2646,10 +2400,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * Burp's Import / Save for a custom scan check: load a BCheck from the console into the corpus, persisted with the project (burpsy-react-ui-kbu1)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's Import / Save for a custom scan check: load a BCheck from the console into the corpus, persisted with the project (burpsy-react-ui-kbu1) */
         post: operations["postApiScannerChecksImport"];
         delete?: never;
         options?: never;
@@ -2666,10 +2417,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * re-read the --bchecks directory, keeping console-imported checks (burpsy-react-ui-kbu1)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** re-read the --bchecks directory, keeping console-imported checks (burpsy-react-ui-kbu1) */
         post: operations["postApiScannerChecksReload"];
         delete?: never;
         options?: never;
@@ -2684,17 +2432,11 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * a loaded check's BCheck source for Export and editing, and Delete for a console-imported check (burpsy-react-ui-kbu1)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** a loaded check's BCheck source for Export and editing, and Delete for a console-imported check (burpsy-react-ui-kbu1) */
         get: operations["getApiScannerChecksSource"];
         put?: never;
         post?: never;
-        /**
-         * a loaded check's BCheck source for Export and editing, and Delete for a console-imported check (burpsy-react-ui-kbu1)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** a loaded check's BCheck source for Export and editing, and Delete for a console-imported check (burpsy-react-ui-kbu1) */
         delete: operations["deleteApiScannerChecksSource"];
         options?: never;
         head?: never;
@@ -2769,25 +2511,13 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding */
         get: operations["getApiScannerConfigs"];
-        /**
-         * the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding */
         put: operations["putApiScannerConfigs"];
-        /**
-         * the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding */
         post: operations["postApiScannerConfigs"];
-        /**
-         * the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding */
         delete: operations["deleteApiScannerConfigs"];
         options?: never;
         head?: never;
@@ -2861,10 +2591,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * Burp's "Passively scan this branch": re-run the passive set over one site-map branch's already-captured exchanges, reporting scanned/out-of-scope/no-response as a partition
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's "Passively scan this branch": re-run the passive set over one site-map branch's already-captured exchanges, reporting scanned/out-of-scope/no-response as a partition */
         post: operations["postApiScannerPassiveBranch"];
         delete?: never;
         options?: never;
@@ -2879,15 +2606,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * secret detection over every captured response — the gitleaks rule corpus plus burpsy's own provider rules, raising a finding per leaked key with its rule, location and a redacted excerpt; off until switched on (burpsy-react-ui-8j0d)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** secret detection over every captured response — the gitleaks rule corpus plus burpsy's own provider rules, raising a finding per leaked key with its rule, location and a redacted excerpt; off until switched on (burpsy-react-ui-8j0d) */
         get: operations["getApiScannerSecrets"];
-        /**
-         * secret detection over every captured response — the gitleaks rule corpus plus burpsy's own provider rules, raising a finding per leaked key with its rule, location and a redacted excerpt; off until switched on (burpsy-react-ui-8j0d)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** secret detection over every captured response — the gitleaks rule corpus plus burpsy's own provider rules, raising a finding per leaked key with its rule, location and a redacted excerpt; off until switched on (burpsy-react-ui-8j0d) */
         put: operations["putApiScannerSecrets"];
         post?: never;
         delete?: never;
@@ -3065,15 +2786,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Burp's Sequencer analysis settings under Burp's keys: sequencer.token_analysis.* (which tests run) and token_handling.base_64_decode_before_analyzing; saved with the project and applied to every analysis that does not name its own tests
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's Sequencer analysis settings under Burp's keys: sequencer.token_analysis.* (which tests run) and token_handling.base_64_decode_before_analyzing; saved with the project and applied to every analysis that does not name its own tests */
         get: operations["getApiSequencerSettings"];
-        /**
-         * Burp's Sequencer analysis settings under Burp's keys: sequencer.token_analysis.* (which tests run) and token_handling.base_64_decode_before_analyzing; saved with the project and applied to every analysis that does not name its own tests
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** Burp's Sequencer analysis settings under Burp's keys: sequencer.token_analysis.* (which tests run) and token_handling.base_64_decode_before_analyzing; saved with the project and applied to every analysis that does not name its own tests */
         put: operations["putApiSequencerSettings"];
         post?: never;
         delete?: never;
@@ -3378,10 +3093,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * turn the session-handling tracer on or off (off by default — it imposes a per-request overhead, which is why it is opt-in)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** turn the session-handling tracer on or off (off by default — it imposes a per-request overhead, which is why it is opt-in) */
         post: operations["postApiSessionTraceEnable"];
         delete?: never;
         options?: never;
@@ -3450,10 +3162,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * record a captured exchange into the site map by id (Burp's add_to_sitemap): already on the map, or pinned past the Delete host/branch/item suppression that hid it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** record a captured exchange into the site map by id (Burp's add_to_sitemap): already on the map, or pinned past the Delete host/branch/item suppression that hid it */
         post: operations["postApiSitemapRecord"];
         delete?: never;
         options?: never;
@@ -3486,10 +3195,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * set which skills this project turns off: {"disabled":[names]}, the whole list
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** set which skills this project turns off: {"disabled":[names]}, the whole list */
         put: operations["putApiSkillsDisabled"];
         post?: never;
         delete?: never;
@@ -3556,17 +3262,11 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * GET: one task's row and an async task's finished body. DELETE removes a finished task's row (a running task answers 409 — cancel first)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** GET: one task's row and an async task's finished body. DELETE removes a finished task's row (a running task answers 409 — cancel first) */
         get: operations["getApiTasksById"];
         put?: never;
         post?: never;
-        /**
-         * GET: one task's row and an async task's finished body. DELETE removes a finished task's row (a running task answers 409 — cancel first)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** GET: one task's row and an async task's finished body. DELETE removes a finished task's row (a running task answers 409 — cancel first) */
         delete: operations["deleteApiTasksById"];
         options?: never;
         head?: never;
@@ -3582,10 +3282,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * re-run a crawl task at its target (only crawl kind re-runs; 409 otherwise)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** re-run a crawl task at its target (only crawl kind re-runs; 409 otherwise) */
         post: operations["postApiTasksByIdAgain"];
         delete?: never;
         options?: never;
@@ -3602,10 +3299,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * ask a running task to stop (unknown or finished id answers 404)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** ask a running task to stop (unknown or finished id answers 404) */
         post: operations["postApiTasksByIdCancel"];
         delete?: never;
         options?: never;
@@ -3622,10 +3316,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * hold one task at its next gate (a task kind that never reaches a gate answers 409; g0ba)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** hold one task at its next gate (a task kind that never reaches a gate answers 409; g0ba) */
         post: operations["postApiTasksByIdPause"];
         delete?: never;
         options?: never;
@@ -3642,10 +3333,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * release one task's hold (a task kind that never reaches a gate answers 409; g0ba)
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** release one task's hold (a task kind that never reaches a gate answers 409; g0ba) */
         post: operations["postApiTasksByIdResume"];
         delete?: never;
         options?: never;
@@ -3662,10 +3350,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * hold every running task at its next gate; the answer's count says how many were holding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** hold every running task at its next gate; the answer's count says how many were holding */
         post: operations["postApiTasksPause"];
         delete?: never;
         options?: never;
@@ -3682,10 +3367,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * release the suite-wide hold; the answer's count says how many were holding
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** release the suite-wide hold; the answer's count says how many were holding */
         post: operations["postApiTasksResume"];
         delete?: never;
         options?: never;
@@ -3819,10 +3501,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /**
-         * one log entry by id: PATCH sets (or clears) its comment
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one log entry by id: PATCH sets (or clears) its comment */
         patch: operations["patchApiToolsLogById"];
         trace?: never;
     };
@@ -3833,16 +3512,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * the organizer's saved items
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the organizer's saved items */
         get: operations["getApiToolsOrganizer"];
         put?: never;
-        /**
-         * the organizer's saved items
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** the organizer's saved items */
         post: operations["postApiToolsOrganizer"];
         delete?: never;
         options?: never;
@@ -3858,20 +3531,11 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it */
         put: operations["putApiToolsOrganizerById"];
-        /**
-         * one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it */
         post: operations["postApiToolsOrganizerById"];
-        /**
-         * one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it */
         delete: operations["deleteApiToolsOrganizerById"];
         options?: never;
         head?: never;
@@ -3886,10 +3550,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** one organizer item by id: POST updates title/note/highlight, PUT status sets the workflow status, DELETE removes it */
         put: operations["putApiToolsOrganizerByIdStatus"];
         post?: never;
         delete?: never;
@@ -3907,10 +3568,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * create a collection: POST {name}; a duplicate name is a 400
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** create a collection: POST {name}; a duplicate name is a 400 */
         post: operations["postApiToolsOrganizerCollections"];
         delete?: never;
         options?: never;
@@ -3926,20 +3584,11 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         put: operations["putApiToolsOrganizerCollectionsById"];
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         post: operations["postApiToolsOrganizerCollectionsById"];
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         delete: operations["deleteApiToolsOrganizerCollectionsById"];
         options?: never;
         head?: never;
@@ -3955,10 +3604,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         post: operations["postApiToolsOrganizerCollectionsByIdDuplicate"];
         delete?: never;
         options?: never;
@@ -3974,10 +3620,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         put: operations["putApiToolsOrganizerCollectionsByIdItems"];
         post?: never;
         delete?: never;
@@ -3994,10 +3637,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /**
-         * organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** organizer collections: rename/note, duplicate, move/copy items (inbox literal), delete with items inbox|delete */
         put: operations["putApiToolsOrganizerCollectionsInbox"];
         post?: never;
         delete?: never;
@@ -4013,15 +3653,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * match & replace rules applied to proxied traffic; PUT replaces the whole set
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** match & replace rules applied to proxied traffic; PUT replaces the whole set */
         get: operations["getApiToolsRules"];
-        /**
-         * match & replace rules applied to proxied traffic; PUT replaces the whole set
-         * @description Risk class local-write: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** match & replace rules applied to proxied traffic; PUT replaces the whole set */
         put: operations["putApiToolsRules"];
         post?: never;
         delete?: never;
@@ -4139,10 +3773,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /**
-         * spend one one-shot re-issue token: re-send its exchange under the minted session variant, record the outcome, and answer with a page that names the variant
-         * @description Risk class egress: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
-         */
+        /** spend one one-shot re-issue token: re-send its exchange under the minted session variant, record the outcome, and answer with a page that names the variant */
         get: operations["getReissueToken"];
         put?: never;
         post?: never;
