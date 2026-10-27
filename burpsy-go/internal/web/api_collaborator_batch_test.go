@@ -3,7 +3,8 @@ package web
 import (
 	"encoding/json"
 	"net/http"
-	"os/exec"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,39 +13,91 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
 
-// The batch mint (burpsy-react-ui-v8q) is verified against the REAL public interactsh pool,
-// not a fake: the oob package's own fixtures came from a live capture and its field names are
-// pinned to the binary's actual -json output, so a fake channel would only prove the handler
-// loops N times over a provider that returns a constant. The real binary, real registration,
-// and real DNS announce prove the whole chain the operator actually exercises — including that
-// a batch of N still shares ONE registration (one Interactsh session) and only the markers
-// differ, which is the attribution contract this endpoint's marker_note documents.
+// The batch mint (burpsy-react-ui-v8q), hermetically.
 //
-// The test is skipped automatically when the binary, the network, or the registration is not
-// available — the honest-failure contract this project runs on. When skipped it says so
-// rather than passing silently: a skip line is visible in the verbose run, which is the point.
-func TestTheCollaboratorBatchMintAgainstThePublicPool(t *testing.T) {
-	if testing.Short() {
-		t.Skip("live registration against the public interactsh pool; not a short-mode test")
-	}
-	// The comment above promises this skips when the binary is not available, and until
-	// burpsy-react-ui-qcng it did not: it skipped only on -short, so a machine without
-	// interactsh-client failed the whole internal/web package with `503: "interactsh-client" not
-	// found on PATH`. That is the failure the honest-failure contract is supposed to prevent, and
-	// it was reported as a package failure rather than a skip.
-	if _, err := exec.LookPath("interactsh-client"); err != nil {
-		t.Skip("interactsh-client is not on PATH; the live registration cannot run, and a skip is " +
-			"the honest outcome here rather than a failure that reads as a broken handler")
-	}
+// This used to register against the PUBLIC interactsh pool on every run and skip when that pool
+// answered 503, so a per-PR gate depended on a third party and turned "the pool was down" into a
+// green "skip" (bead burpsy-react-ui-interactsh-public). The live version is kept, behind the
+// oob_live build tag, in api_collaborator_batch_live_test.go; this one runs everywhere.
+//
+// # Where the fake sits, and why there
+//
+// internal/oob does not speak the interactsh protocol: it drives the official interactsh-client
+// binary as a subprocess (its package comment says why) and reads two things from it — the payload
+// domain the client announces on stderr after registering, and the -json interaction log it
+// appends to. So the narrowest seam is that binary, via oob.Options.BinaryPath: the real
+// oob.NewClient, the real lazy scanner provider and the real HTTP handler all run, and only the
+// process at the far end is a stand-in. A loopback interactsh SERVER would be a wider fake, not a
+// narrower one: the real client would then need to be on PATH (the dependency this removes), and
+// the fake would have to implement upstream's RSA-OAEP/AES registration to be talked to at all.
+//
+// The fake counts how many times it was started. One start is one registration, so "a batch of 3
+// shares ONE registration" is asserted as a number, not inferred from the addresses sharing a
+// suffix — a handler that registered afresh per address and happened to land on the same domain
+// would pass the suffix check and fail this one.
 
-	// Real registration via the real binary and the real public pool (empty ServerURL = the
-	// client's own default pool). The 45s bound covers the slow end of a real DNS round trip.
-	provider := scanner.NewLazyOOBProvider(oob.Options{Timeout: 45 * time.Second})
+// fakeInteractshDomain is what the fake announces. It must match oob's domainRe (lowercase
+// alphanumerics, then .oast.<tld>), the shape of a real registration.
+const fakeInteractshDomain = "c0ffee0burpsy0fake0registration.oast.me"
+
+// fakeInteractshClient writes a stand-in for interactsh-client that announces fakeInteractshDomain
+// the way the real client does, keeps running like it, and appends one line to the returned starts
+// file each time it is launched.
+func fakeInteractshClient(t *testing.T) (bin, starts string) {
+	t.Helper()
+	dir := t.TempDir()
+	starts = filepath.Join(dir, "starts")
+	script := `#!/bin/sh
+echo started >> '` + starts + `'
+echo '[INF] Current interactsh version 1.3.1 (latest)' >&2
+echo '[INF] ` + fakeInteractshDomain + `' >&2
+while :; do sleep 0.05; done
+`
+	bin = filepath.Join(dir, "interactsh-client")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, starts
+}
+
+func registrations(t *testing.T, starts string) int {
+	t.Helper()
+	b, err := os.ReadFile(starts)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Count(string(b), "started\n")
+}
+
+func TestTheCollaboratorBatchMintSharesOneRegistration(t *testing.T) {
+	bin, starts := fakeInteractshClient(t)
+	provider := scanner.NewLazyOOBProvider(oob.Options{BinaryPath: bin, Timeout: 10 * time.Second})
 	t.Cleanup(func() { _ = provider.Close() })
 
 	s := newTestServerWithScanner(t)
 	s.wiredScanner().WithOOBProvider(provider)
 
+	if got := registrations(t, starts); got != 0 {
+		t.Fatalf("the provider is lazy, so nothing may register before the first mint; got %d registrations", got)
+	}
+	domain := assertBatchMint(t, s)
+	if domain != fakeInteractshDomain {
+		t.Fatalf("the mint reported domain %q; the client registered %q", domain, fakeInteractshDomain)
+	}
+	if got := registrations(t, starts); got != 1 {
+		t.Fatalf("a single mint and a batch of 3 started the client %d times; they must share ONE registration "+
+			"(one interactsh session, only the markers differ), which is the attribution contract", got)
+	}
+}
+
+// assertBatchMint drives the mint endpoint through a single mint, a batch of 3 and an over-bound
+// request, asserts the response contract, and returns the registered domain. The hermetic test
+// and the oob_live one share it, so the two cannot drift in what they check.
+func assertBatchMint(t *testing.T, s *Server) string {
+	t.Helper()
 	// Single mint: the contract the existing client reads — one "address" plus a 1-entry
 	// "addresses" — must survive the batch change unchanged.
 	single := mintPayload(t, s, `{}`)
@@ -65,7 +118,10 @@ func TestTheCollaboratorBatchMintAgainstThePublicPool(t *testing.T) {
 	if domain == "" {
 		t.Fatal("the single mint reported no domain; cannot verify the batch shares the registration")
 	}
-	seen := map[string]bool{}
+	if batch.Domain != domain {
+		t.Fatalf("the batch reported domain %q, the single mint %q: one registration has one domain", batch.Domain, domain)
+	}
+	seen := map[string]bool{single.Address: true}
 	for i, a := range batch.Addresses {
 		if seen[a] {
 			t.Fatalf("batch minted a duplicate address %q", a)
@@ -105,9 +161,12 @@ func TestTheCollaboratorBatchMintAgainstThePublicPool(t *testing.T) {
 	if got := len(hubPayloads(t, s)); got != 4 {
 		t.Fatalf("a refused mint must record nothing, but the hub now holds %d payloads", got)
 	}
+	return domain
 }
 
 // mintPayload posts one mint request and decodes the response shape the Collaborator page reads.
+// A 503 (no channel) is a failure: both callers hold a channel, so "unavailable" means the mint
+// path broke, not that a prerequisite is missing.
 func mintPayload(t *testing.T, s *Server, body string) (m struct {
 	Address   string   `json:"address"`
 	Addresses []string `json:"addresses"`
@@ -116,9 +175,6 @@ func mintPayload(t *testing.T, s *Server, body string) (m struct {
 }) {
 	t.Helper()
 	rec := postJSONRaw(t, s, "/api/collaborator/payload", body)
-	if rec.Code == http.StatusServiceUnavailable {
-		t.Skipf("skipping live interactsh test: out-of-band channel unavailable: %s", strings.TrimSpace(rec.Body.String()))
-	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/collaborator/payload %s = %d: %s", body, rec.Code, strings.TrimSpace(rec.Body.String()))
 	}

@@ -156,7 +156,10 @@ if ! current nuclei "$NUCLEI_SHA256" "$bin/nuclei"; then
   unzip -o -q "$dl/nuclei.zip" nuclei -d "$bin"
   stamp nuclei "$NUCLEI_SHA256" "$bin/nuclei"
 fi
-# interactsh-client: internal/web's batch-mint test registers against the real public pool.
+# interactsh-client: no test in the default suite needs it any more. internal/web's batch-mint test
+# runs against a stand-in binary, and its public-pool twin, like internal/oob's, is behind the
+# oob_live build tag (bead burpsy-react-ui-interactsh-public). It stays installed and pinned so a
+# deliberate `go test -tags oob_live` on a runner uses the reviewed release.
 if ! current interactsh "$INTERACTSH_SHA256" "$bin/interactsh-client"; then
   fetch interactsh.zip "$INTERACTSH_SHA256" \
     "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
