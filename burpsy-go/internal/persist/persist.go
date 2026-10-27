@@ -15,11 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-<<<<<<< HEAD
-	"slices"
-=======
 	"os"
->>>>>>> bead/sec-small
+	"slices"
 	"strings"
 	"time"
 
