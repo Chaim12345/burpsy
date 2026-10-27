@@ -149,7 +149,10 @@ a risk-class change in an unlisted file is added to the list in the same PR. A f
 quote counts as a risk path. A change to `crates/` (the frozen parity oracle) fails regardless of
 any review: it is refused, not reviewed.
 
-**The verdict.** The reviewer is a fresh agent given the diff and this list — never the author. It
+**The verdict.** The reviewer is a fresh agent given the diff and this list — never the author. A
+subagent the author spawns qualifies when it starts with none of the author's context (not a fork)
+and is given only the PR, the head sha, this list and the diff; it posts the verdict itself, with an
+`agent-review-by: subagent` line, and the author never edits it (`.claude/skills/review-gate`). It
 reviews the PR at its current head and posts its verdict on the PR, as a PR review (event
 `COMMENT` is enough; one account cannot approve its own PR) or a PR comment, containing a line
 that is exactly
