@@ -73,6 +73,7 @@ input, select, textarea {
   border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;
 }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
+.act:focus-visible, .rail-item:focus-visible, .tools-tab:focus-visible, .keys-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .mut { color: var(--text-faint); }
 .chip {
   display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;

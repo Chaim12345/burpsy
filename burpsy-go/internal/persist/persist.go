@@ -957,6 +957,14 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 			msg := core.MsgId(response)
 			ex.Response = &msg
 		}
+		// The request column comes back as the id it names, including 0. The 0 ambiguity
+		// documented above is resolved where the restored message set is known
+		// (TrafficStore.Restore), not here: a nil Request here is not "no request", it is
+		// "unknown request" — and it skips byRequest indexing in Restore, so ExchangeByRequest
+		// never resolves after a restart and findings and every report format lose their
+		// host, path and method.
+		req := core.MsgId(request)
+		ex.Request = &req
 		ex.Port = uint16(port)
 		ex.TLS = tls != 0
 		if v, ok := status.(int64); ok {

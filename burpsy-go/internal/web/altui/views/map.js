@@ -22,7 +22,7 @@ export async function renderMap(el) {
         <select id="f-method"><option value="">any method</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
         <select id="f-status"><option value="">any status</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option></select>
         <label class="mut" style="font-size:12px"><input type="checkbox" id="f-scope"> in scope</label>
-        <button class="act" id="f-import" title="Import a HAR file (HTTP Archive) into recorded history: the entries are recorded as rows, nothing is sent to any target">Import</button>
+        <button class="act" id="f-import" title="Import a HAR file (HTTP Archive) into recorded history: the entries are recorded as rows and nothing is sent to any target. Imported rows are viewable and searchable; they do not create findings on their own, because passive checks run on live proxy traffic">Import</button>
         <input type="file" id="f-import-file" accept=".har,application/json" hidden>
         <button class="act" id="f-export" title="Download the visible rows as one JSON file: request/response bytes from the store, base64, by message id">Export</button>
       </div>

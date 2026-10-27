@@ -84,7 +84,7 @@ function drawCounts() {
 function drawList() {
   const box = root.querySelector('#pv-list');
   if (!box) return;
-  if (!state.findings.length) { box.innerHTML = '<div class="empty">No findings yet. Passive checks run as traffic flows through the proxy.</div>'; return; }
+  if (!state.findings.length) { box.innerHTML = '<div class="empty">No findings yet. Passive checks run as traffic flows through the proxy. Imported history can be searched and opened from Map and Search, but it does not create findings on its own.</div>'; return; }
   box.innerHTML = state.findings.map((f, i) => `
     <div class="issue-row${state.sel === i ? ' sel' : ''}" data-i="${i}">
       ${sevChip(f.severity)}
@@ -151,7 +151,7 @@ function showDetail(f) {
       <button class="act" id="id-close">✕</button>
     </div>
     <div class="drawer-body">
-      <div class="kv"><span class="chip">${esc(f.host || '')}</span><span class="chip">${esc(f.confidence || '')}</span></div>
+      <div class="kv"><span class="chip" id="fd-host">${esc(f.host || '')}</span><span class="chip">${esc(f.confidence || '')}</span></div>
       ${f.detail ? `<div><div class="section-label">What was seen</div><div style="padding:6px 0">${esc(f.detail)}</div></div>` : ''}
       ${f.remediation ? `<div><div class="section-label">Fix</div><div style="padding:6px 0">${esc(f.remediation)}</div></div>` : ''}
       ${advisoryBlock(f)}
@@ -159,6 +159,19 @@ function showDetail(f) {
     </div>`;
   root.appendChild(d);
   wireDrawer(d, `Finding: ${f.check_name || 'finding'}`);
+  // A merged finding can span hosts; the header carries only the first. Resolve the
+  // occurrences' hosts (read-only exchange lookups, capped) and say so honestly when
+  // they disagree with it.
+  const occIds = [...new Set((f.occurrences || []).map((o) => o.exchange_id))].slice(0, 12);
+  if (occIds.length > 1) {
+    Promise.all(occIds.map((id) => api.get(`/api/exchange/${id}`).catch(() => null))).then((exs) => {
+      const hosts = [...new Set(exs.filter(Boolean).map((e) => e.host))];
+      const chip = d.querySelector('#fd-host');
+      if (chip && hosts.length > 1) {
+        chip.textContent = `${hosts.length} hosts: ${hosts.slice(0, 3).join(', ')}${hosts.length > 3 ? ', ...' : ''}`;
+      }
+    });
+  }
   d.querySelectorAll('[data-ex]').forEach((b) => {
     b.onclick = () => {
       d.remove();
