@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>a333eae4408461eed</task-id>
+<tool-use-id>toolu_01RshUQ1nFRu2shcZnXKk5wE</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a333eae4408461eed.output</output-file>
+<status>failed</status>
+<summary>Agent "Fix SOCKS carrier bypass and credential loss" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a333eae4408461eed</worktreePath><worktreeBranch>worktree-agent-a333eae4408461eed</worktreeBranch></worktree>
+</task-notification>
