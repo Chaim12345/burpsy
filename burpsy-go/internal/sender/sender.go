@@ -45,6 +45,9 @@ type Sender struct {
 	// Guarded by mu with the state it versions, so a capture reads the generation, the
 	// carrier and the config as one consistent snapshot.
 	netGen uint64
+	// typedRoute is the carrier and policy identity the typed client's idle connections were
+	// dialled under (httpClient).
+	typedRoute atomic.Value
 	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
 	// the path. Building a CertPool parses every system root, and this is the handshake path for every
 	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
@@ -471,10 +474,40 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 }
 
 // httpClient returns the client to send one typed request with.
+//
+// The typed path's http.Transport pools idle connections by its own key, which knows nothing of
+// the global SOCKS carrier or the upstream policy's rules: an operator's in-place carrier edit, or a
+// new policy rule, left connections dialled the old way to be reused (burpsy-react-ui-typed-idle-unstamped).
+// So the route those idle connections were dialled under is remembered, and when it differs from the
+// route a new send would take they are closed before it. A connection still in flight when the route
+// changes is returned to the pool afterwards and may carry one more send, which is the in-flight
+// rule ApplyNetwork already documents.
 func (s *Sender) httpClient() *http.Client {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.client
+	client, carrier := s.client, s.carrier
+	s.mu.RUnlock()
+	route := carrier.Identity() + "\x00" + policyIdentity(s.upstream)
+	if prev, _ := s.typedRoute.Swap(route).(string); prev != route && client != nil {
+		client.CloseIdleConnections()
+	}
+	return client
+}
+
+// policyIdentity renders an upstream policy's whole routing decision (default and ordered rules) as
+// a string that changes whenever any route does. "" for none.
+func policyIdentity(p *upstream.Policy) string {
+	if p == nil || p.Empty() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(p.Default().Raw())
+	for _, r := range p.Rules() {
+		b.WriteString("\x00")
+		b.WriteString(r.Pattern)
+		b.WriteString("=")
+		b.WriteString(r.Proxy.Raw())
+	}
+	return b.String()
 }
 
 // tlsVerify reports whether certificate verification is on, under the lock that guards config.
