@@ -346,7 +346,7 @@ func PassivePostureCheckDescriptors() []CheckDescriptor {
 		passiveDescriptor("Password field with autocomplete enabled", DispatchScopePerUrl, passivePostureEnabled, checkPasswordAutocomplete),
 		passiveDescriptor("Password returned in URL query string", DispatchScopePerUrl, passivePostureEnabled, checkPasswordInURLQuery),
 		passiveDescriptor("Password value set in cookie", DispatchScopePerUrl, passivePostureEnabled, checkPasswordInCookie),
-		passiveDescriptor("Cross-domain POST", DispatchScopePerUrl, passivePostureEnabled, checkCrossDomainPOST),
+		passiveDescriptor("Cross-domain POST", DispatchScopePerUrl, passivePostureEnabled, crossDomainPOSTOrSAML(checkCrossDomainPOST)),
 		passiveDescriptor("Request URL override", DispatchScopePerUrl, passivePostureEnabled, checkRequestURLOverride),
 		passiveDescriptor("Long redirection response", DispatchScopePerUrl, passivePostureEnabled, checkLongRedirectionResponse),
 		passiveDescriptor("Multiple content types specified", DispatchScopePerUrl, passivePostureEnabled, checkMultipleContentTypes),

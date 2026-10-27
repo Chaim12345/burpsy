@@ -108,6 +108,7 @@ which is what carries its CWE onto the finding.
 | `b5003410` | JWT signature truncated at null byte | 347 | JWT signature not verified | `check_jwt_forgery` |
 | `b5003420` | JWT expired token accepted | 613 | JWT signature not verified | `check_jwt_forgery` |
 | `b5003430` | JWT algorithm confusion | 347, 327 | JWT signature not verified | `check_jwt_forgery` |
+| `b5003440` | SAML assertion not signed | 347 | Cross-domain POST | `check_passive_posture` |
 | `b5003800` | Weak hash algorithm applied to input | 328 | Suspicious input transformation (reflected) | `check_weak_crypto` |
 | `b5003810` | Password hash with insufficient computational effort | 916 | Suspicious input transformation (reflected) | `check_weak_crypto` |
 | `b5003820` | Block cipher in ECB mode applied to input | 327 | Suspicious input transformation (reflected) | `check_weak_crypto` |
