@@ -230,7 +230,15 @@ func NewSender(config *SenderConfig) *Sender {
 	policy, policyErr := resolveUpstream(config)
 	carrier := config.UpstreamCarrier
 	return &Sender{
-		client:      buildClient(config, settings, carrier),
+		client: buildClient(config, settings, carrier),
+		// The configured carrier reaches every path WithUpstreamCarrier would have reached, not only
+		// the typed client. The raw paths (dialTLS/dialPlain via captureDialIdentity), HTTP/3's
+		// carrier refusal, connection-bound auth and DeriveWithTimeouts all read s.carrier; leaving
+		// it nil sent every raw send from a config-only Sender around the carrier, and the next
+		// ApplyNetwork rebuilt the typed client from s.carrier and dropped it there too
+		// (burpsy-react-ui-newsender-carrier). No pool flush or generation bump is needed: a new
+		// Sender has no connections dialled under any other layer.
+		carrier:     carrier,
 		config:      config,
 		net:         settings,
 		protocols:   newProtocolCache(),
