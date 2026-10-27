@@ -1,0 +1,12 @@
+<task-notification>
+<task-id>a53ad9ec31105e3dd</task-id>
+<tool-use-id>toolu_0166CZq8CEhWmGxpW7AcNA3A</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a53ad9ec31105e3dd.output</output-file>
+<status>completed</status>
+<summary>Agent "Scope-gate browser renders and extscan egress" is waiting on its own background work</summary>
+<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>
+<result>This agent has not reported yet: it is waiting on its own background work and will deliver its report through SubagentHandback when that finishes.
+</result>
+<usage><subagent_tokens>287213</subagent_tokens><tool_uses>126</tool_uses><duration_ms>1804737</duration_ms></usage>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a53ad9ec31105e3dd</worktreePath><worktreeBranch>worktree-agent-a53ad9ec31105e3dd</worktreeBranch></worktree>
+</task-notification>
