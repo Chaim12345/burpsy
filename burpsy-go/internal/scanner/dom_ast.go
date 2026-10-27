@@ -82,6 +82,24 @@ type domASTWalker struct {
 	// depth and visiting bound re-entrant callee walks: a recursive script cannot spin the pass.
 	depth    int
 	visiting map[string]bool
+	// scopes keeps one child scope per function value or call site across propagation rounds: a
+	// fresh scope each round re-bound the body's locals as new every round, so the fixpoint never
+	// reached zero and every handler with a local spent all the rounds.
+	scopes map[ast.Node]*domASTScope
+}
+
+// childScope is node's scope under parent, the same one every round.
+func (w *domASTWalker) childScope(node ast.Node, parent *domASTScope) *domASTScope {
+	if w.scopes == nil {
+		w.scopes = map[ast.Node]*domASTScope{}
+	}
+	s, ok := w.scopes[node]
+	if !ok {
+		s = &domASTScope{}
+		w.scopes[node] = s
+	}
+	s.parent = parent
+	return s
 }
 
 const domASTMaxCallDepth = 4
@@ -292,15 +310,15 @@ func (w *domASTWalker) walkFunctionValue(expr ast.Expression, sc domScriptSrc, s
 	switch fn := expr.(type) {
 	case *ast.FunctionLiteral:
 		if fn.Body != nil {
-			return w.walkBody(fn.Body, sc, &domASTScope{parent: scope})
+			return w.walkBody(fn.Body, sc, w.childScope(fn, scope))
 		}
 	case *ast.ArrowFunctionLiteral:
 		switch body := fn.Body.(type) {
 		case *ast.BlockStatement:
-			return w.walkBody(body, sc, &domASTScope{parent: scope})
+			return w.walkBody(body, sc, w.childScope(fn, scope))
 		case *ast.ExpressionBody:
 			if body.Expression != nil {
-				return w.walkExprStatement(body.Expression, sc, &domASTScope{parent: scope})
+				return w.walkExprStatement(body.Expression, sc, w.childScope(fn, scope))
 			}
 		}
 	}
@@ -509,12 +527,12 @@ func (w *domASTWalker) walkCall(x *ast.CallExpression, sc domScriptSrc, scope *d
 	switch fn := x.Callee.(type) {
 	case *ast.FunctionLiteral:
 		if fn.Body != nil {
-			return w.walkBody(fn.Body, sc, &domASTScope{parent: scope})
+			return w.walkBody(fn.Body, sc, w.childScope(fn, scope))
 		}
 		return 0
 	case *ast.ArrowFunctionLiteral:
 		if body, ok := fn.Body.(*ast.BlockStatement); ok {
-			return w.walkBody(body, sc, &domASTScope{parent: scope})
+			return w.walkBody(body, sc, w.childScope(fn, scope))
 		}
 		return 0
 	}
@@ -526,7 +544,7 @@ func (w *domASTWalker) walkCall(x *ast.CallExpression, sc domScriptSrc, scope *d
 	if !known || w.visiting[id.Name.String()] || w.depth >= domASTMaxCallDepth {
 		return 0
 	}
-	callScope := &domASTScope{parent: scope}
+	callScope := w.childScope(x, scope)
 	for i, p := range fn.params {
 		if i < len(x.ArgumentList) {
 			if t, tainted := w.evalTaint(x.ArgumentList[i], sc, scope); tainted {

@@ -348,7 +348,7 @@ func checkRequestSmuggling(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	// that nothing is queued on a back-end connection.
 	hit, evidence, ok := false, "", false
 	if r.cc.Config != nil && r.cc.Config.CheckExtendedActive {
-		hit, evidence, ok = r.smuggledPrefixProbe(ctx)
+		hit, evidence, ok = r.cachedSmuggledPrefixProbe(ctx)
 	}
 	if ok && hit {
 		detail := "The endpoint answered a POST without reading its declared Content-Length body and " +

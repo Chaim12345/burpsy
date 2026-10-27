@@ -14,6 +14,7 @@ package vulnapp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -88,8 +89,9 @@ func sppjErrorStatus() int {
 // sppjJSON answers the profile read with the prototype's indentation; an unparsable body is the
 // error path whose status the pollution moves.
 func sppjJSON(w http.ResponseWriter, r *http.Request, safe bool) {
-	body := make([]byte, r.ContentLength)
-	_, _ = r.Body.Read(body)
+	// ContentLength is -1 for a chunked body, and one Read may return part of the body: read it all,
+	// capped, rather than sizing a buffer from the header.
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	sppjMerge(body, safe)
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {

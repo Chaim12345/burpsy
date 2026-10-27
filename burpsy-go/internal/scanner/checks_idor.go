@@ -188,18 +188,25 @@ func idorReidentity(raw string, sec *SecondIdentity) (string, bool) {
 		case ok && strings.EqualFold(n, "cookie"):
 			var pairs []string
 			replaced := false
+			seen := map[string]bool{}
+			replacedNames := 0
 			for _, c := range strings.Split(v, ";") {
 				c = strings.TrimSpace(c)
 				cn, _, _ := strings.Cut(c, "=")
 				if bv, isB := bCookies[cn]; isB {
 					pairs = append(pairs, cn+"="+bv)
 					replaced = true
+					if !seen[cn] {
+						seen[cn] = true
+						replacedNames++
+					}
 				} else {
 					pairs = append(pairs, c)
 				}
 			}
-			if !replaced {
-				// A's cookies ride unchanged: whatever session they carry is still A's.
+			if !replaced || replacedNames < len(bCookies) {
+				// A's cookies ride unchanged, or B's set names a cookie A's request does not carry
+				// (A's session goes by another name): whatever session the header carries is still A's.
 				covered = false
 				out = append(out, line)
 				continue
@@ -1244,25 +1251,66 @@ func idorSameBody(a, b ProbeResponse) bool {
 // idorBindingPath names the owner field that shows the identity binding.
 type idorBindingPath struct{ path, session string }
 
-// idorOwnedBySession finds an owner-like JSON field (an id name, owner or sub) whose value is one of
-// the session's own user ids: evidence that the object belongs to the captured identity.
+// idorOwnedBySession finds an owner-like JSON field (idorOwnerKey) whose value is one of the
+// session's own user ids: evidence that the object belongs to the captured identity.
 func idorOwnedBySession(session map[string]bool, a *idorShape) (string, string, bool) {
 	if len(session) == 0 || a == nil || a.kind != "json" {
 		return "", "", false
 	}
+	for _, k := range idorSortedLeafKeys(a) {
+		if v := a.leaves[k]; session[v] && idorOwnerKey(k) {
+			return strings.TrimPrefix(k, "$."), v, true
+		}
+	}
+	return "", "", false
+}
+
+// idorOwnerKey reports whether a leaf path names an object's owner: owner, sub or uid; a person's
+// id (user_id, ownerId, customer_no); or a bare id/pk/uuid under a parent that names a person
+// (user.id, owner.id). Neither the object's OWN primary key ($.id, order.id) nor another object's
+// id (product_id) is ownership: a record whose id happens to equal the session's user id belongs to
+// nobody in particular.
+func idorOwnerKey(path string) bool {
+	last := path[strings.LastIndexAny(path, ".]")+1:]
+	switch strings.ToLower(last) {
+	case "owner", "sub", "uid":
+		return true
+	case "id", "_id", "pk", "uuid":
+		rest := strings.TrimSuffix(path, "."+last)
+		parent := strings.ToLower(rest[strings.LastIndexAny(rest, ".]")+1:])
+		return idorPersonNames[parent]
+	}
+	person, id := false, false
+	for _, w := range idorWords(last) {
+		person = person || idorPersonNames[w]
+		id = id || w == "id" || w == "uuid" || w == "guid" || w == "no" || w == "number"
+	}
+	if !id {
+		// userid, ownerid: one word, a person noun with the id glued on.
+		l := strings.ToLower(last)
+		for n := range idorPersonNames {
+			if l == n+"id" || l == n+"_id" {
+				return true
+			}
+		}
+	}
+	return person && id
+}
+
+// idorPersonNames are parent keys whose id is a person's.
+var idorPersonNames = map[string]bool{
+	"user": true, "owner": true, "account": true, "author": true, "customer": true, "member": true,
+	"creator": true, "createdby": true, "created_by": true,
+}
+
+// idorSortedLeafKeys returns a shape's leaf paths in order, so a search over them is deterministic.
+func idorSortedLeafKeys(a *idorShape) []string {
 	keys := make([]string, 0, len(a.leaves))
 	for k := range a.leaves {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		v := a.leaves[k]
-		last := k[strings.LastIndexAny(k, ".]")+1:]
-		if session[v] && (idorIDName(last) || strings.EqualFold(last, "owner") || strings.EqualFold(last, "sub")) {
-			return strings.TrimPrefix(k, "$."), v, true
-		}
-	}
-	return "", "", false
+	return keys
 }
 
 // idorOwnerBinding finds an id-named JSON field equal to the session's user id in the original and
@@ -1271,15 +1319,9 @@ func idorOwnerBinding(session map[string]bool, a, s *idorShape) (idorBindingPath
 	if len(session) == 0 || a == nil || s == nil || a.kind != "json" {
 		return idorBindingPath{}, "", false
 	}
-	keys := make([]string, 0, len(a.leaves))
-	for k := range a.leaves {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range idorSortedLeafKeys(a) {
 		v := a.leaves[k]
-		last := k[strings.LastIndexAny(k, ".]")+1:]
-		if !session[v] || !(idorIDName(last) || strings.EqualFold(last, "owner") || strings.EqualFold(last, "sub")) {
+		if !session[v] || !idorOwnerKey(k) {
 			continue
 		}
 		if w, ok := s.leaves[k]; ok && w != "" && w != "null" && !session[w] {

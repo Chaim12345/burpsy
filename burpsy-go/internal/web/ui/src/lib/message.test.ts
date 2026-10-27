@@ -548,6 +548,14 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   expect(parseMessage(compactMessage(pretty)).body).toBe(parseMessage(compactMessage(prettyMessage(HTML.replace(/\r\n/g, "\n")))).body);
  });
 
+ test("Pretty markup that already breaks between tags with CRLF still shows as lines, text-node CRLF kept", () => {
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html>", "<head>", "<title>x</title>", "</head>", "<p>a\r\nb</p></html>"].join("\r\n");
+  const body = parseMessage(prettyMessage(HTML)).body;
+  expect(body.split("\r\n").length).toBeGreaterThanOrEqual(6);
+  expect(body).toContain("<title>x</title>");
+  expect(body).toMatch(/a\r\n\s*b/);
+ });
+
  test("a body with nothing formattable passes through untouched", () => {
   expect(compactMessage(FORM)).toBe(FORM);
  });

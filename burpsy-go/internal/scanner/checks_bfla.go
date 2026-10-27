@@ -13,12 +13,14 @@ package scanner
 // target up to three times in all - the harness baseline (as the audited identity), the second
 // identity's replay, and the anonymous control - so a create with a uniqueness rule can answer the
 // baseline with a conflict, and the pass then has nothing to compare. A write is reported only when
-// the second identity's answer matches the audited identity's VALUE for value, not just in shape:
-// a 200 refusal envelope ({"success":false,...}) has the success answer's shape.
+// the second identity's answer matches the audited identity's by value, not just in shape (a 200
+// refusal envelope, {"success":false,...}, has the success answer's shape), leaving out per-call
+// values such as a created id or a timestamp; the anonymous control is judged the same way.
 
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -107,7 +109,7 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if br.Status < 200 || br.Status > 299 || !ashape.same(idorShapeOf(br.Body)) {
 		return nil, nil // B was refused, or answered with a different shape (an error body)
 	}
-	if write && !bflaSameValues(ashape, idorShapeOf(br.Body)) {
+	if write && !bflaSameAnswer(ashape, idorShapeOf(br.Body)) {
 		return nil, nil // same shape, different answer: a refusal dressed as the success envelope
 	}
 	// The anonymous control: a privileged operation anyone can invoke is a finding of another
@@ -116,7 +118,10 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	if nr.Status >= 200 && nr.Status <= 299 && ashape.same(idorShapeOf(nr.Body)) {
+	// For a write the anonymous answer must match by value too: a 200 refusal envelope has the
+	// success answer's shape, and shape alone would read the refusal as "served anonymously".
+	if nr.Status >= 200 && nr.Status <= 299 && ashape.same(idorShapeOf(nr.Body)) &&
+		(!write || bflaSameAnswer(ashape, idorShapeOf(nr.Body))) {
 		return nil, nil
 	}
 	// Stability: the cross-read repeated must answer the same way. Never for a write: repeating it
@@ -156,10 +161,12 @@ func checkBFLA(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	return []*Finding{f}, nil
 }
 
-// bflaSameValues reports whether two answers match value for value: every JSON leaf equal, or the
+// bflaSameAnswer reports whether two answers say the same thing: every stable JSON leaf equal, or the
 // same document for any other body. A write's answer is usually a small status envelope, where the
-// shape alone cannot tell "saved" from "denied".
-func bflaSameValues(a, b *idorShape) bool {
+// shape alone cannot tell "saved" from "denied"; but it also carries per-call values - a created id,
+// a timestamp, a version, a request id - that differ between any two writes, so those are left out
+// of the comparison (bflaVolatileLeaf).
+func bflaSameAnswer(a, b *idorShape) bool {
 	if a == nil || b == nil || a.kind != b.kind {
 		return false
 	}
@@ -170,9 +177,32 @@ func bflaSameValues(a, b *idorShape) bool {
 		return false
 	}
 	for k, v := range a.leaves {
-		if w, ok := b.leaves[k]; !ok || w != v {
+		w, ok := b.leaves[k]
+		if !ok {
+			return false
+		}
+		if v != w && !bflaVolatileLeaf(k, v) && !bflaVolatileLeaf(k, w) {
 			return false
 		}
 	}
 	return true
+}
+
+// bflaVolatileNames are the key names of per-call values in a write's answer.
+// snake_case names are matched whole or by suffix, camelCase by its capitalised suffix (createdAt,
+// requestId), so a verdict key such as "action" or "session" is never mistaken for one.
+var bflaVolatileNames = regexp.MustCompile(`(?i:^(id|uuid|guid|pk|version|etag|nonce|token|ts|time|timestamp|date|created|updated|modified)$|_(id|at|on|by|ts|time|date)$)|[a-z](Id|ID|At|On|By|Time|Date|Stamp)$`)
+
+// bflaVolatileValue matches values that are per-call by their form: numbers, timestamps, UUIDs and
+// long hex or base64 tokens.
+var bflaVolatileValue = regexp.MustCompile(`^(-?[0-9]+(\.[0-9]+)?|[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.]+.*|[0-9a-fA-F-]{32,36}|[0-9a-fA-F]{16,}|[A-Za-z0-9+/_=-]{24,})$`)
+
+// bflaVolatileLeaf reports whether a JSON leaf is a per-call value. Booleans and null are never
+// volatile: they carry the answer's verdict ({"updated":false} versus true).
+func bflaVolatileLeaf(path, value string) bool {
+	if value == "true" || value == "false" || value == "null" {
+		return false
+	}
+	last := path[strings.LastIndexAny(path, ".]")+1:]
+	return bflaVolatileNames.MatchString(last) || bflaVolatileValue.MatchString(value)
 }

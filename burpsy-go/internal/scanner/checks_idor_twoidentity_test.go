@@ -75,6 +75,12 @@ func TestIDORReidentityUncoveredWhenACookieIsNotReplaced(t *testing.T) {
 	if _, covered := idorReidentity(raw, &SecondIdentity{CookieHeader: "sid=bob"}); covered {
 		t.Error("covered with A's session cookie left in place")
 	}
+	// One shared name (csrftoken) does not make the replay B's when B's session goes by another
+	// name than A's: A's sessionid still rides.
+	raw2 := "GET /x HTTP/1.1\r\nHost: h\r\nCookie: sessionid=alice; csrftoken=x\r\n\r\n"
+	if _, covered := idorReidentity(raw2, &SecondIdentity{CookieHeader: "csrftoken=y; session=bob"}); covered {
+		t.Error("covered with only the csrftoken replaced and A's sessionid left in place")
+	}
 	if out, covered := idorReidentity(raw, &SecondIdentity{CookieHeader: "session=bob"}); !covered || !strings.Contains(out, "Cookie: session=bob") {
 		t.Errorf("same-name cookie: covered=%v out=%q", covered, out)
 	}
@@ -100,6 +106,16 @@ func TestIDOROwnedBySession(t *testing.T) {
 	}
 	if _, _, ok := idorOwnedBySession(session, idorShapeOf(`{"name":"widget","price":1}`)); ok {
 		t.Error("a non-owner field counted as ownership")
+	}
+	for _, notOwner := range []string{`{"id":1,"total":5}`, `{"order":{"id":1}}`, `{"product_id":1}`} {
+		if _, _, ok := idorOwnedBySession(session, idorShapeOf(notOwner)); ok {
+			t.Errorf("an object's own or another object's id counted as ownership: %s", notOwner)
+		}
+	}
+	for _, owner := range []string{`{"user":{"id":1}}`, `{"owner_id":1}`, `{"userid":1}`, `{"sub":"1"}`} {
+		if _, _, ok := idorOwnedBySession(session, idorShapeOf(owner)); !ok {
+			t.Errorf("a person's id not counted as ownership: %s", owner)
+		}
 	}
 	if _, _, ok := idorOwnedBySession(nil, idorShapeOf(`{"userId":1}`)); ok {
 		t.Error("ownership without any session id")

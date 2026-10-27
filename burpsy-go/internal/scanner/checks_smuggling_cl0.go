@@ -55,6 +55,26 @@ func newSmuggledCanary(authority string) smuggledCanary {
 // reports whether the canary's answer took the follow-up's response slot on the attack pair
 // only. ok is false when either batch could not be read cleanly (refusal, pacing decline,
 // missing response): the technique is then inconclusive, never a pass and never a fail.
+// cl0Result is one endpoint's smuggled-prefix outcome, shared by the rows that read it.
+type cl0Result struct {
+	hit, ok  bool
+	evidence string
+}
+
+// cachedSmuggledPrefixProbe runs smuggledPrefixProbe once per scanner, authority and path.
+func (r *smugglingRun) cachedSmuggledPrefixProbe(ctx context.Context) (bool, string, bool) {
+	key := r.authority + "|" + r.path
+	if v, ok := r.cc.Scanner.cl0Probes.Load(key); ok {
+		c := v.(cl0Result)
+		return c.hit, c.evidence, c.ok
+	}
+	hit, evidence, ok := r.smuggledPrefixProbe(ctx)
+	if ok {
+		r.cc.Scanner.cl0Probes.Store(key, cl0Result{hit: hit, ok: ok, evidence: evidence})
+	}
+	return hit, evidence, ok
+}
+
 func (r *smugglingRun) smuggledPrefixProbe(ctx context.Context) (hit bool, evidence string, ok bool) {
 	canary := newSmuggledCanary(r.authority)
 	if canary.request == nil {
@@ -109,8 +129,12 @@ func smugglingGet(path, authority string) []byte {
 // checkClientSideDesync probes the endpoint with the smuggled-prefix pair and reports the
 // "Client-side desync" row when the canary's answer took the follow-up's slot.
 //
-// The proof never leaves the scanner's connection: the poisoned answer is consumed by the
-// scanner's own follow-up, and the canary is a 404 nobody else's request can be harmed by.
+// The scanner owns only the client-side connection. Directly against the origin the poisoned
+// answer is consumed by the scanner's own follow-up; behind a front end that pools back-end
+// connections and honours Content-Length, the smuggled canary's 404 can instead wait on a SHARED
+// back-end connection and reach another user's request. That is why the row runs only under
+// CheckExtendedActive, and why the probe is sent once per endpoint (cachedSmuggledPrefixProbe),
+// however many rows read it.
 func checkClientSideDesync(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
 		return nil, nil
@@ -127,7 +151,7 @@ func checkClientSideDesync(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if r.gate == nil {
 		return nil, fmt.Errorf("client-side desync: no authorised sender: %w", errCapabilityMissing)
 	}
-	hit, evidence, ok := r.smuggledPrefixProbe(ctx)
+	hit, evidence, ok := r.cachedSmuggledPrefixProbe(ctx)
 	if !ok || !hit {
 		return nil, nil
 	}

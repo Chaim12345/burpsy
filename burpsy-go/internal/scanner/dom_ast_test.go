@@ -79,3 +79,18 @@ func Test_the_ast_pass_reaches_handlers_switch_cases_returns_and_arrow_callbacks
 		}
 	}
 }
+
+// A handler or callback body with its own locals must reach a fixpoint: one scope per function
+// value across rounds, so its bindings are new only once and the pass is complete, not cut short.
+func Test_handler_locals_reach_a_fixpoint(t *testing.T) {
+	for name, src := range map[string]string{
+		"assigned handler": `window.onhashchange = function(){ var h = location.hash; var g = h; document.write(g); };`,
+		"arrow callback":   `[1].forEach(() => { var h = location.hash; document.write(h); });`,
+		"known callee":     `function f(a){ var b = a; document.write(b); } f(location.hash);`,
+	} {
+		a := AnalyzeDOMScript(src, DOMBudget{})
+		if a.Budget.Truncated() || len(a.Flows) != 1 {
+			t.Errorf("%s: truncated=%v flows=%d (%s)", name, a.Budget.Truncated(), len(a.Flows), a.Summary())
+		}
+	}
+}
