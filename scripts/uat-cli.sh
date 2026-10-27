@@ -9,6 +9,7 @@
 #      deliberately vulnerable app) verbatim and is captured in history.
 #   3. scan: an audit of that exchange (through the confirmation gate) reports the reflected
 #      cross-site scripting the target declares at /search, and none on its safe twin.
+#   6. restart: history, findings and TLS pass-through settings survive a restart on the same -db.
 #
 # Ports (distinct from e2e-go.sh 18180s and the browser UAT harness 18280s): proxy 18380, web 18381,
 # target 18399. e2e-go.sh stays the broad API suite (nightly); this is the short operator flow a
@@ -165,5 +166,30 @@ if [ "$CID" = none ]; then no "no control exchange in history"; elif audit_excha
   [ "$LAST_FOUND" -eq "$FOUND_VULN" ] && ok "a second vulnerable exchange reports the same finding count ($FOUND_VULN)" || no "vulnerable audits disagree ($FOUND_VULN vs $LAST_FOUND): the comparison below is not trustworthy"
   [ "${FOUND_TWIN:--1}" -ge 0 ] && [ "$FOUND_TWIN" -lt "$FOUND_VULN" ] && ok "the safe twin's audit found fewer than the vulnerable one ($FOUND_TWIN < $FOUND_VULN)" || no "the twin's audit found ${FOUND_TWIN:-none}, not fewer than the vulnerable audit's $FOUND_VULN"
 fi
+echo "=== 6. a restart on the same project restores it ==="
+# Startup restore had no test at any tier (burpsy-react-ui-startup-restore-test): set state, stop the
+# process, start it again on the same -db, and read the state back. A setting that comes back as its
+# default after a restart is the failure this catches.
+WEB="http://127.0.0.1:$WEB_PORT"
+curl -s -o /dev/null -X POST "$WEB/api/proxy/passthrough" -H 'content-type: application/json' -d '{"pattern":"uat-restart.example"}'
+curl -s -o /dev/null -X PUT "$WEB/api/proxy/passthrough" -H 'content-type: application/json' -d '{"apply_out_of_scope":true,"auto_add_on_failure":true}'
+before_pt=$(curl -s "$WEB/api/proxy/passthrough")
+before_hist=$(curl -s "$WEB/api/history" | python3 -c 'import json,sys;d=json.load(sys.stdin);d=d if isinstance(d,list) else (d.get("exchanges") or []);print(len(d))')
+before_xss=$(xss_count)
+echo "$before_pt" | grep -q uat-restart.example && ok "pass-through settings were accepted before the restart" || no "pass-through settings not accepted: ${before_pt:0:160}"
+kill "$BURPSY_PID" 2>/dev/null; wait "$BURPSY_PID" 2>/dev/null
+"$work/burpsy" -db "$work/uat.db" -proxy "127.0.0.1:$PROXY_PORT" -web "127.0.0.1:$WEB_PORT" \
+  -scope-include 127.0.0.1 >>"$work/burpsy.log" 2>&1 & BURPSY_PID=$!
+for _ in $(seq 1 100); do curl -s -o /dev/null "$WEB/api/stats" && break; sleep 0.1; done
+after_pt=$(curl -s "$WEB/api/proxy/passthrough")
+after_hist=$(curl -s "$WEB/api/history" | python3 -c 'import json,sys;d=json.load(sys.stdin);d=d if isinstance(d,list) else (d.get("exchanges") or []);print(len(d))')
+[ "$after_hist" = "$before_hist" ] && [ "${after_hist:-0}" -gt 0 ] && ok "history came back with all $after_hist exchanges" || no "history: $before_hist exchanges before the restart, $after_hist after"
+[ "$(xss_count)" = "$before_xss" ] && ok "findings came back ($before_xss cross-site scripting)" || no "findings: $before_xss before the restart, $(xss_count) after"
+python3 -c '
+import json,sys
+d=json.loads(sys.argv[1])
+sys.exit(0 if "uat-restart.example" in d.get("patterns",[]) and d.get("apply_out_of_scope") and d.get("auto_add_on_failure") else 1)' "$after_pt" \
+  && ok "TLS pass-through patterns and both switches came back" || no "pass-through after the restart: ${after_pt:0:200}"
+
 echo; echo "############ $PASS passed, $FAIL failed ############"
 [ "$FAIL" -eq 0 ]
