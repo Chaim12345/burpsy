@@ -139,3 +139,29 @@ func TestBFLAWriteStaysQuietOnA200RefusalEnvelope(t *testing.T) {
 		t.Error("the envelope twin accepted a write from the low-privilege identity")
 	}
 }
+
+// Per-call values (a created id, a timestamp, a request id) differ between any two writes; the
+// verdict leaves (booleans, status words) must not.
+func TestBFLASameAnswerIgnoresPerCallValues(t *testing.T) {
+	a := idorShapeOf(`{"updated":true,"id":41,"created_at":"2026-10-27T00:00:01Z","requestId":"9f8e7d6c5b4a39281706f5e4d3c2b1a0","status":"saved"}`)
+	b := idorShapeOf(`{"updated":true,"id":42,"created_at":"2026-10-27T00:00:02Z","requestId":"0a1b2c3d4e5f60718293a4b5c6d7e8f9","status":"saved"}`)
+	if !bflaSameAnswer(a, b) {
+		t.Error("two successful writes differing only in per-call values were judged different")
+	}
+	for _, refusal := range []string{
+		`{"updated":false,"id":42,"created_at":"2026-10-27T00:00:02Z","requestId":"0a1b2c3d4e5f60718293a4b5c6d7e8f9","status":"saved"}`,
+		`{"updated":true,"id":42,"created_at":"2026-10-27T00:00:02Z","requestId":"0a1b2c3d4e5f60718293a4b5c6d7e8f9","status":"denied"}`,
+	} {
+		if bflaSameAnswer(a, idorShapeOf(refusal)) {
+			t.Errorf("a refusal judged the same answer: %s", refusal)
+		}
+	}
+}
+
+// The anonymous control is judged by value for a write too: an endpoint that refuses anonymous
+// callers with a 200 envelope ({"updated":false}) while accepting B's write is still a finding.
+func TestBFLAWriteReportsWhenAnonymousIsRefusedWithA200Envelope(t *testing.T) {
+	if f := bflaFindingIn(bflaWriteAudit(t, "/api/anon-envelope/admin/settings", true)); f == nil {
+		t.Fatal("no finding: the anonymous 200 refusal envelope was read as an anonymous success")
+	}
+}

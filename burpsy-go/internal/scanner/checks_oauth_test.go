@@ -197,3 +197,11 @@ func TestOAuthLocationGrant(t *testing.T) {
 		}
 	}
 }
+
+// A registered redirect_uri with no path: the server's normalised "/" is the same URL.
+func TestOAuthLocationTargetsTreatsAnEmptyPathAsRoot(t *testing.T) {
+	v := "https://app.example.attacker.burpsy.invalid"
+	if !oauthLocationTargets("HTTP/1.1 302 Found\r\nLocation: "+v+"/?code=x\r\n\r\n", v) {
+		t.Error("a bypass to the host-only variant was missed because of the trailing slash")
+	}
+}

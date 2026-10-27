@@ -126,7 +126,11 @@ type ActiveScanner struct {
 	nativeOnce sync.Once
 	// jwtKeys caches each origin's published JWT verification keys (*jwtHostKeyEntry by origin),
 	// so the algorithm-confusion probe fetches a host's JWKS once per scanner, not per request.
-	jwtKeys    sync.Map
+	jwtKeys sync.Map
+	// cl0Probes holds each endpoint's CL.0 smuggled-prefix result (cl0Result by authority and
+	// path): the smuggling row and "Client-side desync" both read it, and the probe - which can
+	// leave a response on a shared back-end connection - is sent once, not once per row.
+	cl0Probes  sync.Map
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }

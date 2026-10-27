@@ -44,6 +44,10 @@ func apiAuthEndpoints() []Endpoint {
 			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
 			Note: "the same write enforcing the admin role, but refusing with HTTP 200 and the success " +
 				"envelope's shape ({\"updated\":false,...}): nothing is written for a non-admin"},
+		{Path: "/api/anon-envelope/admin/settings", Row: row, Method: "POST", ContentType: "application/json",
+			Body: `{"setting":"banner","value":"hello"}`, RequestHeaders: cookie,
+			Note: "the vulnerable settings write, but refusing an ANONYMOUS caller with HTTP 200 and the " +
+				"success envelope's shape ({\"updated\":false,...}): any session may write"},
 		{Path: "/api/users/2", Row: row, Method: "POST", ContentType: "application/json",
 			Body:           `{"username":"bob","email":"bob@example.test"}`,
 			RequestHeaders: map[string]string{"Cookie": IDORSecondSessionCookie},
@@ -101,13 +105,20 @@ func APIAuthSettingWritesBy(uid int) int {
 
 // apiAuthAdminSettings is a state-changing admin operation: POST writes a setting. The vulnerable
 // twin accepts any authenticated session; the safe twin requires the admin (user 1).
-func apiAuthAdminSettings(safe bool) http.HandlerFunc { return apiAuthAdminSettingsAs(safe, false) }
+func apiAuthAdminSettings(safe bool) http.HandlerFunc {
+	return apiAuthAdminSettingsAs(safe, false, false)
+}
 
-// apiAuthAdminSettingsAs is apiAuthAdminSettings; envelope makes the safe twin refuse with HTTP 200
-// and {"updated":false,...}, the success answer's shape, as many APIs do.
-func apiAuthAdminSettingsAs(safe, envelope bool) http.HandlerFunc {
+// apiAuthAdminSettingsAs is apiAuthAdminSettings; envelope makes the safe twin refuse a non-admin
+// with HTTP 200 and {"updated":false,...}, the success answer's shape, as many APIs do, and
+// anonEnvelope refuses an anonymous caller the same way.
+func apiAuthAdminSettingsAs(safe, envelope, anonEnvelope bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid := idorSession(r)
+		if uid == 0 && anonEnvelope && r.Method == http.MethodPost {
+			idorJSON(w, http.StatusOK, map[string]any{"updated": false, "setting": "banner"})
+			return
+		}
 		if uid == 0 {
 			idorJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
@@ -140,7 +151,8 @@ func apiAuthAdminSettingsAs(safe, envelope bool) http.HandlerFunc {
 func registerAPIAuth(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/settings", apiAuthAdminSettings(false))
 	mux.HandleFunc("/api/safe/admin/settings", apiAuthAdminSettings(true))
-	mux.HandleFunc("/api/envelope/admin/settings", apiAuthAdminSettingsAs(true, true))
+	mux.HandleFunc("/api/envelope/admin/settings", apiAuthAdminSettingsAs(true, true, false))
+	mux.HandleFunc("/api/anon-envelope/admin/settings", apiAuthAdminSettingsAs(false, false, true))
 	mux.HandleFunc("/api/admin/users", apiAuthAdminUsers)
 	mux.HandleFunc("/api/safe/admin/users", apiAuthSafeAdminUsers)
 	mux.HandleFunc("/api/users/", apiAuthProfile(false))

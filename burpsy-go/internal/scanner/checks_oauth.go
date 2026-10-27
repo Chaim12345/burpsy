@@ -231,7 +231,15 @@ func oauthLocationTargets(respRaw, variant string) bool {
 	if strings.Contains(variant, "cb-burpsy-canary") {
 		return strings.HasSuffix(path.Clean(lu.Path), "/cb-burpsy-canary")
 	}
-	return lu.Path == vu.Path
+	return oauthPath(lu.Path) == oauthPath(vu.Path)
+}
+
+// oauthPath treats an empty path as "/": https://app.example and https://app.example/ are one URL.
+func oauthPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	return p
 }
 
 // oauthLocationGrant reports whether a Location carries an issued grant (a code, an access token

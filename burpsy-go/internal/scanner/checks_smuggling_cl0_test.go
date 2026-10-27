@@ -120,3 +120,25 @@ func TestCL0NeedsTheExtendedActiveOptIn(t *testing.T) {
 		}
 	}
 }
+
+// The smuggling row and "Client-side desync" share one CL.0 probe per endpoint: the risky prefix
+// is sent once however many rows read it. The listener is closed after the first row, so the
+// second can only report from the shared result, never from a probe of its own.
+func TestCL0ProbeIsSentOncePerEndpoint(t *testing.T) {
+	l, err := vulnapp.StartListener("desync-cl0")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cc := smugglingAt(l.Host, l.Port, l.TLS)
+	cc.Config = &ScanConfig{CheckRequestSmuggling: true, CheckExtendedActive: true}
+	if fs, err := checkRequestSmuggling(ctx, cc); err != nil || len(fs) == 0 {
+		t.Fatalf("smuggling row: %v %v", fs, err)
+	}
+	l.Close()
+	fs, err := checkClientSideDesync(ctx, cc)
+	if err != nil || len(fs) != 1 {
+		t.Fatalf("client-side desync did not reuse the endpoint's CL.0 result: %v %v", fs, err)
+	}
+}
