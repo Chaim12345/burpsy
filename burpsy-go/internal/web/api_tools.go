@@ -242,7 +242,7 @@ func (spec repeaterSendSpec) sendContext(ctx context.Context) context.Context {
 }
 
 // prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
-// runs the host-level scope gate, in that order. It returns the HTTP status a refusal should carry,
+// runs the per-request scope gate (AuthoriseRaw on the bytes to be sent), in that order. It returns the HTTP status a refusal should carry,
 // so the two handlers report an identical refusal for identical input; code is 0 on success.
 //
 // The order is load-bearing and is the single send's original order: options are validated before
@@ -270,17 +270,23 @@ func (s *Server) prepareRepeaterSend(
 			return repeaterSendSpec{}, http.StatusBadRequest, fmt.Errorf("refused: %w", verr)
 		}
 	}
-	// The transforms run before the scope gate on the transformed bytes — though the gate is
-	// host-level and no transform changes the authority, so this ordering is about the stored
-	// exchange recording what actually went out, not about which bytes the gate saw.
+	// The transforms run before the scope gate, and the gate judges the transformed bytes: those are
+	// the bytes that go on the wire, so they are the only ones a scope decision can be about.
 	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls, targetPathOf(target)))
-	// The repeater sends to whatever target the operator types, so it is gated
-	// by scope for the same reason the intruder is: a scope the operator set to
-	// constrain outbound traffic must not be bypassable by sending raw bytes
-	// here. The request line is not parsed (the operator owns it), so this is a
-	// host-level check, the same first layer the intruder applies.
-	if !s.scope.MayContainHost(host, port, tls) {
-		return repeaterSendSpec{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "/", tls))
+	// The repeater sends to whatever target the operator types, so it is gated by scope for the same
+	// reason the intruder is: a scope the operator set to constrain outbound traffic must not be
+	// bypassable by sending raw bytes here.
+	//
+	// AuthoriseRaw, on the request actually being sent — not MayContainHost on the target
+	// (burpsy-react-ui-repeater-hostlevel-scope). MayContainHost is a host-level pre-filter that skips
+	// path- and protocol-scoped excludes by design, and this was the ONLY gate a Repeater send passed:
+	// s.sender is the plain sender, not the authorising one. So `exclude target.test/logout` stopped
+	// the proxy, Intruder and a Repeater group send on one connection, and a single Repeater send
+	// went straight through it. Every caller of this builder — single send, group send, the edit
+	// preview — now gets the per-request decision, and a request line that cannot be read is refused
+	// rather than waved through, as it is everywhere else AuthoriseRaw runs.
+	if aerr := s.scope.AuthoriseRaw(host, port, tls, raw); aerr != nil {
+		return repeaterSendSpec{}, http.StatusForbidden, aerr
 	}
 	spec = repeaterSendSpec{
 		Host: host, Port: port, TLS: tls, Raw: raw, AsWritten: request, Options: opts, From: from,
