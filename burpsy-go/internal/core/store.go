@@ -901,6 +901,11 @@ func NewTrafficStoreWithCaptureDir(dir string, segmentSize uint64) (*TrafficStor
 // Put stores a raw HTTP message and returns its ID.
 func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 	defer ts.gate.enter()()
+	return ts.put(raw, direction)
+}
+
+// put is Put without taking the capture gate: the caller holds it (CaptureHold).
+func (ts *TrafficStore) put(raw []byte, direction Direction) (MsgId, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -965,6 +970,11 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 // AddExchange adds an exchange record.
 func (ts *TrafficStore) AddExchange(ex *Exchange) {
 	defer ts.gate.enter()()
+	ts.addExchange(ex)
+}
+
+// addExchange is AddExchange without taking the capture gate: the caller holds it (CaptureHold).
+func (ts *TrafficStore) addExchange(ex *Exchange) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 

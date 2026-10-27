@@ -40,3 +40,36 @@ func (s *captureGateSlot) enter() func() {
 	}
 	return noRelease
 }
+
+// CaptureHold keeps the capture gate held across several writes that belong together — one
+// exchange's request, response, earlier stages and index row — so a project switch can never fall
+// between them and leave the messages in one project and the exchange row in the other
+// (burpsy-react-ui-capture-split). Its Put and AddExchange do not take the gate again: a
+// sync.RWMutex read side is not reentrant once a writer is queued, so re-entering would deadlock
+// against a waiting switch. Release exactly once, and before anything that may take the gate on
+// another store (a passive scan adding findings).
+type CaptureHold struct {
+	ts      *TrafficStore
+	release func()
+}
+
+// HoldCapture takes the capture gate (a no-op without one) and returns the hold.
+func (ts *TrafficStore) HoldCapture() *CaptureHold {
+	return &CaptureHold{ts: ts, release: ts.gate.enter()}
+}
+
+// Put stores a message under the hold.
+func (h *CaptureHold) Put(raw []byte, direction Direction) (MsgId, error) {
+	return h.ts.put(raw, direction)
+}
+
+// AddExchange adds an exchange row under the hold.
+func (h *CaptureHold) AddExchange(ex *Exchange) { h.ts.addExchange(ex) }
+
+// Release lets the gate go. Safe to call more than once.
+func (h *CaptureHold) Release() {
+	if h.release != nil {
+		h.release()
+		h.release = nil
+	}
+}

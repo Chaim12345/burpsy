@@ -271,7 +271,12 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	if len(x.Response) == 0 {
 		return nil, ErrNoResponse
 	}
-	reqID, err := c.Store.Put(x.Request, core.DirectionRequest)
+	// One hold of the capture gate across every write of this exchange: a project switch lands
+	// before the request or after the index row, never between them (burpsy-react-ui-capture-split).
+	// Released before the passive scan, which adds findings under the findings store's own gate.
+	hold := c.Store.HoldCapture()
+	defer hold.Release()
+	reqID, err := hold.Put(x.Request, core.DirectionRequest)
 	if err != nil {
 		return nil, fmt.Errorf("capture: storing the request: %w", err)
 	}
@@ -280,9 +285,9 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	// *extra* copy is reported but never fatal: the exchange's own bytes are already committed, and
 	// losing a variant costs the operator a comparison view, whereas refusing the exchange would
 	// cost them the traffic. The error is returned only for the request/response themselves.
-	reqOriginal, reqAuto := c.storeStages("request", x.RequestOriginal, x.RequestAuto, x.Request, core.DirectionRequest)
+	reqOriginal, reqAuto := c.storeStages(hold, "request", x.RequestOriginal, x.RequestAuto, x.Request, core.DirectionRequest)
 
-	respID, err := c.Store.Put(x.Response, core.DirectionResponse)
+	respID, err := hold.Put(x.Response, core.DirectionResponse)
 	if err != nil {
 		// The request is already in the message log, which is append-only and has no retraction. That
 		// is acceptable: an orphaned message row costs its bytes and is reachable by id, whereas an
@@ -290,7 +295,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// nothing will read it as a completed exchange.
 		return nil, fmt.Errorf("capture: storing the response: %w", err)
 	}
-	respOriginal, respAuto := c.storeStages("response", x.ResponseOriginal, x.ResponseAuto, x.Response, core.DirectionResponse)
+	respOriginal, respAuto := c.storeStages(hold, "response", x.ResponseOriginal, x.ResponseAuto, x.Response, core.DirectionResponse)
 	ex := &core.Exchange{
 		Request:  core.MsgPtr(reqID),
 		Response: &respID,
@@ -346,7 +351,8 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		ListenerPort: x.ListenerPort,
 		ClientIP:     x.ClientIP,
 	}
-	c.Store.AddExchange(ex)
+	hold.AddExchange(ex)
+	hold.Release()
 	c.ScanExchange(ex)
 	return ex, nil
 }
@@ -366,7 +372,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 // capture: the exchange's own bytes are already committed, and losing a comparison view costs the
 // operator far less than losing the traffic. Under-recorded and said so, which is this project's
 // direction for every partial result.
-func (c Capture) storeStages(what string, original, auto, final []byte, dir core.Direction) (origID, autoID *core.MsgId) {
+func (c Capture) storeStages(hold *core.CaptureHold, what string, original, auto, final []byte, dir core.Direction) (origID, autoID *core.MsgId) {
 	if auto == nil && original == nil {
 		return nil, nil
 	}
@@ -374,7 +380,7 @@ func (c Capture) storeStages(what string, original, auto, final []byte, dir core
 		if stage == nil || bytes.Equal(stage, next) {
 			return nil
 		}
-		id, err := c.Store.Put(stage, dir)
+		id, err := hold.Put(stage, dir)
 		if err != nil {
 			if c.Logger != nil {
 				c.Logger.Warn("capture: keeping the earlier stage of a message failed, so this exchange records only the later one",
