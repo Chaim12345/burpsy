@@ -48,8 +48,9 @@ import (
 
 // projectSwitchMu serializes a project switch against everything that writes durable state.
 //
-// Taken by the switch for its whole duration, and by the capture/record path around its mirror
-// writes, so no capture can land in the middle of a swap. A `sync.RWMutex` rather than a plain
+// Taken by the switch for its whole duration, and by the capture/record path around each store
+// append and its mirror write (through core.CaptureGate, before the store's own mutex — see
+// installCaptureSinks for the lock order), so no capture can land in the middle of a swap. A `sync.RWMutex` rather than a plain
 // mutex because the common case — capturing while nobody is switching — must not serialize
 // against itself: capture takes the read side, the switch takes the write side and therefore
 // waits for in-flight captures to finish rather than racing them.
@@ -81,47 +82,40 @@ func (s *Server) CloseProject() {
 	}
 }
 
-// installCaptureSinks points the shared stores' write-through sinks at `store`, taking the
-// project-switch READ lock around each write.
+// installCaptureSinks points the shared stores' write-through sinks at `store`, and gates every
+// sink-calling store method on the project-switch READ lock.
 //
 // This is where the capture path is serialized against a switch, and the choice is deliberate:
 // the sinks are the ONE seam every capture passes through — the proxy's record(), the active
-// scanner's, the crawler's — because each of them ends in the same mirror write. Wrapping the
-// sinks catches every writer without internal/web being imported by internal/proxy or
+// scanner's, the crawler's — because each of them ends in the same mirror write. Gating the
+// stores catches every writer without internal/web being imported by internal/proxy or
 // internal/scanner (which would invert the dependency direction), and without editing any of
 // them.
 //
-// The lock is per-write, not per-capture: a capture's in-memory append is authoritative and
-// needs no protection (core's own design says so — "memory is authoritative, SQLite is durable
-// backup"), and holding the read side for the whole capture would serialize every proxy
-// connection against a switch for the duration of a response body.
+// The read lock is taken by the STORE, before its own mutex, through core.CaptureGate — not by
+// the sinks. The sinks run under the store's mutex, and the switch takes projectSwitchMu first
+// and the store's mutex second (Restore, SegmentLog, SetPersistenceSinks); a sink taking
+// projectSwitchMu inverted that order, and capture plus a switch deadlocked the whole process
+// (burpsy-react-ui-switch-deadlock). The gate fixes the order — projectSwitchMu, then the store
+// — and keeps each append and its mirror write in one hold, so a switch cannot fall between the
+// in-memory row and its durable row. The sinks therefore take no lock themselves: the read side
+// of an RWMutex is not reentrant once a switch is queued on the write side.
+//
+// The lock is per-append, not per-capture: holding the read side for the whole capture would
+// serialize every proxy connection against a switch for the duration of a response body.
 func installCaptureSinks(store *core.TrafficStore, findings *core.FindingStore, p *persist.Store) {
 	if p == nil {
 		return
 	}
+	store.SetCaptureGate(lockProjectCapture)
 	store.SetPersistenceSinks(
-		func(m *core.StoredMessage) {
-			unlock := lockProjectCapture()
-			defer unlock()
-			p.SaveMessage(m)
-		},
-		func(e *core.Exchange) {
-			unlock := lockProjectCapture()
-			defer unlock()
-			p.SaveExchange(e)
-		},
+		func(m *core.StoredMessage) { p.SaveMessage(m) },
+		func(e *core.Exchange) { p.SaveExchange(e) },
 	)
 	if findings != nil {
-		findings.SetPersistenceSink(func(f *core.Finding) {
-			unlock := lockProjectCapture()
-			defer unlock()
-			p.SaveFinding(f)
-		})
-		findings.SetDeleteSink(func(id uint64) {
-			unlock := lockProjectCapture()
-			defer unlock()
-			p.DeleteFinding(id)
-		})
+		findings.SetCaptureGate(lockProjectCapture)
+		findings.SetPersistenceSink(func(f *core.Finding) { p.SaveFinding(f) })
+		findings.SetDeleteSink(func(id uint64) { p.DeleteFinding(id) })
 	}
 }
 
