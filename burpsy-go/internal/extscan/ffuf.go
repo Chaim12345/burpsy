@@ -39,6 +39,9 @@ type Discovery struct {
 // FFUFOptions are the knobs a caller may set on one ffuf run. Everything else
 // about the invocation is fixed by this package, so a caller cannot reshape the
 // command into something the allowlist and scope gates did not anticipate.
+// DefaultFFUFRate caps content discovery at the same requests per second as nuclei's default.
+const DefaultFFUFRate = DefaultNucleiRateLimit
+
 type FFUFOptions struct {
 	// Wordlist is the path to the wordlist file. Required: ffuf with no
 	// wordlist is not a smaller scan, it is no scan.
@@ -50,8 +53,8 @@ type FFUFOptions struct {
 	MatchCodes string
 	// Threads is ffuf's -t concurrency. Zero takes ffuf's default of 40.
 	Threads int
-	// Rate is ffuf's -rate cap in requests per second. Zero is uncapped, which
-	// is ffuf's own default; an engagement with a rate agreement should set it.
+	// Rate is ffuf's -rate cap in requests per second. Zero takes DefaultFFUFRate;
+	// ffuf's own default is uncapped.
 	Rate int
 }
 
@@ -226,9 +229,11 @@ func ffufArgs(target Target, opts FFUFOptions, outFile, proxyURL string) []strin
 	if opts.Threads > 0 {
 		args = append(args, "-t", fmt.Sprint(opts.Threads))
 	}
-	if opts.Rate > 0 {
-		args = append(args, "-rate", fmt.Sprint(opts.Rate))
+	rate := opts.Rate
+	if rate <= 0 {
+		rate = DefaultFFUFRate
 	}
+	args = append(args, "-rate", fmt.Sprint(rate))
 	return args
 }
 
