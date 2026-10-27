@@ -273,6 +273,62 @@ func (c *Carrier) Restore(snap CarrierSnapshot) error {
 	return c.SetSocks(snap.Socks, snap.Bypass, snap.RemoteResolve)
 }
 
+// Freeze returns the carrier's configuration at this instant as a carrier no later SetSocks on c
+// can reach, plus that configuration's identity (see Identity), both from one locked read so the
+// two cannot describe different instants.
+//
+// It exists for the sender's dial identity (burpsy-react-ui-o388-predial-vs-dial): the carrier is
+// edited in place while traffic flows, so a dial that consulted the live holder could open its
+// socket under a configuration its pool stamp does not name. The copy shares the hop and the
+// compiled bypass rules with c — SetSocks installs fresh values and never edits either in place —
+// and carries no attachment counts, which describe the holder, not a dial. A nil carrier freezes
+// to nil and the empty identity.
+func (c *Carrier) Freeze() (*Carrier, string) {
+	if c == nil {
+		return nil, ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	frozen := &Carrier{socks: c.socks, bypass: c.bypass, remoteResolve: c.remoteResolve}
+	return frozen, c.identityLocked()
+}
+
+// Identity renders the carrier's current configuration as a string that changes whenever what
+// the carrier would do to some connection changes: the hop with its credentials, the remote-DNS
+// choice and the bypass patterns in order. Unconfigured is the empty string, the same as no
+// carrier at all, because both open every socket directly.
+//
+// In-memory only, for a pool's reuse comparison: it carries the hop's password (Raw form), so it
+// must never reach a log line, an error, an encoder or a response — the same contract as
+// Policy's Raw rule strings in the sender's stamp.
+func (c *Carrier) Identity() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.identityLocked()
+}
+
+// identityLocked is Identity with c.mu already held.
+func (c *Carrier) identityLocked() string {
+	if c.socks == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(c.socks.Raw())
+	if c.remoteResolve {
+		b.WriteString("\x00remote")
+	} else {
+		b.WriteString("\x00local")
+	}
+	for _, rule := range c.bypass {
+		b.WriteByte(0)
+		b.WriteString(rule.Pattern)
+	}
+	return b.String()
+}
+
 // installed reports whether a hop is configured, read once so a dial does not take the lock twice.
 func (c *Carrier) installed() bool {
 	c.mu.RLock()

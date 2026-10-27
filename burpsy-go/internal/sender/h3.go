@@ -31,13 +31,21 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 	// implied they were in force. The pin is strict — it never falls back — so the honest
 	// answer is an error naming the cause. The h1/h2 legs honor all three; send without
 	// the pin to use them.
+	//
+	// The carrier and the settings are read once, under s.mu: WithUpstreamCarrier swaps the
+	// carrier under that lock, so an unlocked read was a data race on the very check that keeps
+	// this leg from bypassing the hop, and one snapshot keeps the refusal and the TLS policy
+	// below on the same instant (burpsy-react-ui-o388-predial-vs-dial residual 5).
+	s.mu.RLock()
+	carrier, settings := s.carrier, s.net
+	s.mu.RUnlock()
 	if s.upstream != nil && !s.upstream.Empty() {
 		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the configured upstream proxy: QUIC dials the origin directly, and sending anyway would bypass the upstream the operator configured; refusing rather than pretending the upstream carried this")
 	}
-	if _, _, _, carrierSet := s.carrier.Configured(); carrierSet {
+	if _, _, _, carrierSet := carrier.Configured(); carrierSet {
 		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the SOCKS carrier: QUIC dials the origin directly, and sending anyway would bypass the carrier the operator configured; refusing rather than pretending the carrier carried this")
 	}
-	if _, overridden := s.Network().Resolution.resolveHost(host); overridden {
+	if _, overridden := settings.Resolution.resolveHost(host); overridden {
 		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot honor the host-resolution override for %q: the override pins the dial address the TCP legs use, and QUIC dials the name as given; refusing rather than pretending the override applied", host)
 	}
 	// The carriability bar is planH2's. h3's request model is h2's with QPACK standing in for
@@ -49,7 +57,6 @@ func (s *Sender) sendH3(ctx context.Context, host string, port uint16, useTLS bo
 		return nil, SendOutcome{}, fmt.Errorf("HTTP/3 cannot carry this request (%s), and silently falling back to another protocol would send something the operator did not write", down)
 	}
 
-	settings := s.Network()
 	// QUIC embeds TLS 1.3, but the policy inputs are the sender's own: the operator's verification
 	// setting, trust roots, minimum version floor and per-host client certificate all apply here
 	// exactly as they do on the TCP legs.
