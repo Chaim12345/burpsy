@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ func (s *Store) SetProjectName(name string) error {
 // Open opens (creating if necessary) the database at path and ensures the
 // schema exists. Pass a logger for mirror-write diagnostics.
 func Open(path string, logger *zap.Logger) (*Store, error) {
+	if err := ownerOnlyDatabase(path, logger); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
@@ -142,10 +146,70 @@ func (s *Store) Backup(dest string) error {
 	if dest == "" {
 		return errors.New("backup destination is empty")
 	}
+	// A snapshot is the whole project — every captured cookie and token — so it is created owner-only
+	// (burpsy-react-ui-data-at-rest-perms) rather than with SQLite's 0644. VACUUM INTO accepts an
+	// existing EMPTY file, so the destination is made here with 0600 and SQLite fills it. O_EXCL keeps
+	// the no-overwrite rule above with VACUUM INTO, which refuses a non-empty destination itself.
+	created := false
+	if f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, ownerOnlyFile); err == nil {
+		f.Close()
+		created = true
+	}
 	// The parameter is bound rather than interpolated. VACUUM INTO takes an expression, so a bound
 	// value works, and a path is operator input — it arrives from a schedule's params.
 	if _, err := s.db.Exec(`VACUUM INTO ?`, dest); err != nil {
+		if created {
+			// The empty file is ours; leaving it would make the next attempt at this name look like
+			// a backup that exists.
+			os.Remove(dest)
+		}
 		return fmt.Errorf("backup to %s: %w", dest, err)
+	}
+	return nil
+}
+
+// ownerOnlyFile is the mode every file holding captured traffic is created with: the operator's own
+// account and nobody else's. A project database holds every request and response burpsy recorded —
+// session cookies, bearer tokens, credentials typed into a target — and a 0644 file in a home
+// directory hands all of it to every other local account.
+const ownerOnlyFile os.FileMode = 0o600
+
+// ownerOnlyDatabase makes the database at path, and its -wal and -shm companions, owner-only before
+// SQLite opens it (burpsy-react-ui-data-at-rest-perms).
+//
+// A missing database is created here, empty, with 0600: an empty file is a valid empty SQLite
+// database, and SQLite creates the -wal and -shm files with the MAIN file's permissions (unix VFS,
+// findCreateFileMode), so the mode set here is the mode all three get. Left to itself SQLite would
+// create the main file 0644 under the usual umask.
+//
+// An existing database is tightened if group or other can reach it, so a project created by an
+// earlier build stops being world-readable on its next open rather than staying exposed forever. A
+// chmod that fails (a file this account does not own, a filesystem without modes) is logged, not
+// fatal: the operator can still open their project, and the log says what was not done.
+//
+// A path SQLite reads as something other than a file (":memory:", a "file:" URI) is left alone.
+func ownerOnlyDatabase(path string, logger *zap.Logger) error {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, ownerOnlyFile)
+	if err == nil {
+		return f.Close()
+	}
+	if !errors.Is(err, os.ErrExist) {
+		// Not ours to diagnose: sql.Open / the first query reports the real reason (a missing
+		// directory, a read-only filesystem) in the words the caller already handles.
+		return nil
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		info, serr := os.Stat(p)
+		if serr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if cerr := os.Chmod(p, info.Mode().Perm()&0o700); cerr != nil && logger != nil {
+			logger.Warn("project file is readable by other accounts and could not be made owner-only",
+				zap.String("path", p), zap.Error(cerr))
+		}
 	}
 	return nil
 }
