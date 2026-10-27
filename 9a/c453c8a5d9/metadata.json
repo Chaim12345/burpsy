@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "9ac453c8a5d9",
+  "strategy": "manual-commit",
+  "branch": "beads-batch2",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".beads/issues.jsonl"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/c453c8a5d9/0/metadata.json",
+      "transcript": "/9a/c453c8a5d9/0/full.jsonl",
+      "compact_transcript": "/9a/c453c8a5d9/0/transcript.jsonl",
+      "content_hash": "/9a/c453c8a5d9/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 7273,
+    "cache_read_tokens": 2469360,
+    "output_tokens": 3772,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 14,
+      "cache_creation_tokens": 14690,
+      "cache_read_tokens": 443860,
+      "output_tokens": 3703,
+      "api_call_count": 7
+    }
+  },
+  "redaction": {
+    "replacements": 121,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 47,
+      "key_context": 37,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
