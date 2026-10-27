@@ -7,7 +7,7 @@ name: Nightly
 #
 #   e2e-go   e2e-go.sh against a local target.
 #   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
-#   fuzz     every listed fuzz target for 5 minutes each, one process per target (scripts/ci-fuzz.sh).
+#   fuzz     every fuzz target for 2 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
 #            race-web and race-core on every push to master, the race detector covers the whole module.
 #
@@ -196,8 +196,10 @@ jobs:
         if: failure()
         run: tail -100 /tmp/burpsy-parity.log /tmp/parity-target.log || true
 
-  # One `go test -fuzz` process per target (go test takes one per run). 10 targets x 5 min fits the
-  # timeout. A listed target missing from its package fails the job (ci-fuzz.sh verify). A crasher is
+  # One `go test -fuzz` process per target (go test takes one per run). 22 targets x 2 min plus a
+  # compile each fits the timeout. A listed target missing from its package, or a target nobody
+  # listed, fails the job (ci-fuzz.sh verify). The generated corpus ($GOCACHE/fuzz) is cached across
+  # nights so each run continues from the last instead of from the seeds. A crasher is
   # written to internal/<pkg>/testdata/fuzz/<Target>/ and uploaded: commit it as the regression test.
   fuzz:
     runs-on: ubuntu-latest
@@ -210,9 +212,17 @@ jobs:
           tools: "false"
       - name: Every listed target exists
         run: scripts/ci-fuzz.sh verify
+      - name: Locate the fuzz corpus cache
+        id: fuzzcache
+        run: echo "dir=$(cd burpsy-go && go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.fuzzcache.outputs.dir }}
+          key: nightly-fuzz-corpus-${{ github.run_id }}
+          restore-keys: nightly-fuzz-corpus-
       - name: Fuzz
         env:
-          CI_FUZZ_TIME: 5m
+          CI_FUZZ_TIME: 2m
         run: scripts/ci-fuzz.sh run
       - uses: actions/upload-artifact@v4
         if: failure()
