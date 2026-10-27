@@ -130,3 +130,21 @@ func TestHeadLinesAlwaysDropsTheFirstLine(t *testing.T) {
 		t.Errorf("HeadLines = %q, want just [Accept: y] - the first line is never a header", lines)
 	}
 }
+
+// Unicode case folding is not header-name folding: KELVIN SIGN lowers to "k" and invalid UTF-8
+// lowers to U+FFFD (three bytes), which once both mis-matched a line and sliced the value at the
+// wrong offset (the committed FuzzHeaderValueExact crasher).
+func TestHeaderValueExactFoldsASCIIOnly(t *testing.T) {
+	if v, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\nKey: v\r\n"), "key"); ok {
+		t.Errorf("a KELVIN SIGN field was read as \"key\": %q", v)
+	}
+	if v, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\n\x90: v\r\n"), "\xa0"); ok {
+		t.Errorf("an invalid-UTF-8 field matched a different invalid byte: %q", v)
+	}
+	if v, ok := HeaderValueExact([]byte("\n\x90:"), "\xa0"); ok {
+		t.Errorf("the fuzz crasher head matched: %q", v)
+	}
+	if v, ok := HeaderValueExact([]byte("HTTP/1.1 200 OK\r\n\x90:  raw \r\n"), "\x90"); !ok || v != "raw" {
+		t.Errorf("an exact non-ASCII byte name = (%q, %v), want (\"raw\", true)", v, ok)
+	}
+}
