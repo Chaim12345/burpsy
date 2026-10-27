@@ -73,6 +73,10 @@ func (s *Server) upstreamDialer() upstreamproxy.Dialer {
 // a slow-but-alive origin should still answer it.
 const upstreamConnectTimeout = 30 * time.Second
 
+// upstreamTLSDialTimeout bounds a whole TLS leg's setup: the dial (itself bounded above) plus the
+// handshake.
+var upstreamTLSDialTimeout = 60 * time.Second
+
 // carrier is the global SOCKS layer, or nil. A method so every leg in this file reads it the same
 // way and a nil Server is the same answer as a Server with no carrier.
 func (s *Server) carrier() *upstreamproxy.Carrier {
@@ -150,7 +154,12 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (n
 	if policy := s.upstreamPolicy(); (policy != nil && !policy.Empty()) || s.carrier() != nil {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}
-	conn, negotiated, err := dialer.Dial(context.Background(), serverName, addr, alpnOffer)
+	// Bounded (burpsy-react-ui-proxy-timeouts-rest): the TCP dial has its own 30s bound, but the TLS
+	// handshake ran under context.Background, so an origin that accepted and never answered the
+	// ClientHello held the browser's leg forever.
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamTLSDialTimeout)
+	defer cancel()
+	conn, negotiated, err := dialer.Dial(ctx, serverName, addr, alpnOffer)
 	if err == nil && s.config.serverCerts != nil {
 		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
 			if port, cerr := strconv.ParseUint(portText, 10, 16); cerr == nil {

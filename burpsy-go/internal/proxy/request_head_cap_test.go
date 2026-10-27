@@ -3,9 +3,13 @@ package proxy
 import (
 	"bufio"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
 )
 
 // A client that streams header lines without end used to grow readFullRequest's buffer until the
@@ -87,5 +91,64 @@ func TestTheRequestChunkDecoderBoundsItsLines(t *testing.T) {
 	body, ok := readChunkedBody(bufio.NewReader(strings.NewReader("3\r\nabc\r\n0\r\nX-T: v\r\n\r\n")))
 	if !ok || string(body) != "abc" {
 		t.Errorf("a normal chunked body = %q, %v", body, ok)
+	}
+}
+
+// The request line is bounded like the header block: an endless first line through a real listener
+// is answered 431 and the connection closed, not buffered (burpsy-react-ui-proxy-timeouts-rest).
+func TestAnEndlessRequestLineIsAnswered431(t *testing.T) {
+	srv := NewServer(NewProxyConfig(core.NewTrafficStore()).WithLogger(zap.NewNop()))
+	client, server := net.Pipe()
+	go srv.handleConnection(server)
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
+	go func() {
+		chunk := []byte(strings.Repeat("A", 4096))
+		for {
+			if _, err := client.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+	reply, err := bufio.NewReader(client).ReadString('\n')
+	if err != nil || !strings.HasPrefix(reply, "HTTP/1.1 431") {
+		t.Fatalf("an endless request line got %q, %v; want a 431", reply, err)
+	}
+}
+
+// A TLS leg to an origin that accepts and never answers the ClientHello gives up at the setup bound
+// instead of holding the browser's leg forever.
+func TestAnUpstreamThatNeverHandshakesIsGivenUpOn(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // hold it open, say nothing
+		}
+	}()
+	old := upstreamTLSDialTimeout
+	upstreamTLSDialTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { upstreamTLSDialTimeout = old })
+	srv := NewServer(NewProxyConfig(core.NewTrafficStore()).WithLogger(zap.NewNop()))
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { _, _, err := srv.dialUpstreamTLS("silent.test", ln.Addr().String(), nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a handshake nobody answered succeeded")
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Errorf("gave up after %v, want near the 300ms bound", time.Since(start))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the TLS dial to a silent origin is still waiting after 10s")
 	}
 }

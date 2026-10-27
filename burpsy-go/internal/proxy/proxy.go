@@ -1524,7 +1524,13 @@ func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 
 	// Read initial request
 	reader := bufio.NewReader(clientConn)
-	requestLine, err := reader.ReadString('\n')
+	// Bounded like the header block (burpsy-react-ui-proxy-timeouts-rest): an endless request line
+	// would otherwise buffer until the 30s line deadline, at whatever rate the client can send.
+	requestLine, err := readHeadLine(reader, maxRequestHeadBytes)
+	if err == errRequestHeadTooLarge {
+		writeHeadTooLarge(clientConn)
+		return
+	}
 	if err != nil {
 		return
 	}
@@ -1709,7 +1715,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// the WebSocket handoff below keep the frame bytes that arrived with a 101.
 	upstreamBR := bufio.NewReader(upstream)
 	for {
-		requestLine, err := br.ReadString('\n')
+		requestLine, err := readHeadLine(br, maxRequestHeadBytes)
+		if err == errRequestHeadTooLarge {
+			writeHeadTooLarge(tlsClient)
+			return
+		}
 		if err != nil {
 			return
 		}
