@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bx6jxjcpg</task-id>
+<tool-use-id>toolu_01ToCYfPA4JN4kQ8EXhJ53M8</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bx6jxjcpg.output</output-file>
+<status>completed</status>
+<summary>Background command "export GOTOOLCHAIN=go1.27.3 &amp;&amp; pkgs=$(scripts/affected-go-tests.sh 92e1d43 | tr '\n' ' ') &amp;&amp; scripts/capped-run.sh -- sh -c "cd burpsy-go &amp;&amp; go test -count=1 -timeout 30m $pkgs" &gt; /tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/scratchpad/t1.log 2&gt;&amp;1; echo exit=$?" completed (exit code 0)</summary>
+</task-notification>
