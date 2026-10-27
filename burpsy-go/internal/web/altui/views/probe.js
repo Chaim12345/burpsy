@@ -5,8 +5,8 @@ import { toast, runGated } from '../components.js';
 // dry-run that shows the scope verdict before any byte leaves.
 
 const state = {
-  target: 'http://127.0.0.1:28099',
-  request: 'GET / HTTP/1.1\r\nHost: 127.0.0.1:28099\r\n\r\n',
+  target: '',
+  request: '',
   response: null, sending: false,
   // Exact-replay fidelity: when a stored exchange is loaded and the editor is
   // untouched, sends go by from_exchange (the backend replays the stored octets).
@@ -19,14 +19,14 @@ export async function renderProbe(el) {
   el.innerHTML = `
     <div id="probe-targetbar">
       <span class="pane-title">Probe</span>
-      <input class="target" id="p-target" spellcheck="false" placeholder="http://host:port" value="${esc(state.target)}">
+      <input class="target" id="p-target" spellcheck="false" placeholder="enter a target you are authorized to test, e.g. http://host:port" value="${esc(state.target)}">
       <button class="act" id="p-dry" title="Apply edits and show the scope verdict without sending">Dry run</button>
       <button class="act primary" id="p-send">Send</button>
     </div>
     <div id="probe-split">
       <div id="probe-req">
         <div class="pane-head"><span class="pane-title">Request</span><span class="mut" id="p-reqmeta"></span></div>
-        <textarea class="editor" id="p-editor" spellcheck="false"></textarea>
+        <textarea class="editor" id="p-editor" spellcheck="false" placeholder="GET / HTTP/1.1&#10;Host: host:port"></textarea>
         <div class="verdict" id="p-verdict" style="display:none"></div>
       </div>
       <div id="probe-resp">
@@ -89,7 +89,7 @@ function normalizedRaw() {
 async function doSend(dry) {
   if (state.sending) return;
   const target = state.target.trim();
-  if (!target) { toast('set a target first, e.g. http://127.0.0.1:28099', true); return; }
+  if (!target) { toast('set a target first, e.g. http://host:port', true); return; }
   const editor = document.getElementById('p-editor');
   const pristine = state.fromExchange != null && editor.value === state.loadedText;
   const body = pristine

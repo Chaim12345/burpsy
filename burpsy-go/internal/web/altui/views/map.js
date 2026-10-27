@@ -49,7 +49,7 @@ export async function refreshMap() {
 function drawTree() {
   const root = document.getElementById('map-tree');
   if (!root) return;
-  if (!state.tree.length) { root.innerHTML = '<div class="empty">No captured traffic yet.<br>Nothing has passed through the proxy. Drive a browser through it, or send from Probe.</div>'; return; }
+  if (!state.tree.length) { root.innerHTML = '<div class="empty">No traffic recorded yet.<br>Probe sends and any traffic captured by the proxy appear here.</div>'; return; }
   root.innerHTML = state.tree.map((n) => treeNode(n)).join('');
   root.querySelectorAll('.tree-row').forEach((row) => {
     row.onclick = () => {
