@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -1557,7 +1558,13 @@ func (f *crawlAuditFeed) finish(ctx context.Context) {
 // was shared before the crawl left it and is worth keeping shareable: two places that both "audit
 // these exchanges" is how one launched scan comes to audit less than another with nothing on screen
 // saying which.
-func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string, skipParams ...string) *scanner.SessionOutcome {
+// auditSkips are parameters a launch exempts from the audit: by name everywhere, or on one endpoint.
+type auditSkips struct {
+	names []string
+	at    []bcheck.ParameterAt
+}
+
+func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string, skips ...auditSkips) *scanner.SessionOutcome {
 	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
 	for _, f := range rep.Fetches {
 		ids = append(ids, f.ExchangeID)
@@ -1571,7 +1578,12 @@ func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report,
 	// without anything on screen saying so.
 	cfg := s.activeScanner().AuditConfig()
 	// Parameters the API review marked Fixed (vuw7) are kept out of this audit's insertion points.
-	cfg.SkipAllTestsForParameters = append(append([]string(nil), cfg.SkipAllTestsForParameters...), skipParams...)
+	cfg.SkipAllTestsForParameters = append([]string(nil), cfg.SkipAllTestsForParameters...)
+	cfg.SkipAllTestsForParametersAt = append([]bcheck.ParameterAt(nil), cfg.SkipAllTestsForParametersAt...)
+	for _, sk := range skips {
+		cfg.SkipAllTestsForParameters = append(cfg.SkipAllTestsForParameters, sk.names...)
+		cfg.SkipAllTestsForParametersAt = append(cfg.SkipAllTestsForParametersAt, sk.at...)
+	}
 	return s.runBulkAudit(ctx, task, target, ids, cfg, "the run produced no exchanges to audit")
 }
 

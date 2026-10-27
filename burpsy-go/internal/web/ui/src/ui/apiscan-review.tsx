@@ -123,8 +123,8 @@ export function APIScanReview({
    ) : (
     <>
      <p className="cell-dim" style={{ margin: 0 }}>
-      Dynamic values are sent and audited like any other. Fixed values are sent as set and kept out of the audit's insertion points — the
-      audit matches a Fixed parameter by name, so fixing one on a single endpoint exempts that name on every endpoint. A request body
+      Dynamic values are sent and audited like any other. Fixed values are sent as set and kept out of the audit's insertion points on the endpoints the row
+      applies to: this endpoint only, or every endpoint carrying the parameter when the row is set to all. A request body
       synthesised from a schema is not listed. * marks a parameter the document requires.
      </p>
      {rows.length > 8 ? (
