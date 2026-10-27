@@ -264,6 +264,15 @@ func main() {
 	// remote browser at the same address render byte-identical UI and hit the
 	// same API — one build, one server, two ways to reach it.
 	proxyHandler := httputil.NewSingleHostReverseProxy(target)
+	// The webview's own requests arrive with the asset server's Host (wails / wails.localhost), and
+	// the console refuses any Host it was not bound to on EVERY method, reads included
+	// (burpsy-react-ui-rebind-read). This handler only ever carries the in-process webview's
+	// requests, so it forwards them as what they are: requests for the bound console.
+	direct := proxyHandler.Director
+	proxyHandler.Director = func(r *http.Request) {
+		direct(r)
+		r.Host = target.Host
+	}
 
 	err = wails.Run(&options.App{
 		Title:  "burpsy",

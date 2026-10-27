@@ -61,10 +61,10 @@ type Server struct {
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
 	mux             *http.ServeMux
-	// allowedHosts are the Host header values this console answers to for MUTATING requests
-	// (burpsy-react-ui-s19k). Empty means loopback only, which is the setting that stops a DNS
-	// rebinding attack; a non-empty set is an operator who deliberately bound the console to
-	// something reachable and has named what they reachable it as.
+	// allowedHosts are the non-loopback Host header values this console answers to, on every method
+	// (burpsy-react-ui-s19k, burpsy-react-ui-rebind-read). Loopback is always accepted; empty means
+	// loopback only, which is the setting that stops a DNS rebinding attack. Entries come from
+	// WithAllowedHosts and from the address ListenAndServe was bound to (allowBindAddr).
 	//
 	// Absent from the default on purpose: the safe reading must be the one a caller gets by doing
 	// nothing, because a flag nobody sets cannot be the thing standing between a hostile page and an
@@ -1489,7 +1489,7 @@ func (s *Server) sameOriginOnly(h http.Handler) http.Handler {
 	})
 }
 
-// WithAllowedHosts names the Host header values this console answers to for mutating requests.
+// WithAllowedHosts names the non-loopback Host header values this console answers to.
 //
 // Required for a non-loopback bind: `-web 0.0.0.0:8081` puts the console on the network, and a
 // cross-site gate that only accepts loopback would refuse the operator's own browser along with
@@ -1512,6 +1512,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	// Remember the bound address so the DOM auditor can tell its extension where to report
 	// (burpsy-react-ui-wl94). A wildcard or empty host is normalised to loopback by domInvaderReportURL.
 	s.webAddr = addr
+	// Accept the Host a browser sends for the address the console is bound to
+	// (burpsy-react-ui-rebind-read). The Host check covers reads, so without this a non-loopback
+	// bind would refuse the operator's own browser on the first page load.
+	s.allowBindAddr(addr, localInterfaceAddrs)
 	// Cap every request body so a single oversized POST cannot exhaust memory.
 	// The API is operator-facing and loopback-bound, but a body limit is cheap
 	// insurance and the right default for any server that reads JSON into structs.

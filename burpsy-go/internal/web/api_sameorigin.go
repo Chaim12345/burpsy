@@ -37,9 +37,15 @@ import (
 //     browsers that send no Sec-Fetch-Site, and it is also forgeable only by a non-browser client —
 //     which is fine, because a non-browser client is a script the operator wrote.
 //
-// READS ARE NOT GATED. A cross-origin GET cannot change state, and gating it would break the two
-// things the console genuinely needs: the CA certificate download, and a bookmarked or reloaded page.
-// The mutating verbs are POST, PUT, PATCH and DELETE.
+// THE HOST CHECK APPLIES TO EVERY METHOD; the Sec-Fetch-Site and Origin checks apply only to the
+// mutating verbs (POST, PUT, PATCH, DELETE). The split is the rebinding case
+// (burpsy-react-ui-rebind-read): a page on a domain that rebinds to 127.0.0.1 is SAME-ORIGIN to the
+// browser, so it can not only send a GET but READ the reply — /api/message/{id} hands it captured
+// cookies and session material, /api/history the operator's whole traffic. Same-origin policy is
+// what normally stops a hostile page reading a cross-origin GET, and rebinding is exactly the attack
+// that switches it off, so a read is only safe once Host shows the browser was pointed at THIS
+// console. A plain cross-origin GET (not rebound) is still allowed: it cannot change state, the page
+// cannot read the reply, and refusing it would break the CA download and a bookmarked page.
 //
 // # Why a token is NOT implemented here, and what would be needed
 //
@@ -88,30 +94,36 @@ func isLoopbackHost(h string) bool {
 	return false
 }
 
-// mutatingVerbs are the methods a cross-site request is refused on. GET and HEAD are absent because a
-// cross-origin GET cannot change server state, and blocking it would break the CA download and every
-// page reload.
+// mutatingVerbs are the methods the Sec-Fetch-Site and Origin checks apply to. GET and HEAD are
+// absent because a cross-origin GET cannot change server state and its reply is unreadable to the
+// page that sent it, and blocking it would break the CA download and every page reload. The Host check
+// is NOT limited to these verbs: see requireSameOrigin.
 var mutatingVerbs = map[string]bool{
 	http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true,
 }
 
-// requireSameOrigin refuses a mutating request that did not come from this console.
+// requireSameOrigin refuses a request that did not come from this console.
 //
 // Three checks, in the order that costs least, and each is sufficient on its own for the attack it
 // answers. All three pass for the console's own fetch(), which is same-origin, sends no cross-origin
-// Origin header, and sets Sec-Fetch-Site: same-origin.
+// Origin header, and sets Sec-Fetch-Site: same-origin. The Host check runs on EVERY method; the other
+// two only on a mutating one.
 func (s *Server) requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
-	if !mutatingVerbs[r.Method] {
-		return true
-	}
-
 	// 1. Host. The rebinding defence, and the only one rebinding cannot route around: a hostile
 	//    domain that rebinds to 127.0.0.1 still sends ITS OWN name in Host, so the browser's
 	//    same-origin view and this check disagree, and this check is the one that holds.
+	//
+	//    Before the method test, not after it (burpsy-react-ui-rebind-read). A rebound page is
+	//    same-origin to the browser, so a GET it sends is one whose reply it can READ — captured
+	//    cookies from /api/message/{id}, the whole proxy history from /api/history. Exempting reads
+	//    here exempted exactly the requests the rebinding attack exists to make.
 	host := r.Host
 	if !s.acceptsHost(host) {
 		http.Error(w, crossSiteRefusal, http.StatusForbidden)
 		return false
+	}
+	if !mutatingVerbs[r.Method] {
+		return true
 	}
 
 	// 2. Sec-Fetch-Site. Set by the browser and not readable by page script, so a hostile page
@@ -136,14 +148,59 @@ func (s *Server) requireSameOrigin(w http.ResponseWriter, r *http.Request) bool 
 
 // acceptsHost reports whether the console answers to this Host header.
 //
-// A configured allowlist wins, because a non-loopback bind is a deliberate operator choice and
-// refusing it would make `-web 0.0.0.0:8081` unusable. With none configured, only loopback is
-// accepted — which is the case that stops rebinding.
+// Loopback is always accepted: a loopback name or address in Host is not something a rebinding
+// attack can produce, because rebinding needs the browser to be pointed at the ATTACKER'S name. On top
+// of that, the configured allowlist — names the operator gave (WithAllowedHosts) and the address the
+// console was bound to (allowBindAddr) — keeps a non-loopback bind usable. A configured list used to
+// REPLACE loopback; that was harmless while a GET was never checked, and once the Host check covered
+// reads (burpsy-react-ui-rebind-read) it would have locked the operator's own loopback browser out of
+// a console they bound to 0.0.0.0.
 func (s *Server) acceptsHost(host string) bool {
-	if len(s.allowedHosts) > 0 {
-		return s.allowedHosts[host] || s.allowedHosts[stripPort(host)]
+	if isLoopbackHost(host) {
+		return true
 	}
-	return isLoopbackHost(host)
+	return s.allowedHosts[host] || s.allowedHosts[stripPort(host)]
+}
+
+// localInterfaceAddrs is what ListenAndServe enumerates for a wildcard bind. A variable so a test can
+// state the interfaces rather than depend on the machine it runs on.
+var localInterfaceAddrs = net.InterfaceAddrs
+
+// allowBindAddr adds the Host values a browser legitimately sends to a console bound at addr.
+//
+// A specific address or name is accepted as written, with its port: `-web 192.168.1.5:8081` is the
+// operator naming exactly what they will type. A wildcard bind (`0.0.0.0:8081`, `[::]:8081`, `:8081`)
+// is accepted on each of this machine's interface ADDRESSES with that port. Addresses only, never
+// names: an IP literal in Host means the browser was pointed at that IP, which no DNS rebinding can
+// arrange. A DNS name for a wildcard bind still has to be named with WithAllowedHosts.
+//
+// A failed interface enumeration adds nothing, so the console falls back to loopback only — the
+// direction that refuses a legitimate remote browser rather than accepting a hostile one.
+func (s *Server) allowBindAddr(addr string, interfaceAddrs func() ([]net.Addr, error)) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return
+	}
+	var hosts []string
+	if ip := net.ParseIP(host); host != "" && (ip == nil || !ip.IsUnspecified()) {
+		hosts = append(hosts, net.JoinHostPort(host, port))
+	} else if interfaceAddrs != nil {
+		addrs, err := interfaceAddrs()
+		if err != nil {
+			return
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok || ipn.IP.IsLinkLocalUnicast() {
+				// Link-local IPv6 needs a zone in Host, which no browser URL carries portably.
+				continue
+			}
+			hosts = append(hosts, net.JoinHostPort(ipn.IP.String(), port))
+		}
+	}
+	if len(hosts) > 0 {
+		s.WithAllowedHosts(hosts...)
+	}
 }
 
 // originMatchesHost reports whether an Origin header names the same authority the request arrived on.
