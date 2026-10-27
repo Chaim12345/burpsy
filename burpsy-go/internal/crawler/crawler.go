@@ -1256,9 +1256,10 @@ type Crawler struct {
 	// credential phase re-fetches them WITH its session. GET-only, deliberately: replaying a
 	// challenged POST would re-send a body under a session the unauthenticated phase did not
 	// hold — a write with new authority, which the re-fetch is not licensed to make. Bounded
-	// (maxAuthChallenged); discovery-order. The seen-map is bounded by construction: every URL
-	// in it was admitted to the frontier, and the admitted-request table is bounded by
-	// MaxFingerprints (SkipFingerprintBudget refuses past it). challengedSeeded marks that the
+	// (maxAuthChallenged); discovery-order. The seen-map is bounded by the requests the crawl
+	// sends: an entry is added only for a GET that was actually fetched and answered 401/403,
+	// whether it came off the frontier or a direct perform path that bypasses enqueue (a
+	// follow-up retry), and fetches are bounded by MaxRequests. challengedSeeded marks that the
 	// current phase has already issued its re-fetches, so a re-login does not re-seed them.
 	authChallenged     []string
 	authChallengedSeen map[string]bool
@@ -1697,15 +1698,16 @@ func (c *Crawler) Run(ctx context.Context) Report {
 			// phase whose retry recovered something is not drained (burpsy-react-ui-crediso).
 			// A no-op with nothing owed or the phase's pass budget spent.
 			c.runFollowUpPasses(ctx, &rep, &lim)
-			if len(c.frontier) > 0 {
-				continue
-			}
 			// A retry inside the pass may be what tripped the error-handling policy: re-check
-			// BEFORE the next phase's login is admitted — the policy just said this target is
-			// not to be sent to.
+			// BEFORE anything else is sent - the next phase's login, and also the links a
+			// recovered retry just admitted to this phase's frontier, which would otherwise take
+			// one more visit before the post-visit check (burpsy-react-ui-credfx).
 			if c.checkPauseThresholds(&rep, &lim) {
 				pausedByPolicy = true
 				break
+			}
+			if len(c.frontier) > 0 {
+				continue
 			}
 			// The unauthenticated phase drains first; then each credential in turn gets its
 			// own phase behind its own login (burpsy-react-ui-crediso).
