@@ -103,6 +103,28 @@ func appendCacheDeceptionSuffix(path string) string {
 	return path + "/nonexistent" + cacheDeceptionStaticExt + query
 }
 
+// cacheDeceptionVariants are the static-looking URLs for a dynamic path (0vzb.41): a trailing static
+// file, the same after a delimiter the origin may stop parsing at (; # ? NUL !), and traversals a
+// cache may normalise to a static directory or an exact-match static file while the origin does not.
+func cacheDeceptionVariants(path string) [][2]string {
+	query := ""
+	if i := strings.Index(path, "?"); i >= 0 {
+		path, query = path[:i], path[i:]
+	}
+	trimmed := strings.TrimSuffix(path, "/")
+	out := [][2]string{{appendCacheDeceptionSuffix(path + query), "a static file appended as a path segment"}}
+	for _, d := range []string{";", "%23", "%3f", "%00", "!"} {
+		out = append(out, [2]string{trimmed + d + "nonexistent" + cacheDeceptionStaticExt + query,
+			"a static extension after the delimiter " + d})
+	}
+	out = append(out,
+		[2]string{"/static/..%2f" + strings.TrimPrefix(trimmed, "/") + query, "an encoded traversal out of a static directory"},
+		[2]string{trimmed + "%2f%2e%2e%2frobots.txt" + query, "an encoded traversal to an exact-match static file"},
+		[2]string{trimmed + ";%2f%2e%2e%2frobots.txt" + query, "a delimiter and encoded traversal to an exact-match static file"},
+	)
+	return out
+}
+
 // sendCacheProbe sends one request through the engagement-scope gate and returns
 // the response. It returns ok=false on refusal, transport error, or a missing
 // sender, so a check falls through cleanly rather than reporting a false result.
@@ -147,20 +169,26 @@ func checkWebCacheDeception(ctx context.Context, cc *CheckContext) ([]*Finding, 
 	if originalBody == "" {
 		return nil, nil
 	}
-	decoratedURL := appendCacheDeceptionSuffix(exchange.Path)
-	resp, ok := sendCacheProbe(s, ctx, exchange, decoratedURL, nil)
-	if !ok {
-		return nil, nil
+	var decoratedURL, how string
+	var evidence cacheDeceptionEvidence
+	for _, v := range cacheDeceptionVariants(exchange.Path) {
+		resp, ok := sendCacheProbe(s, ctx, exchange, v[0], nil)
+		if !ok {
+			continue
+		}
+		if ev := analyzeCacheDeceptionEvidence(originalBody, string(resp.Body), resp.StatusCode); ev&deceptionEvidenceDynamicContent != 0 {
+			decoratedURL, how, evidence = v[0], v[1], ev
+			break
+		}
 	}
-	evidence := analyzeCacheDeceptionEvidence(originalBody, string(resp.Body), resp.StatusCode)
-	if evidence&deceptionEvidenceDynamicContent == 0 {
+	if decoratedURL == "" {
 		return nil, nil
 	}
 	return []*Finding{{
 		Name:        cacheDeceptionIssue,
 		Severity:    "medium",
 		Confidence:  "firm",
-		Description: "Web cache deception: a dynamic, sensitive response was served under a static-looking URL (" + decoratedURL + "), which a cache may store and serve to other users.",
+		Description: "Web cache deception: a dynamic, sensitive response was served under a static-looking URL (" + decoratedURL + ", " + how + "), which a cache may store and serve to other users.",
 		URL:         decoratedURL,
 		Method:      exchange.Method,
 		Evidence:    cacheDeceptionEvidenceText(evidence),
