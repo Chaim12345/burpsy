@@ -208,17 +208,21 @@ func (a *authzRawSender) Send(ctx context.Context, auth scanner.AuthContext) (in
 	}
 	// Store both halves so the Comparer can load them; the last ids per label are what the verdict
 	// reports (calibration sends the baseline N times — the last is representative).
-	reqID, rerr := a.s.store.Put(raw, core.DirectionRequest)
-	rspID, perr := a.s.store.Put(respBytes, core.DirectionResponse)
+	// One capture-gate hold across both messages and the row (burpsy-react-ui-capture-split-web).
+	hold := a.s.store.HoldCapture()
+	reqID, rerr := hold.Put(raw, core.DirectionRequest)
+	rspID, perr := hold.Put(respBytes, core.DirectionResponse)
 	if rerr == nil && perr == nil {
 		exID := &core.Exchange{Host: a.ex.Host, Port: a.ex.Port, TLS: a.ex.TLS, Method: a.ex.Method, Path: a.ex.Path,
 			Request: core.MsgPtr(reqID), Response: &rspID}
-		a.s.store.AddExchange(exID)
+		hold.AddExchange(exID)
+		hold.Release()
 		a.mu.Lock()
 		a.lastReqID[auth.Label] = uint64(reqID)
 		a.lastRspID[auth.Label] = uint64(rspID)
 		a.mu.Unlock()
 	}
+	hold.Release()
 	status := authzStatus(respBytes)
 	body := string(responseBodyBytes(respBytes))
 	return status, body, elapsed, nil

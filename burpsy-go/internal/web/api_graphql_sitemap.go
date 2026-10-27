@@ -100,8 +100,11 @@ func (s *Server) handleGraphQLSitemap(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "could not write the operation into the request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		msgID, err := s.store.Put(raw, core.DirectionRequest)
+		// One capture-gate hold across the message and its row (burpsy-react-ui-capture-split-web).
+		hold := s.store.HoldCapture()
+		msgID, err := hold.Put(raw, core.DirectionRequest)
 		if err != nil {
+			hold.Release()
 			http.Error(w, "could not store a generated request: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -116,7 +119,8 @@ func (s *Server) handleGraphQLSitemap(w http.ResponseWriter, r *http.Request) {
 			ParentID:  s.validParent(&parent),
 			Source:    core.SourceSchema,
 		}
-		s.store.AddExchange(row)
+		hold.AddExchange(row)
+		hold.Release()
 		resp.Operations = append(resp.Operations, graphqlSitemapOp{
 			Kind: op.Kind, Field: op.Field, Name: op.Name, ExchangeID: row.ID, Path: row.Path, Parent: row.ParentID,
 		})

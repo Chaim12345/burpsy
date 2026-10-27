@@ -329,11 +329,15 @@ func (s *Server) recordRepeaterExchange(
 	// must not be silently swallowed: an exchange referencing a non-existent
 	// message ID would 404 in history lookups. Log and degrade rather than
 	// advertise a bad id.
-	reqMsgID, err := s.store.Put(spec.Raw, core.DirectionRequest)
+	// One capture-gate hold across both messages and the row naming them, so a project switch cannot
+	// split this send across two projects (burpsy-react-ui-capture-split-web).
+	hold := s.store.HoldCapture()
+	defer hold.Release()
+	reqMsgID, err := hold.Put(spec.Raw, core.DirectionRequest)
 	if err != nil {
 		s.logger.Error("repeater: failed to store request", zap.Error(err))
 	}
-	respMsgID, err := s.store.Put(rawResp, core.DirectionResponse)
+	respMsgID, err := hold.Put(rawResp, core.DirectionResponse)
 	if err != nil {
 		s.logger.Error("repeater: failed to store response", zap.Error(err))
 	}
@@ -374,7 +378,8 @@ func (s *Server) recordRepeaterExchange(
 		note := spec.Note
 		ex.Notes = &note
 	}
-	s.store.AddExchange(ex)
+	hold.AddExchange(ex)
+	hold.Release()
 
 	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
 	// response the operator drove by hand, and Burp's jar can be configured to monitor the
