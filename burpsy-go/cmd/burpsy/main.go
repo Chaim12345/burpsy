@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/buildinfo"
 	"log"
 	"os"
 	"os/exec"
@@ -127,7 +128,12 @@ func main() {
 	upstreamProxyRules := flag.String("upstream-proxy-rule", "",
 		"per-destination upstream proxy rules, comma-separated pattern=URL (e.g. '*.internal=socks5://127.0.0.1:1080,api.example.com=direct'); first match wins, ahead of -upstream-proxy")
 
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.String())
+		return
+	}
 
 	// Before anything is built: this either prints a list and exits, or resolves a name, or refuses one
 	// that does not exist. Resolving it late — after the proxy is listening — would mean a typo takes

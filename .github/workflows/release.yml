@@ -37,6 +37,9 @@ jobs:
           - goos: darwin
             goarch: arm64
             archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            archive: tar.gz
           - goos: windows
             goarch: amd64
             archive: zip
@@ -63,8 +66,11 @@ jobs:
           ext=""
           [ "$GOOS" = windows ] && ext=".exe"
           mkdir -p "../dist/$PKG"
-          go build -trimpath -ldflags="-s -w" -o "../dist/$PKG/burpsy$ext" ./cmd/burpsy
-          go build -trimpath -ldflags="-s -w" -o "../dist/$PKG/burpsy-mcp$ext" ./cmd/burpsy-mcp
+          # The tag is stamped into internal/buildinfo: the module lives in burpsy-go/, so the
+          # repository tag is not its module version and build metadata alone would report "(devel)".
+          ldflags="-s -w -X github.com/burpsy-go/burpsy/internal/buildinfo.Version=${GITHUB_REF_NAME}"
+          go build -trimpath -ldflags="$ldflags" -o "../dist/$PKG/burpsy$ext" ./cmd/burpsy
+          go build -trimpath -ldflags="$ldflags" -o "../dist/$PKG/burpsy-mcp$ext" ./cmd/burpsy-mcp
           cp ../LICENSE "../dist/$PKG/"
 
       - name: Package (tar.gz)
@@ -84,7 +90,7 @@ jobs:
           path: ${{ env.PKG }}.${{ matrix.archive }}
           if-no-files-found: error
 
-  # One job attaches every archive, so the release is created once (not raced by four matrix legs)
+  # One job attaches every archive, so the release is created once (not raced by the matrix legs)
   # and SHA256SUMS covers the complete set. A missing archive fails the release rather than
   # publishing a partial one: `needs` waits for every build leg, and fail_on_unmatched_files guards
   # the glob.
@@ -104,7 +110,7 @@ jobs:
         run: |
           shopt -s nullglob
           files=(burpsy-*.tar.gz burpsy-*.zip)
-          [ "${#files[@]}" -eq 4 ] || { echo "expected 4 archives, found ${#files[@]}: ${files[*]}"; exit 1; }
+          [ "${#files[@]}" -eq 5 ] || { echo "expected 5 archives, found ${#files[@]}: ${files[*]}"; exit 1; }
           sha256sum "${files[@]}" > SHA256SUMS
           cat SHA256SUMS
 
