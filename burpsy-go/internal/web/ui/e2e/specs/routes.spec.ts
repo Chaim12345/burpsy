@@ -85,12 +85,8 @@ test.describe("routes", () => {
   });
 
   test("a hidden nav leaf is not offered as a Go to entry", async ({ page }) => {
-    // KNOWN PRODUCT DEFECT, found when this suite first ran in CI (bead e2eorph, 2026-10-27).
-    // nav.ts marks the detached exchange window `hidden` because "routable and listed are separate
-    // questions" — listing it would offer "go to another detached window". app.tsx's paletteActions
-    // flat-maps every leaf without that filter, so the palette offers "Proxy › Exchange detail".
-    // test.fail keeps the check running; it goes red, and this marker goes, once the filter lands.
-    test.fail(true, "app.tsx paletteActions lists nav.ts hidden leaves (Proxy › Exchange detail)");
+    // nav.ts marks the detached exchange window `hidden`; the palette used to list it anyway
+    // (fixed in burpsy-react-ui-palette-hidden-leaf), so this runs as a plain assertion.
     await gotoApp(page);
     await page.keyboard.press("ControlOrMeta+k");
     await expect(page.getByLabel("Search commands")).toBeVisible();

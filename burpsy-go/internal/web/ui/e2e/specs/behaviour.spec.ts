@@ -1142,16 +1142,13 @@ test.describe("extender", () => {
  });
 
  test("the Registration points prose agrees with the table under it", async ({ page }) => {
-  // KNOWN PRODUCT DEFECT, found when this suite was first run in CI (bead e2eorph, 2026-10-27):
-  // pages/extensions.tsx still says "Three, and only three" above a table the server now fills
-  // with ten registration points. test.fail keeps the check running: it reports expected-failure
-  // while the defect stands, and turns red the day the prose is fixed, so this marker is removed
-  // then rather than forgotten.
-  test.fail(true, "extensions.tsx Registration points detail says 'Three, and only three' over ten rows");
+  // Was a known defect (the prose said "Three, and only three" over ten rows); fixed in
+  // burpsy-react-ui-ext-points-copy, so this runs as a plain assertion.
   const contract = await page.request.get("/api/extensions/apis").then((response) => response.json());
   await gotoRoute(page, route("extenderapis"));
   const section = page.locator(".section-heading", { hasText: "Registration points" });
   await expect(section).toBeVisible();
-  if (contract.kinds.length !== 3) await expect(section).not.toContainText("Three, and only three");
+  await expect(section).not.toContainText("Three, and only three");
+  await expect(section).toContainText(`${contract.kinds.length} registration point`);
  });
 });

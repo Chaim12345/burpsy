@@ -1027,18 +1027,21 @@ function App(): JSX.Element {
  const requestRepeaterTabSearch = useApp((state) => state.requestRepeaterTabSearch);
  const repeaterTabSearchChord = useChord("repeater.tabSearch");
  const paletteActions = useMemo<PaletteAction[]>(() => {
-  const navigation: PaletteAction[] = TOOLS.flatMap((entry) =>
-   entry.leaves.map((child) => ({
+  // Hidden leaves are routable but not listed (nav.ts): the palette is a list, so it honours the flag
+  // the sidebar does (burpsy-react-ui-palette-hidden-leaf).
+  const navigation: PaletteAction[] = TOOLS.flatMap((entry) => {
+   const listed = entry.leaves.filter((child) => !child.hidden);
+   return listed.map((child) => ({
     id: `go:${child.id}`,
-    label: entry.leaves.length > 1 ? `${entry.label} › ${child.label}` : child.label,
+    label: listed.length > 1 ? `${entry.label} › ${child.label}` : child.label,
     group: "Go to",
     hint: child.description,
     shortcut: entry.hotkey && entryLeaf(entry) === child.id ? `alt+${entry.hotkey}` : undefined,
     keywords: child.description,
     icon: entry.icon,
     run: () => navigate(child.id),
-   })),
-  );
+   }));
+  });
 
   const commands: PaletteAction[] = [
    {
