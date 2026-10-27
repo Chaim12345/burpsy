@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>burpsy — workbench</title>
+<link rel="stylesheet" href="/alt/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<div id="shell">
+  <nav id="rail" aria-label="Workflow">
+    <div class="brand" title="burpsy alternative console (MVP)">
+      <span class="brand-mark">b/</span><span class="brand-word">burpsy</span>
+    </div>
+    <button class="rail-item" data-view="map" title="Map — what do we know">
+      <span class="rail-ico">◎</span><span class="rail-label">Map</span>
+    </button>
+    <button class="rail-item" data-view="probe" title="Probe — poke it and see">
+      <span class="rail-ico">⌖</span><span class="rail-label">Probe</span>
+    </button>
+    <button class="rail-item rail-held" data-view="attack" title="Attack — held in this build" aria-disabled="true">
+      <span class="rail-ico">⚔</span><span class="rail-label">Attack</span><span class="rail-tag">held</span>
+    </button>
+    <button class="rail-item" data-view="prove" title="Prove — the evidence">
+      <span class="rail-ico">✓</span><span class="rail-label">Prove</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <a class="rail-item" href="/legacy" title="The original burpsy console"><span class="rail-ico">&#8617;</span><span class="rail-label">Legacy</span></a>
+    <div id="live-badge" class="live" title="Backend connection">
+      <span class="live-dot"></span><span id="live-text">connecting</span>
+    </div>
+  </nav>
+  <main id="main">
+    <section id="view-map" class="view"></section>
+    <section id="view-probe" class="view"></section>
+    <section id="view-attack" class="view"></section>
+    <section id="view-prove" class="view"></section>
+  </main>
+</div>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+<script type="module" src="/alt/app.js"></script>
+</body>
+</html>
