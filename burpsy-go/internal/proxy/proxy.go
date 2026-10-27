@@ -18,9 +18,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -1273,6 +1275,35 @@ type Server struct {
 	// wsLive is every WebSocket this relay is pumping right now, by handshake exchange, so Repeater
 	// can attach to one (burpsy-react-ui-wuwf). See ws_live.go.
 	wsLive wsLiveRegistry
+
+	// connPanics counts relay goroutines that panicked and were contained by
+	// recoverConnection. See ConnectionPanics.
+	connPanics atomic.Uint64
+}
+
+// ConnectionPanics reports how many client connections ended in a contained panic. Zero is the
+// only healthy value: each one is a parser or relay bug that a peer's bytes reached, logged with its
+// stack when it happened.
+func (s *Server) ConnectionPanics() uint64 { return s.connPanics.Load() }
+
+// recoverConnection is deferred at the root of every client connection's goroutine. Without it, a
+// panic anywhere in the relay — a hostile origin's response reaching a parser bug is the case that
+// prompted this (burpsy-react-ui-negchunk-panic: chunk size "-1" reached make()) — kills the whole
+// process, every other operator's connection and the console with it. Contained, it costs the one
+// connection it happened on: logged with its stack, counted, and the connection closed by the
+// handler's own deferred Close. It is a backstop, not a fix — the parser bug is still a bug.
+func (s *Server) recoverConnection(clientConn net.Conn) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	s.connPanics.Add(1)
+	remote := ""
+	if addr := clientConn.RemoteAddr(); addr != nil {
+		remote = addr.String()
+	}
+	s.config.logger.Error("proxy connection panicked; connection closed",
+		zap.String("client", remote), zap.Any("panic", r), zap.ByteString("stack", debug.Stack()))
 }
 
 // NewServer creates a new proxy server.
@@ -1473,6 +1504,9 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 // what the next connection does and never what a connection already in flight does.
 func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 	defer clientConn.Close()
+	// Deferred after Close so it runs first: the panic is logged and counted, then the
+	// connection closes.
+	defer s.recoverConnection(clientConn)
 
 	// Set keep-alive
 	if tcpConn, ok := clientConn.(*net.TCPConn); ok {
@@ -1840,7 +1874,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				return
 			}
 			completed := time.Now()
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, forwarded.response, startTime, forwarded.firstByte, completed, forwarded.serverIP, requestEdited, downgrade, false, forwarded.note, forwarded.protocol) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, forwarded.response, startTime, forwarded.firstByte, completed, forwarded.serverIP, requestEdited, downgrade, false, forwarded.note, forwarded.protocol) || forwarded.endConn {
 				return
 			}
 			continue
@@ -1872,31 +1906,24 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			}
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
-				var truncated *httputil.TruncatedBodyError
-				if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
+				// The same salvage the plaintext leg has (stream_response.go): a short or
+				// capped body is forwarded rather than dropping the exchange, and its note
+				// travels with the record.
+				salvaged, ok := salvageResponseBody(head, body, err)
+				if !ok {
 					return
 				}
-				if truncated != nil {
-					// The same salvage the plaintext leg has (stream_response.go): a short
-					// Content-Length body forwards close-delimited rather than dropping the
-					// exchange. The truncation note travels with the record.
-					head = httputil.CloseDelimitedHead(head)
-					s.config.logger.Warn("response body truncated by upstream",
-						zap.String("path", path), zap.String("declared", truncated.Declared),
-						zap.Int("received", truncated.Received), zap.Error(err))
-				}
-				responseData := append(head, body...)
-				completed := time.Now()
 				var note *string
-				if truncated != nil {
-					t := "upstream closed the response body short of its declared Content-Length (" +
-						truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
-						"the partial body was forwarded close-delimited"
-					note = &t
+				if salvaged.note != "" {
+					s.config.logger.Warn("response body not forwarded whole",
+						zap.String("path", path), zap.String("note", salvaged.note), zap.Error(err))
+					note = &salvaged.note
 				}
-				// A truncated body leaves the upstream connection's framing unknowable, so
-				// this response ends the keep-alive loop either way.
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
+				responseData := append(salvaged.head, body...)
+				completed := time.Now()
+				// A short or capped body leaves the upstream connection's framing unknowable,
+				// so such a response ends the keep-alive loop either way.
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || salvaged.endConn {
 					return
 				}
 				continue
@@ -1998,32 +2025,26 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		}
 
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
-		var truncated *httputil.TruncatedBodyError
-		if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
+		// Truncation and cap salvage, TLS leg (arch review: the TLS leg kept the old
+		// drop-the-exchange shape after the plaintext leg was fixed). A short body's
+		// declared framing is false, so its head goes out close-delimited; a capped one
+		// is forwarded as far as it was read (burpsy-react-ui-h1-cap-silent). The record
+		// carries exactly what was lost; the upstream connection's framing is unknowable
+		// from here, so the keep-alive loop ends with this response.
+		salvaged, ok := salvageResponseBody(head, body, err)
+		if !ok {
 			return
 		}
-		if truncated != nil {
-			// Truncation salvage, TLS leg (arch review: the TLS leg kept the old
-			// drop-the-exchange shape after the plaintext leg was fixed). The declared
-			// framing is false now, so the head goes out close-delimited and the record
-			// carries exactly what was lost; the upstream connection's framing is
-			// unknowable from here, so the keep-alive loop ends with this response.
-			head = httputil.CloseDelimitedHead(head)
-			s.config.logger.Warn("response body truncated by upstream",
-				zap.String("path", path), zap.String("declared", truncated.Declared),
-				zap.Int("received", truncated.Received), zap.Error(err))
-		}
-		responseData := append(head, body...)
-		completed := time.Now()
 		var note *string
-		if truncated != nil {
-			t := "upstream closed the response body short of its declared Content-Length (" +
-				truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
-				"the partial body was forwarded close-delimited"
-			note = &t
+		if salvaged.note != "" {
+			s.config.logger.Warn("response body not forwarded whole",
+				zap.String("path", path), zap.String("note", salvaged.note), zap.Error(err))
+			note = &salvaged.note
 		}
+		responseData := append(salvaged.head, body...)
+		completed := time.Now()
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || salvaged.endConn {
 			return
 		}
 	}
@@ -3239,14 +3260,12 @@ func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		sizeText := strings.TrimSpace(line)
-		if i := strings.IndexByte(sizeText, ';'); i >= 0 {
-			sizeText = strings.TrimSpace(sizeText[:i])
-		}
-		size, err := strconv.ParseUint(sizeText, 16, 64)
+		// The shared strict parser (httputil.ParseChunkSize): hex digits only, bounded, never signed.
+		parsed, err := httputil.ParseChunkSize(line)
 		if err != nil {
 			return nil, false
 		}
+		size := uint64(parsed)
 		if size == 0 {
 			// The terminal chunk. Trailers, if any, run to the blank line; read and discard them so
 			// the next request on this connection starts at a message boundary.
@@ -3505,14 +3524,17 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 			return
 		}
 		body, err := httputil.ReadResponseBody(br, head)
-		if err != nil {
+		// A short or capped body is forwarded with honest framing; this path returns after the
+		// one response, so the connection ends with it either way.
+		salvaged, ok := salvageResponseBody(head, body, err)
+		if !ok {
 			return
 		}
 		// A response that is not the 101 is an ordinary response — the upgrade was refused — so it
 		// takes the same two steps as the plaintext copy below, in the same order and for the same
 		// reason. The 101 itself is deliberately left alone: rewriting a handshake would break it,
 		// and that is true on this path exactly as it is on the recorded one.
-		resp := s.applyMatchReplace(matchreplace.DirResponse, append(head, body...), host, port, path, false)
+		resp := s.applyMatchReplace(matchreplace.DirResponse, append(salvaged.head, body...), host, port, path, false)
 		clientConn.Write(s.applyResponseRulesUnrecorded(resp))
 		return
 	}
@@ -3536,7 +3558,10 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	//
 	// Unrecorded, hence the counter: nothing here is stored, so the rewrite is real but
 	// invisible in history, and Counters.ModifiedUnrecorded is what makes it accountable.
-	if resp, _, err := readHTTPResponse(upstreamConn); err == nil {
+	// A body cut at the cap is forwarded as far as it was read (readHTTPResponse made its head
+	// honest); this path serves one response, so the connection ends with it.
+	var capped *httputil.BodyCapError
+	if resp, _, err := readHTTPResponse(upstreamConn); err == nil || errors.As(err, &capped) {
 		// Match & Replace first, then the blanket response modification rules — the same order, and
 		// for the same reason, as handleTLSResponse and completeResponse: a Match & Replace rule is
 		// written against the origin's own bytes, and running "remove all JavaScript" first would
@@ -3613,6 +3638,9 @@ type forwardResult struct {
 	firstByte time.Time
 	protocol  core.Protocol
 	note      *string
+	// endConn: the response was forwarded without its own end (a body cut at the cap), so the
+	// client connection it is written to must close after it.
+	endConn bool
 }
 
 func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) (forwardResult, error) {
@@ -3679,6 +3707,12 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 		understand100 = n.Continue.Understand100
 	}
 	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, understand100)
+	// A body cut at the cap is still the answer: forwarded as far as it was read, noted, and the
+	// client connection ended after it (burpsy-react-ui-h1-cap-silent).
+	var capped *httputil.BodyCapError
+	if errors.As(err, &capped) {
+		err = nil
+	}
 	if err == nil {
 		// Same reason as the keep-alive leg: a challenge learned here is what lets the NEXT request
 		// through this proxy authenticate. This path dials a fresh connection each time, so the
@@ -3697,7 +3731,12 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	if err != nil {
 		return forwardResult{serverIP: serverIP}, err
 	}
-	return forwardResult{response: resp, serverIP: serverIP, firstByte: firstByte, protocol: core.ProtocolHTTP1, note: h3Note}, nil
+	result := forwardResult{response: resp, serverIP: serverIP, firstByte: firstByte, protocol: core.ProtocolHTTP1, note: h3Note}
+	if capped != nil {
+		result.note = joinNotes(capSalvageNote(capped), h3Note)
+		result.endConn = true
+	}
+	return result, nil
 }
 
 // h3AttemptTimeout bounds one QUIC attempt. A handshake either completes promptly or the
@@ -3775,8 +3814,12 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 // Content-Length and chunked transfer encoding instead of waiting for EOF
 // (which never comes on a keep-alive connection). It also reports the instant the
 // first response byte arrived, for a caller reporting time-to-first-byte.
+//
+// A body cut at the cap comes back as the response with a *httputil.BodyCapError, its head made
+// honest for forwarding (salvageResponseBody): the caller forwards it, notes it, and ends the
+// connection.
 func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
-	return httputil.ReadHTTPResponseTimed(conn)
+	return readHTTPResponseSkippingInterim(conn, false)
 }
 
 // readHTTPResponseSkippingInterim is readHTTPResponse with the operator's 100-continue handling
@@ -3790,10 +3833,9 @@ func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
 // that answers with interim statuses forever is keeping the connection busy for nothing, and needs a
 // floor rather than a spin. The error names the count, so an operator can tell a misbehaving peer
 // from a slow one.
+//
+// With understand100 off it reads exactly one response, interim or not, which is readHTTPResponse.
 func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte, time.Time, error) {
-	if !understand100 {
-		return readHTTPResponse(conn)
-	}
 	br := bufio.NewReader(conn)
 	firstByte := time.Time{}
 	for interim := 0; ; interim++ {
@@ -3805,13 +3847,22 @@ func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte,
 			firstByte = at
 		}
 		body, err := httputil.ReadResponseBody(br, head)
-		if err != nil {
+		var capped *httputil.BodyCapError
+		if err != nil && !errors.As(err, &capped) {
 			return nil, time.Time{}, err
+		}
+		if capped != nil {
+			// Only a final response has a body to cut (a 1xx carries none), so this is the
+			// answer: forwarded as far as it was read, with the cut reported to the caller.
+			salvaged, _ := salvageResponseBody(head, body, err)
+			raw := make([]byte, 0, len(salvaged.head)+len(body))
+			raw = append(raw, salvaged.head...)
+			return append(raw, body...), firstByte, err
 		}
 		raw := make([]byte, 0, len(head)+len(body))
 		raw = append(raw, head...)
 		raw = append(raw, body...)
-		if !isInterimResponseHead(head) {
+		if !understand100 || !isInterimResponseHead(head) {
 			return raw, firstByte, nil
 		}
 		if interim+1 >= maxInterimResponses {

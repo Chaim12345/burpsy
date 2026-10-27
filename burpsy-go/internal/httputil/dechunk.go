@@ -2,8 +2,6 @@ package httputil
 
 import (
 	"bytes"
-	"strconv"
-	"strings"
 )
 
 // Dechunk collapses a chunked body — `size CRLF data CRLF … 0 CRLF trailer CRLF` — to its data. It
@@ -21,14 +19,11 @@ func Dechunk(body []byte) ([]byte, bool) {
 		if eol < 0 {
 			return nil, false
 		}
-		sizeLine := strings.TrimSpace(string(rest[:eol]))
+		// ParseChunkSize (chunk.go) is the one strict size parser every reader here shares: it drops a
+		// chunk extension (`1a;name=value`) and refuses a sign, a non-hex byte or an overlong size.
+		size, err := ParseChunkSize(string(rest[:eol]))
 		rest = rest[eol+1:]
-		// A chunk extension (`1a;name=value`) is legal and its size is the part before the semicolon.
-		if semi := strings.IndexByte(sizeLine, ';'); semi >= 0 {
-			sizeLine = strings.TrimSpace(sizeLine[:semi])
-		}
-		size, err := strconv.ParseInt(sizeLine, 16, 64)
-		if err != nil || size < 0 {
+		if err != nil {
 			return nil, false
 		}
 		if size == 0 {

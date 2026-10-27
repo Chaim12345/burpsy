@@ -13,6 +13,7 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 # package-dir target — W3's committed list. Add a line when a fuzz target is added.
 targets='httputil FuzzRequestURL
 httputil FuzzDechunk
+httputil FuzzParseChunkSize
 proxy FuzzParseClientHelloALPN
 proxy FuzzAltSvcLearn
 proxy FuzzProxyDechunk

@@ -53,11 +53,16 @@ const maxStreamingBodyBytes = 8 * 1024 * 1024
 // for THAT response — "treat text/event-stream responses as streaming" (burpsy-react-ui-v52t): an
 // event stream on a host nobody declared would otherwise run the ordinary read to its deadline and
 // come back as nothing but an error, losing the head and every event that did arrive.
-func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(head []byte) bool) ([]byte, error) {
+//
+// capped is non-nil when the final response's body passed httputil.MaxResponseBodyBytes and was cut
+// there (burpsy-react-ui-h1-cap-silent): raw is the head as the origin sent it plus the prefix that
+// fit, err is nil, and the caller must put capped.Note() on the record and must not reuse the
+// connection — the unread remainder is still on it.
+func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(head []byte) bool) (raw []byte, capped *httputil.BodyCapError, err error) {
 	for interim := 0; ; interim++ {
 		head, err := httputil.ReadResponseHead(br)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if streaming || (promote != nil && promote(head)) {
@@ -67,7 +72,7 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 			body := drainStreamingBody(br)
 			raw := make([]byte, 0, len(head)+len(body))
 			raw = append(raw, head...)
-			return append(raw, body...), nil
+			return append(raw, body...), nil, nil
 		}
 
 		body, err := httputil.ReadResponseBody(br, head)
@@ -78,21 +83,28 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 			// baselines and replays get what the server actually sent rather
 			// than nothing. The proxy leg marks the same event on the exchange
 			// it records; here the stripped framing is the visible artifact.
+			//
+			// A body cut at the cap keeps its head exactly as the origin sent it: the
+			// record's note says what was cut, and rewriting the framing would put
+			// bytes in the record the origin never sent.
 			var truncated *httputil.TruncatedBodyError
-			if !errors.As(err, &truncated) || len(body) == 0 {
-				return nil, err
+			switch {
+			case errors.As(err, &capped):
+			case errors.As(err, &truncated) && len(body) > 0:
+				head = httputil.CloseDelimitedHead(head)
+			default:
+				return nil, nil, err
 			}
-			head = httputil.CloseDelimitedHead(head)
 		}
 		raw := make([]byte, 0, len(head)+len(body))
 		raw = append(raw, head...)
 		raw = append(raw, body...)
 
 		if !understand100 || !isInterimHead(head) {
-			return raw, nil
+			return raw, capped, nil
 		}
 		if interim+1 >= maxInterimResponses {
-			return raw, fmt.Errorf("peer sent %d interim responses without a final one",
+			return raw, nil, fmt.Errorf("peer sent %d interim responses without a final one",
 				maxInterimResponses)
 		}
 		// A 1xx carries no body (httputil.ReadResponseBody enforces the same rule), so br is

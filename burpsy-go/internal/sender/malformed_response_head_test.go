@@ -14,7 +14,7 @@ import (
 func TestReadResponseReturnsAHeadWithAMalformedHeaderLineWhole(t *testing.T) {
 	raw := "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nSet-Cookie: session=x\r\ninjected: yes\r\n" +
 		"colonless\r\n\r\nhello"
-	resp, err := readResponse(bufio.NewReader(strings.NewReader(raw)), true, false, nil)
+	resp, _, err := readResponse(bufio.NewReader(strings.NewReader(raw)), true, false, nil)
 	if err != nil {
 		t.Fatalf("the response must come back whole, not as an error: %v", err)
 	}
