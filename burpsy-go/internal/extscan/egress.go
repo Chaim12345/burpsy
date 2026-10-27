@@ -118,6 +118,9 @@ func urlPort(u *url.URL, tls bool) uint16 {
 type refusalLog struct {
 	mu     sync.Mutex
 	sample []string
+	// paths are the refused request paths: the gate answers each with its own 403, which a tool
+	// matching 403 would otherwise report as a discovery.
+	paths map[string]bool
 }
 
 func (l *refusalLog) record(line string) {
@@ -126,6 +129,20 @@ func (l *refusalLog) record(line string) {
 	if len(l.sample) < maxRefusalsRecorded {
 		l.sample = append(l.sample, line)
 	}
+	if f := strings.Fields(line); len(f) >= 2 {
+		if u, err := url.Parse(f[1]); err == nil && u.Path != "" {
+			if l.paths == nil {
+				l.paths = map[string]bool{}
+			}
+			l.paths[u.Path] = true
+		}
+	}
+}
+
+func (l *refusalLog) refusedPath(p string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.paths[p]
 }
 
 func (l *refusalLog) snapshot() []string {

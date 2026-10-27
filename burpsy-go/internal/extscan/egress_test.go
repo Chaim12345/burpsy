@@ -2,6 +2,7 @@ package extscan
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -184,5 +185,15 @@ func TestAnHTTPSTargetOnAPartlyScopedHostIsRefusedBeforeLaunch(t *testing.T) {
 	gate.Close()
 	if mode != EgressGatePerAuthority {
 		t.Errorf("mode = %q, want the per-tunnel description", mode)
+	}
+}
+
+func TestARefusedPathIsRememberedPastTheSampleCap(t *testing.T) {
+	var l refusalLog
+	for i := 0; i < maxRefusalsRecorded+5; i++ {
+		l.record(fmt.Sprintf("GET http://h.test/p%d — refused by scope", i))
+	}
+	if !l.refusedPath(fmt.Sprintf("/p%d", maxRefusalsRecorded+4)) || l.refusedPath("/other") {
+		t.Fatal("refusedPath does not reflect what the gate refused")
 	}
 }

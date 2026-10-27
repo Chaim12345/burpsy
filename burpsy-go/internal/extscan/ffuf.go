@@ -199,7 +199,13 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	// The requests are already sent by this point — that is the cost of
 	// delegation, and Authorise is what keeps it bounded — but a result outside
 	// the engagement must not enter a report as though burpsy meant to fetch it.
-	res.Discoveries, res.OutOfScope = filterInScope(scope, target, discoveries)
+	sent := discoveries[:0]
+	for _, d := range discoveries {
+		if !refusals.refusedPath(d.Path) {
+			sent = append(sent, d)
+		}
+	}
+	res.Discoveries, res.OutOfScope = filterInScope(scope, target, sent)
 	res.Outcome = OutcomeCompleted
 	return res
 }

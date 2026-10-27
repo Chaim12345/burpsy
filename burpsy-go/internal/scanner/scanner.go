@@ -130,11 +130,9 @@ type ActiveScanner struct {
 	// cl0Probes holds each endpoint's CL.0 smuggled-prefix result (cl0Result by authority and
 	// path): the smuggling row and "Client-side desync" both read it, and the probe - which can
 	// leave a response on a shared back-end connection - is sent once, not once per row.
-	cl0Probes sync.Map
-	// vhostProbed marks each authority whose Host routing was probed: a host-level property.
-	vhostProbed sync.Map
-	findings    []*Finding
-	findingsMu  sync.RWMutex
+	cl0Probes  sync.Map
+	findings   []*Finding
+	findingsMu sync.RWMutex
 }
 
 // ScanConfig holds scanner configuration: which checks are in the set, and how the session is

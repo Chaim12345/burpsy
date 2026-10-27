@@ -189,9 +189,6 @@ func checkHostHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding
 // an internal name that answers 2xx, unlike both the baseline and that default, twice, is routed
 // somewhere else.
 func hostRoutingFinding(cc *CheckContext, base []byte, authority string, send func([]byte) (ProbeResponse, bool)) []*Finding {
-	if _, seen := cc.Scanner.vhostProbed.LoadOrStore(fmt.Sprint(cc.Exchange.TLS, authority), true); seen {
-		return nil
-	}
 	// Each body has the Host it was sent masked, so a page that merely prints the Host is one page.
 	fetch := func(host string) (int, string, bool) {
 		r, ok := send(withHostHeaders(base, host))
