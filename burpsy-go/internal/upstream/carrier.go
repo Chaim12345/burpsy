@@ -258,19 +258,57 @@ type CarrierSnapshot struct {
 	RemoteResolve bool     `json:"remote_resolve"`
 }
 
-// Snapshot returns the carrier as a value.
+// Snapshot returns the carrier as a value, CREDENTIALS INCLUDED, for the durable store.
+//
+// Socks is the hop's Raw form, not Display: Snapshot used to be built from Configured, which renders
+// the redacted Display form, so a carrier saved as socks5://user:pw@host came back from disk as a hop
+// whose username was the literal "***" and whose password was gone — configured on screen, failing
+// authentication on the wire, and no error anywhere (burpsy-react-ui-carrier-creds-lost). The same
+// contract as Policy.Snapshot and Proxy.Raw applies: the only caller is the durable store, and the
+// value must never reach a log line, an error, an encoder or a response. Configured stays redacted
+// and is what the panel and logs read.
 func (c *Carrier) Snapshot() CarrierSnapshot {
-	proxy, bypass, remote, _ := c.Configured()
-	return CarrierSnapshot{Socks: proxy, Bypass: bypass, RemoteResolve: remote}
+	if c == nil {
+		return CarrierSnapshot{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.socks == nil {
+		return CarrierSnapshot{}
+	}
+	bypass := make([]string, 0, len(c.bypass))
+	for _, rule := range c.bypass {
+		bypass = append(bypass, rule.Pattern)
+	}
+	return CarrierSnapshot{Socks: c.socks.Raw(), Bypass: bypass, RemoteResolve: c.remoteResolve}
 }
 
-// Restore installs a persisted snapshot.
+// redactedUserinfo is the placeholder Display writes in place of a hop's credentials ("***@").
+const redactedUserinfo = "***"
+
+// Restore installs a persisted snapshot, and reports whether it had to drop credentials to do so.
 //
 // A refusal is returned rather than swallowed, and the caller decides: a carrier that could not be
 // restored is a dial path that will go direct, and the operator has to be told rather than discover it
 // as a connection that stopped being carried.
-func (c *Carrier) Restore(snap CarrierSnapshot) error {
-	return c.SetSocks(snap.Socks, snap.Bypass, snap.RemoteResolve)
+//
+// # Rows written before the carrier persisted its Raw form
+//
+// Those rows hold the redacted Display form, "socks5://***@host:port": the credentials were never
+// written, so they cannot be recovered. Restoring that string verbatim would install a hop that
+// authenticates as a user literally named "***" — a working-looking credential nobody configured. The
+// placeholder is recognised (username exactly "***", no password) and the hop is restored WITHOUT
+// credentials, with credentialsDropped true so the caller warns the operator to re-enter them. The
+// hop itself is kept: dropping the whole carrier would send traffic direct, which is the outcome an
+// operator who configured a hop asked not to have.
+func (c *Carrier) Restore(snap CarrierSnapshot) (credentialsDropped bool, err error) {
+	raw := strings.TrimSpace(snap.Socks)
+	if proxy, perr := Parse(raw); perr == nil && proxy.user == redactedUserinfo && proxy.pass == "" {
+		proxy.user = ""
+		raw = proxy.Raw()
+		credentialsDropped = true
+	}
+	return credentialsDropped, c.SetSocks(raw, snap.Bypass, snap.RemoteResolve)
 }
 
 // Freeze returns the carrier's configuration at this instant as a carrier no later SetSocks on c

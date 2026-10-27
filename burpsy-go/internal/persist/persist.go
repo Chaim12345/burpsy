@@ -2988,8 +2988,18 @@ func (s *Store) LoadUpstreamCarrier(carrier *upstream.Carrier) (bool, error) {
 	if snap.Socks == "" {
 		return false, nil
 	}
-	if err := carrier.Restore(snap); err != nil {
+	dropped, err := carrier.Restore(snap)
+	if err != nil {
 		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	if dropped {
+		// A row from before the carrier persisted its Raw form: it holds the redacted "***@"
+		// placeholder, not the credentials, so they are gone. The hop is restored without them
+		// rather than as a user literally named "***", and the operator is told to re-enter them.
+		// The row is left as it is, so the warning repeats on every start until they do.
+		s.note("upstream carrier", errors.New("the saved SOCKS carrier predates credential persistence "+
+			"and holds only a redacted placeholder; it was restored WITHOUT credentials — re-enter the "+
+			"SOCKS username and password in Settings → Network"))
 	}
 	return true, nil
 }
