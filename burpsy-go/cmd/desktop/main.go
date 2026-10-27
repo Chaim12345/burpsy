@@ -268,11 +268,7 @@ func main() {
 	// the console refuses any Host it was not bound to on EVERY method, reads included
 	// (burpsy-react-ui-rebind-read). This handler only ever carries the in-process webview's
 	// requests, so it forwards them as what they are: requests for the bound console.
-	direct := proxyHandler.Director
-	proxyHandler.Director = func(r *http.Request) {
-		direct(r)
-		r.Host = target.Host
-	}
+	proxyHandler.Director = consoleDirector(proxyHandler.Director, target.Host)
 
 	err = wails.Run(&options.App{
 		Title:  "burpsy",
@@ -290,5 +286,30 @@ func main() {
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// webviewOrigins are the origins the wails webview's own pages send: wails:// on macOS/Linux,
+// http(s)://wails.localhost on Windows (WebView2).
+var webviewOrigins = map[string]bool{
+	"wails://wails":           true,
+	"wails://wails.localhost": true,
+	"http://wails.localhost":  true,
+	"https://wails.localhost": true,
+}
+
+// consoleDirector forwards the webview's requests as requests for the bound console. The console
+// refuses any Host it was not bound to on every method (burpsy-react-ui-rebind-read), and on a
+// POST/PUT/PATCH/DELETE it also refuses an Origin that does not match the Host — which the webview's
+// own origin never does, so every write from the desktop window was refused
+// (burpsy-react-ui-desktop-origin). Only the webview's known origins are rewritten: anything else
+// is passed through for the console to judge, so this handler never launders a foreign origin.
+func consoleDirector(direct func(*http.Request), consoleHost string) func(*http.Request) {
+	return func(r *http.Request) {
+		direct(r)
+		r.Host = consoleHost
+		if webviewOrigins[r.Header.Get("Origin")] {
+			r.Header.Set("Origin", "http://"+consoleHost)
+		}
 	}
 }
