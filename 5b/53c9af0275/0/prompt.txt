@@ -1,0 +1,2 @@
+Stop hook feedback:
+[~/.claude/stop-hook-git-check.sh]: There are 8 unpushed commit(s) on branch 'ccr-bca3d2a2-umg0e3'. Please push these changes to the remote repository.
