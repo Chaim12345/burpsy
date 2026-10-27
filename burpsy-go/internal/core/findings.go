@@ -407,6 +407,9 @@ type FindingStore struct {
 	// with the finding's id, must not call back into the store, and must not fail the in-memory
 	// delete — memory is authoritative, SQLite is durable backup.
 	onDelete func(id uint64)
+	// gate is the owning process's outer lock for every method that calls onAdd or onDelete (see
+	// CaptureGate), taken before fs.mu.
+	gate captureGateSlot
 
 	// consolidation is the operator's action on a collision (burpsy-react-ui-oorl); the zero value
 	// resolves to keep_existing. tally and tallyByTask count what each collision became.
@@ -538,6 +541,7 @@ func dedupPath(path string) string {
 // describe the issue class and the moment it was first seen, and rewriting them on each merge would
 // make a finding's text depend on scan order.
 func (fs *FindingStore) Add(finding NewFinding) uint64 {
+	defer fs.gate.enter()()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -686,6 +690,10 @@ func (fs *FindingStore) SetPersistenceSink(onAdd func(f *Finding)) {
 	fs.onAdd = onAdd
 }
 
+// SetCaptureGate installs the outer lock taken around every method that calls a persistence sink —
+// Add, Triage, Delete, Clear — before fs.mu. See CaptureGate. nil removes it.
+func (fs *FindingStore) SetCaptureGate(g CaptureGate) { fs.gate.set(g) }
+
 // SetDeleteSink installs the hook called after a finding is removed, or nil to remove it. Single
 // slot, like SetPersistenceSink. The durable mirror needs this to drop the row — without it a
 // deleted finding walks back in on the next restart, reading its row out of SQLite.
@@ -700,6 +708,7 @@ func (fs *FindingStore) SetDeleteSink(onDelete func(id uint64)) {
 // false when no finding carries that id — a stale row on the operator's screen, which the API
 // surfaces as 404 rather than silently writing nothing.
 func (fs *FindingStore) Triage(id uint64, mutate func(f *Finding)) bool {
+	defer fs.gate.enter()()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	f := fs.byIDLocked(id)
@@ -781,6 +790,7 @@ func (fs *FindingStore) Count() int {
 
 // Delete removes a finding by ID.
 func (fs *FindingStore) Delete(id uint64) bool {
+	defer fs.gate.enter()()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
@@ -808,6 +818,7 @@ func (fs *FindingStore) Delete(id uint64) bool {
 // Clear removes all findings. Each removed id goes through the delete sink so the durable mirror
 // empties with the memory — the sink is nil-able because a zero-value store is usable without one.
 func (fs *FindingStore) Clear() {
+	defer fs.gate.enter()()
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if fs.onDelete != nil {

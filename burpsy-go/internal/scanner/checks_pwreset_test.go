@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
 )
@@ -72,7 +73,7 @@ func TestPasswordResetRowsPerVariant(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			t.Parallel()
 			if e.DOM && !rt.chrome {
-				t.Skip("no Chrome on PATH: this browser-observed variant is NOT exercised in this run")
+				domexectest.Skip(t, "no Chrome on PATH: this browser-observed variant is untested")
 			}
 			got := rt.findingsFor(t, e.Path, e.DOM)
 			if onlyAbsent {

@@ -87,7 +87,7 @@ func Test_the_pause_before_retry_is_waited_and_stoppable(t *testing.T) {
 	plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
 	atk := NewAttack(base, pts[:1], sets([]string{"slow"}), plan).
 		WithLimits(Unthrottled(1)).
-		WithRetries(1, 120*time.Millisecond).
+		WithRetries(1, 30*time.Second).
 		WithControl(NewControl())
 
 	// Stop the attack the moment its first send fails — the pause that follows must be cut
@@ -101,8 +101,10 @@ func Test_the_pause_before_retry_is_waited_and_stoppable(t *testing.T) {
 	report := Run(atk, send, nil)
 	elapsed := time.Since(started)
 
-	if elapsed >= 120*time.Millisecond {
-		t.Fatalf("a stopped attack must not sleep the full retry pause, took %v", elapsed)
+	// A 30s pause against a 10s bound: the stop must cut the sleep short, and a loaded runner (or
+	// -race) cannot make a correct run look like a full sleep (burpsy-react-ui-timing-bounds).
+	if elapsed >= 10*time.Second {
+		t.Fatalf("a stopped attack must not sleep the full 30s retry pause, took %v", elapsed)
 	}
 	if report.RetriesUsed != 0 {
 		t.Fatalf("a stop during the pause wins over the retry, got %d retries", report.RetriesUsed)

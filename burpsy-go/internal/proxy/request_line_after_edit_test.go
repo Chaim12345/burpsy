@@ -74,9 +74,19 @@ func editTargetProxyWith(t *testing.T, scope *core.Scope, options *Options, from
 		}
 	}()
 
+	// The operator stops with the test (not after a fixed deadline), so no loop outlives it for
+	// goleak to find when a narrow -run selection finishes in milliseconds.
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(stop); <-stopped })
 	go func() {
+		defer close(stopped)
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			for _, held := range engine.Held() {
 				if held.Direction != intercept.DirectionRequest {
 					continue

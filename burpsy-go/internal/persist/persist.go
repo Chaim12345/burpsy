@@ -15,6 +15,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,6 +85,9 @@ func (s *Store) SetProjectName(name string) error {
 // Open opens (creating if necessary) the database at path and ensures the
 // schema exists. Pass a logger for mirror-write diagnostics.
 func Open(path string, logger *zap.Logger) (*Store, error) {
+	if err := ownerOnlyDatabase(path, logger); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
@@ -142,10 +147,70 @@ func (s *Store) Backup(dest string) error {
 	if dest == "" {
 		return errors.New("backup destination is empty")
 	}
+	// A snapshot is the whole project — every captured cookie and token — so it is created owner-only
+	// (burpsy-react-ui-data-at-rest-perms) rather than with SQLite's 0644. VACUUM INTO accepts an
+	// existing EMPTY file, so the destination is made here with 0600 and SQLite fills it. O_EXCL keeps
+	// the no-overwrite rule above with VACUUM INTO, which refuses a non-empty destination itself.
+	created := false
+	if f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, ownerOnlyFile); err == nil {
+		_ = f.Close()
+		created = true
+	}
 	// The parameter is bound rather than interpolated. VACUUM INTO takes an expression, so a bound
 	// value works, and a path is operator input — it arrives from a schedule's params.
 	if _, err := s.db.Exec(`VACUUM INTO ?`, dest); err != nil {
+		if created {
+			// The empty file is ours; leaving it would make the next attempt at this name look like
+			// a backup that exists.
+			_ = os.Remove(dest)
+		}
 		return fmt.Errorf("backup to %s: %w", dest, err)
+	}
+	return nil
+}
+
+// ownerOnlyFile is the mode every file holding captured traffic is created with: the operator's own
+// account and nobody else's. A project database holds every request and response burpsy recorded —
+// session cookies, bearer tokens, credentials typed into a target — and a 0644 file in a home
+// directory hands all of it to every other local account.
+const ownerOnlyFile os.FileMode = 0o600
+
+// ownerOnlyDatabase makes the database at path, and its -wal and -shm companions, owner-only before
+// SQLite opens it (burpsy-react-ui-data-at-rest-perms).
+//
+// A missing database is created here, empty, with 0600: an empty file is a valid empty SQLite
+// database, and SQLite creates the -wal and -shm files with the MAIN file's permissions (unix VFS,
+// findCreateFileMode), so the mode set here is the mode all three get. Left to itself SQLite would
+// create the main file 0644 under the usual umask.
+//
+// An existing database is tightened if group or other can reach it, so a project created by an
+// earlier build stops being world-readable on its next open rather than staying exposed forever. A
+// chmod that fails (a file this account does not own, a filesystem without modes) is logged, not
+// fatal: the operator can still open their project, and the log says what was not done.
+//
+// A path SQLite reads as something other than a file (":memory:", a "file:" URI) is left alone.
+func ownerOnlyDatabase(path string, logger *zap.Logger) error {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, ownerOnlyFile)
+	if err == nil {
+		return f.Close()
+	}
+	if !errors.Is(err, os.ErrExist) {
+		// Not ours to diagnose: sql.Open / the first query reports the real reason (a missing
+		// directory, a read-only filesystem) in the words the caller already handles.
+		return nil
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		info, serr := os.Stat(p)
+		if serr != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 == 0 {
+			continue
+		}
+		if cerr := os.Chmod(p, info.Mode().Perm()&0o700); cerr != nil && logger != nil {
+			logger.Warn("project file is readable by other accounts and could not be made owner-only",
+				zap.String("path", p), zap.Error(cerr))
+		}
 	}
 	return nil
 }
@@ -2614,19 +2679,56 @@ func (s *Store) SaveScanConfig(cfg scanner.ScanConfig) error {
 	return s.setSetting("scanconfig.overrides", string(encoded))
 }
 
-// LoadScanConfig restores the persisted overrides. Absence of state yields a nil config and no
-// error — an old database simply means "use NewActiveScanner's defaults", and a nil lets the
-// caller skip the apply instead of clobbering those defaults with a zero struct.
-func (s *Store) LoadScanConfig() (*scanner.ScanConfig, error) {
+// LoadScanConfig restores the persisted overrides ON TOP OF base, which is the configuration the
+// caller would run with had nothing been saved (the launch defaults). Absence of state yields a nil
+// config and no error, so the caller keeps base as it is.
+//
+// # Why the document is decoded onto base, not onto a zero ScanConfig
+//
+// The stored document is json.Marshal(ScanConfig): the Go field names are the keys. A project saved
+// by an older build has no key for a switch added (or flipped to default-on) since, and decoding
+// into &ScanConfig{} turned every such switch into Go's zero value — so a check that defaults ON
+// came back OFF for no reason the operator could see (burpsy-react-ui-scanconfig-persist-format).
+// encoding/json leaves a field whose key is absent untouched, so decoding onto a copy of base keeps
+// the launch default for exactly the keys the document does not mention, and the saved value for
+// every key it does.
+//
+// A key the current struct no longer has (a renamed or removed field) is ignored, as encoding/json
+// does for any unknown key: the renamed field keeps base's value. A document that does not decode
+// (malformed, or a key holding the wrong JSON type) is an error and yields nil, never a partially
+// applied config — the caller then runs on base and says so.
+//
+// The fields tagged json:"-" (SecondIdentity's credentials, the DNS resolver) are never stored, so
+// they always come from base.
+//
+// The stored keys stay the Go field names rather than the snake_case wire view of
+// /api/scanner/config: that view does not carry every ScanConfig field (CustomPayloads, IssueTypes,
+// PendingDeadline, DisableGraphQLIngest and several check switches), so storing it would drop
+// state that is saved today.
+func (s *Store) LoadScanConfig(base scanner.ScanConfig) (*scanner.ScanConfig, error) {
 	v, err := s.getSetting("scanconfig.overrides")
 	if err != nil || v == "" {
 		return nil, err
 	}
-	cfg := &scanner.ScanConfig{}
-	if err := json.Unmarshal([]byte(v), cfg); err != nil {
+	cfg := unaliasScanConfig(base)
+	if err := json.Unmarshal([]byte(v), &cfg); err != nil {
 		return nil, err
 	}
-	return cfg, nil
+	return &cfg, nil
+}
+
+// unaliasScanConfig gives c fresh copies of every slice it holds. encoding/json decodes a JSON array
+// into a non-nil slice by truncating it and appending, which writes through the caller's backing
+// array: without this, loading a project could rewrite the caller's baseline in place.
+// TestUnaliasScanConfigCoversEverySliceField fails when a slice or map field is added and not
+// handled here.
+func unaliasScanConfig(c scanner.ScanConfig) scanner.ScanConfig {
+	c.XSSBrowserTargets = slices.Clone(c.XSSBrowserTargets)
+	c.ResetTestIdentities = slices.Clone(c.ResetTestIdentities)
+	c.CustomPayloads = slices.Clone(c.CustomPayloads)
+	c.IssueTypes = slices.Clone(c.IssueTypes)
+	c.OnlyRows = slices.Clone(c.OnlyRows)
+	return c
 }
 
 // SaveProxyOptions persists the proxy response-modification switches as one settings value.
@@ -2950,8 +3052,18 @@ func (s *Store) LoadUpstreamCarrier(carrier *upstream.Carrier) (bool, error) {
 	if snap.Socks == "" {
 		return false, nil
 	}
-	if err := carrier.Restore(snap); err != nil {
+	dropped, err := carrier.Restore(snap)
+	if err != nil {
 		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	if dropped {
+		// A row from before the carrier persisted its Raw form: it holds the redacted "***@"
+		// placeholder, not the credentials, so they are gone. The hop is restored without them
+		// rather than as a user literally named "***", and the operator is told to re-enter them.
+		// The row is left as it is, so the warning repeats on every start until they do.
+		s.note("upstream carrier", errors.New("the saved SOCKS carrier predates credential persistence "+
+			"and holds only a redacted placeholder; it was restored WITHOUT credentials — re-enter the "+
+			"SOCKS username and password in Settings → Network"))
 	}
 	return true, nil
 }

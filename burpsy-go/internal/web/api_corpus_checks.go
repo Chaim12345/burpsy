@@ -86,10 +86,11 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 	// The corpus rows come from the loader. A scanner built without WithCorpusChecks has no corpus:
 	// nil is the supported state and the leaf reports the buckets it does know rather than a list
 	// nothing could ever have loaded.
-	var corpus []*bcheck.Check
+	var corpus, bundledChecks []*bcheck.Check
 	var disabled map[string]bool
 	if s.wiredScanner() != nil {
 		corpus = s.wiredScanner().CorpusChecks()
+		bundledChecks = s.wiredScanner().BundledChecks()
 		disabled = s.wiredScanner().DisabledChecks()
 	}
 
@@ -131,6 +132,22 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 
+	// The compiled-in corpus the engine dispatches beside the loaded one (0vzb.27): listed so a check
+	// that runs in every audit can be seen and switched off. Read-only: its source is the binary's.
+	for _, c := range bundledChecks {
+		row := corpusCheckView{
+			Name:        c.Name,
+			Active:      true,
+			Loaded:      true,
+			Disabled:    disabled[c.Name],
+			Severity:    c.Metadata.Severity,
+			Author:      c.Metadata.Author,
+			Description: c.Metadata.Description,
+			Origin:      "bundled",
+		}
+		rows = append(rows, row)
+	}
+
 	// Passive checks are this scanner's own set, not the corpus the ActiveScanner holds — but the
 	// leaf is where an operator sees what is loaded, and a passive check that will run on every
 	// response is as much a "custom scan check" as an active one. Carried from the same loader's
@@ -151,9 +168,9 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"enabled":       passiveLoaded > 0 || len(corpus) > 0,
+		"enabled":       passiveLoaded > 0 || len(corpus)+len(bundledChecks) > 0,
 		"passive_count": passiveLoaded,
-		"active_count":  len(corpus),
+		"active_count":  len(corpus) + len(bundledChecks),
 		"checks":        rows,
 	})
 }
@@ -191,7 +208,7 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 	// The name is checked against the corpus BEFORE anything is recorded, so a disable that names
 	// nothing is refused here rather than taking effect silently later.
 	found := false
-	for _, c := range s.wiredScanner().CorpusChecks() {
+	for _, c := range append(s.wiredScanner().CorpusChecks(), s.wiredScanner().BundledChecks()...) {
 		if c.Name == body.Name {
 			found = true
 			break

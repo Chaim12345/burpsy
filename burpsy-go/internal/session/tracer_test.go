@@ -15,6 +15,7 @@ package session
 //   - the ring is bounded: 200 entries, oldest dropped, so "only use while troubleshooting"
 //     stays honest over a long engagement.
 import (
+	"fmt"
 	"testing"
 )
 
@@ -87,19 +88,26 @@ func TestDisablingKeepsTheRecordedEntries(t *testing.T) {
 	}
 }
 
-func TestTheRingIsBoundedAndNewestWins(t *testing.T) {
-	t.Skip("exercising 200 handled requests through HandleRecovery needs a rule matching every host; the ring's bound is asserted structurally by traceRingCap and the snapshot ordering below")
-}
-
+// The ring is bounded and the newest entries win: after traceRingCap+20 writes the snapshot holds
+// exactly the last traceRingCap of them, oldest first. (A skipped stub of this name used to claim
+// the property without testing it; each entry now carries its write index, so which ones survived
+// and in what order is checked by identity, not inferred from timestamps that can tie.)
 func TestSnapshotIsOrderedOldestFirst(t *testing.T) {
 	tr := &traceRing{}
 	tr.setEnabled(true)
-	for i := 0; i < traceRingCap+20; i++ {
-		tr.record(TraceEntry{Host: "h", Path: "/p", Rule: string(rune('a'+i%26)) + "-rule"})
+	const extra = 20
+	for i := 0; i < traceRingCap+extra; i++ {
+		tr.record(TraceEntry{Host: "h", Path: fmt.Sprintf("/p%d", i), Rule: string(rune('a'+i%26)) + "-rule"})
 	}
 	got := tr.snapshot()
 	if len(got) != traceRingCap {
 		t.Fatalf("snapshot = %d entries, want the ring bound %d", len(got), traceRingCap)
+	}
+	for i, e := range got {
+		if want := fmt.Sprintf("/p%d", i+extra); e.Path != want {
+			t.Fatalf("snapshot[%d] = %s, want %s: the ring must keep the newest %d writes, oldest first",
+				i, e.Path, want, traceRingCap)
+		}
 	}
 	// After wrapping, the oldest surviving entry is the 21st written; every snapshot read after
 	// another wrap must stay ordered oldest-first.

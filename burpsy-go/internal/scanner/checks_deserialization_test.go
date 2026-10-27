@@ -192,7 +192,7 @@ func TestDeserializationPlans(t *testing.T) {
 		"b":      "Jackson polymorphic JSON (@class)/base64",
 		"t":      "fastjson polymorphic JSON (@type)/text",
 		"prefs":  "Jackson polymorphic JSON (@class)/base64,unsigned JSON state/base64",
-		"opaque": "Java object stream/base64,PHP serialize()/base64,PHP serialize()/text,Python pickle/base64,Jackson polymorphic JSON (@class)/base64,unsigned JSON state/base64",
+		"opaque": "Java object stream/base64,PHP serialize()/base64,PHP serialize()/text,Python pickle/base64,Ruby Marshal/base64,Jackson polymorphic JSON (@class)/base64,unsigned JSON state/base64",
 	}
 	for name, w := range want {
 		if g := strings.Join(got[name], ","); g != w {

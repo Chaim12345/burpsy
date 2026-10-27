@@ -6,14 +6,23 @@
 //
 // This suite is no longer the UI gate — the live browser pass is (`ui-live.sh` plus
 // burpsy-go/docs/UI-VERIFICATION.md). What it still is, and why it is kept: the screenshot artifacts,
-// and a second, differently-shaped opinion on the console. verify.sh skips it deliberately; run it
-// when you want either of those.
+// and a second, differently-shaped opinion on the console. verify.sh skips it deliberately; CI runs
+// it nightly (.github/workflows/nightly.yml, job e2e-ui), so drift shows up within a day instead of
+// accumulating unseen (bead e2eorph found 26 failing tests the first time it ran there). The two-spec
+// UAT subset (playwright.uat.config.ts, specs-uat/) is the one that runs on every change.
 //
 // The suite drives a real burpsy-go — built, started and seeded with real proxy traffic by
 // harness/global-setup.ts. There is no mock server and no fixture JSON: a console asserted against
 // invented data proves the console can render invented data.
 
 import { defineConfig, devices } from "@playwright/test";
+
+// The same two switches as playwright.uat.config.ts, under the same names so one environment serves
+// both configs: BURPSY_UAT_CHROME points at a Chromium other than the revision this Playwright
+// pins (a machine with a preinstalled browser), BURPSY_UAT_NO_SANDBOX=1 is what CI runners need to
+// start it (nightly.yml's e2e-ui job sets it, as go.yml's uat-ui job does).
+const executablePath = process.env.BURPSY_UAT_CHROME || undefined;
+const args = process.env.BURPSY_UAT_NO_SANDBOX ? ["--no-sandbox", "--disable-dev-shm-usage"] : [];
 
 export default defineConfig({
   testDir: "./specs",
@@ -50,5 +59,14 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1440, height: 900 },
+        launchOptions: { executablePath, args, timeout: 60_000 },
+      },
+    },
+  ],
 });

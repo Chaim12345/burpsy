@@ -40,19 +40,27 @@ import (
 //     rule list reduced to the resolved rule would answer isHTTPProxyAddr differently for a
 //     target that is itself a configured proxy. wrap answers from the same snapshot, so the
 //     gate and the consumed policy cannot disagree about the instant they describe.
-//   - cert is the store's answer pointer at capture, replayed by frozenCerts. In-tree
-//     bindings are immutable once loaded (LoadClientCert builds a fresh tls.Certificate;
-//     Add/Remove/ReplaceWith swap entries, never edit one), so the pointer cannot change
-//     under the stamp; an embedder that mutates a tls.Certificate in place after binding it
-//     would desync presentation from stamp and is outside what the freeze can see.
+//   - cert is a copy of the store's answer at capture (frozenCert), replayed by frozenCerts,
+//     and the stamp hashes that copy. In-tree bindings are immutable once loaded
+//     (LoadClientCert builds a fresh tls.Certificate; Add/Remove/ReplaceWith swap entries,
+//     never edit one); the copy is what keeps an embedder that reassigns a bound
+//     tls.Certificate's fields in place from desyncing presentation from stamp. Writes INTO a
+//     DER buffer or a key object remain outside what any freeze short of a deep key copy sees.
+//   - carrier is a frozen copy of the global SOCKS layer's configuration at capture
+//     (upstream.Carrier.Freeze), not the live holder. The holder is edited IN PLACE — the
+//     operator's /api/network/proxy edit is Carrier.SetSocks on the one instance every surface
+//     shares — so the pointer and the generation never move on an edit, and a stamp that named
+//     the carrier only through them let a connection dialled direct answer sends made after
+//     the operator configured a hop. The stamp therefore names the carrier's own identity, and
+//     the dial consumes the copy that identity was read from.
 //   - fingerprint is the resolved ClientHello fingerprint at capture (63pf): a dial input
 //     outside the settings generation's reach, populated only at construction in-tree, but
 //     freezable for one read, so it rides the identity rather than being re-read at dial
 //     time.
 //
 // The stamp is in-memory only — pooled connections and h2 sessions carry it, nothing logs,
-// encodes or dumps it — so the rule's Raw form (credentials included, per the persistence
-// contract) never leaves the process through it.
+// encodes or dumps it — so the rule's and the carrier hop's Raw forms (credentials included,
+// per the persistence contract) never leave the process through it.
 type dialIdentity struct {
 	// gen is the network-settings generation at capture, read under s.mu with the carrier
 	// and the config: WithUpstreamCarrier writes the pointer and bumps the generation inside
@@ -73,7 +81,8 @@ type dialIdentity struct {
 	// after capture cannot tear the gate from the route, because both describe the capture
 	// instant; the next dial decision recaptures.
 	wrap bool
-	// carrier is the global SOCKS layer in force at capture.
+	// carrier is the global SOCKS layer's configuration at capture, frozen — see the type note.
+	// Nil exactly when the sender holds no carrier, so the wrap gate reads as it always did.
 	carrier *upstream.Carrier
 	// cert is the client certificate the handshake presents — see the type note for the
 	// in-place-mutation boundary. Nil presents none, which is also what a nil store meant at
@@ -82,9 +91,11 @@ type dialIdentity struct {
 	// fingerprint is the resolved ClientHello fingerprint at capture.
 	fingerprint alpn.Fingerprint
 	// route is the reuse stamp: the generation, the frozen rule FOR THE DIALLED ADDRESS,
-	// the frozen certificate's leaf hash, and the fingerprint — the o388 shape with the
-	// generation prepended and the fingerprint appended, and with the rule resolved for the
-	// dialled address rather than the original host (the dial's own lookup key).
+	// the frozen certificate's leaf hash, the frozen carrier's identity and the fingerprint —
+	// the o388 shape with the generation prepended and the fingerprint appended, and with the
+	// rule resolved for the dialled address rather than the original host (the dial's own
+	// lookup key). The generation is what covers the settings-borne dial inputs — resolver,
+	// dial-address override, timeouts and TLS policy — because every write to s.net bumps it.
 	route string
 }
 
@@ -107,20 +118,14 @@ func (id dialIdentity) certSource() alpn.ClientCertSource {
 	return frozenCerts{cert: id.cert}
 }
 
-// certAnswer reads the client-certificate answer for host from cfg and renders its stamp
-// suffix: nothing when the question is never asked, a bare separator when it is asked and the
-// answer is "none", or the binding's leading-bytes hash. Capture and take re-evaluation share
-// it so both pin the same answer in the same form.
-func certAnswer(cfg *SenderConfig, host string, useTLS bool) (*tls.Certificate, string) {
+// certAnswer reads the client-certificate answer for host from cfg, and whether the question is
+// asked at all. Capture and take re-evaluation share it, and both render it with certSuffix, so
+// both pin the same answer in the same form.
+func certAnswer(cfg *SenderConfig, host string, useTLS bool) (*tls.Certificate, bool) {
 	if !useTLS || cfg == nil || cfg.ClientCerts == nil {
-		return nil, ""
+		return nil, false
 	}
-	cert := cfg.ClientCerts.For(host)
-	if cert == nil || len(cert.Certificate) == 0 {
-		return cert, "\x00"
-	}
-	sum := sha256.Sum256(cert.Certificate[0])
-	return cert, "\x00" + hex.EncodeToString(sum[:8])
+	return cfg.ClientCerts.For(host), true
 }
 
 // fingerprintAnswer is the client-fingerprint answer for host, shared by capture and take
@@ -134,8 +139,37 @@ func fingerprintAnswer(cfg *SenderConfig, host string, useTLS bool) alpn.Fingerp
 
 // routeStamp assembles the fingerprint both sides of a pool exchange compare. One assembler
 // keeps the dial-time capture and the take-time re-evaluation byte-identical in form.
-func routeStamp(gen uint64, route string, fp alpn.Fingerprint) string {
-	return strconv.FormatUint(gen, 10) + "\x00" + route + "\x00" + string(fp)
+func routeStamp(gen uint64, route, carrier string, fp alpn.Fingerprint) string {
+	return strconv.FormatUint(gen, 10) + "\x00" + route + "\x00" + carrier + "\x00" + string(fp)
+}
+
+// frozenCert copies the binding the handshake will present, so the bytes the stamp hashes and
+// the certificate the dialer later hands to crypto/tls are one value even if the store's entry
+// is edited in place after capture. In-tree bindings are never edited (LoadClientCert builds a
+// fresh tls.Certificate; the store swaps entries), so this only closes the embedder case the
+// type note names. The chain's outer slice is copied, the DER bytes and the key are shared:
+// a write INTO a DER buffer or a key object is not seen, and is not something any binding API
+// offers.
+func frozenCert(cert *tls.Certificate) *tls.Certificate {
+	if cert == nil {
+		return nil
+	}
+	c := *cert
+	c.Certificate = append([][]byte(nil), cert.Certificate...)
+	return &c
+}
+
+// certSuffix renders the stamp suffix for a certificate answer already read: nothing when the
+// question is never asked, a bare separator for "none", or the leaf's leading-bytes hash.
+func certSuffix(cert *tls.Certificate, asked bool) string {
+	if !asked {
+		return ""
+	}
+	if cert == nil || len(cert.Certificate) == 0 {
+		return "\x00"
+	}
+	sum := sha256.Sum256(cert.Certificate[0])
+	return "\x00" + hex.EncodeToString(sum[:8])
 }
 
 // routeForDialAddr re-evaluates, under the configuration live right now, the stamp a
@@ -150,15 +184,19 @@ func (s *Sender) routeForDialAddr(host string, useTLS bool) func(dialAddr string
 	s.mu.RLock()
 	gen := s.netGen
 	cfg := s.config
+	carrier := s.carrier
 	s.mu.RUnlock()
-	_, suffix := certAnswer(cfg, host, useTLS)
+	suffix := certSuffix(certAnswer(cfg, host, useTLS))
 	fp := fingerprintAnswer(cfg, host, useTLS)
+	// The carrier is read live, like the policy: an in-place edit since the dial must make the
+	// candidate's stamp disagree. Unconfigured reads as "" without allocating.
+	carried := carrier.Identity()
 	return func(dialAddr string) string {
 		route := "direct"
 		if s.upstream != nil {
 			route = s.upstream.ForAddr(dialAddr).Raw()
 		}
-		return routeStamp(gen, route+suffix, fp)
+		return routeStamp(gen, route+suffix, carried, fp)
 	}
 }
 
@@ -174,9 +212,14 @@ func (s *Sender) captureDialIdentity(ctx context.Context, host string, port uint
 	// RLock so the snapshot the stamp and the dial are built from can never straddle a
 	// setter's swap.
 	s.mu.RLock()
-	id := dialIdentity{gen: s.netGen, settings: s.net, carrier: s.carrier}
+	id := dialIdentity{gen: s.netGen, settings: s.net}
+	carrier := s.carrier
 	cfg := s.config
 	s.mu.RUnlock()
+	// The holder pointer was read with the generation; its configuration is frozen here, and the
+	// identity the stamp names is read in the same locked section as the copy the dial consumes.
+	var carried string
+	id.carrier, carried = carrier.Freeze()
 	id.dialAddr = id.settings.dialAddressFor(ctx, host, port)
 	route := "direct"
 	if s.upstream != nil {
@@ -192,10 +235,11 @@ func (s *Sender) captureDialIdentity(ctx context.Context, host string, port uint
 		route = frozen.ForAddr(id.dialAddr).Raw()
 	}
 	id.wrap = (id.upstream != nil && !id.upstream.Empty()) || id.carrier != nil
-	var suffix string
-	id.cert, suffix = certAnswer(cfg, host, useTLS)
-	route += suffix
+	cert, asked := certAnswer(cfg, host, useTLS)
+	// Copy first, hash the copy: the stamp names exactly the value the handshake presents.
+	id.cert = frozenCert(cert)
+	route += certSuffix(id.cert, asked)
 	id.fingerprint = fingerprintAnswer(cfg, host, useTLS)
-	id.route = routeStamp(id.gen, route, id.fingerprint)
+	id.route = routeStamp(id.gen, route, carried, id.fingerprint)
 	return id, nil
 }

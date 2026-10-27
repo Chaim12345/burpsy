@@ -123,3 +123,39 @@ describe("the .proto file set on the Protobuf tab", () => {
   await waitFor(() => expect(decodeCalls.some((c) => c.proto_entry === "b.proto")).toBe(true));
  });
 });
+
+// A file-set pick resolves asynchronously. A clear or a paste made while it is pending is the newer
+// decision: the pick must not land on top of it (burpsy-react-ui-pggap).
+describe("a pending .proto pick never overwrites a later clear or paste", () => {
+ const pendingFiles = () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+   release = resolve;
+  });
+  const file = (name: string, text: string) => ({ name, text: () => gate.then(() => text) }) as unknown as File;
+  return { files: [file("a.proto", 'syntax = "proto3"; message A {}'), file("b.proto", 'syntax = "proto3"; message B {}')], release };
+ };
+
+ test("Clear schema wins over a pick that resolves after it", async () => {
+  useApp.setState({ protoSchema: { name: "old.proto", text: 'syntax = "proto3"; message Old {}' } } as never);
+  renderWithProviders(<ProtobufView bodyBase64="CgN4" grpc={false} direction="request" />);
+  const { files, release } = pendingFiles();
+  await pickFiles(files);
+  fireEvent.click(await screen.findByRole("button", { name: "Clear schema" }));
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(useApp.getState().protoSchema).toBeNull();
+ });
+
+ test("a pasted schema wins over a pick that resolves after it", async () => {
+  renderWithProviders(<ProtobufView bodyBase64="CgN4" grpc={false} direction="request" />);
+  const { files, release } = pendingFiles();
+  await pickFiles(files);
+  fireEvent.click(await screen.findByRole("button", { name: "Paste .proto" }));
+  fireEvent.change(screen.getByLabelText(".proto source"), { target: { value: 'syntax = "proto3"; message Pasted {}' } });
+  fireEvent.click(screen.getByRole("button", { name: "Use this schema" }));
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(useApp.getState().protoSchema?.name).toBe("pasted .proto");
+ });
+});

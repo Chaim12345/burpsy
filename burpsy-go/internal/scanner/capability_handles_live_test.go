@@ -12,32 +12,26 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
-// chromeAvailable fails when Chrome is missing instead of skipping.
+// chromeAvailable makes a missing Chrome a counted skip, which fails the package, not a quiet one.
 //
 // A silent skip here is the expensive kind of quiet: 51 catalog rows are DOM rows whose only
 // live validation runs through this browser, so a machine without Chrome would report a green
 // suite while none of them were exercised. Absence has to be declared, not inferred — set
-// BURPSY_ALLOW_NO_CHROME=1 to accept the reduced coverage, and the skip then says so.
+// BURPSY_ALLOW_NO_CHROME=1 to accept the reduced coverage, and the package then passes saying so.
 func chromeAvailable(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable", "chrome"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return
-		}
+	if domexectest.ChromeOnPath() {
+		return
 	}
-	if os.Getenv("BURPSY_ALLOW_NO_CHROME") == "1" {
-		t.Skip("BURPSY_ALLOW_NO_CHROME=1: skipping the DOM capability tests; the DOM catalog rows are NOT exercised in this run")
-	}
-	t.Fatal("no Chrome binary on PATH: the DOM capability and every DOM catalog row would go untested. " +
-		"Install Chrome/Chromium, or set BURPSY_ALLOW_NO_CHROME=1 to accept that this run does not exercise them.")
+	// Counted: TestMain fails the package unless BURPSY_ALLOW_NO_CHROME=1 (domexectest).
+	domexectest.Skip(t, "no Chrome binary on PATH: the DOM capability and every DOM catalog row are untested")
 }
 
 func TestTheBrowserHandleReachesARealBrowserAndObservesTaint(t *testing.T) {

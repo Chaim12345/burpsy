@@ -94,15 +94,39 @@ func HeaderValue(head []byte, name string) (string, bool) {
 // must not have those effects — a sender who can pad "Content-Encoding : gzip" past the proxy
 // while an origin reads it strictly has a smuggling channel (0vzb.40 works this ground). The
 // reads with those effects use this function; convenience reads keep the lenient HeaderValue.
+//
+// The name is compared byte for byte with ASCII case folding only. Field names are ASCII tokens, and
+// Unicode folding is both wrong and unsafe here: strings.ToLower maps "\u212a" (KELVIN SIGN) to "k",
+// so a line the origin reads as some other field would be recognised as the named one, and it
+// rewrites invalid UTF-8 to U+FFFD, changing the byte length the value was sliced at (a fuzzed
+// "\n\x90:" head panicked with slice bounds out of range).
 func HeaderValueExact(head []byte, name string) (string, bool) {
-	prefix := strings.ToLower(name) + ":"
+	n := len(name)
 	for _, line := range HeadLines(head) {
-		if len(line) == 0 {
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(string(line)), prefix) {
-			return strings.TrimSpace(string(line[len(prefix):])), true
+		if len(line) > n && line[n] == ':' && asciiEqualFold(line[:n], name) {
+			return strings.TrimSpace(string(line[n+1:])), true
 		}
 	}
 	return "", false
+}
+
+// asciiEqualFold reports whether b and s are equal under ASCII case folding; any non-ASCII byte must
+// match exactly.
+func asciiEqualFold(b []byte, s string) bool {
+	if len(b) != len(s) {
+		return false
+	}
+	for i := 0; i < len(b); i++ {
+		x, y := b[i], s[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }

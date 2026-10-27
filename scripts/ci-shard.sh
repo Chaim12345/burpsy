@@ -15,11 +15,17 @@
 #   scanner-detect    internal/scanner: TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo,
 #                     plus its share of the other scanner tests (see "Scanner balance")
 #   scanner-rest-0/1  internal/scanner: the other scanner tests, split by measured time
-#   rest              every package except internal/scanner and internal/web
+#   rest              every package except internal/scanner, internal/web and race-core's
 #   race-web-0/1      internal/web under -race, its tests split in two by index
-#   race-core         internal/proxy, internal/dash and internal/pool under -race, always (bead burpsy-react-ui-8pki:
-#                     the race gate widens one package at a time; add a package here only after it
-#                     has been run clean under -race, and watch this shard's time)
+#   race-core         internal/proxy, internal/dash, internal/pool, internal/sender and
+#                     internal/intruder under -race, always (bead burpsy-react-ui-8pki: the race gate
+#                     widens one package at a time; add a package here only after it has been run
+#                     clean under -race, and watch this shard's time). sender and intruder joined for
+#                     bead burpsy-react-ui-racepr: the 2026-10-27 review found a data race in one and
+#                     a deadlock in the other, which until then only the nightly race run could see.
+#                     In affected mode the shard runs only those of its packages the PR affects, so
+#                     a PR touching internal/sender gets sender, and those of these packages that
+#                     import it, under -race; one touching none of them runs nothing here.
 #
 # There is no plain (non-race) internal/web shard. Until 2026-10-13 a `web` shard ran exactly the
 # tests race-web-0/1 run, only without -race. The race run executes the same tests (internal/web has
@@ -73,10 +79,16 @@ cd "$repo/burpsy-go"
 mod=$(go list -m)
 scanner="$mod/internal/scanner"
 web="$mod/internal/web"
-# The packages the race-core shard owns, one per line; every other shard leaves them alone.
+# The packages the race-core shard owns, one per line; every other shard leaves them alone. rest,
+# in both modes, excludes exactly notrest, so adding a package here moves it out of rest in one edit.
 core="$mod/internal/proxy
 $mod/internal/dash
-$mod/internal/pool"
+$mod/internal/pool
+$mod/internal/sender
+$mod/internal/intruder"
+notrest="$scanner
+$web
+$core"
 budget=TestAnAuditSendsProbesAndStaysWithinARequestBudget
 detect=TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
 
@@ -92,7 +104,7 @@ timeout=(-timeout 1700s)
 parallel=(-parallel 12)
 if [ "${CI_SHARD_RACE:-}" = 1 ]; then
   # Scanner under -race at raised parallelism is unmeasured (the race evidence covered
-  # internal/web, internal/proxy, internal/dash and internal/pool only), so race-mode shards
+  # internal/web and race-core's packages only), so race-mode shards
   # keep the default -parallel. Integrator guard for evmi; robust to future workflow edits.
   parallel=()
   race=(-race)
@@ -172,7 +184,7 @@ scanner_bin() {
       }'
 }
 
-rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" || true; }
+rest_pkgs() { go list ./... | grep -vxF "$notrest" || true; }
 
 if [ "$verb" = verify ]; then
   # Recompute every shard's selection and compare the union with the module's tests. Compiles the
@@ -223,8 +235,8 @@ reason=""
 if [ -n "${CI_AFFECTED_BASE:-}" ]; then
   affected=$("$repo/scripts/affected-go-tests.sh" "$CI_AFFECTED_BASE") || { echo "ci-shard: affected-go-tests.sh failed" >&2; exit 1; }
   if [ -z "$own" ]; then
-    selected=$(grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" <<<"$affected" || true)
-    reason="no package outside internal/scanner, internal/web, internal/proxy, internal/dash and internal/pool is affected by $CI_AFFECTED_BASE...HEAD"
+    selected=$(grep -vxF "$notrest" <<<"$affected" || true)
+    reason="no package outside internal/scanner, internal/web and race-core's $(tr '\n' ' ' <<<"${core//"$mod"\//}")is affected by $CI_AFFECTED_BASE...HEAD"
   else
     selected=$(grep -xF "$own" <<<"$affected" || true)
     reason="$(tr '\n' ' ' <<<"${own//"$mod"\//}")is not affected by $CI_AFFECTED_BASE...HEAD (neither changed nor importing a changed package)"

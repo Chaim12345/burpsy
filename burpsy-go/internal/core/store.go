@@ -843,6 +843,10 @@ type TrafficStore struct {
 	// SQLite is durable backup.
 	onMessage  func(m *StoredMessage)
 	onExchange func(ex *Exchange)
+	// gate is the owning process's outer lock for every method that calls a
+	// persistence sink (see CaptureGate). Read without ts.mu, because it is taken
+	// BEFORE ts.mu.
+	gate captureGateSlot
 	// exchangeObservers are live derived views of the exchange index — the site
 	// map, today — that must be told about an arrival as it happens rather than
 	// rebuilding themselves when someone asks. They run under the same lock and
@@ -896,6 +900,12 @@ func NewTrafficStoreWithCaptureDir(dir string, segmentSize uint64) (*TrafficStor
 
 // Put stores a raw HTTP message and returns its ID.
 func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
+	defer ts.gate.enter()()
+	return ts.put(raw, direction)
+}
+
+// put is Put without taking the capture gate: the caller holds it (CaptureHold).
+func (ts *TrafficStore) put(raw []byte, direction Direction) (MsgId, error) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -959,6 +969,12 @@ func (ts *TrafficStore) Put(raw []byte, direction Direction) (MsgId, error) {
 
 // AddExchange adds an exchange record.
 func (ts *TrafficStore) AddExchange(ex *Exchange) {
+	defer ts.gate.enter()()
+	ts.addExchange(ex)
+}
+
+// addExchange is AddExchange without taking the capture gate: the caller holds it (CaptureHold).
+func (ts *TrafficStore) addExchange(ex *Exchange) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
@@ -1038,6 +1054,11 @@ func (ts *TrafficStore) SetPersistenceSinks(onMessage func(*StoredMessage), onEx
 	ts.onMessage = onMessage
 	ts.onExchange = onExchange
 }
+
+// SetCaptureGate installs the outer lock taken around every method that calls a
+// persistence sink — Put, AddExchange, UpdateExchangeAnnotation — before ts.mu.
+// See CaptureGate for why it cannot be taken inside the sinks. nil removes it.
+func (ts *TrafficStore) SetCaptureGate(g CaptureGate) { ts.gate.set(g) }
 
 // Restore replaces the store's contents with a previously persisted snapshot.
 // Messages and exchanges are positional: their ids are their slice indexes, so
@@ -1234,6 +1255,7 @@ var ValidHighlights = map[string]bool{
 // exactly as told, and the 400 for an unknown colour belongs to the HTTP layer that can see the
 // request that caused it.
 func (ts *TrafficStore) UpdateExchangeAnnotation(id ExchangeID, notes *string, notesSet bool, highlight string, highlightSet bool) (*Exchange, error) {
+	defer ts.gate.enter()()
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 

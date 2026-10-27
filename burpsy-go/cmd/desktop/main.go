@@ -35,6 +35,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
@@ -50,6 +51,8 @@ type App struct {
 	proxyBind string
 	webBind   string
 	dbFile    string
+	// closeProject closes the open -db project on shutdown.
+	closeProject func()
 
 	logger *zap.Logger
 	store  *core.TrafficStore
@@ -82,6 +85,19 @@ func (a *App) startup(ctx context.Context) {
 	findingStore := core.NewFindingStore()
 	interceptEngine := intercept.NewEngine()
 	passiveScanner := scanner.NewPassiveScanner(a.store, logger)
+
+	// -db, as in cmd/burpsy: restore history, findings and scope, then mirror every write.
+	var persistStore *persist.Store
+	if a.dbFile != "" {
+		persistStore, err = persist.Open(a.dbFile, logger)
+		if err != nil {
+			logger.Fatal("open project database", zap.String("db", a.dbFile), zap.Error(err))
+		}
+		if err := persistStore.Restore(a.store, findingStore, a.scope, nil, nil, nil, nil); err != nil {
+			logger.Fatal("restore project", zap.Error(err))
+		}
+		web.InstallCaptureSinks(a.store, findingStore, persistStore)
+	}
 
 	// One log for the listener and the console, created before either is built: the relay
 	// goroutines read it as soon as the proxy serves (burpsy-react-ui-6dt).
@@ -147,6 +163,10 @@ func (a *App) startup(ctx context.Context) {
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
 		WithBindAddrs(a.proxyBind, a.webBind)
+	if persistStore != nil {
+		webServer.WithPersist(persistStore)
+		a.closeProject = webServer.CloseProject
+	}
 	webServer.StartLiveAuditSweep(runCtx)
 	go func() {
 		if err := webServer.ListenAndServe(runCtx, a.webBind); err != nil && err != context.Canceled {
@@ -166,6 +186,9 @@ func (a *App) shutdown(ctx context.Context) {
 		if err := a.store.Sync(); err != nil && a.logger != nil {
 			a.logger.Error("failed to seal capture on shutdown", zap.Error(err))
 		}
+	}
+	if a.closeProject != nil {
+		a.closeProject()
 	}
 }
 
@@ -263,7 +286,11 @@ func main() {
 	// in-process web.Server started in startup(), so the desktop window and a
 	// remote browser at the same address render byte-identical UI and hit the
 	// same API — one build, one server, two ways to reach it.
-	proxyHandler := httputil.NewSingleHostReverseProxy(target)
+	// The webview's own requests arrive with the asset server's Host (wails / wails.localhost), and
+	// the console refuses any Host it was not bound to on EVERY method, reads included
+	// (burpsy-react-ui-rebind-read). This handler only ever carries the in-process webview's
+	// requests, so it forwards them as what they are: requests for the bound console.
+	proxyHandler := &httputil.ReverseProxy{Rewrite: consoleRewrite(target)}
 
 	err = wails.Run(&options.App{
 		Title:  "burpsy",
@@ -281,5 +308,30 @@ func main() {
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// webviewOrigins are the origins the wails webview's own pages send: wails:// on macOS/Linux,
+// http(s)://wails.localhost on Windows (WebView2).
+var webviewOrigins = map[string]bool{
+	"wails://wails":           true,
+	"wails://wails.localhost": true,
+	"http://wails.localhost":  true,
+	"https://wails.localhost": true,
+}
+
+// consoleRewrite forwards the webview's requests as requests for the bound console. The console
+// refuses any Host it was not bound to on every method (burpsy-react-ui-rebind-read), and on a
+// POST/PUT/PATCH/DELETE it also refuses an Origin that does not match the Host — which the webview's
+// own origin never does, so every write from the desktop window was refused
+// (burpsy-react-ui-desktop-origin). Only the webview's known origins are rewritten: anything else
+// is passed through for the console to judge, so this handler never launders a foreign origin.
+func consoleRewrite(target *url.URL) func(*httputil.ProxyRequest) {
+	return func(pr *httputil.ProxyRequest) {
+		pr.SetURL(target)
+		pr.Out.Host = target.Host
+		if webviewOrigins[pr.In.Header.Get("Origin")] {
+			pr.Out.Header.Set("Origin", "http://"+target.Host)
+		}
 	}
 }

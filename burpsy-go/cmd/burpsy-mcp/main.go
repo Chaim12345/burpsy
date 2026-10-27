@@ -20,9 +20,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/buildinfo"
 	"os"
 	"os/signal"
-	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -90,15 +90,8 @@ func main() {
 	}
 }
 
-// version reports the module version from the build, so a binary copied somewhere with no build
-// metadata says "dev" rather than claiming a release.
-func version() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
-		return "dev"
-	}
-	return info.Main.Version
-}
+// version reports the stamped release version, else the module version, else "dev".
+func version() string { return buildinfo.String() }
 
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "burpsy-mcp: %v\n", err)

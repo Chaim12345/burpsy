@@ -99,7 +99,8 @@ func (b *Browser) RenderFragment(ctx context.Context, fragment string, settle ti
 	if settle <= 0 {
 		settle = 750 * time.Millisecond
 	}
-	tabCtx, cancel, err := b.newTab(ctx)
+	// openTab: this function's own Fetch handler is stricter than the default gate and must be the only one.
+	tabCtx, cancel, err := b.openTab(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -375,6 +375,13 @@ func BurpsyNativeRows() []BurpsyRow {
 			"are the forgeries JWT Editor automates. It rides the signature row because it is decided in that " +
 			"row's differential, against a token-with-trailing-bytes control.",
 	}, {
+		Name:      IssueSAMLUnsigned,
+		TypeIndex: 0xb5003440,
+		CWE:       347,
+		Rides:     "Cross-domain POST",
+		Why: "Burp's catalogue has no SAML rows: SAML Raider leaves assertion signing to the tester. It rides " +
+			"'Cross-domain POST' because a SAMLResponse arrives in the cross-site form post that row inspects.",
+	}, {
 		Name:      IssueJWTAlgorithmConfusion,
 		TypeIndex: 0xb5003430,
 		CWE:       347,

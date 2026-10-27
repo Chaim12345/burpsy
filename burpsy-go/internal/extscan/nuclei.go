@@ -54,8 +54,9 @@ type NucleiOptions struct {
 	Severities string
 	// Tags restricts the run by template tag (nuclei's -tags).
 	Tags string
-	// RateLimit caps requests per second (nuclei's -rl). Zero takes nuclei's
-	// own default; an engagement with a rate agreement should set it.
+	// RateLimit caps requests per second (nuclei's -rl). Zero takes
+	// DefaultNucleiRateLimit — not nuclei's own default of 150, which is a load
+	// test; an engagement with a rate agreement should set it.
 	RateLimit int
 	// Interactsh turns nuclei's OAST templates back on. Off by default: those
 	// templates report through a third-party interaction server, and an
@@ -82,6 +83,15 @@ type NucleiResult struct {
 	// OutOfScope counts hits the engagement scope does not authorise, dropped from
 	// Hits and counted here for the same reason FFUFResult.OutOfScope is.
 	OutOfScope int
+	// EgressGate says what the run's egress gate enforced (EgressGatePerRequest
+	// or EgressGatePerAuthority); empty when the tool was never launched.
+	EgressGate string
+	// GateRefused counts the requests the egress gate refused before they were
+	// sent; GateRefusals is a sample (at most 50) naming them. A template whose
+	// requests were refused did not run as written, so a non-zero count makes
+	// the run OutcomePartial with IncompleteScopeRefused.
+	GateRefused  int
+	GateRefusals []string
 	// Err explains every outcome but OutcomeCompleted, and is nil for that one.
 	// For OutcomePartial it is why the run was cut short.
 	Err error
@@ -114,6 +124,9 @@ const (
 	IncompleteUnparseable IncompleteReason = "unparseable output"
 	// IncompleteCapped: the captured output hit Config.MaxOutputBytes.
 	IncompleteCapped IncompleteReason = "output cap reached"
+	// IncompleteScopeRefused: the egress gate refused requests templates made
+	// outside the engagement scope, so those templates did not run as written.
+	IncompleteScopeRefused IncompleteReason = "out-of-scope requests refused"
 )
 
 // incompleteOf classifies the process-level error run returned for a run that
@@ -181,37 +194,24 @@ func RunNuclei(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Ta
 		return res
 	}
 
-	args := []string{
-		"-u", target.URL,
-		"-jsonl",
-		// -silent keeps the banner and progress off the stream, -nc drops ANSI
-		// colouring, -duc stops nuclei reaching for the network to check for its
-		// own updates mid-engagement, -ot drops the base64 template blob that
-		// otherwise doubles every record.
-		"-silent", "-nc", "-duc", "-ot",
+	gate, refusals, mode, err := startEgressGate(cfg, scope, target)
+	if err != nil {
+		res.Outcome = OutcomeUnauthorised
+		if !errors.Is(err, ErrUnauthorised) {
+			res.Outcome = OutcomeFailed
+		}
+		res.Err = err
+		return res
 	}
-	if !opts.IncludeRaw {
-		args = append(args, "-omit-raw")
-	}
-	if !opts.Interactsh {
-		args = append(args, "-ni")
-	}
-	for _, t := range opts.Templates {
-		args = append(args, "-t", t)
-	}
-	if opts.Severities != "" {
-		args = append(args, "-severity", opts.Severities)
-	}
-	if opts.Tags != "" {
-		args = append(args, "-tags", opts.Tags)
-	}
-	if opts.RateLimit > 0 {
-		args = append(args, "-rl", strconv.Itoa(opts.RateLimit))
-	}
+	defer gate.Close()
+	res.EgressGate = mode
+
+	args := nucleiArgs(target, opts, gate.URL())
 	res.Command = append([]string{path}, args...)
 
 	stdout, stderr, code, runErr := run(ctx, cfg, path, args)
 	res.ExitCode = code
+	res.GateRefused, res.GateRefusals = int(gate.Refused()), refusals.snapshot()
 	hits, truncated, parseErr := parseNuclei(stdout)
 	res.Truncated = truncated
 
@@ -252,11 +252,65 @@ func RunNuclei(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Ta
 		res.Incomplete = IncompleteCapped
 		res.Err = fmt.Errorf("extscan: nuclei output hit the %d-byte capture cap; the %d hit(s) "+
 			"parsed are a prefix of what nuclei reported", cfg.maxOutput(), len(hits))
+	case res.GateRefused > 0:
+		res.Incomplete = IncompleteScopeRefused
+		res.Err = fmt.Errorf("extscan: the egress gate refused %d out-of-scope request(s) nuclei templates "+
+			"made, so those templates did not run as written (first: %s)", res.GateRefused, firstOr(res.GateRefusals))
 	}
 	if res.Incomplete != "" {
 		res.Outcome = OutcomePartial
 	}
 	return res
+}
+
+// nucleiArgs builds nuclei's argv (after the binary). proxyURL is the run's
+// egress gate and is always passed: there is no nuclei invocation from this
+// package that dials on its own.
+func nucleiArgs(target Target, opts NucleiOptions, proxyURL string) []string {
+	args := []string{
+		"-u", target.URL,
+		"-jsonl",
+		// -silent keeps the banner and progress off the stream, -nc drops ANSI
+		// colouring, -duc stops nuclei reaching for the network to check for its
+		// own updates mid-engagement, -ot drops the base64 template blob that
+		// otherwise doubles every record.
+		"-silent", "-nc", "-duc", "-ot",
+		// Every HTTP request through the egress gate.
+		"-proxy", proxyURL,
+		// HTTP templates only. nuclei's HTTP proxy carries HTTP; its dns, tcp,
+		// ssl, websocket, whois, headless, code and javascript protocols dial
+		// (or execute) on their own and would bypass the gate, so they are not
+		// run from here.
+		"-pt", "http",
+	}
+	if !opts.IncludeRaw {
+		args = append(args, "-omit-raw")
+	}
+	if !opts.Interactsh {
+		args = append(args, "-ni")
+	}
+	for _, t := range opts.Templates {
+		args = append(args, "-t", t)
+	}
+	if opts.Severities != "" {
+		args = append(args, "-severity", opts.Severities)
+	}
+	if opts.Tags != "" {
+		args = append(args, "-tags", opts.Tags)
+	}
+	rate := opts.RateLimit
+	if rate <= 0 {
+		rate = DefaultNucleiRateLimit
+	}
+	args = append(args, "-rl", strconv.Itoa(rate))
+	return args
+}
+
+func firstOr(list []string) string {
+	if len(list) == 0 {
+		return "none recorded"
+	}
+	return list[0]
 }
 
 // parseNuclei reads the -jsonl stream.

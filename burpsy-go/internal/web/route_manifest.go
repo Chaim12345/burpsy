@@ -49,11 +49,12 @@ const (
 	//
 	// Its own class because none of the others fits and folding it into one of them would understate
 	// it. riskLocal is defined as writing burpsy's own state, and this writes nothing; riskEgress and
-	// riskAttack are about what leaves for the target, and a plugin may send nothing at all. What makes
-	// it confirmation-worthy is the direction the others do not cover: the code on the far side is not
-	// this program's, and after a load it is running until something stops it. The gate is the same as
-	// scanner's `run tool` — the request names an allowlist key, never a path — so this class marks
-	// "the operator already authorised this binary; a caller still has to mean it".
+	// riskAttack are about what leaves for the target, and a plugin may send nothing at all. What sets
+	// it apart is the direction the others do not cover: the code on the far side is not this
+	// program's, and after a load it is running until something stops it. It is NOT in the
+	// confirmation set (needsConfirmation): the gate is the allowlist, as for scanner's `run tool` —
+	// the request names a -plugins key, never a path, so the operator already authorised the binary on
+	// the command line. TestRiskExecuteIsExcludedFromTheConfirmationSetWithItsReason pins that choice.
 	riskExecute riskClass = "execute"
 )
 

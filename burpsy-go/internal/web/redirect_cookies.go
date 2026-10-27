@@ -12,8 +12,10 @@ import (
 //
 // The two sides do not match, and both differences are meaningful:
 //
-//   - internal/session imports internal/sender, so sender cannot import it. The follower takes a
-//     two-method interface for the same reason internal/sender's ClientCerts is one.
+//   - internal/sender sits below every tool and imports none of them (TestSenderImportsNoToolOrSurfacePackage),
+//     so it cannot import internal/session's coordinator. The follower takes a two-method interface
+//     for the same reason internal/sender's ClientCerts is one. (This line used to say session
+//     imports sender; it does not, and the reason never depended on it.)
 //   - The coordinator's CookieHeader takes a PATH and returns a string, because its jar honours
 //     Path scoping for a browser-shaped request. The follower knows the path — it just resolved the
 //     Location — and the empty string it would otherwise pass is exactly the "no path" case that jar

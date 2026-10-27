@@ -784,7 +784,7 @@ func cmdReport(ctx *cliContext, args []string) error {
 		return err
 	}
 	if *out != "" {
-		if err := os.WriteFile(*out, doc, 0o644); err != nil {
+		if err := writeReport(*out, doc); err != nil {
 			return err
 		}
 		fmt.Fprintf(ctx.out, "wrote %s (%d bytes)\n", *out, len(doc))

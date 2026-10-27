@@ -3,6 +3,7 @@ package extscan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,6 +39,9 @@ type Discovery struct {
 // FFUFOptions are the knobs a caller may set on one ffuf run. Everything else
 // about the invocation is fixed by this package, so a caller cannot reshape the
 // command into something the allowlist and scope gates did not anticipate.
+// DefaultFFUFRate caps content discovery at the same requests per second as nuclei's default.
+const DefaultFFUFRate = DefaultNucleiRateLimit
+
 type FFUFOptions struct {
 	// Wordlist is the path to the wordlist file. Required: ffuf with no
 	// wordlist is not a smaller scan, it is no scan.
@@ -49,8 +53,8 @@ type FFUFOptions struct {
 	MatchCodes string
 	// Threads is ffuf's -t concurrency. Zero takes ffuf's default of 40.
 	Threads int
-	// Rate is ffuf's -rate cap in requests per second. Zero is uncapped, which
-	// is ffuf's own default; an engagement with a rate agreement should set it.
+	// Rate is ffuf's -rate cap in requests per second. Zero takes DefaultFFUFRate;
+	// ffuf's own default is uncapped.
 	Rate int
 }
 
@@ -62,6 +66,15 @@ type FFUFResult struct {
 	Outcome     Outcome
 	Target      Target
 	Discoveries []Discovery
+	// EgressGate says what the run's egress gate enforced (EgressGatePerRequest
+	// or EgressGatePerAuthority); empty when the tool was never launched.
+	EgressGate string
+	// GateRefused counts the requests the egress gate refused before they were
+	// sent (a wordlist entry that escaped the authorised subtree, an excluded
+	// path); GateRefusals is a sample (at most 50). ffuf sees each refusal as a
+	// 403 from the gate, which the scope filter then drops from Discoveries.
+	GateRefused  int
+	GateRefusals []string
 	// OutOfScope counts paths ffuf reported that the engagement scope does not
 	// authorise, and which were therefore dropped from Discoveries.
 	//
@@ -136,6 +149,18 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 		return res
 	}
 
+	gate, refusals, mode, err := startEgressGate(cfg, scope, target)
+	if err != nil {
+		res.Outcome = OutcomeUnauthorised
+		if !errors.Is(err, ErrUnauthorised) {
+			res.Outcome = OutcomeFailed
+		}
+		res.Err = err
+		return res
+	}
+	defer gate.Close()
+	res.EgressGate = mode
+
 	dir, err := os.MkdirTemp("", "burpsy-ffuf-")
 	if err != nil {
 		res.Outcome = OutcomeFailed
@@ -145,32 +170,12 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	defer os.RemoveAll(dir)
 	outFile := filepath.Join(dir, "ffuf.json")
 
-	fuzzURL := strings.TrimSuffix(target.URL, "/") + "/FUZZ"
-	args := []string{
-		"-u", fuzzURL,
-		"-w", opts.Wordlist,
-		"-of", "json",
-		"-o", outFile,
-		// -s keeps the progress spinner off the captured stream; -noninteractive
-		// stops ffuf reaching for a console it does not have here.
-		"-s", "-noninteractive",
-	}
-	if opts.Extensions != "" {
-		args = append(args, "-e", opts.Extensions)
-	}
-	if opts.MatchCodes != "" {
-		args = append(args, "-mc", opts.MatchCodes)
-	}
-	if opts.Threads > 0 {
-		args = append(args, "-t", fmt.Sprint(opts.Threads))
-	}
-	if opts.Rate > 0 {
-		args = append(args, "-rate", fmt.Sprint(opts.Rate))
-	}
+	args := ffufArgs(target, opts, outFile, gate.URL())
 	res.Command = append([]string{path}, args...)
 
 	_, stderr, code, runErr := run(ctx, cfg, path, args)
 	res.ExitCode = code
+	res.GateRefused, res.GateRefusals = int(gate.Refused()), refusals.snapshot()
 	if runErr != nil {
 		res.Outcome = OutcomeFailed
 		res.Err = fmt.Errorf("extscan: ffuf: %w: %s", runErr, trimErr(stderr))
@@ -194,9 +199,48 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	// The requests are already sent by this point — that is the cost of
 	// delegation, and Authorise is what keeps it bounded — but a result outside
 	// the engagement must not enter a report as though burpsy meant to fetch it.
-	res.Discoveries, res.OutOfScope = filterInScope(scope, target, discoveries)
+	sent := discoveries[:0]
+	for _, d := range discoveries {
+		if !refusals.refusedPath(d.Path) {
+			sent = append(sent, d)
+		}
+	}
+	res.Discoveries, res.OutOfScope = filterInScope(scope, target, sent)
 	res.Outcome = OutcomeCompleted
 	return res
+}
+
+// ffufArgs builds ffuf's argv (after the binary). proxyURL is the run's egress
+// gate and is always passed (-x): there is no ffuf invocation from this package
+// that dials on its own.
+func ffufArgs(target Target, opts FFUFOptions, outFile, proxyURL string) []string {
+	fuzzURL := strings.TrimSuffix(target.URL, "/") + "/FUZZ"
+	args := []string{
+		"-u", fuzzURL,
+		"-w", opts.Wordlist,
+		"-of", "json",
+		"-o", outFile,
+		// -s keeps the progress spinner off the captured stream; -noninteractive
+		// stops ffuf reaching for a console it does not have here.
+		"-s", "-noninteractive",
+		// Every request through the egress gate.
+		"-x", proxyURL,
+	}
+	if opts.Extensions != "" {
+		args = append(args, "-e", opts.Extensions)
+	}
+	if opts.MatchCodes != "" {
+		args = append(args, "-mc", opts.MatchCodes)
+	}
+	if opts.Threads > 0 {
+		args = append(args, "-t", fmt.Sprint(opts.Threads))
+	}
+	rate := opts.Rate
+	if rate <= 0 {
+		rate = DefaultFFUFRate
+	}
+	args = append(args, "-rate", fmt.Sprint(rate))
+	return args
 }
 
 // parseFFUF turns ffuf's JSON envelope into discoveries.

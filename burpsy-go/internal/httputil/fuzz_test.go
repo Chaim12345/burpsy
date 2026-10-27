@@ -186,16 +186,26 @@ func FuzzHeaderValueExact(f *testing.F) {
 			return
 		}
 		value, ok := HeaderValueExact(head, name)
-		prefix := strings.ToLower(name) + ":"
+		// The oracle folds ASCII only, written independently of the implementation: Unicode folding
+		// (strings.ToLower) both mis-matches (KELVIN SIGN -> "k") and changes byte lengths on invalid
+		// UTF-8, which is how this oracle once shared the implementation's out-of-range slice.
+		lowerASCII := func(b []byte) string {
+			out := make([]byte, len(b))
+			for i, c := range b {
+				if c >= 'A' && c <= 'Z' {
+					c += 32
+				}
+				out[i] = c
+			}
+			return string(out)
+		}
+		want := lowerASCII([]byte(name)) + ":"
 		firstStrict := -1
 		var firstValue string
 		for i, line := range HeadLines(head) {
-			if len(line) == 0 {
-				continue
-			}
-			if strings.HasPrefix(strings.ToLower(string(line)), prefix) {
+			if len(line) >= len(want) && lowerASCII(line[:len(want)]) == want {
 				firstStrict = i
-				firstValue = strings.TrimSpace(string(line[len(prefix):]))
+				firstValue = strings.TrimSpace(string(line[len(want):]))
 				break
 			}
 		}
@@ -210,6 +220,11 @@ func FuzzHeaderValueExact(f *testing.F) {
 		}
 		if value != firstValue {
 			t.Fatalf("value %q is not the first strict match %q for %q in %q", value, firstValue, name, head)
+		}
+		// The lenient read cuts at the first colon and trims the field, so it can only be compared
+		// for a name that is itself a plain field name.
+		if strings.ContainsRune(name, ':') || strings.TrimSpace(name) != name {
+			return
 		}
 		if _, lenientOK := HeaderValue(head, name); !lenientOK {
 			t.Fatalf("strict match for %q invisible to the lenient read of %q", name, head)

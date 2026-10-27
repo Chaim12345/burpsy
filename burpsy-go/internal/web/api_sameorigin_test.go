@@ -3,10 +3,14 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // burpsy-react-ui-s19k: the console has no authentication, it is a tool that sends attacks, and it
@@ -227,5 +231,117 @@ func TestARefusedRequestNeverReachesItsHandler(t *testing.T) {
 	if _, ok := reply["task_id"]; ok {
 		t.Error("the refusal body carries a task_id, so a caller can read a crawl it was not allowed " +
 			"to start")
+	}
+}
+
+// burpsy-react-ui-rebind-read: a page on a domain that rebinds to 127.0.0.1 is same-origin to the
+// browser, so it can READ the reply to a GET — which is what made exempting reads from the Host check
+// a leak of every captured cookie. The foreign-Host read is refused; the same read on the console's
+// own loopback Host still works, so the fix is not a denial of service on the console itself.
+func TestARebindingPageCannotReadCapturedTraffic(t *testing.T) {
+	s := newTestServer()
+	id, err := s.store.Put([]byte("GET /account HTTP/1.1\r\nHost: target.test\r\nCookie: session=rebind-secret-cookie\r\n\r\n"), core.DirectionRequest)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	msg := "/api/message/" + strconv.FormatUint(uint64(id), 10)
+
+	for _, path := range []string{msg, "/api/history"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			t.Run(method+" "+path, func(t *testing.T) {
+				// Foreign Host, and the headers a rebound same-origin page really sends.
+				req := httptest.NewRequest(method, path, nil)
+				req.Host = "rebind.attacker.example:8081"
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				rec := httptest.NewRecorder()
+				s.guarded.ServeHTTP(rec, req)
+				if rec.Code != http.StatusForbidden {
+					t.Errorf("status = %d, want 403: a page that rebound to loopback read %s", rec.Code, path)
+				}
+				if strings.Contains(rec.Body.String(), "rebind-secret-cookie") {
+					t.Errorf("the refusal carries the captured cookie: %q", rec.Body.String())
+				}
+
+				// Loopback Host: the console's own read.
+				for _, host := range []string{"127.0.0.1:8081", "localhost:8081", "[::1]:8081"} {
+					req := httptest.NewRequest(method, path, nil)
+					req.Host = host
+					req.Header.Set("Sec-Fetch-Site", "same-origin")
+					rec := httptest.NewRecorder()
+					s.guarded.ServeHTTP(rec, req)
+					// HEAD is not served on every route (a 405 there is the handler's answer, not the
+					// gate's), so HEAD only has to get past the gate; GET has to succeed.
+					if rec.Code == http.StatusForbidden || method == http.MethodGet && rec.Code != http.StatusOK {
+						t.Errorf("Host %s: status = %d; the console's own read was refused", host, rec.Code)
+					}
+				}
+			})
+		}
+	}
+
+	// And the loopback read carries the content, so the 200 above is the real view.
+	req := httptest.NewRequest(http.MethodGet, msg, nil)
+	req.Host = "127.0.0.1:8081"
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "rebind-secret-cookie") {
+		t.Errorf("the loopback read did not return the message: %q", rec.Body.String())
+	}
+}
+
+// A configured non-loopback name is accepted on reads too, and naming one does not lock out loopback.
+func TestANamedHostReadsAndLoopbackStillWorksBesideIt(t *testing.T) {
+	s := newTestServer().WithAllowedHosts("burp.internal:8081")
+	for _, tc := range []struct {
+		host string
+		want int
+	}{
+		{"burp.internal:8081", http.StatusOK},
+		{"127.0.0.1:8081", http.StatusOK},
+		{"burp.internal.evil.example:8081", http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+		req.Host = tc.host
+		rec := httptest.NewRecorder()
+		s.guarded.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("GET /api/history with Host %s: status = %d, want %d", tc.host, rec.Code, tc.want)
+		}
+	}
+}
+
+// The address the console is bound to is accepted without a separate step, so a non-loopback bind
+// does not 403 the operator's first page load now that reads are Host-checked. A wildcard bind is
+// accepted on interface ADDRESSES only; a DNS name is never inferred.
+func TestTheBindAddressIsAcceptedAndAWildcardBindAcceptsOnlyInterfaceAddresses(t *testing.T) {
+	ifaces := func() ([]net.Addr, error) {
+		return []net.Addr{
+			&net.IPNet{IP: net.ParseIP("192.0.2.10"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("2001:db8::10"), Mask: net.CIDRMask(64, 128)},
+			&net.IPNet{IP: net.ParseIP("fe80::1"), Mask: net.CIDRMask(64, 128)},
+		}, nil
+	}
+	for _, tc := range []struct {
+		bind     string
+		accepted []string
+		refused  []string
+	}{
+		{"192.0.2.10:8081", []string{"192.0.2.10:8081", "127.0.0.1:8081"}, []string{"192.0.2.11:8081", "evil.example:8081"}},
+		{"0.0.0.0:8081", []string{"192.0.2.10:8081", "[2001:db8::10]:8081", "localhost:8081"}, []string{"[fe80::1]:8081", "evil.example:8081"}},
+		{":8081", []string{"192.0.2.10:8081"}, []string{"evil.example:8081"}},
+		{"127.0.0.1:8081", []string{"127.0.0.1:8081"}, []string{"192.0.2.10:8081", "evil.example:8081"}},
+	} {
+		s := newTestServer()
+		s.allowBindAddr(tc.bind, ifaces)
+		for _, h := range tc.accepted {
+			if !s.acceptsHost(h) {
+				t.Errorf("bind %s: Host %s refused", tc.bind, h)
+			}
+		}
+		for _, h := range tc.refused {
+			if s.acceptsHost(h) {
+				t.Errorf("bind %s: Host %s accepted", tc.bind, h)
+			}
+		}
 	}
 }

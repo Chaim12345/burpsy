@@ -744,6 +744,9 @@ type AuditConfig struct {
 	//
 	// Burp's softer sibling is SkipServerSideInjectionForParameters, below.
 	SkipAllTestsForParameters []string
+	// SkipAllTestsForParametersAt is the skip-all list scoped to one endpoint each: the API scan's
+	// Fixed parameters, which exempt a parameter on the operation the review named and nowhere else.
+	SkipAllTestsForParametersAt []bcheck.ParameterAt
 	// SkipServerSideInjectionForParameters is Burp's
 	// scanner/ignored_insertion_points/skip_server_side_injection_for_parameters: parameters, by
 	// name, that the server-side injection checks do not probe while every other check still does
@@ -929,6 +932,7 @@ func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
 	// harness, audit-item ledger and check context — because enumerateOptions is the one
 	// place all three read.
 	opts.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
+	opts.SkipAllTestsForParametersAt = cfg.SkipAllTestsForParametersAt
 	// Operator-marked spans short-circuit the heuristics (burpsy-react-ui-806w). Rides this one path
 	// so the probe harness, the item ledger and the check context all see the same manual points.
 	opts.ManualSpans = cfg.ManualSpans

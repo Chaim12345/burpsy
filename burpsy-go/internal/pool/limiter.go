@@ -23,7 +23,7 @@ package pool
 import (
 	"context"
 
-	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/ratelimit"
 )
 
 // Limiter returns the one live limiter for this pool, building it on first use.
@@ -31,7 +31,7 @@ import (
 // The error is ErrNoSuchPool for a name nothing holds, never a limiter with default bounds: a tool
 // that ran unbounded because its pool had been deleted is the exact failure this package exists to
 // prevent, and it would happen at the moment nobody is watching.
-func (r *Registry) Limiter(name string) (*intruder.RateLimiter, error) {
+func (r *Registry) Limiter(name string) (*ratelimit.RateLimiter, error) {
 	p, err := r.Get(name)
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (r *Registry) Limiter(name string) (*intruder.RateLimiter, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.limiters == nil {
-		r.limiters = map[string]*intruder.RateLimiter{}
+		r.limiters = map[string]*ratelimit.RateLimiter{}
 	}
 	// Re-checked under the write lock rather than trusting the read above: two tools starting under
 	// one pool at once must not each build a limiter, because then neither bounds the other.
@@ -48,7 +48,7 @@ func (r *Registry) Limiter(name string) (*intruder.RateLimiter, error) {
 		return l, nil
 	}
 	limit := p.Limit()
-	l := intruder.NewRateLimiter(&limit)
+	l := ratelimit.NewRateLimiter(&limit)
 	r.limiters[k] = l
 	return l, nil
 }
@@ -80,7 +80,7 @@ type contextKey struct{}
 // two different pools would then race, and the loser would run under bounds its operator did not
 // choose — silently, since a limiter reports the name it was built with and not the name that was
 // asked for.
-func WithLimiter(ctx context.Context, l *intruder.RateLimiter) context.Context {
+func WithLimiter(ctx context.Context, l *ratelimit.RateLimiter) context.Context {
 	if l == nil {
 		return ctx
 	}
@@ -88,8 +88,8 @@ func WithLimiter(ctx context.Context, l *intruder.RateLimiter) context.Context {
 }
 
 // LimiterFrom returns the limiter carried in this context, if any.
-func LimiterFrom(ctx context.Context) (*intruder.RateLimiter, bool) {
-	l, ok := ctx.Value(contextKey{}).(*intruder.RateLimiter)
+func LimiterFrom(ctx context.Context) (*ratelimit.RateLimiter, bool) {
+	l, ok := ctx.Value(contextKey{}).(*ratelimit.RateLimiter)
 	return l, ok && l != nil
 }
 

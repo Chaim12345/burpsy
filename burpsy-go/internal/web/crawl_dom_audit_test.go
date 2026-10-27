@@ -13,13 +13,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
@@ -66,8 +66,11 @@ func spaCrawlTarget(t *testing.T) *httptest.Server {
 // A crawl with a browser finds the SPA page's script-created content and stays silent on the
 // static twin: the bead's criterion 4, both halves.
 func TestACrawlWithABrowserReportsTheScriptCreatedContentItRendered(t *testing.T) {
-	if os.Getenv("BURPSY_ALLOW_NO_CHROME") == "1" {
-		t.Skip("BURPSY_ALLOW_NO_CHROME=1: this test needs the browser it exists to exercise")
+	// Counted, not failed outright: without Chrome this test used to fail on its own unless
+	// BURPSY_ALLOW_NO_CHROME=1, while its siblings skipped green. Both now go through the one
+	// package ledger, which fails the package unless the escape hatch is set.
+	if !chromeAvailable() {
+		domexectest.Skip(t, "no Chrome on PATH: the rendered-crawl DOM audit is untested")
 	}
 	target := spaCrawlTarget(t)
 	u, _ := url.Parse(target.URL)

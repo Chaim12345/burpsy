@@ -32,20 +32,16 @@ package domexec
 // sent, so an SSO identity provider must be added to scope. See gaps.md, Crawler B.
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/egressgate"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -70,7 +66,7 @@ type Session struct {
 	id              cdp.BrowserContextID
 	gate            ScopeGate
 	restrictedProbe bool
-	proxy           *gateProxy
+	proxy           *egressgate.Proxy
 
 	mu      sync.Mutex
 	closed  bool
@@ -123,14 +119,15 @@ func (b *Browser) NewSession(gate ScopeGate) (*Session, error) {
 	s := &Session{b: b, gate: gate}
 	params := target.CreateBrowserContext().WithDisposeOnDetach(true)
 	if gate != nil {
-		p, err := startGateProxy(gate, s.recordBlocked)
+		// The shared loopback gate (internal/egressgate), dialling through the caller's egress route.
+		p, err := egressgate.Start(gate, s.recordBlocked, b.opts.EgressDial)
 		if err != nil {
 			return nil, err
 		}
 		s.proxy = p
 		// "<-loopback>" removes Chrome's implicit loopback bypass, so a target on 127.0.0.1 is gated
 		// like any other — the same subtraction internal/browser makes for the operator's browser.
-		params = params.WithProxyServer("http://" + p.addr()).WithProxyBypassList("<-loopback>")
+		params = params.WithProxyServer(p.URL()).WithProxyBypassList("<-loopback>")
 	}
 	ctx, cancel := context.WithTimeout(b.browserCtx, b.opts.resolvedTimeout())
 	defer cancel()
@@ -181,7 +178,7 @@ func (s *Session) Close() {
 
 func (s *Session) closeProxy() {
 	if s.proxy != nil {
-		s.proxy.close()
+		s.proxy.Close()
 	}
 }
 
@@ -397,121 +394,4 @@ func (s *Session) RenderedDOMWithOptions(ctx context.Context, targetURL string, 
 	outcome.Settled = outcome.Waited < opts.MaxWait
 	outcome.Capped = !outcome.Settled
 	return html, outcome, nil
-}
-
-// ---- the gating proxy ---------------------------------------------------------------------------
-
-type gateProxy struct {
-	ln     net.Listener
-	srv    *http.Server
-	gate   ScopeGate
-	record func(string)
-	// transport sends the plain-HTTP requests the proxy allows. No proxy of its own: the session is
-	// the proxy.
-	transport *http.Transport
-}
-
-func startGateProxy(gate ScopeGate, record func(string)) (*gateProxy, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("domexec: could not start the session's scope-gating proxy: %w", err)
-	}
-	p := &gateProxy{ln: ln, gate: gate, record: record, transport: &http.Transport{
-		Proxy: nil, ForceAttemptHTTP2: false, ResponseHeaderTimeout: 30 * time.Second,
-	}}
-	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = p.srv.Serve(ln) }()
-	return p, nil
-}
-
-func (p *gateProxy) addr() string { return p.ln.Addr().String() }
-
-func (p *gateProxy) close() {
-	_ = p.srv.Close()
-	p.transport.CloseIdleConnections()
-}
-
-func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodConnect {
-		p.tunnel(w, r)
-		return
-	}
-	if r.URL == nil || !r.URL.IsAbs() {
-		http.Error(w, "burpsy session proxy: absolute-form requests only", http.StatusBadRequest)
-		return
-	}
-	if err := p.gate.AllowURL(r.URL); err != nil {
-		p.record(r.Method + " " + RedactURL(r.URL.String()) + " — " + err.Error())
-		http.Error(w, "burpsy: refused by the engagement scope: "+err.Error(), http.StatusForbidden)
-		return
-	}
-	out := r.Clone(r.Context())
-	out.RequestURI = ""
-	for _, h := range []string{"Proxy-Connection", "Proxy-Authorization", "Connection", "Keep-Alive", "Te", "Trailer", "Upgrade"} {
-		out.Header.Del(h)
-	}
-	resp, err := p.transport.RoundTrip(out)
-	if err != nil {
-		http.Error(w, "burpsy session proxy: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
-func (p *gateProxy) tunnel(w http.ResponseWriter, r *http.Request) {
-	host, portStr, err := net.SplitHostPort(r.Host)
-	if err != nil {
-		http.Error(w, "bad CONNECT authority", http.StatusBadRequest)
-		return
-	}
-	port64, err := strconv.ParseUint(portStr, 10, 16)
-	if err != nil {
-		http.Error(w, "bad CONNECT port", http.StatusBadRequest)
-		return
-	}
-	// A CONNECT is TLS by Chrome's use of it (it tunnels plain HTTP only for WebSockets over ws://,
-	// which this treats the same way: the authority is what is checked).
-	if err := p.gate.AllowAuthority(strings.Trim(host, "[]"), uint16(port64), true); err != nil {
-		p.record("CONNECT " + r.Host + " — " + err.Error())
-		http.Error(w, "burpsy: refused by the engagement scope", http.StatusForbidden)
-		return
-	}
-	upstream, err := net.DialTimeout("tcp", r.Host, 15*time.Second)
-	if err != nil {
-		http.Error(w, "burpsy session proxy: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		upstream.Close()
-		http.Error(w, "hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	client, buf, err := hj.Hijack()
-	if err != nil {
-		upstream.Close()
-		return
-	}
-	_, _ = client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	go pipe(upstream, client, buf)
-	go pipe(client, upstream, nil)
-}
-
-func pipe(dst, src net.Conn, buffered *bufio.ReadWriter) {
-	defer dst.Close()
-	defer src.Close()
-	if buffered != nil && buffered.Reader.Buffered() > 0 {
-		pending, _ := buffered.Reader.Peek(buffered.Reader.Buffered())
-		if _, err := dst.Write(pending); err != nil {
-			return
-		}
-	}
-	_, _ = io.Copy(dst, src)
 }

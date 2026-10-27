@@ -103,14 +103,13 @@ func checkHostHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding
 	}
 	baseURL := exchangeURL(cc.Exchange)
 	baseline := h.Baseline()
-	// A response with no URL at all has nowhere to put a host: nothing below could be observed.
-	if !strings.Contains(string(baseline.Raw), "//") {
-		return nil, nil
-	}
-
 	send := func(raw []byte) (ProbeResponse, bool) {
 		res, err := h.SendRequestHTTP1(ctx, withCacheBuster(raw))
 		return res, err == nil
+	}
+	// A response with no URL at all has nowhere to put a host: only routing can be observed.
+	if !strings.Contains(string(baseline.Raw), "//") {
+		return hostRoutingFinding(cc, base, authority, send), nil
 	}
 	var confirmed []string
 	var evidence []string
@@ -170,8 +169,9 @@ func checkHostHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding
 			evidence = append(evidence, name+": "+seen[0])
 		}
 	}
+	vhost := hostRoutingFinding(cc, base, authority, send)
 	if len(confirmed) == 0 {
-		return nil, nil
+		return vhost, nil
 	}
 	f := buildProbeFinding(cc, IssueHostHeaderInjection, "firm",
 		strings.Join(evidence, "; "),
@@ -181,7 +181,61 @@ func checkHostHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding
 			"host — through a shared cache, or a password-reset link built from it — points the victim at a host "+
 			"of the attacker's choosing.")
 	f.Severity = "medium"
-	return []*Finding{f}, nil
+	return append([]*Finding{f}, vhost...), nil
+}
+
+// hostRoutingFinding reports an internal name in Host selecting a different application (0vzb.42).
+// Two random .invalid hosts show what the server answers for an unknown name (its default vhost);
+// an internal name that answers 2xx, unlike both the baseline and that default, twice, is routed
+// somewhere else.
+func hostRoutingFinding(cc *CheckContext, base []byte, authority string, send func([]byte) (ProbeResponse, bool)) []*Finding {
+	// Each body has the Host it was sent masked, so a page that merely prints the Host is one page.
+	fetch := func(host string) (int, string, bool) {
+		r, ok := send(withHostHeaders(base, host))
+		if !ok {
+			return 0, "", false
+		}
+		body := strings.ReplaceAll(r.Body, host, "HOST")
+		return r.Status, strings.ReplaceAll(body, hostnameOf(host), "HOST"), true
+	}
+	s1, b1, ok1 := fetch(hostCanary())
+	s2, b2, ok2 := fetch(hostCanary())
+	so, bo, oko := fetch(authority)
+	if !ok1 || !ok2 || !oko {
+		return nil
+	}
+	dflt := newBooleanComparator(s1, b1, s2, b2)
+	if !dflt.stable() {
+		return nil
+	}
+	orig := newBooleanComparator(so, bo, so, bo)
+	port := ""
+	if i := strings.LastIndexByte(authority, ':'); i > 0 && !strings.HasSuffix(authority, "]") {
+		port = authority[i:]
+	}
+	for _, name := range []string{"localhost", "127.0.0.1", "admin", "internal", "intranet"} {
+		st, body, ok := fetch(name + port)
+		if !ok || st < 200 || st >= 300 {
+			continue
+		}
+		pg := dflt.page(st, body, "")
+		if dflt.sameAsBase(pg) || orig.sameAsBase(orig.page(st, body, "")) {
+			continue
+		}
+		st2, body2, ok := fetch(name + port)
+		if !ok || st2 != st || !dflt.alike(pg, dflt.page(st2, body2, "")) {
+			continue
+		}
+		f := buildProbeFinding(cc, IssueHostHeaderInjection, "firm",
+			fmt.Sprintf("Host: %s -> HTTP %d, %d bytes (unknown host -> HTTP %d)", name+port, st, len(body), s1),
+			fmt.Sprintf("with Host: %s the server at %s answered %d with a page unlike both the original "+
+				"response and what it serves for an unknown host name, twice. The Host header selects another "+
+				"application (virtual host); an attacker can reach an internal site through this front end.",
+				name+port, cc.Exchange.Host, st))
+		f.Severity = "low"
+		return []*Finding{f}
+	}
+	return nil
 }
 
 // overrideHeaderValue renders a host in the header's own syntax.

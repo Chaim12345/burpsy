@@ -20,7 +20,7 @@ const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
 // content made the counts large would make the assertions about counts fragile for no gain.
 
 test.describe("Dashboard — Crawl and audit (Burp's primary scan kind)", () => {
-  test("the dialog offers Burp's four scan types, and a disabled one says what is missing", async ({
+  test("the dialog offers Burp's four scan types, every one of them runnable", async ({
     page,
     consoleErrors,
   }) => {
@@ -39,16 +39,12 @@ test.describe("Dashboard — Crawl and audit (Burp's primary scan kind)", () => 
     // would never be the element under test.
     await expect(dialog.getByRole("button", { name: /^Crawl Maps/ })).toBeEnabled();
 
-    // The two burpsy cannot run are present and disabled rather than absent, and each names the
-    // capability it is missing. "not built yet" was the old text and it is a reason no operator can
-    // act on: it does not say whether the thing is coming, blocked, or simply never planned.
-    const api = dialog.getByRole("button", { name: /^API-only scan/ });
-    await expect(api).toBeDisabled();
-    await expect(api).toContainText("API-definition import");
-
-    const selected = dialog.getByRole("button", { name: /^Audit selected items/ });
-    await expect(selected).toBeDisabled();
-    await expect(selected).toContainText("selection-driven");
+    // These two were once disabled cards naming the capability they lacked (API-definition import, a
+    // selection-driven audit). Both have since landed (dashboard.tsx SCAN_TYPES: launch "api" posts
+    // to /api/apiscan, "audit" to /api/audit/selected), so all four cards are runnable. A card that
+    // regresses to disabled fails here.
+    await expect(dialog.getByRole("button", { name: /^API-only scan/ })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: /^Audit selected items/ })).toBeEnabled();
 
     expect(consoleErrors).toEqual([]);
   });

@@ -15,12 +15,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/bcheck/bundled"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
@@ -193,6 +195,18 @@ func (s *Server) handleCheckSource(w http.ResponseWriter, r *http.Request) {
 	}
 	e, ok := s.passiveScanner.Entry(name)
 	if !ok {
+		// A compiled-in check (0vzb.27): its source is the embedded file, read-only.
+		if m, err := bundled.LoadManifest(); err == nil {
+			if src, sourcePath, found := m.SourceOf(name); found {
+				kind := "active"
+				if c, perr := bcheck.Parse(src); perr == nil {
+					kind = checkKind(c)
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"name": name, "origin": "bundled", "source": src,
+					"kind": kind, "file": path.Base(sourcePath)})
+				return
+			}
+		}
 		http.Error(w, "no check named "+name+" is loaded", http.StatusNotFound)
 		return
 	}

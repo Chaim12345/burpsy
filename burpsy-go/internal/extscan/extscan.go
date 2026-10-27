@@ -4,11 +4,10 @@
 //
 // # Two gates, both before exec
 //
-// A delegated tool dials the target itself. Nothing in this package can put an
-// external process behind `sender.AuthorisedSender`, so the per-request byte
-// gate that authorises every request burpsy constructs simply does not reach
-// here. Two gates stand in for it, and both are checked before the binary is
-// launched:
+// A delegated tool composes its own requests, so `sender.AuthorisedSender`'s
+// per-request byte gate cannot reach them. Three gates stand in for it — two
+// checked before the binary is launched, and a loopback forward proxy every
+// request the tool sends goes through (egress.go):
 //
 //   - The allowlist. A tool is named, never pathed: `Config.Tools` maps the
 //     name an operator allowed onto the executable that implements it, and a
@@ -20,6 +19,10 @@
 //     but path-scoped rules mean burpsy cannot predict where the tool will go.
 //     See Authorise for why a partially-in-scope host is a refusal rather than
 //     a smaller scan.
+//   - The egress gate. The tool is pointed at a burpsy-owned proxy that refuses
+//     each out-of-scope request before it is dialled and dials the rest through
+//     the configured egress route. See egress.go for what it can and cannot see
+//     inside an HTTPS tunnel.
 //
 // # Refusals are typed, never silent
 //
@@ -49,6 +52,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/egressgate"
 	"github.com/burpsy-go/burpsy/internal/procgroup"
 )
 
@@ -81,6 +85,11 @@ type Config struct {
 	// MaxOutputBytes caps captured stdout+stderr per run. Zero takes
 	// DefaultMaxOutputBytes.
 	MaxOutputBytes int
+	// EgressDial is how the run's egress gate (egress.go) opens the connections
+	// it allows: the sender's egress dialer (sender.Sender.EgressDialContext) in
+	// production, so a delegated scan leaves through the operator's upstream
+	// proxy, SOCKS carrier and resolution table. nil dials directly.
+	EgressDial egressgate.DialFunc
 }
 
 func (c Config) timeout() time.Duration {

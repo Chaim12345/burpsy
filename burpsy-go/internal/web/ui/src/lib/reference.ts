@@ -522,8 +522,8 @@ export const TOOL_PANELS: ReferencePanel[] = [
      "Change request method, change body encoding, toggle chunked framing — each on a copy in a new Repeater tab; the history row never changes.",
    },
    {
-    term: "Copy URL / Copy as curl / Copy links",
-    detail: "The URL; a curl command with the request's headers and body; every link the response carries.",
+    term: "Copy URL / Copy as curl / Copy as sqlmap command / Copy links",
+    detail: "The URL; a curl or sqlmap command with the request's headers and body; every link the response carries.",
    },
    { term: "Copy request to file / Save request and response", detail: "Download the request alone, or both halves in one labelled file." },
    { term: "Highlight / Add comment", detail: "Annotate the row; both are filterable (highlight and comment are query fields)." },

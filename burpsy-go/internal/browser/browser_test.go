@@ -13,6 +13,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"go.uber.org/zap"
 )
@@ -107,7 +108,7 @@ func TestSettingsAndClearRefusals(t *testing.T) {
 // not open windows; every other argument is the operator's launch exactly.
 func TestAnHTTPSPageLoadedInTheBrowserReachesHistoryWithNoCertificateWarning(t *testing.T) {
 	if _, err := domexec.ResolveChromePath(""); err != nil {
-		t.Skip("no Chromium on this machine: ", err)
+		domexectest.Skipf(t, "no Chromium on this machine: %v", err)
 	}
 
 	hits := make(chan string, 16)

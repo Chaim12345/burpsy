@@ -423,8 +423,9 @@ export interface CorpusCheckView {
  severity?: string;
  author?: string;
  description?: string;
- /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks. */
- origin?: "console" | "file";
+ /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks,
+  * "bundled" for one compiled into the binary (0vzb.27): listed and switchable, never edited. */
+ origin?: "console" | "file" | "bundled";
  file?: string;
 }
 
@@ -537,6 +538,8 @@ export interface TriageSettingsView {
  model: string;
  api_key?: string;
  configured: boolean;
+ /** No project is open, so nothing can be stored. */
+ needs_project?: boolean;
 }
 
 /** One skill in GET /api/skills (burpsy-react-ui-ulsy): a packaged prompt technique from the

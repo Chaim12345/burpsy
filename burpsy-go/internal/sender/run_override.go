@@ -68,9 +68,13 @@ func (s *Sender) DeriveWithTimeouts(o TimeoutOverride) (*Sender, error) {
 	if s == nil {
 		return nil, fmt.Errorf("there is no sender to derive a run's timeouts from")
 	}
+	// The carrier is read in the same locked section as the config and the settings: WithUpstreamCarrier
+	// writes it under s.mu, so reading it after the unlock was a data race, and could pair the settings
+	// from before a swap with the carrier from after it (burpsy-react-ui-o388-predial-vs-dial residual 4).
 	s.mu.RLock()
 	cfg := *s.config
 	settings := s.net
+	carrier := s.carrier
 	s.mu.RUnlock()
 
 	connect := settings.Timeouts.ConnectMS
@@ -100,11 +104,11 @@ func (s *Sender) DeriveWithTimeouts(o TimeoutOverride) (*Sender, error) {
 	cfg.Timeout = time.Duration(total) * time.Millisecond
 
 	return &Sender{
-		client:       buildClient(&cfg, settings, s.carrier),
+		client:       buildClient(&cfg, settings, carrier),
 		config:       &cfg,
 		net:          settings,
 		jar:          s.jar,
-		carrier:      s.carrier,
+		carrier:      carrier,
 		protocols:    s.protocols,
 		upstream:     s.upstream,
 		upstreamErr:  s.upstreamErr,

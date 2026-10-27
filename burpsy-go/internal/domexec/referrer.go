@@ -38,7 +38,8 @@ func (b *Browser) ObserveCrossOriginReferers(ctx context.Context, pageURL string
 	if err != nil || (page.Scheme != "http" && page.Scheme != "https") {
 		return nil, fmt.Errorf("domexec: %q is not an http(s) page", pageURL)
 	}
-	tabCtx, cancel, err := b.newTab(ctx)
+	// openTab: this function's own Fetch handler is stricter than the default gate and must be the only one.
+	tabCtx, cancel, err := b.openTab(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -628,7 +628,7 @@ export function ExtenderApisPage(): JSX.Element {
      <Card>
       <SectionHeading
        title="Registration points"
-       detail="Three, and only three. Of Montoya's thirteen userInterface() registration points, ten hand Burp a Swing object and have no honest web analogue; a JSON schema for a component whose only consumer is the thing that defined it would be a fiction, so they are absent rather than approximated."
+       detail={`${data.kinds.length} registration ${data.kinds.length === 1 ? "point" : "points"}, listed below. Montoya's userInterface() registration points that hand Burp a Swing object have no honest web analogue; a JSON schema for a component whose only consumer is the thing that defined it would be a fiction, so they are absent rather than approximated.`}
       />
       <SimpleTable headers={["Kind", "Invoked by", "What it is", "Burp's equivalent"]}>
        {data.kinds.map((kind) => (

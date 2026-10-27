@@ -1,8 +1,27 @@
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
+
+// The "Add scope rule" card. The form's fields are labelled Host / Port / Path now (they were
+// "Host pattern" / "Path prefix"), and the page has a second "Host" field further down (the drop
+// scope), so every form locator is scoped to this card.
+const addForm = (page: Page) => page.locator(".card", { has: page.getByRole("heading", { name: "Add scope rule" }) });
+
+/**
+ * Clear every rule through the page, the way an operator does: "Clear scope" now asks first ("Clear
+ * every scope rule?", because an empty scope puts every host in scope), so the header button alone
+ * clears nothing. A no-op when the table is already empty (the button is disabled then).
+ */
+async function clearScope(page: Page): Promise<void> {
+  const clear = page.getByRole("button", { name: "Clear scope" }).first();
+  if (!(await clear.isEnabled())) return;
+  await clear.click();
+  const dialog = page.getByRole("dialog", { name: "Clear every scope rule?" });
+  await dialog.getByRole("button", { name: "Clear scope" }).click();
+  await expect(dialog).toBeHidden();
+}
 
 // The Scope page used to be a one-line delegate to Settings' shared section, whose notice honestly
 // said the UI offered host patterns only. The Go API grew port and path arms (ScopeRequest.Path /
@@ -14,11 +33,11 @@ test.describe("Scope page — Burp-style rule table", () => {
   test("adding a rule with port and path arms shows the full tuple", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("scope"));
 
-    await page.getByLabel("Rule kind").selectOption("include");
-    await page.getByLabel("Host pattern").fill("api.example.com");
-    await page.getByLabel("Port").fill("8443");
-    await page.getByLabel("Path prefix").fill("/v2");
-    await page.getByRole("button", { name: "Add rule" }).click();
+    await addForm(page).getByLabel("Rule kind").selectOption("include");
+    await addForm(page).getByLabel("Host", { exact: true }).fill("api.example.com");
+    await addForm(page).getByLabel("Port", { exact: true }).fill("8443");
+    await addForm(page).getByLabel("Path", { exact: true }).fill("/v2");
+    await addForm(page).getByRole("button", { name: "Add rule" }).click();
 
     const row = page.locator("tr.data-row", { hasText: "api.example.com" });
     await expect(row).toHaveCount(1);
@@ -32,16 +51,16 @@ test.describe("Scope page — Burp-style rule table", () => {
     await gotoRoute(page, route("scope"));
 
     // Scope persists across tests (the harness server is shared), so start from a clean table.
-    await page.getByRole("button", { name: "Clear scope" }).click();
+    await clearScope(page);
     await expect(page.locator("tr.data-row")).toHaveCount(0);
 
     // Two rules on one host differing only in path — removing by host alone would delete both,
     // which is exactly the bug the backend's identity-aware remove exists to prevent.
     for (const path of ["/v2", "/admin"]) {
-      await page.getByLabel("Rule kind").selectOption("exclude");
-      await page.getByLabel("Host pattern").fill("api.example.com");
-      await page.getByLabel("Path prefix").fill(path);
-      await page.getByRole("button", { name: "Add rule" }).click();
+      await addForm(page).getByLabel("Rule kind").selectOption("exclude");
+      await addForm(page).getByLabel("Host", { exact: true }).fill("api.example.com");
+      await addForm(page).getByLabel("Path", { exact: true }).fill(path);
+      await addForm(page).getByRole("button", { name: "Add rule" }).click();
     }
     await expect(page.locator("tr.data-row", { hasText: "api.example.com" })).toHaveCount(2);
 
@@ -74,7 +93,7 @@ test.describe("Scope page — Paste URL", () => {
    */
   const emptyScope = async (page: import("@playwright/test").Page) => {
     const clear = page.getByRole("button", { name: "Clear scope" });
-    if (await clear.isEnabled()) await clear.click();
+    if (await clear.isEnabled()) await clearScope(page);
     await expect(page.locator("tr.data-row")).toHaveCount(0);
   };
 
@@ -111,7 +130,7 @@ test.describe("Scope page — Paste URL", () => {
     await expect(page.locator("tr.data-row")).toHaveCount(2);
     expect(consoleErrors).toEqual([]);
 
-    await page.getByRole("button", { name: "Clear scope" }).click();
+    await clearScope(page);
   });
 
   /**

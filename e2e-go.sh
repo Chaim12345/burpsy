@@ -74,7 +74,9 @@ BIN=$(mktemp -u /tmp/burpsy-go-e2e.XXXXXX)
 cleanup(){
   [ -n "${TARGET_PID:-}" ] && kill "$TARGET_PID" 2>/dev/null
   [ -n "${BURPSY_PID:-}" ] && kill "$BURPSY_PID" 2>/dev/null
-  rm -f "$BIN"
+  [ -n "${TLS_ORIGIN_PID:-}" ] && kill "$TLS_ORIGIN_PID" 2>/dev/null
+  [ -n "${TLS_BURPSY_PID:-}" ] && kill "$TLS_BURPSY_PID" 2>/dev/null
+  rm -rf "$BIN" "${TLS_WORK:-}"
   wait 2>/dev/null
 }
 trap cleanup EXIT
@@ -328,6 +330,60 @@ echo "$CJ" | grep -qE '"name":"(Path|SameSite)"' \
 echo "=== 10. memory accounting is exposed ==="
 ST=$(curl -s "http://127.0.0.1:$WEB_PORT/api/stats")
 echo "$ST" | grep -qE '"stored_bytes":[0-9]+' && ok "stats: $ST" || no "stats missing"
+
+echo "=== 11. HTTPS through the intercepting proxy: the CA is served, trusted, and history is plaintext ==="
+# The Go port of e2e-tls.sh, which drove the frozen Rust binary (burpsy-react-ui-legacy-e2e-rust): a
+# second burpsy with -intercept-tls generates its CA on first start; curl trusts the CA the console
+# serves at /ca.crt and fetches a loopback HTTPS origin through the proxy; history must hold the
+# decrypted path and body. Separate ports so the plain run above is untouched.
+TLS_WORK=$(mktemp -d /tmp/burpsy-e2e-tls.XXXXXX)
+TLS_PROXY=18182; TLS_WEB=18183; TLS_ORIGIN=18198
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" \
+  -keyout "$TLS_WORK/origin.key" -out "$TLS_WORK/origin.crt" >/dev/null 2>&1
+python3 - "$TLS_ORIGIN" "$TLS_WORK" <<'PY' &
+import http.server, ssl, sys
+port, work = int(sys.argv[1]), sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = f"TLS-ORIGIN {self.path}".encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+srv = http.server.HTTPServer(("127.0.0.1", port), H)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(f"{work}/origin.crt", f"{work}/origin.key")
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+srv.serve_forever()
+PY
+TLS_ORIGIN_PID=$!
+"$BIN" --proxy 127.0.0.1:$TLS_PROXY --web 127.0.0.1:$TLS_WEB -intercept-tls -ca-dir "$TLS_WORK/ca" >"$TLS_WORK/burpsy.log" 2>&1 &
+TLS_BURPSY_PID=$!
+for _ in $(seq 1 100); do curl -s -o /dev/null "http://127.0.0.1:$TLS_WEB/api/stats" && break; sleep 0.1; done
+for _ in $(seq 1 100); do curl -sk -o /dev/null "https://127.0.0.1:$TLS_ORIGIN/" && break; sleep 0.1; done
+# The origin is self-signed and the proxy verifies upstream certificates by default (Burp's default),
+# so the origin's certificate is added as a trusted root the way an operator would: a confirmed PUT of
+# the network settings' tls.root_ca_path. Verification stays on.
+TRUST=$(python3 - "$TLS_WEB" "$TLS_WORK/origin.crt" <<'PY'
+import json,sys,urllib.request
+web,ca=sys.argv[1],sys.argv[2]
+base=f"http://127.0.0.1:{web}"
+cur=json.load(urllib.request.urlopen(f"{base}/api/network/settings",timeout=10))
+settings=cur.get("settings",cur)
+settings.setdefault("tls",{})["root_ca_path"]=ca
+body=json.dumps(settings)
+mint=json.dumps({"method":"PUT","url":"/api/network/settings","body":body}).encode()
+tok=json.load(urllib.request.urlopen(urllib.request.Request(f"{base}/api/network/settings/confirm",mint,{"content-type":"application/json"}),timeout=10))["token"]
+req=urllib.request.Request(f"{base}/api/network/settings",body.encode(),{"content-type":"application/json","X-Burpsy-Confirm":tok},method="PUT")
+print(urllib.request.urlopen(req,timeout=10).status)
+PY
+)
+[ "$TRUST" = 200 ] && ok "the origin's certificate was added as a trusted root (confirmed PUT)" || no "network settings PUT: '$TRUST'"
+curl -s -o "$TLS_WORK/ca.crt" "http://127.0.0.1:$TLS_WEB/ca.crt"
+grep -q "BEGIN CERTIFICATE" "$TLS_WORK/ca.crt" && ok "the console serves the generated CA" || no "no CA at /ca.crt: $(head -c 120 "$TLS_WORK/ca.crt")"
+TBODY=$(env -u NO_PROXY -u no_proxy curl -s --cacert "$TLS_WORK/ca.crt" -x "http://127.0.0.1:$TLS_PROXY" "https://127.0.0.1:$TLS_ORIGIN/secret-path?x=1")
+[ "$TBODY" = "TLS-ORIGIN /secret-path?x=1" ] && ok "curl trusted the burpsy CA and got the origin's answer through the proxy" || no "HTTPS through the proxy: '${TBODY:0:160}'"
+sleep 0.5
+THIST=$(curl -s "http://127.0.0.1:$TLS_WEB/api/history")
+echo "$THIST" | grep -q '/secret-path' && ok "history holds the decrypted HTTPS path" || no "HTTPS path not in history: ${THIST:0:200}"
+echo "$THIST" | grep -q '"tls":true' && ok "the exchange is recorded as TLS" || no "the HTTPS exchange is not marked tls: ${THIST:0:200}"
 
 echo
 echo "############ $PASS passed, $FAIL failed ############"

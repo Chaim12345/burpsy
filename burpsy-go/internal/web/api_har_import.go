@@ -152,8 +152,11 @@ func (s *Server) importHAREntries(entries []harEntry) harImportResult {
 			result.note(i, err)
 			continue
 		}
-		reqID, err := s.store.Put(reqRaw, core.DirectionRequest)
+		// One capture-gate hold across the entry's messages and its row (burpsy-react-ui-capture-split-web).
+		hold := s.store.HoldCapture()
+		reqID, err := hold.Put(reqRaw, core.DirectionRequest)
 		if err != nil {
+			hold.Release()
 			result.Skipped++
 			result.note(i, fmt.Errorf("store request: %w", err))
 			continue
@@ -178,7 +181,7 @@ func (s *Server) importHAREntries(entries []harEntry) harImportResult {
 		if e.Response.Status > 0 {
 			if respRaw, rerr := renderHARResponse(e.Response); rerr != nil {
 				result.note(i, fmt.Errorf("response: %w", rerr))
-			} else if respID, perr := s.store.Put(respRaw, core.DirectionResponse); perr != nil {
+			} else if respID, perr := hold.Put(respRaw, core.DirectionResponse); perr != nil {
 				result.note(i, fmt.Errorf("store response: %w", perr))
 			} else {
 				status := uint16(e.Response.Status)
@@ -191,7 +194,8 @@ func (s *Server) importHAREntries(entries []harEntry) harImportResult {
 			}
 		}
 
-		s.store.AddExchange(ex)
+		hold.AddExchange(ex)
+		hold.Release()
 		result.Imported++
 	}
 	return result

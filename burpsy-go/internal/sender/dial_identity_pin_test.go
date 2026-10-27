@@ -182,8 +182,15 @@ func TestDialIdentityFreezesTheTLSFingerprintAtCapture(t *testing.T) {
 func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 	config := DefaultSenderConfig()
 	s := NewSender(config)
+	// The capture holds a frozen COPY of the carrier (dial_identity.go), so the two holders are
+	// told apart by their configuration's identity rather than by pointer: before is
+	// unconfigured, after names a hop.
 	before := upstream.NewCarrier()
 	after := upstream.NewCarrier()
+	if err := after.SetSocks("socks5://127.0.0.1:1080", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	afterID := after.Identity()
 	s.WithUpstreamCarrier(before)
 	base := mustCapture(t, s, "example.com", 443, false)
 
@@ -209,7 +216,7 @@ func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 					}
 					return
 				}
-				sawNewCarrier := id.carrier == after
+				sawNewCarrier := id.carrier.Identity() == afterID
 				sawNewGeneration := id.gen > base.gen
 				if sawNewCarrier != sawNewGeneration {
 					select {
@@ -228,7 +235,7 @@ func TestDialIdentityCarrierAndGenerationAreAConsistentPair(t *testing.T) {
 	for f := range failures {
 		t.Error(f)
 	}
-	if id := mustCapture(t, s, "example.com", 443, false); id.carrier != after {
+	if id := mustCapture(t, s, "example.com", 443, false); id.carrier.Identity() != afterID {
 		t.Error("the carrier settled on the pre-swap value")
 	}
 }

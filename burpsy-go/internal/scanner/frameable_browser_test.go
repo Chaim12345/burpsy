@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/chromedp/chromedp"
 )
 
@@ -95,7 +96,7 @@ func TestIsFrameableAgreesWithTheBrowser(t *testing.T) {
 		actx, cancel = chromedp.NewRemoteAllocator(context.Background(), remote)
 	} else {
 		actx, cancel = chromedp.NewExecAllocator(context.Background(),
-			append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", true))...)
+			append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", true), chromedp.NoSandbox)...)
 	}
 	defer cancel()
 	for i, c := range frameableCases {
@@ -114,7 +115,7 @@ func TestIsFrameableAgreesWithTheBrowser(t *testing.T) {
 			cancelTimeout()
 			cancelTab()
 			if i == 0 {
-				t.Skipf("no browser reachable, so the verdicts are NOT re-observed in this run: %v", err)
+				domexectest.Skipf(t, "no browser reachable, so the verdicts are not re-observed: %v", err)
 			}
 			t.Fatalf("case %d: %v", i, err)
 		}

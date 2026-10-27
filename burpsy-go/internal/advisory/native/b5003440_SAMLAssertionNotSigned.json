@@ -1,0 +1,20 @@
+{
+  "typeIndex": 3036689472,
+  "name": "SAML assertion not signed",
+  "description": "<p>A SAMLResponse sent to the application carries an Assertion with no XML signature, neither on the Assertion nor on the enclosing Response. A service provider that accepts such an assertion lets anyone who can post to its assertion consumer service log in as any user by writing the NameID and attributes they want.</p>\n<p>burpsy reports this passively from the observed SAMLResponse, so it is tentative: confirm by replaying the response with an altered NameID and checking whether the login succeeds.</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Configure the identity provider to sign assertions, and configure the service provider to require a valid signature, from the identity provider's pinned certificate, on every assertion it accepts. Reject unsigned and wrongly signed responses before reading any attribute.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "OWASP SAML Security Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/SAML_Security_Cheat_Sheet.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-347: Improper Verification of Cryptographic Signature",
+      "url": "https://cwe.mitre.org/data/definitions/347.html"
+    }
+  ]
+}

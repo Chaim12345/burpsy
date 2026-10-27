@@ -38,6 +38,8 @@ type triageSettingsView struct {
 	Model      string `json:"model"`
 	APIKey     string `json:"api_key,omitempty"` // echoed only when the operator just sent it; GET omits
 	Configured bool   `json:"configured"`        // GET only: a key is stored
+	// NeedsProject: no project is open, so nothing can be stored (GET only).
+	NeedsProject bool `json:"needs_project,omitempty"`
 }
 
 // handleTriageSettings serves GET/PUT /api/settings/triage.
@@ -47,7 +49,7 @@ func (s *Server) handleTriageSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if s.persist == nil {
-			http.Error(w, "persistence is not attached to this process: the triage endpoint cannot be stored", http.StatusServiceUnavailable)
+			writeJSON(w, http.StatusOK, triageSettingsView{NeedsProject: true})
 			return
 		}
 		cfg, err := s.persist.LoadTriageSettings()

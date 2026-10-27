@@ -91,7 +91,8 @@ go test ./internal/blindxss/...
 Two tests render a real victim page in headless Chrome through `domexec.Browser.RenderedDOM` and
 assert on what that browser actually sent — the callback body is never hand-constructed, so a
 change to `scriptTemplate` that breaks the real capture path fails here rather than passing against
-a guess at its output. Both skip when no Chrome binary is present. The rest run offline in
+a guess at its output. Both skip when no browser can be launched, and the skip is counted: `TestMain` fails the package
+unless `BURPSY_ALLOW_NO_CHROME=1` (`internal/domexec/domexectest`). The rest run offline in
 milliseconds.
 
 ## Dependencies

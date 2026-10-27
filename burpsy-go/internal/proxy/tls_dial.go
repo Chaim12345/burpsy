@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
@@ -51,12 +52,13 @@ func (s *Server) clientCertSource() alpn.ClientCertSource {
 
 // upstreamDialer is the dialer every leg in this file uses.
 //
-// No timeout of its own: the relay legs here have never had a dial timeout — they rely on the OS
-// connect timeout, the same as the net.Dial calls this replaced — and inventing one now would change
-// when a slow origin gives up on a path unrelated to proxying.
+// Bounded by upstreamConnectTimeout (burpsy-react-ui-proxy-no-timeouts). The legs used to rely on the
+// OS connect timeout — two minutes and more on Linux for a black-holed SYN — so every browser request
+// to an unreachable origin pinned a goroutine and the client's socket for that long.
 func (s *Server) upstreamDialer() upstreamproxy.Dialer {
 	return upstreamproxy.Dialer{
-		Policy: s.upstreamPolicy(),
+		Timeout: upstreamConnectTimeout,
+		Policy:  s.upstreamPolicy(),
 		// The global SOCKS layer, applied beneath whatever the policy resolved — the layer that makes
 		// an HTTP upstream proxy reachable only through a SOCKS hop expressible, and that carries a
 		// direct dial too because the setting says every outbound connection
@@ -65,6 +67,15 @@ func (s *Server) upstreamDialer() upstreamproxy.Dialer {
 		Carrier: s.carrier(),
 	}
 }
+
+// upstreamConnectTimeout bounds one upstream dial, including an upstream proxy's handshake. Longer
+// than the sender's 10s connect default because a browser behind the proxy has its own patience and
+// a slow-but-alive origin should still answer it.
+const upstreamConnectTimeout = 30 * time.Second
+
+// upstreamTLSDialTimeout bounds a whole TLS leg's setup: the dial (itself bounded above) plus the
+// handshake.
+var upstreamTLSDialTimeout = 60 * time.Second
 
 // carrier is the global SOCKS layer, or nil. A method so every leg in this file reads it the same
 // way and a nil Server is the same answer as a Server with no carrier.
@@ -135,10 +146,20 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (n
 	// The pool and the protocol floor come from the same policy as the verify switch, so an operator
 	// who turned verification off and then on again has not silently lost the custom CA they added.
 	policy.applyTo(&dialer)
-	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
+	// Carried whenever an upstream policy OR the global SOCKS carrier is configured — the rule the
+	// sender's raw path states (sender.go dialTLS, burpsy-react-ui-mr83 part 3). Gating on the policy
+	// alone was burpsy-react-ui-socks-tls-bypass: an operator who set only a SOCKS hop had every
+	// intercepted HTTPS leg dialled straight at the origin, because alpn.Dialer with no Carry opens
+	// its own socket. A nil carrier with an empty policy keeps the direct dial byte for byte.
+	if policy := s.upstreamPolicy(); (policy != nil && !policy.Empty()) || s.carrier() != nil {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}
-	conn, negotiated, err := dialer.Dial(context.Background(), serverName, addr, alpnOffer)
+	// Bounded (burpsy-react-ui-proxy-timeouts-rest): the TCP dial has its own 30s bound, but the TLS
+	// handshake ran under context.Background, so an origin that accepted and never answered the
+	// ClientHello held the browser's leg forever.
+	ctx, cancel := context.WithTimeout(context.Background(), upstreamTLSDialTimeout)
+	defer cancel()
+	conn, negotiated, err := dialer.Dial(ctx, serverName, addr, alpnOffer)
 	if err == nil && s.config.serverCerts != nil {
 		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
 			if port, cerr := strconv.ParseUint(portText, 10, 16); cerr == nil {

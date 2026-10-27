@@ -146,7 +146,7 @@ func (s *Sender) sendSynchronizedOn(ctx context.Context, conn net.Conn, raw []by
 		return nil, SendOutcome{}, fmt.Errorf("write failed: %w", explainCancellation(ctx, err))
 	}
 
-	response, rerr := readResponse(
+	response, capped, rerr := readResponse(
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
@@ -155,7 +155,9 @@ func (s *Sender) sendSynchronizedOn(ctx context.Context, conn net.Conn, raw []by
 	if rerr != nil {
 		return nil, SendOutcome{}, fmt.Errorf("read failed: %w", explainCancellation(ctx, rerr))
 	}
-	return response, SendOutcome{Protocol: core.ProtocolHTTP1}, rerr
+	out := SendOutcome{Protocol: core.ProtocolHTTP1}
+	addCapNote(&out, capped)
+	return response, out, nil
 }
 
 // hostOf reads the Host header out of a raw request, for the streaming check and the

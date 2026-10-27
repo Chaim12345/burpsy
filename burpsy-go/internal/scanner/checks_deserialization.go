@@ -298,6 +298,7 @@ func deserPlansFor(p bcheck.InsertionPoint) ([]deserPlan, bool) {
 		{deserPHPFamily, b64},
 		{deserPHPFamily, deserRaw},
 		{deserPickleFamily, b64},
+		{deserRubyFamily, b64},
 		{deserJacksonFamily, b64},
 		{deserTypedJSONFamily, b64},
 	}, false
@@ -312,6 +313,8 @@ func deserPlansForBytes(decoded []byte, enc deserEncoding, cookie bool) []deserP
 		return []deserPlan{{deserPHPFamily, enc}}
 	case SerializedPython:
 		return []deserPlan{{deserPickleFamily, enc}}
+	case SerializedRuby:
+		return []deserPlan{{deserRubyFamily, enc}}
 	}
 	t := strings.TrimSpace(string(decoded))
 	if strings.HasPrefix(t, "{") && json.Valid([]byte(t)) {
@@ -404,6 +407,26 @@ var deserPickleFamily = &deserFamily{
 			accepted: ok, rejected: bad,
 			acceptedNote: fmt.Sprintf("a protocol-%d pickle of the int %d", proto, n),
 			rejectedNote: fmt.Sprintf("the same bytes with the undefined opcode 0x%02x in place of STOP", i),
+		}
+	},
+}
+
+// deserRubyFamily is Ruby Marshal (0vzb.45): Marshal.dump of a small int against the same bytes
+// truncated, or under a marshal version Ruby refuses.
+var deserRubyFamily = &deserFamily{
+	name: "Ruby Marshal", severity: "high", confidence: "firm",
+	proves: "the server runs Marshal.load on this value, which instantiates any class the payload names",
+	pair: func(i int) deserPair {
+		n := deserRandByte()%0x60 + 0x10
+		ok := []byte{0x04, 0x08, 'i', n + 5}
+		bad, note := []byte{0x04, 0x08, 'i'}, "the same bytes cut before the integer"
+		if i == 1 {
+			bad, note = []byte{0x04, 0x09, 'i', n + 5}, "the same bytes under marshal version 4.9"
+		}
+		return deserPair{
+			accepted: ok, rejected: bad,
+			acceptedNote: fmt.Sprintf("Marshal.dump(%d)", n),
+			rejectedNote: note,
 		}
 	},
 }

@@ -64,9 +64,14 @@ risk=(
   # generator and client copy of the gated list.
   "burpsy-go/internal/web/route_manifest.go|gated routes + MCP risk-class placement"
   "burpsy-go/internal/web/confirm_gate.go|gated routes"
+  "burpsy-go/internal/web/confirm_binding.go|gated routes (token-to-call binding)"
+  "burpsy-go/internal/web/agent_tools.go|gated routes (needsConfirmation predicate)"
+  "burpsy-go/internal/web/ui/src/lib/route-manifest.ts|gated routes (client gate table)"
+  "burpsy-go/internal/web/ui/src/lib/gated-routes.contract.json|gated routes (resolver contract)"
   "burpsy-go/internal/web/ui/scripts/gen-gated-routes.ts|gated routes"
   "burpsy-go/internal/web/ui/src/lib/gated-routes.ts|gated routes"
   "burpsy-go/internal/web/ui/src/lib/route-risk.ts|gated routes"
+  "burpsy-go/internal/web/ui/src/lib/api.ts|gated routes (client gated-route resolver)"
   # MCP risk-class placement: which tools an MCP client is offered, in which group.
   "burpsy-go/internal/mcp/groups.go|MCP risk-class placement"
   # Credential, client-certificate, CA and TLS material. proxy.go is listed whole because it mints
@@ -90,6 +95,9 @@ risk=(
   "scripts/ci-changes.py|CI gate code"
   "scripts/affected-go-tests.sh|CI gate code"
   "scripts/ci-install-tools.sh|CI gate code/pinned hashes"
+  "scripts/ci-lint.sh|CI gate code"
+  "scripts/ci-fuzz.sh|CI gate code"
+  "scripts/ci/*|CI gate code (lint config, govulncheck baseline)"
   ".buildkite/*|CI pipeline/agent image"
   # What the `ui` job runs (package.json's `check` script) and what it installs (lockfile, bun
   # config, the TypeScript settings tsc --noEmit checks against): editing these edits the UI gate.
@@ -102,14 +110,32 @@ risk=(
   ".gitattributes|merge drivers"
 )
 
-# risk_of PATH — print the class PATH falls in, or nothing.
-risk_of() {
+# match_risk PATH — print the class of the first entry whose glob matches PATH, or nothing.
+match_risk() {
   local f=$1 entry
-  case "$f" in \"*) echo "unusual file name"; return ;; esac
   for entry in "${risk[@]}"; do
     # shellcheck disable=SC2053 # the right-hand side is a glob on purpose
     if [[ "$f" == ${entry%%|*} ]]; then echo "${entry#*|}"; return; fi
   done
+}
+
+# risk_of PATH — print the class PATH falls in, or nothing. A test that pins a risk-class file is
+# in that file's class: weakening the pin and the code together in one PR is the change this gate
+# exists to catch (x_test.go next to x.go; x.test.ts / x.contract.test.ts next to x.ts).
+risk_of() {
+  local f=$1 class src
+  case "$f" in \"*) echo "unusual file name"; return ;; esac
+  class=$(match_risk "$f")
+  if [ -n "$class" ]; then echo "$class"; return; fi
+  case "$f" in
+    *_test.go) src=${f%_test.go}.go ;;
+    *.contract.test.ts) src=${f%.contract.test.ts}.ts ;;
+    *.test.ts) src=${f%.test.ts}.ts ;;
+    *.test.tsx) src=${f%.test.tsx}.tsx ;;
+    *) return ;;
+  esac
+  class=$(match_risk "$src")
+  if [ -n "$class" ]; then echo "$class (its test)"; fi
 }
 
 # Command substitution, not a process substitution: a failing git diff fails the script (set -e)

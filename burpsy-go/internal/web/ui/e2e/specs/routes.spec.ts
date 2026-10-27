@@ -7,6 +7,9 @@
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 
+/** nav.ts's one `hidden` leaf, as the palette labels it. */
+const HIDDEN_LEAF = "Proxy › Exchange detail";
+
 test.describe("routes", () => {
   for (const route of ROUTES) {
     test(`#${route.id} renders "${route.h1}" and logs no errors`, async ({
@@ -59,12 +62,30 @@ test.describe("routes", () => {
     }
 
     // And nothing extra: navigation entries plus the five commands the shell defines.
-    const navigationEntries = labels.filter((label) =>
-      ROUTES.some((route) => label.split("\n")[0]?.trim().endsWith(route.label)),
-    );
-    expect(navigationEntries.length).toBe(ROUTES.length);
+    // A "Go to" entry is shaped "Tool › Leaf" for the three tools with several leaves, or is a
+    // single-leaf tool's bare label. Counted by that shape, not by suffix-matching ROUTES: the palette
+    // also jumps to Settings sections, and "Settings › Scanner" ends with the Scanner leaf's label.
+    // Counting by shape is also what makes a leaf added to nav.ts and not to ROUTES fail here.
+    const multiLeaf = /^(Target|Proxy|Extensions) › /;
+    const singleLeaf = new Set(ROUTES.filter((route) => !["target", "proxy", "extender"].includes(route.tool)).map((route) => route.label));
+    // "Proxy › Exchange detail" is excluded by name: it is a hidden leaf (nav.ts `hidden: true`, the
+    // detached-window route) that the palette lists anyway — a known defect with its own test below.
+    const navigationEntries = labels
+      .map((label) => label.split("\n")[0]?.trim() ?? "")
+      .filter((first) => (multiLeaf.test(first) || singleLeaf.has(first)) && first !== HIDDEN_LEAF);
+    expect(navigationEntries.length, `palette "Go to" entries: ${navigationEntries.join(" | ")}`).toBe(ROUTES.length);
 
     expect(consoleErrors).toEqual([]);
+  });
+
+  test("a hidden nav leaf is not offered as a Go to entry", async ({ page }) => {
+    // nav.ts marks the detached exchange window `hidden`; the palette used to list it anyway
+    // (fixed in burpsy-react-ui-palette-hidden-leaf), so this runs as a plain assertion.
+    await gotoApp(page);
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(page.getByLabel("Search commands")).toBeVisible();
+    const labels = await page.locator("#palette-results [role=option] .palette-item-label").allInnerTexts();
+    expect(labels.map((label) => label.split("\n")[0]?.trim())).not.toContain(HIDDEN_LEAF);
   });
 
   test("every alt+N hotkey navigates to its tool's entry leaf", async ({ page, consoleErrors }) => {

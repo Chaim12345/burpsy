@@ -4,25 +4,34 @@ import { ROUTES } from "../harness/routes";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
 
-// The menu bar lagged Burp in three ways: the second menu was called "Project" where Burp has
-// "File", there was no Tools menu at all (the only way between tools was the tab strip), and View
-// had no way back from a dragged-out split layout. These tests pin all three.
+// The menu bar lagged Burp in three ways: the menus did not match Burp's, the tab list sat in a
+// burpsy-only Tools menu as navigate actions, and View had no way back from a dragged-out split
+// layout. These tests pin the fixes. Bead lje3 moved the tab list into View, as Burp has it: one
+// checkable entry per top-level tab (show/hide, not navigate) plus "Restore default tab layout".
 
-test.describe("Menu bar — File, Tools, reset layout", () => {
-  test("Tools menu lists every tool and navigates to it", async ({ page, consoleErrors }) => {
+// Every top-level tab, in nav.ts's TOOLS order.
+const TABS = ["Dashboard", "Target", "Proxy", "Intruder", "Repeater", "Collaborator", "Sequencer", "Decoder", "Comparer", "Logger", "Organizer", "Session", "Extensions", "Discover", "Settings"];
+
+test.describe("Menu bar — Burp's menus, the View tab list, reset layout", () => {
+  test("the menus are Burp's, and View lists every top-level tab as a show/hide toggle", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("dashboard"));
 
     const triggers = page.locator(".menu-trigger");
-    await expect(triggers).toHaveCount(6);
-    await expect(triggers).toContainText(["burpsy", "File", "Repeater", "Tools", "View", "Help"]);
+    await expect(triggers).toHaveText(["burpsy", "File", "Project", "Intruder", "Repeater", "View", "Help"]);
 
-    await page.locator('.menu-trigger:has-text("Tools")').click();
-    for (const label of ["Dashboard", "Target", "Proxy", "Intruder", "Repeater", "Sequencer", "Decoder", "Comparer", "Logger", "Organizer", "Session", "Settings"]) {
-      await expect(page.getByRole("menuitem", { name: new RegExp(`^${label}`) })).toBeVisible();
+    await page.locator('.menu-trigger:has-text("View")').click();
+    for (const label of TABS) {
+      await expect(page.getByRole("menuitemcheckbox", { name: new RegExp(`^${label}`) })).toBeChecked();
     }
+    await expect(page.getByRole("menuitem", { name: "Restore default tab layout" })).toBeVisible();
 
-    await page.getByRole("menuitem", { name: /^Logger/ }).click();
-    await expect(page).toHaveURL(/#logger/);
+    // Unchecking a tab hides it from the strip; Restore brings it back.
+    await page.getByRole("menuitemcheckbox", { name: /^Logger/ }).click();
+    const strip = page.getByRole("navigation", { name: "Tools" });
+    await expect(strip.locator(".tool-tab").filter({ hasText: "Logger" })).toHaveCount(0);
+    await page.locator('.menu-trigger:has-text("View")').click();
+    await page.getByRole("menuitem", { name: "Restore default tab layout" }).click();
+    await expect(strip.locator(".tool-tab").filter({ hasText: "Logger" })).toHaveCount(1);
     expect(consoleErrors).toEqual([]);
   });
 
@@ -34,7 +43,7 @@ test.describe("Menu bar — File, Tools, reset layout", () => {
     await page.getByRole("menuitem", { name: "Reset panel layout" }).click();
 
     // The action reloads the page; wait for the app to come back before asserting.
-    await expect(page.locator(".menu-trigger")).toHaveCount(6);
+    await expect(page.locator(".menu-trigger")).toHaveCount(7);
     const probe = await page.evaluate(() => localStorage.getItem("burpsy.split.probe"));
     expect(probe).toBeNull();
     expect(consoleErrors).toEqual([]);

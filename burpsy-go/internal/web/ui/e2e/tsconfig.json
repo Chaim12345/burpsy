@@ -13,5 +13,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["harness", "specs", "playwright.config.ts"]
+  "include": ["harness", "specs", "specs-uat", "playwright.config.ts", "playwright.uat.config.ts"]
 }

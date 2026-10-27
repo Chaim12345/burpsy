@@ -724,3 +724,43 @@ func TestSelfRegistrationHonoursThePerFormCap(t *testing.T) {
 		t.Errorf("the repeat discoveries were not reported as capped; records: %+v", rep.Skips.Records)
 	}
 }
+
+// A second, different login form that appears on several pages is ONE ignored login function and
+// one record: form discovery collapses the repeats before the login-form choice sees them. Pinned for
+// burpsy-react-ui-credfx (b), whose worry was one record per encounter.
+func TestAnIgnoredSecondLoginFormIsRecordedOncePerForm(t *testing.T) {
+	form := func(action string) string {
+		return `<form method="post" action="` + action + `"><input type="text" name="user" value="">` +
+			`<input type="password" name="pass"><input type="submit" value="Sign in"></form>`
+	}
+	page := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<html><body>` + body + `</body></html>`))
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", page(form("/login")+`<a href="/p1">p1</a><a href="/p2">p2</a><a href="/p3">p3</a>`))
+	for _, p := range []string{"/p1", "/p2", "/p3"} {
+		mux.HandleFunc(p, page(form("/admin/login")))
+	}
+	mux.HandleFunc("/login", page(`<p>no</p>`))
+	mux.HandleFunc("/admin/login", page(`<p>no</p>`))
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.SubmitForms = true
+	cfg.LoginCredentials = []LoginCredential{{Username: "u", Password: "p"}}
+	rep := run(t, cfg)
+	n := 0
+	for _, s := range rep.Skips.Records {
+		if s.Reason == SkipLoginFormIgnored {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the admin login form on three pages produced %d ignored-form records, want 1", n)
+	}
+}

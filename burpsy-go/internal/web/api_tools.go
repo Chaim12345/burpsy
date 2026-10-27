@@ -242,7 +242,7 @@ func (spec repeaterSendSpec) sendContext(ctx context.Context) context.Context {
 }
 
 // prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
-// runs the host-level scope gate, in that order. It returns the HTTP status a refusal should carry,
+// runs the per-request scope gate (AuthoriseRaw on the bytes to be sent), in that order. It returns the HTTP status a refusal should carry,
 // so the two handlers report an identical refusal for identical input; code is 0 on success.
 //
 // The order is load-bearing and is the single send's original order: options are validated before
@@ -270,17 +270,23 @@ func (s *Server) prepareRepeaterSend(
 			return repeaterSendSpec{}, http.StatusBadRequest, fmt.Errorf("refused: %w", verr)
 		}
 	}
-	// The transforms run before the scope gate on the transformed bytes — though the gate is
-	// host-level and no transform changes the authority, so this ordering is about the stored
-	// exchange recording what actually went out, not about which bytes the gate saw.
+	// The transforms run before the scope gate, and the gate judges the transformed bytes: those are
+	// the bytes that go on the wire, so they are the only ones a scope decision can be about.
 	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls, targetPathOf(target)))
-	// The repeater sends to whatever target the operator types, so it is gated
-	// by scope for the same reason the intruder is: a scope the operator set to
-	// constrain outbound traffic must not be bypassable by sending raw bytes
-	// here. The request line is not parsed (the operator owns it), so this is a
-	// host-level check, the same first layer the intruder applies.
-	if !s.scope.MayContainHost(host, port, tls) {
-		return repeaterSendSpec{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "/", tls))
+	// The repeater sends to whatever target the operator types, so it is gated by scope for the same
+	// reason the intruder is: a scope the operator set to constrain outbound traffic must not be
+	// bypassable by sending raw bytes here.
+	//
+	// AuthoriseRaw, on the request actually being sent — not MayContainHost on the target
+	// (burpsy-react-ui-repeater-hostlevel-scope). MayContainHost is a host-level pre-filter that skips
+	// path- and protocol-scoped excludes by design, and this was the ONLY gate a Repeater send passed:
+	// s.sender is the plain sender, not the authorising one. So `exclude target.test/logout` stopped
+	// the proxy, Intruder and a Repeater group send on one connection, and a single Repeater send
+	// went straight through it. Every caller of this builder — single send, group send, the edit
+	// preview — now gets the per-request decision, and a request line that cannot be read is refused
+	// rather than waved through, as it is everywhere else AuthoriseRaw runs.
+	if aerr := s.scope.AuthoriseRaw(host, port, tls, raw); aerr != nil {
+		return repeaterSendSpec{}, http.StatusForbidden, aerr
 	}
 	spec = repeaterSendSpec{
 		Host: host, Port: port, TLS: tls, Raw: raw, AsWritten: request, Options: opts, From: from,
@@ -300,6 +306,22 @@ func (s *Server) prepareRepeaterSend(
 // that rode a shared socket inside sender.SendKeepAlive has no per-exchange timing to report, and
 // core.UnmeasuredDuration is how that is said out loud instead of being written as a zero that reads
 // as an instantaneous send.
+// withSendNote returns spec with what the sender did to the send appended to its note: a header it
+// added, a body it cut at the cap (SendOutcome.Note). The stored exchange records the request as
+// written and the response as rendered, so without the note a modified request or a truncated
+// response would read as untouched.
+func (spec repeaterSendSpec) withSendNote(note string) repeaterSendSpec {
+	if note == "" {
+		return spec
+	}
+	note = "[burpsy] " + note
+	if spec.Note != "" {
+		note = spec.Note + "\n\n" + note
+	}
+	spec.Note = note
+	return spec
+}
+
 func (s *Server) recordRepeaterExchange(
 	spec repeaterSendSpec, rawResp []byte, protocol core.Protocol, duration core.ExchangeDuration, started time.Time,
 ) (resp repeaterSendResp, ex *core.Exchange) {
@@ -307,11 +329,15 @@ func (s *Server) recordRepeaterExchange(
 	// must not be silently swallowed: an exchange referencing a non-existent
 	// message ID would 404 in history lookups. Log and degrade rather than
 	// advertise a bad id.
-	reqMsgID, err := s.store.Put(spec.Raw, core.DirectionRequest)
+	// One capture-gate hold across both messages and the row naming them, so a project switch cannot
+	// split this send across two projects (burpsy-react-ui-capture-split-web).
+	hold := s.store.HoldCapture()
+	defer hold.Release()
+	reqMsgID, err := hold.Put(spec.Raw, core.DirectionRequest)
 	if err != nil {
 		s.logger.Error("repeater: failed to store request", zap.Error(err))
 	}
-	respMsgID, err := s.store.Put(rawResp, core.DirectionResponse)
+	respMsgID, err := hold.Put(rawResp, core.DirectionResponse)
 	if err != nil {
 		s.logger.Error("repeater: failed to store response", zap.Error(err))
 	}
@@ -352,7 +378,8 @@ func (s *Server) recordRepeaterExchange(
 		note := spec.Note
 		ex.Notes = &note
 	}
-	s.store.AddExchange(ex)
+	hold.AddExchange(ex)
+	hold.Release()
 
 	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
 	// response the operator drove by hand, and Burp's jar can be configured to monitor the
@@ -421,10 +448,14 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 		// that arrived with no bytes in it.
 		// nil exchange as well as nil length: the send never reached a response, so nothing was
 		// stored and there are no bytes for Logger's viewer to resolve.
-		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
+		msg := err.Error()
+		if outcome.Note != "" {
+			msg += " (" + outcome.Note + ")"
+		}
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, msg, nil)
 		return repeaterSendResp{}, err
 	}
-	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	resp, _ := s.recordRepeaterExchange(spec.withSendNote(outcome.Note), rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
 	if spec.H2Sessions != nil {
 		// Whether this request was the first on its connection — the fact HTTP/2 connection reuse
 		// exists to let an operator control (adkx).

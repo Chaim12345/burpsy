@@ -3,6 +3,7 @@ package httputil
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -186,27 +187,26 @@ func StreamResponse(br *bufio.Reader, head []byte, onChunk func([]byte)) (Stream
 // cleanly; a stream that simply stops is the open-ended case and reports what arrived.
 func streamChunked(br *bufio.Reader, out *bytes.Buffer, remaining int, emit func([]byte)) (StreamResult, error) {
 	for {
-		sizeLine, err := br.ReadString('\n')
+		sizeLine, err := readChunkLine(br, MaxChunkLineBytes)
+		if errors.Is(err, ErrChunkLineTooLong) {
+			return StreamResult{Body: out.Bytes()}, fmt.Errorf("reading chunk size: %w", err)
+		}
 		if err != nil {
 			// The stream stopped mid-body. What arrived is the answer for an open-ended response.
 			return StreamResult{Body: out.Bytes(), Truncated: true}, nil
 		}
-		sizeStr := strings.TrimSpace(strings.SplitN(sizeLine, ";", 2)[0])
-		size, err := strconv.ParseInt(sizeStr, 16, 64)
+		// The shared strict parser (chunk.go): a signed or non-hex size is a protocol fault, and a
+		// negative one used to reach make() below and panic (burpsy-react-ui-negchunk-panic).
+		size, err := ParseChunkSize(sizeLine)
 		if err != nil {
-			return StreamResult{Body: out.Bytes()}, fmt.Errorf("bad chunk size %q: %w", sizeStr, err)
+			return StreamResult{Body: out.Bytes()}, err
 		}
 		if size == 0 {
 			// Terminal chunk; consume trailers to the blank line so the connection is framed again.
-			for {
-				line, err := br.ReadString('\n')
-				if err != nil {
-					return StreamResult{Body: out.Bytes()}, err
-				}
-				if strings.TrimSpace(line) == "" {
-					return StreamResult{Body: out.Bytes(), Completed: true}, nil
-				}
+			if err := readChunkTrailers(br, func(string) {}); err != nil {
+				return StreamResult{Body: out.Bytes()}, err
 			}
+			return StreamResult{Body: out.Bytes(), Completed: true}, nil
 		}
 		readSize := size
 		if readSize > int64(remaining) {

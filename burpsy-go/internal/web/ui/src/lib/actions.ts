@@ -141,6 +141,28 @@ export function rawToCurl(raw: string, url: string): string {
  return parts.join(" \\\n");
 }
 
+/** Translate a captured request into a sqlmap command line (v0ei.7). */
+export function rawToSqlmap(raw: string, url: string): string {
+ const q = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
+ const split = raw.search(/\r?\n\r?\n/);
+ const head = split >= 0 ? raw.slice(0, split) : raw;
+ const body = split >= 0 ? raw.slice(split).replace(/^\r?\n\r?\n/, "") : "";
+ const [requestLine = "", ...headers] = head.split(/\r?\n/);
+ const method = requestLine.split(" ")[0] || "GET";
+ const parts = [`sqlmap -u ${q(url)}`];
+ if (method !== "GET" && !(method === "POST" && body)) parts.push(`  --method=${method}`);
+ for (const line of headers) {
+  const colon = line.indexOf(":");
+  if (colon <= 0) continue;
+  const name = line.slice(0, colon).trim();
+  if (/^(host|content-length)$/i.test(name)) continue;
+  parts.push(`  -H ${q(`${name}: ${line.slice(colon + 1).trim()}`)}`);
+ }
+ if (body.trim()) parts.push(`  --data=${q(body)}`);
+ parts.push("  --batch");
+ return parts.join(" \\\n");
+}
+
 /**
  * Swap a raw request between GET and POST, Burp's "Change request method" semantics: the token
  * flips and the body follows HTTP semantics — a request becoming GET loses Content-Length and the
@@ -225,6 +247,7 @@ export function useExchangeActions(): {
  addToSiteMap: (exchange: Exchange) => Promise<void>;
  copyUrl: (exchange: Exchange) => Promise<void>;
  copyCurl: (exchange: Exchange) => Promise<void>;
+ copySqlmap: (exchange: Exchange) => Promise<void>;
  filterByHost: (exchange: Exchange) => void;
  addToScope: (exchange: Exchange) => Promise<void>;
  auditExchange: (exchange: Exchange) => Promise<void>;
@@ -411,6 +434,16 @@ export function useExchangeActions(): {
    toast.success("curl command copied");
   } catch (error) {
    toast.error(`Could not build curl: ${error instanceof Error ? error.message : String(error)}`);
+  }
+ };
+
+ const copySqlmap = async (exchange: Exchange) => {
+  try {
+   const raw = await fetchRaw(exchange.request);
+   await copyToClipboard(rawToSqlmap(raw, exchangeUrl(exchange)));
+   toast.success("sqlmap command copied");
+  } catch (error) {
+   toast.error(`Could not build sqlmap command: ${error instanceof Error ? error.message : String(error)}`);
   }
  };
 
@@ -869,6 +902,7 @@ export function useExchangeActions(): {
    actions: [
     { id: "url", label: "Copy URL", icon: Link2, onSelect: () => void copyUrl(exchange) },
     { id: "curl", label: "Copy as curl", icon: Terminal, onSelect: () => void copyCurl(exchange) },
+    { id: "sqlmap", label: "Copy as sqlmap command", icon: Terminal, onSelect: () => void copySqlmap(exchange) },
     { id: "id", label: `Copy exchange id (#${exchange.id})`, icon: Copy, onSelect: () => void copyToClipboard(String(exchange.id)) },
     { id: "to-file", label: "Copy request to file", icon: FileCode2, onSelect: () => void copyRequestToFile(exchange) },
     { id: "links", label: "Copy links", icon: Globe, onSelect: () => void copyLinks(exchange) },
@@ -976,6 +1010,7 @@ export function useExchangeActions(): {
   addToSiteMap,
   copyUrl,
   copyCurl,
+  copySqlmap,
   filterByHost,
   addToScope,
   auditExchange,

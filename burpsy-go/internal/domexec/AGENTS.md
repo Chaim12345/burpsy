@@ -67,8 +67,12 @@ rows the HTTP-only scanner cannot reach.
 go test ./internal/domexec/...
 ```
 
-Tests that need a real Chrome are skipped when none is present, consistent with the honest-failure
-contract.
+Tests that need a real Chrome skip when none can be launched, but the skip is counted, not silent:
+they skip through `domexectest.Skip`, and `TestMain` (via `domexectest.Main`) then fails the package
+unless `BURPSY_ALLOW_NO_CHROME=1`. `domexectest/` is that skip ledger, shared by every package whose
+tests drive a browser (domexec, dominvader, blindxss, browser, crawler, scanner, web) so none of them
+can report green over tests that never ran. It imports nothing from `internal/`, so this package's
+own tests can use it.
 
 ## Dependencies
 

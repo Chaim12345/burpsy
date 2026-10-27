@@ -184,7 +184,7 @@ func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
 		"already_seen": already,
 	}
 	if already {
-		body["note"] = "that host and path are already on the map because traffic to them was observed, " +
+		body["note"] = "that host and path are already on the map because traffic to them, or beneath them, was observed, " +
 			"which is a stronger fact than a note to self"
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -31,6 +31,7 @@ import (
 const spaBundleFragment = `
 !function(){var e={routes:[{path:"/dashboard"},{path:"/settings/profile"},{path:"/orders/{id}"}],
 fetch:function(n){return fetch(BASE+n,{credentials:"include"})},
+orders:function(e){return fetch(` + "`/users/${e.id}/orders`" + `)},
 API:"/api/v1",ADMIN:"/admin/panel",LOGOUT:"/logout",
 BUNDLE:"static/js/main.a1b2c3.js"};window.__APP=e}();
 //# sourceMappingURL=main.a1b2c3.js.map`
@@ -50,6 +51,16 @@ func TestTheSpeculativePhaseFindsTheStraightQuotedRoutes(t *testing.T) {
 			t.Errorf("%q was not extracted from a path-valued constant; got %v", want, got)
 		}
 	}
+	// A template literal's interpolation is never queued as text (burpsy-react-ui-crawl-template-literal):
+	// fetch(`/users/${e.id}/orders`) yields its whole leading segment, /users/, as the JS extractor does.
+	if !containsStr(got, "/users/") {
+		t.Errorf("the template literal's whole leading segment /users/ was not extracted; got %v", got)
+	}
+	for _, g := range got {
+		if strings.Contains(g, "${") {
+			t.Errorf("a raw template interpolation was extracted as a URL: %q", g)
+		}
+	}
 	// The bundle's own filename is NOT a path and must not become one. A .js file sitting at the site
 	// root is not a location, and admitting it is exactly the invented-URL failure the package refuses.
 	if containsStr(got, "static/js/main.a1b2c3.js") {
@@ -57,8 +68,9 @@ func TestTheSpeculativePhaseFindsTheStraightQuotedRoutes(t *testing.T) {
 	}
 }
 
-// The three gaps that decide whether cgo is warranted. Each is asserted as a MISS, so the day one
-// starts passing, the test tells the story.
+// The gaps that decide whether cgo is warranted. Each is asserted as a MISS, so the day one closes
+// the test fails and says so, and the baseline is updated rather than left describing a miss that
+// no longer exists.
 func TestWhatTheSpeculativePhaseCannotResolve(t *testing.T) {
 	for _, tc := range []struct{ name, want string }{
 		{
@@ -72,14 +84,23 @@ func TestWhatTheSpeculativePhaseCannotResolve(t *testing.T) {
 		},
 		{
 			// Second: a template literal is assembled at runtime from parts the reader sees separately.
+			// The fixture's fetch(`/users/${e.id}/orders`) yields only its raw source text; the route
+			// it stands for, with the interpolation as a parameter segment, is not recovered. (This
+			// case used to want "/users/`${id}`", a token the tokenizer splits on backticks and so
+			// could never produce, against a fixture with no template literal in it: a miss that
+			// could not stop being a miss.)
 			name: "a template-literal path",
-			want: "/users/" + "`${id}`",
+			want: "/users/{id}/orders",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// A closed gap FAILS rather than skips: a skip is silent in the summary, so the
+			// baseline would go on documenting a miss that no longer exists and the jsluice/cgo
+			// decision would be made against stale numbers. Whoever closes it updates this file.
 			if containsStr(speculativeURLFields(spaBundleFragment), tc.want) {
-				t.Skipf("%q is now extracted — this gap is closed, and the jsluice question should be "+
-					"re-examined rather than assumed", tc.want)
+				t.Fatalf("%q is now extracted: this gap is CLOSED. Move it out of the misses into "+
+					"TestTheSpeculativePhaseFindsTheStraightQuotedRoutes and re-examine the jsluice "+
+					"question rather than assume it", tc.want)
 			}
 			t.Logf("MISS, as expected: %q is not recoverable from the source text alone. This is the case "+
 				"that decides whether cgo is worth the static binary", tc.want)
@@ -97,8 +118,11 @@ func TestTheSourceMappingURLIsVisibleButUnfollowed(t *testing.T) {
 	// ...and the speculative phase does not extract it, because it is not root-shaped: it has a scheme-
 	// relative prefix on the file, not a leading slash.
 	got := speculativeURLFields(spaBundleFragment)
-	if containsStr(got, "main.a1b2c3.js.map") {
-		t.Skip("the source map is now extracted; criterion 2 needs a FETCH, not extraction")
+	// By suffix, not equality: every token the phase emits starts with "/" or a scheme, so an exact
+	// match on the bare file name could never fire and this check could never fail.
+	if anyHasSuffix(got, "main.a1b2c3.js.map") {
+		t.Fatal("the source map is now extracted: this baseline is stale. Update it, and note that " +
+			"criterion 2 needs a FETCH of the map, not just its extraction")
 	}
 	t.Log("the source map is not extracted: the phase mines root-shaped tokens, and this is a " +
 		"scheme-relative reference. Criterion 2 needs a deliberate fetch, which is the only new " +
@@ -119,6 +143,15 @@ func TestRepeatedLiteralsAreExtractedOnce(t *testing.T) {
 	if n != 1 {
 		t.Errorf("/api/thing was extracted %d times from a repeated literal, want 1", n)
 	}
+}
+
+func anyHasSuffix(list []string, suffix string) bool {
+	for _, v := range list {
+		if strings.HasSuffix(v, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsStr(list []string, want string) bool {

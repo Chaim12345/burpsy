@@ -145,6 +145,12 @@ func (l *Logger) Apply(settings Settings) error {
 				continue
 			}
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err == nil {
+				// The mode only applies on create; an existing log keeps whatever it had.
+				if err = f.Chmod(0o600); err != nil {
+					_ = f.Close()
+				}
+			}
 			if err != nil {
 				for p, nf := range opened {
 					if _, existed := l.files[p]; !existed {

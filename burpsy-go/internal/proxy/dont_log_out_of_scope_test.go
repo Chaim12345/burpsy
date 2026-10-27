@@ -91,7 +91,7 @@ func TestDontLogOutOfScopeCountsTheDrop(t *testing.T) {
 
 	driveThroughProxy(t, srv, host, port)
 
-	if got := settleThenCountExchanges(srv.config.store); got != 0 {
+	if got := countAfterDropDecision(t, srv.config.store, srv.config.options, 1); got != 0 {
 		t.Errorf("out-of-scope traffic recorded %d exchanges, want 0 with the switch on", got)
 	}
 	if got := srv.config.options.Counters().DroppedOutOfScope; got != 1 {
@@ -352,7 +352,7 @@ func TestDontLogOutOfScopeCountsTheTLSDrop(t *testing.T) {
 		t.Errorf("the client received %q — the switch must never stop the delivery", b)
 	}
 
-	if got := settleThenCountExchanges(store); got != 0 {
+	if got := countAfterDropDecision(t, store, options, 1); got != 0 {
 		t.Errorf("out-of-scope TLS traffic recorded %d exchanges, want 0 with the switch on", got)
 	}
 	if got := options.Counters().DroppedOutOfScope; got != 1 {

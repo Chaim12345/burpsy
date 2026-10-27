@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/apidoc"
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -236,13 +237,23 @@ func applyReview(doc *apidoc.Document, req apiScanReq) error {
 	return nil
 }
 
-// fixedParameters are the names the review marked Fixed, for the audit's skip list.
-func fixedParameters(req apiScanReq) []string {
-	var out []string
+// fixedParameters are the parameters the review marked Fixed, for the audit's skip lists: a row with
+// no Endpoint applies to every endpoint carrying the parameter, so its name joins the run-wide list;
+// a row naming an endpoint ("METHOD template") exempts the parameter on that endpoint only
+// (burpsy-react-ui-8yjj: by name alone, fixing it on one operation stopped it being attacked on
+// every other).
+func fixedParameters(req apiScanReq) auditSkips {
+	var out auditSkips
 	for _, o := range req.Parameters {
-		if o.Mode == "fixed" {
-			out = append(out, o.Name)
+		if o.Mode != "fixed" {
+			continue
 		}
+		method, template, scoped := strings.Cut(strings.TrimSpace(o.Endpoint), " ")
+		if !scoped || strings.TrimSpace(template) == "" {
+			out.names = append(out.names, o.Name)
+			continue
+		}
+		out.at = append(out.at, bcheck.ParameterAt{Method: method, Template: strings.TrimSpace(template), Name: o.Name})
 	}
 	return out
 }
@@ -359,7 +370,7 @@ func (s *Server) startAPIScan(req apiScanReq) (uint64, *apiScanSummary, error) {
 			// Before Finish, for the reason the crawl's audit half is: the audit's own task id is
 			// handed to the findings it produces, and the sweep's row stays open while it runs, so the
 			// two rows read as one scan's two halves — which is what the operator launched.
-			s.auditFetchedExchanges(ctx, &rep, "API scan of "+base.Host, fixedParameters(req)...)
+			s.auditFetchedExchanges(ctx, &rep, "API scan of "+base.Host, fixedParameters(req))
 		}
 		task.Finish(dash.Breakdown{})
 		// changeHistory covers the exchanges the sweep just produced and every traffic-derived count;

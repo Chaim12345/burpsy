@@ -93,28 +93,38 @@ func jsluiceURLs(body []byte) (urls []*jsluice.URL, ok bool) {
 // first placeholder, cut back to the last whole path segment — `/api/v2/orders/${id}` is a real
 // directory, `/api/v2/orders/` — and a placeholder in the query drops the query, keeping the path.
 // What is left must still name something: a bare "/", "./" or a fragment like ".js" is refused.
+// cutAtPlaceholder cuts s at the first of markers (a runtime value: jsluice's EXPR, a template
+// literal's ${): a placeholder in a query value keeps the path before the query; one in the path cuts
+// back to the last whole segment ("/orders/abc${x}" names "/orders/", not "/orders/abc"). It reports
+// false when no whole segment precedes the placeholder. A string with no marker is returned as is.
+func cutAtPlaceholder(s string, markers ...string) (string, bool) {
+	cut := -1
+	for _, marker := range markers {
+		if i := strings.Index(s, marker); i >= 0 && (cut < 0 || i < cut) {
+			cut = i
+		}
+	}
+	if cut < 0 {
+		return s, true
+	}
+	head := s[:cut]
+	if q := strings.IndexByte(head, '?'); q >= 0 {
+		return head[:q], true
+	}
+	if slash := strings.LastIndexByte(head, '/'); slash >= 0 {
+		return head[:slash+1], true
+	}
+	return "", false
+}
+
 func normaliseJSLocation(raw string) (string, bool) {
 	s := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "'\"`"))
 	if s == "" {
 		return "", false
 	}
-	cut := -1
-	for _, marker := range []string{"EXPR", "${"} {
-		if i := strings.Index(s, marker); i >= 0 && (cut < 0 || i < cut) {
-			cut = i
-		}
-	}
-	if cut >= 0 {
-		head := s[:cut]
-		if q := strings.IndexByte(head, '?'); q >= 0 {
-			// The placeholder is a query value: the path before the query is whole.
-			s = head[:q]
-		} else if slash := strings.LastIndexByte(head, '/'); slash >= 0 {
-			// Cut back to the last whole segment: "/orders/abc${x}" names "/orders/", not "/orders/abc".
-			s = head[:slash+1]
-		} else {
-			return "", false
-		}
+	s, ok := cutAtPlaceholder(s, "EXPR", "${")
+	if !ok {
+		return "", false
 	}
 	// A literal that ENDS a query mid-assignment ("/users?id=", "/x?a=1&") is the left half of a
 	// concatenation — the value is appended at run time — so its query is a placeholder too.

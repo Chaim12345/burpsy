@@ -47,7 +47,10 @@ test.describe("Sequencer — the extended randomness battery", () => {
   test("a large sample runs the battery and every row carries its own statistic", async ({ page, consoleErrors }) => {
     await gotoRoute(page, route("sequencer"));
 
-    const tokens = hexTokens(600, 0x9e3779b9);
+    // 1100, not 600: the compression test's floor rose from 512 to 1024 tokens (internal/sequencer
+    // MinTokensForCompression, burpsy-react-ui-jdgq), and below it the test refuses instead of
+    // producing the "reduction against the incompressible control" statistic asserted below.
+    const tokens = hexTokens(1100, 0x9e3779b9);
     // The page carries more than one hidden file input — the editor has one and the app's
     // configuration import has another — and they are all `sr-only`, so which is first is a
     // DOM-order detail. The badge below is what makes this self-verifying: it counts the
@@ -79,9 +82,9 @@ test.describe("Sequencer — the extended randomness battery", () => {
     // The sentence that keeps a flagged row from being read as a grade change.
     await expect(card.getByText(/do not change the grade above, which is the FIPS 140-2 battery's/)).toBeVisible();
 
-    // 600 tokens of 32 hex characters is 19,200 bits: every table in this battery is
-    // 256 cells wide, so the transition test cannot fill one and must say so rather
-    // than pass. That refusal is the honest half of the feature and it has to render.
+    // 1100 tokens give each hex position 1,099 transitions, and its 16x16 transition table
+    // (256 cells) needs well over that for the Cochran conditions, so the transition test
+    // cannot fill one and must say so rather than pass. That refusal is the honest half of the feature and it has to render.
     const refusals = card.getByText("not tested");
     await expect(refusals).toHaveCount(1);
     await expect(card.getByText(/needs about \d+ transitions/)).toBeVisible();
@@ -111,7 +114,7 @@ test.describe("Sequencer — the extended randomness battery", () => {
     await expect(card.getByText("not tested")).toHaveCount(4);
     await expect(card.getByText(/needs about \d+ transitions/)).toBeVisible();
     await expect(card.getByText(/below 30 samples/)).toBeVisible();
-    await expect(card.getByText(/needs at least 512/)).toBeVisible();
+    await expect(card.getByText(/this test needs at least \d+/)).toBeVisible();
     await expect(card.getByText(/cannot fill a testable tuplet table/)).toBeVisible();
 
     // No row may render a verdict badge it did not earn.

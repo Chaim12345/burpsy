@@ -140,7 +140,7 @@ if [ -d burpsy-go ] && command -v go >/dev/null 2>&1; then
   fi
 
   step "go tests (burpsy-go)"
-  GOTEST=$(cd burpsy-go && go test ./... 2>&1)
+  GOTEST=$(cd burpsy-go && go test ./... -count=1 -timeout 30m 2>&1)
   GFAIL=$(grep -cE '^(--- )?FAIL' <<<"$GOTEST")
   GPKG=$(grep -cE '^ok  ' <<<"$GOTEST")
   if [ "$GFAIL" -gt 0 ]; then

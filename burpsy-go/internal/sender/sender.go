@@ -45,6 +45,9 @@ type Sender struct {
 	// Guarded by mu with the state it versions, so a capture reads the generation, the
 	// carrier and the config as one consistent snapshot.
 	netGen uint64
+	// typedRoute is the carrier and policy identity the typed client's idle connections were
+	// dialled under (httpClient).
+	typedRoute atomic.Value
 	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
 	// the path. Building a CertPool parses every system root, and this is the handshake path for every
 	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
@@ -230,7 +233,15 @@ func NewSender(config *SenderConfig) *Sender {
 	policy, policyErr := resolveUpstream(config)
 	carrier := config.UpstreamCarrier
 	return &Sender{
-		client:      buildClient(config, settings, carrier),
+		client: buildClient(config, settings, carrier),
+		// The configured carrier reaches every path WithUpstreamCarrier would have reached, not only
+		// the typed client. The raw paths (dialTLS/dialPlain via captureDialIdentity), HTTP/3's
+		// carrier refusal, connection-bound auth and DeriveWithTimeouts all read s.carrier; leaving
+		// it nil sent every raw send from a config-only Sender around the carrier, and the next
+		// ApplyNetwork rebuilt the typed client from s.carrier and dropped it there too
+		// (burpsy-react-ui-newsender-carrier). No pool flush or generation bump is needed: a new
+		// Sender has no connections dialled under any other layer.
+		carrier:     carrier,
 		config:      config,
 		net:         settings,
 		protocols:   newProtocolCache(),
@@ -371,8 +382,16 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 				Resolver:           settings.dialer().Resolver,
 				ClientCerts:        config.ClientCerts,
 			}
-			if policy != nil && !policy.Empty() {
-				dialer.Carry = upstream.Dialer{Policy: policy, Timeout: config.Timeout, Base: settings.dialer()}.DialContext
+			// Policy OR carrier, the raw path's rule (dialTLS; dialIdentity.wrap). Gating on the policy
+			// alone, and building the Dialer without the carrier, sent a client-cert TLS send straight
+			// to the origin when only a SOCKS hop was configured (burpsy-react-ui-socks-tls-bypass).
+			if (policy != nil && !policy.Empty()) || carrier != nil {
+				dialer.Carry = upstream.Dialer{
+					Policy:  policy,
+					Timeout: config.Timeout,
+					Base:    settings.dialer(),
+					Carrier: carrier,
+				}.DialContext
 			}
 			addr = settings.overrideAddr(addr)
 			// The offer matches ForceAttemptHTTP2 above: the transport inspects the negotiated protocol
@@ -450,15 +469,45 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	// that close-delimited under the old network may answer completely under the new
 	// resolution or carrier, and an uncleared mark would force fresh connections for the
 	// process's life (PR #363 review).
-	s.closeDelimitedAuthorities = sync.Map{}
+	s.closeDelimitedAuthorities.Clear() // in place: in-flight sends Load and Store it without s.mu
 	return nil
 }
 
 // httpClient returns the client to send one typed request with.
+//
+// The typed path's http.Transport pools idle connections by its own key, which knows nothing of
+// the global SOCKS carrier or the upstream policy's rules: an operator's in-place carrier edit, or a
+// new policy rule, left connections dialled the old way to be reused (burpsy-react-ui-typed-idle-unstamped).
+// So the route those idle connections were dialled under is remembered, and when it differs from the
+// route a new send would take they are closed before it. A connection still in flight when the route
+// changes is returned to the pool afterwards and may carry one more send, which is the in-flight
+// rule ApplyNetwork already documents.
 func (s *Sender) httpClient() *http.Client {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.client
+	client, carrier := s.client, s.carrier
+	s.mu.RUnlock()
+	route := carrier.Identity() + "\x00" + policyIdentity(s.upstream)
+	if prev, _ := s.typedRoute.Swap(route).(string); prev != route && client != nil {
+		client.CloseIdleConnections()
+	}
+	return client
+}
+
+// policyIdentity renders an upstream policy's whole routing decision (default and ordered rules) as
+// a string that changes whenever any route does. "" for none.
+func policyIdentity(p *upstream.Policy) string {
+	if p == nil || p.Empty() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(p.Default().Raw())
+	for _, r := range p.Rules() {
+		b.WriteString("\x00")
+		b.WriteString(r.Pattern)
+		b.WriteString("=")
+		b.WriteString(r.Proxy.Raw())
+	}
+	return b.String()
 }
 
 // tlsVerify reports whether certificate verification is on, under the lock that guards config.
@@ -1128,7 +1177,7 @@ func (s *Sender) SendRawOutcome(
 		// landing during a failed pooled exchange governs the redial, as it did before
 		// the freeze.
 		if ic := s.pool.take(key, plan.wantH2, s.routeForDialAddr(host, useTLS)); ic != nil {
-			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
+			resp, capped, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
 			}
@@ -1141,7 +1190,8 @@ func (s *Sender) SendRawOutcome(
 					}
 				}
 				out := s.finish(host, port, useTLS, ic.negotiated, down, nil, nil, remoteIP(ic.conn), err)
-				s.release(key, ic, plan.http1, resp, err)
+				addCapNote(&out, capped)
+				s.release(key, ic, plan.http1, resp, capped, err)
 				return resp, out, err
 			}
 			// The server closed it while it sat idle; this send gets a fresh connection.
@@ -1152,7 +1202,7 @@ func (s *Sender) SendRawOutcome(
 	if !useTLS {
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
-		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
+		resp, ip, capped, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
 		if err == nil {
 			s.observeCloseDelimited(key, resp)
 		}
@@ -1160,6 +1210,7 @@ func (s *Sender) SendRawOutcome(
 		if connCloseAdded {
 			out.Note = connCloseNote
 		}
+		addCapNote(&out, capped)
 		return resp, out, err
 	}
 
@@ -1253,19 +1304,20 @@ func (s *Sender) SendRawOutcome(
 	if keep {
 		br := bufio.NewReader(conn)
 		stop := watchCancel(ctx, conn)
-		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
+		resp, capped, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
 		stop()
 		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+		addCapNote(&out, capped)
 		if err == nil {
 			s.observeCloseDelimited(key, resp)
 		}
-		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
+		if err == nil && capped == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
 			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route, dialAddr: dialID.dialAddr})
 		}
 		return resp, out, err
 	}
-	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
+	resp, capped, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	if err == nil {
 		s.observeCloseDelimited(key, resp)
 	}
@@ -1273,13 +1325,14 @@ func (s *Sender) SendRawOutcome(
 	if connCloseAdded {
 		out.Note = connCloseNote
 	}
+	addCapNote(&out, capped)
 	return resp, out, err
 }
 
 // release returns a reused connection to the pool when its exchange left it reusable, and closes it
-// otherwise.
-func (s *Sender) release(key string, ic *idleConn, request, response []byte, err error) {
-	if err == nil && reusableAfter(request, response) && ic.br.Buffered() == 0 {
+// otherwise. A body cut at the cap never leaves it reusable: the rest of that body is still on it.
+func (s *Sender) release(key string, ic *idleConn, request, response []byte, capped *httputil.BodyCapError, err error) {
+	if err == nil && capped == nil && reusableAfter(request, response) && ic.br.Buffered() == 0 {
 		s.pool.put(key, ic)
 		return
 	}
@@ -1447,28 +1500,28 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 // — the same fact the TLS path reads off its own connection (burpsy-react-ui-gj4f).
 //
 // With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
-func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
+func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, *httputil.BodyCapError, error) {
 	// The stamp names the identity this dial consumes - see the note at the TLS dial.
 	dialID, derr := s.captureDialIdentity(ctx, host, port, false)
 	if derr != nil {
-		return nil, "", derr
+		return nil, "", nil, derr
 	}
 	conn, err := s.dialPlain(ctx, host, port, dialID)
 	if err != nil {
-		return nil, "", fmt.Errorf("connection failed: %w", err)
+		return nil, "", nil, fmt.Errorf("connection failed: %w", err)
 	}
 	ip := remoteIP(conn)
 	br := bufio.NewReader(conn)
 	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
 	stop := watchCancel(ctx, conn)
-	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
+	resp, capped, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
-	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
+	if keep && err == nil && capped == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
 		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route, dialAddr: dialID.dialAddr})
 	} else {
 		conn.Close()
 	}
-	return resp, ip, err
+	return resp, ip, capped, err
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
@@ -1476,17 +1529,20 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 // host is carried in rather than read off the connection because it decides two things the address
 // cannot: whether this authority's responses are declared open-ended, and — under a resolution
 // override — the connection's remote address is not the host at all.
-func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, error) {
+func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, *httputil.BodyCapError, error) {
 	return s.exchangeHTTP1(ctx, conn, bufio.NewReader(conn), host, raw)
 }
 
 // exchangeHTTP1 is writeHTTP1 on a connection whose reader is kept with it, which a kept-alive
 // connection needs: bytes buffered past one response belong to the connection, not to the read.
-func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Reader, host string, raw []byte) ([]byte, error) {
+//
+// capped is readResponse's: non-nil when the body was cut at the cap, in which case the response is
+// returned, the connection must not be pooled, and the outcome must carry capped.Note().
+func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Reader, host string, raw []byte) ([]byte, *httputil.BodyCapError, error) {
 	settings := s.Network()
 	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
-		return nil, &writeFailure{err: explainCancellation(ctx, err)}
+		return nil, nil, &writeFailure{err: explainCancellation(ctx, err)}
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
@@ -1496,7 +1552,7 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 		// window for this send.
 		promote = overridePromoter(ctx, conn, window)
 	}
-	response, err := readResponse(
+	response, capped, err := readResponse(
 		br,
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
@@ -1506,9 +1562,22 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a
 		// cancelled send as "read failed: i/o timeout" would blame the target for a decision the
 		// operator made. See cancel.go.
-		return nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
+		return nil, nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
 	}
-	return response, nil
+	return response, capped, nil
+}
+
+// addCapNote puts a capped body's note on the outcome, after any note already there, so a send
+// that was both given a Connection: close and cut at the cap says both.
+func addCapNote(out *SendOutcome, capped *httputil.BodyCapError) {
+	if capped == nil {
+		return
+	}
+	if out.Note == "" {
+		out.Note = capped.Note()
+		return
+	}
+	out.Note += "; " + capped.Note()
 }
 
 // setDeadline bounds one exchange by the context's deadline when it has one, and by the configured

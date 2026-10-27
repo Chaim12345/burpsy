@@ -3,6 +3,7 @@ package domexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -814,6 +815,12 @@ type RenderOutcome struct {
 	// Screenshot is the JPEG RenderOptions.Screenshot asked for; nil when not asked, or when the
 	// capture failed (a render that succeeded is not failed for want of a picture).
 	Screenshot []byte
+	// Blocked are the requests the page tried to make that the scope gate refused
+	// (RenderedDOMGated), "METHOD url — reason", deduplicated and capped at MaxBlockedRecorded. A
+	// render whose script or API lives outside scope is incomplete, not empty, and a caller must be
+	// able to say so. Always nil for a render in a caller-owned Session, whose refusals accumulate on
+	// the Session (RenderBlocked).
+	Blocked []string
 }
 
 // RenderedRequest is one request a page issued at run time.
@@ -828,9 +835,80 @@ type RenderedRequest struct {
 // streams cannot grow a crawl's frontier without bound.
 const MaxRenderedRequests = 200
 
-// RenderedDOMWithOptions reads the rendered DOM of one page, waiting for it to settle first, and
-// says whether it did.
-func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
+// RenderedDOMGated reads the rendered DOM of one page under a scope gate: the page AND every request it
+// makes while it renders — scripts, stylesheets, images, XHR/fetch, frames, workers, redirect hops —
+// is checked against gate before it leaves the machine (burpsy-react-ui-browser-render-unscoped).
+//
+// Authorising only the URL a render is pointed at is not authorising the render: the page then loads
+// whatever it likes, and an out-of-scope CDN, analytics beacon or third-party API receives traffic the
+// engagement never covered. So:
+//
+//   - With a local Chrome the render runs in a fresh isolated Session (its own browser context, with
+//     the per-context scope-gating proxy AND Fetch interception), disposed afterwards. The proxy is
+//     what covers targets Fetch interception in one tab cannot see — out-of-process iframes, workers —
+//     and it dials through Options.EgressDial. The fresh context also means a render no longer shares
+//     a cookie jar with the DOM taint checks.
+//   - A remote CDP engine (obscura, lightpanda) cannot have per-context proxies (NewSession refuses
+//     it), so the render tab gets Fetch interception alone. A remote engine that does not support
+//     Fetch.enable fails the render rather than rendering ungated.
+//
+// A nil gate is refused: there is no ungated render in this package's exported surface.
+// RenderOutcome.Blocked lists what was refused.
+func (b *Browser) RenderedDOMGated(ctx context.Context, targetURL string, opts RenderOptions, gate ScopeGate) (string, RenderOutcome, error) {
+	if gate == nil {
+		return "", RenderOutcome{}, errors.New("domexec: a render needs a scope gate; none was given")
+	}
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return "", RenderOutcome{}, fmt.Errorf("domexec: render %q: %w", targetURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", RenderOutcome{}, fmt.Errorf("domexec: render %q: only http and https pages are rendered", targetURL)
+	}
+	if err := gate.AllowURL(u); err != nil {
+		return "", RenderOutcome{}, fmt.Errorf("domexec: render %q refused by the scope gate: %w", RedactURL(targetURL), err)
+	}
+	if b.remoteURL != "" {
+		// Fetch interception only; see the doc comment. The Session value is never registered with
+		// the browser — it carries the gate and the refusal list for installFetchGate.
+		s := &Session{b: b, gate: gate}
+		opts = opts.withDefaults()
+		started := time.Now()
+		var shot []byte
+		html, reqs, dropped, err := b.renderedDOMIn(ctx, func(ctx context.Context) (context.Context, context.CancelFunc, error) {
+			tabCtx, cancel, err := b.openTab(ctx)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := s.installFetchGate(tabCtx); err != nil {
+				cancel()
+				return nil, nil, fmt.Errorf("domexec: the remote engine could not gate the render's requests, so it was not rendered: %w", err)
+			}
+			return tabCtx, cancel, nil
+		}, targetURL, opts, &shot)
+		outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped, Screenshot: shot, Blocked: s.RenderBlocked()}
+		if err != nil {
+			return "", outcome, err
+		}
+		outcome.Settled = outcome.Waited < opts.MaxWait
+		outcome.Capped = !outcome.Settled
+		return html, outcome, nil
+	}
+	sess, err := b.NewSession(gate)
+	if err != nil {
+		return "", RenderOutcome{}, fmt.Errorf("domexec: render %q: no scope-gated browser context: %w", RedactURL(targetURL), err)
+	}
+	defer sess.Close()
+	html, outcome, err := sess.RenderedDOMWithOptions(ctx, targetURL, opts)
+	outcome.Blocked = sess.RenderBlocked()
+	return html, outcome, err
+}
+
+// renderedDOMWithOptions reads the rendered DOM of one page in the browser's default context with NO
+// scope gate, waiting for it to settle first, and says whether it did. Unexported on purpose: every
+// production render goes through RenderedDOMGated. It remains for this package's own tests of the
+// render mechanics.
+func (b *Browser) renderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
 	opts = opts.withDefaults()
 	started := time.Now()
 	var shot []byte
@@ -847,8 +925,15 @@ func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, 
 	return html, outcome, nil
 }
 
-func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, error) {
-	html, _, err := b.RenderedDOMWithOptions(ctx, targetURL, RenderOptions{})
+// RenderedDOM is RenderedDOMGated with the default render options.
+func (b *Browser) RenderedDOM(ctx context.Context, targetURL string, gate ScopeGate) (string, error) {
+	html, _, err := b.RenderedDOMGated(ctx, targetURL, RenderOptions{}, gate)
+	return html, err
+}
+
+// renderedDOM is the ungated default-context render, for this package's tests.
+func (b *Browser) renderedDOM(ctx context.Context, targetURL string) (string, error) {
+	html, _, err := b.renderedDOMWithOptions(ctx, targetURL, RenderOptions{})
 	return html, err
 }
 

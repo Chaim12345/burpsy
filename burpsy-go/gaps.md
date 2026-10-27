@@ -2210,6 +2210,21 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Authenticated render pass:** requests the logged-in render pass's pages make are scope-gated too;
   refusals are reported in `report.login.render_blocked`, so a page whose script is on an out-of-scope CDN
   renders empty with the reason stated.
+- **Every other render is scope-gated too (burpsy-react-ui-browser-render-unscoped, 2026-10-27).** The
+  crawl's unauthenticated render pass, the crawl's rendered-DOM audit and the CSTI check used to authorise
+  only the URL they pointed the browser at; the page then loaded scripts, beacons, XHR and frames from any
+  host. `domexec.Browser.RenderedDOMGated` (the only exported render) now runs each render in a fresh
+  isolated context behind the session proxy plus Fetch interception: the crawl's renders are gated on the
+  crawl scope (refusals become a per-page skip record), the scanner's on the engagement scope, or on the
+  page's own origin when no scope is declared (refusals counted as `rendered_audit.scope_blocked`). The
+  session proxy now dials through the sender's egress route (`Options.EgressDial` ←
+  `sender.EgressDialContext`), so the upstream proxy / SOCKS carrier / resolution table apply to it.
+  NOT covered: the shared default context's other navigations — `ObserveTaint`, `ObserveStored` (the
+  stored-XSS render pass), `SubmitAndObserve`, `NavigateSPA`, `ObserveCrossOriginReferers`,
+  `RenderFragment` and the ungated `Browser.Interact` — still let the page load what it names with Chrome
+  dialling directly (follow-up bead needed); with a remote
+  CDP engine a render is gated by Fetch interception alone (no per-context proxy, so out-of-process frames
+  and workers are not seen).
 - **Burp's login crawl events** (Zwkv `RECORDED_SEQUENCE_STARTED/ERROR`, `PAGES_FOUND_AFTER_LOGIN` /
   `NO_PAGES_FOUND_AFTER_LOGIN`): each replay is a `crawl.login` event in the task's event log, and
   `report.login.pages_found_after_login` carries the count. `RECORDED_SEQUENCE_BROWSER_ERROR` is a 400 at
@@ -2611,6 +2626,15 @@ algorithms are not in the documentation, burpsy's stated rules are recorded here
   except for…" (the always-test extension list is the `extensions` field) and the case-sensitivity
   mode (ffuf matches paths as the target serves them). Neither is in this bead's scope; both are
   one-option follow-ups if an engagement needs them.
+- **Every ffuf/nuclei request goes through a scope gate (burpsy-react-ui-extscan-egress, 2026-10-27).**
+  Each run starts a burpsy-owned loopback forward proxy (`internal/egressgate`) and passes it as ffuf
+  `-x` / nuclei `-proxy`; it refuses out-of-scope requests before they are dialled (counted and sampled
+  on the result as `GateRefused`/`GateRefusals`; a nuclei run with refusals is `partial`) and dials the
+  rest through the sender's egress route. nuclei runs HTTP templates only (`-pt http`) because its other
+  protocols dial around an HTTP proxy, and its default rate is 50 req/s, not nuclei's 150. Limits: an
+  HTTPS target is gated per tunnel (host:port), so the whole host must be in scope and path-scoped
+  excludes inside it are not visible (TLS interception in the gate would close this); ffuf has no default
+  rate cap; `tlsprobe` and `oob` (public OAST pool by default) still dial on their own.
 - **A running run's `by_status` serialises as []** — a pre-existing null that crashed the console's
   status chips the first time an e2e sweep rendered a running run (the tool had never been
   allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:

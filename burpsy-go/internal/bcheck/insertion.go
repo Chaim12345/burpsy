@@ -59,9 +59,11 @@
 package bcheck
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -451,6 +453,10 @@ type EnumerateOptions struct {
 	//
 	// Burp's softer list, skip_server_side_injection_for_parameters, is the field below.
 	SkipAllTestsForParameters []string
+	// SkipAllTestsForParametersAt is the same exemption scoped to one endpoint (the API scan's review
+	// step marks a parameter Fixed on one operation): a point is dropped only when the request being
+	// enumerated is that endpoint's (ParameterAt.Matches). Counted in the same Declined.
+	SkipAllTestsForParametersAt []ParameterAt
 	// SkipServerSideInjectionForParameters names parameters an operator exempted from the
 	// server-side injection checks only — Burp's
 	// scanner.ignored_insertion_points.skip_server_side_injection_for_parameters. The scanner
@@ -864,7 +870,8 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 	// describes what remained after the operator's own exemptions — a point dropped by
 	// the operator is not also a point the cap dropped, and the two declines must not
 	// double-count one place.
-	if skipped := skipNamedPoints(&out, opts.SkipAllTestsForParameters); skipped > 0 {
+	if skipped := skipNamedPoints(&out, append(append([]string(nil), opts.SkipAllTestsForParameters...),
+		parametersAt(req, opts.SkipAllTestsForParametersAt)...)); skipped > 0 {
 		declined = append(declined, Declined{
 			What: DeclinedSkippedParamWhat,
 			Reason: fmt.Sprintf("%d point(s) were not audited: their parameter is on the operator's skip-all-tests list",
@@ -930,6 +937,63 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 // returning how many it removed. The removal is in-place over the slice the enumerator built,
 // so the fixed order of the survivors is unchanged — order is observable (a check reports
 // one finding per point) and an exemption must not reorder what it did not exempt.
+// ParameterAt names one parameter on one endpoint: Method and Template are an API operation's
+// ("POST", "/users/{id}/orders"), Name the parameter's.
+type ParameterAt struct {
+	Method, Template, Name string
+}
+
+// Matches reports whether a request with this method and path (query excluded) is the endpoint's.
+// The template is matched against the END of the path, segment by segment, a {param} segment
+// matching any one segment: the requests an API scan sends sit under the server's base path
+// (/api/v1/users/7 for /users/{id}), which the operation's template does not carry.
+func (p ParameterAt) Matches(method, path string) bool {
+	if !strings.EqualFold(p.Method, method) {
+		return false
+	}
+	want := strings.Split(strings.Trim(p.Template, "/"), "/")
+	got := strings.Split(strings.Trim(path, "/"), "/")
+	if len(got) < len(want) {
+		return false
+	}
+	got = got[len(got)-len(want):]
+	for i, w := range want {
+		if strings.HasPrefix(w, "{") && strings.HasSuffix(w, "}") {
+			if got[i] == "" {
+				return false
+			}
+			continue
+		}
+		if w != got[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// parametersAt returns the names of the scoped exemptions that apply to req's own endpoint.
+func parametersAt(req []byte, at []ParameterAt) []string {
+	if len(at) == 0 {
+		return nil
+	}
+	line, _, _ := bytes.Cut(req, []byte("\r\n"))
+	fields := strings.Fields(string(line))
+	if len(fields) < 2 {
+		return nil
+	}
+	path, _, _ := strings.Cut(fields[1], "?")
+	if u, err := url.Parse(path); err == nil && u.IsAbs() {
+		path = u.Path // absolute-form request target
+	}
+	var names []string
+	for _, p := range at {
+		if p.Matches(fields[0], path) {
+			names = append(names, p.Name)
+		}
+	}
+	return names
+}
+
 func skipNamedPoints(pts *[]InsertionPoint, names []string) int {
 	if len(names) == 0 || len(*pts) == 0 {
 		return 0

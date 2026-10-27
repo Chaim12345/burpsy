@@ -160,7 +160,7 @@ func (s *Server) repeaterStructuredSend(w http.ResponseWriter, r *http.Request, 
 	}
 	if err != nil {
 		// A dry run reports the refusal as its verdict rather than failing; prepareRepeaterSend refused
-		// at host level, so rebuild the spec's addressing for the preview.
+		// on scope, so rebuild the spec's addressing for the preview.
 		host, port, tls, _ := targetParts(target)
 		spec = repeaterSendSpec{Host: host, Port: port, TLS: tls, Raw: edited, AsWritten: string(edited), Options: opts}
 	}

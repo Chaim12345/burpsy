@@ -643,7 +643,12 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		s.scope.Add(rule)
+		// An identical rule (kind, pattern, path, port, protocol) adds nothing to what scope decides,
+		// and two of them gave the console two rows with one identity
+		// (burpsy-react-ui-scope-duplicate-rules). The request succeeds and the list is unchanged.
+		if !scopeHasRule(s.scope, rule) {
+			s.scope.Add(rule)
+		}
 	case "remove":
 		if req.Pattern == "" {
 			http.Error(w, "Pattern is required", http.StatusBadRequest)
@@ -1801,4 +1806,16 @@ func (s *Server) findingIsolated(f *core.Finding) bool {
 		}
 	}
 	return true
+}
+
+// scopeHasRule reports whether scope already holds a rule identical to r in every arm.
+func scopeHasRule(scope *core.Scope, r *core.ScopeRule) bool {
+	same := func(x, y *string) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	for _, e := range scope.Rules() {
+		if e.Kind == r.Kind && e.Pattern == r.Pattern && same(e.PathPrefix, r.PathPrefix) && same(e.Protocol, r.Protocol) &&
+			(e.Port == nil) == (r.Port == nil) && (e.Port == nil || *e.Port == *r.Port) {
+			return true
+		}
+	}
+	return false
 }

@@ -406,11 +406,14 @@ func TestDiscoveryCountsResultsTheScopeRefusedRatherThanHidingThem(t *testing.T)
 			t.Errorf("an excluded path was reported: %+v", d)
 		}
 	}
-	if run.Counts.OutOfScope == 0 {
-		t.Fatalf("counts.out_of_scope = 0 after excluding a path ffuf found; a dropped result that is "+
-			"not counted is indistinguishable from one that was never there (run: %+v)", run)
+	// The exclude races ffuf: it either drops /admin after the sweep or the egress gate refuses the
+	// request first. Either way the refusal must be stated.
+	gateRefused := strings.Contains(run.Summary, "egress gate refused")
+	if run.Counts.OutOfScope == 0 && !gateRefused {
+		t.Fatalf("counts.out_of_scope = 0 and no gate refusal after excluding a path ffuf found; a dropped "+
+			"result that is not counted is indistinguishable from one that was never there (run: %+v)", run)
 	}
-	if !strings.Contains(run.Summary, "outside the engagement scope") {
+	if !gateRefused && !strings.Contains(run.Summary, "outside the engagement scope") {
 		t.Errorf("summary does not state the drop: %q", run.Summary)
 	}
 	// The task's own breakdown has to agree: an out-of-scope drop is gated work, so the count is a

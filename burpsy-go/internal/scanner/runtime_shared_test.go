@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 var (
@@ -46,7 +47,9 @@ var (
 // every later DOM check staring at a dead process, which reads as zero observations, which reads
 // as clean - the exact miscount this package exists to prevent.
 func TestMain(m *testing.M) {
-	code := m.Run()
+	// The browser capability ledger: a counted Chrome skip fails the package unless
+	// BURPSY_ALLOW_NO_CHROME=1 (internal/domexec/domexectest).
+	code := domexectest.Main(m)
 	if sharedTarget != nil {
 		if sharedTarget.srv != nil {
 			sharedTarget.srv.Close()

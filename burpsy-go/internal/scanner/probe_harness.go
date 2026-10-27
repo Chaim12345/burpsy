@@ -325,7 +325,19 @@ func (h *ProbeHarness) SendFollowing(ctx context.Context, point bcheck.Insertion
 // ApplyOptions.Raw and every other behaviour of SendFollowing is unchanged.
 func (h *ProbeHarness) SendFollowingOpts(ctx context.Context, point bcheck.InsertionPoint, payload string,
 	opts bcheck.ApplyOptions) (ProbeResponse, error) {
-	mutated, err := point.ApplyOpts(h.reqBytes, payload, false, opts)
+	return h.sendFollowing(ctx, point, payload, false, opts)
+}
+
+// SendFollowingAppending is SendFollowing with the payload appended to the point's original value
+// rather than replacing it (burpsy-react-ui-nulbyte): the null-byte XSS variants need the value the
+// application accepted to reach it byte-exact, in its captured wire spelling, ahead of the probe.
+func (h *ProbeHarness) SendFollowingAppending(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	return h.sendFollowing(ctx, point, payload, true, bcheck.ApplyOptions{})
+}
+
+func (h *ProbeHarness) sendFollowing(ctx context.Context, point bcheck.InsertionPoint, payload string,
+	appending bool, opts bcheck.ApplyOptions) (ProbeResponse, error) {
+	mutated, err := point.ApplyOpts(h.reqBytes, payload, appending, opts)
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
 	}

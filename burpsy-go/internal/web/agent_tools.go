@@ -113,18 +113,10 @@ func generateAgentTools() []AgentTool {
 	return tools
 }
 
-// confirmationGate is the shared gate that refuses scope/attack/credential/
-// destructive classes without an explicit per-call human confirmation.
-type confirmationGate struct {
-	confirmed map[string]bool
-}
-
-func newConfirmationGate() *confirmationGate {
-	return &confirmationGate{confirmed: make(map[string]bool)}
-}
-
 // needsConfirmation reports whether a risk class requires explicit human
-// confirmation before an unattended caller can use it.
+// confirmation before an unattended caller can use it. It is the one statement of the policy:
+// the confirmation gate (confirm_gate.go), the token binding (confirm_binding.go), the OpenAPI
+// description (openapi.go) and the console's generated gate table all derive from it.
 func needsConfirmation(r riskClass) bool {
 	switch r {
 	case riskScope, riskAttack, riskCredential, riskDestructive:
@@ -132,27 +124,6 @@ func needsConfirmation(r riskClass) bool {
 	default:
 		return false
 	}
-}
-
-// allow reports whether a call to a route with the given risk class is allowed.
-// If the class requires confirmation, the caller must have explicitly confirmed
-// this specific call.
-func (g *confirmationGate) allow(r riskClass, callID string) error {
-	if !needsConfirmation(r) {
-		return nil
-	}
-	if callID == "" {
-		return fmt.Errorf("call to %s route requires explicit human confirmation: this route can %s", r, toolSafety(r))
-	}
-	if !g.confirmed[callID] {
-		return fmt.Errorf("call %q to %s route has not been confirmed by a human", callID, r)
-	}
-	return nil
-}
-
-// confirm marks a call ID as human-confirmed.
-func (g *confirmationGate) confirm(callID string) {
-	g.confirmed[callID] = true
 }
 
 // riskClassOf returns the risk class for a route pattern.

@@ -33,6 +33,8 @@ export const ROUTES: Route[] = [
   { id: "auditqueue", label: "Audit queue", h1: "Audit queue", tool: "target" },
   { id: "advisories", label: "Issue definitions", h1: "Issue definitions", tool: "target" },
   { id: "contentdiscovery", label: "Content discovery", h1: "Content discovery", tool: "target" },
+  { id: "dominvader", label: "DOM auditor", h1: "DOM auditor", tool: "target" },
+  { id: "authz", label: "Access control", h1: "Access control", tool: "target" },
   { id: "scope", label: "Scope", h1: "Scope", tool: "target" },
   { id: "intercept", label: "Intercept", h1: "Intercept", tool: "proxy", hotkey: "3" },
   { id: "history", label: "HTTP history", h1: "HTTP history", tool: "proxy" },
@@ -52,6 +54,7 @@ export const ROUTES: Route[] = [
   { id: "extensions", label: "Installed", h1: "Extensions", tool: "extender" },
   { id: "extenderoptions", label: "Options", h1: "Extender options", tool: "extender" },
   { id: "extenderapis", label: "APIs", h1: "Extender APIs", tool: "extender" },
+  { id: "scannerchecks", label: "Custom scan checks", h1: "Custom scan checks", tool: "extender" },
   { id: "settings", label: "Settings", h1: "Settings", tool: "settings" },
 ];
 

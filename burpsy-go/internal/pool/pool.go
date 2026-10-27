@@ -23,7 +23,7 @@
 // state belongs to whichever layer owns the attacks". Putting the registry there would contradict
 // that and would make the scanner import the intruder to look a name up. This package is that
 // layer: it owns names and lifetimes, and it owns *no limiter behaviour at all*. Every pool
-// resolves to an intruder.RateLimit and the limiting is done by intruder.RateLimiter. Two limiters
+// resolves to an ratelimit.RateLimit and the limiting is done by ratelimit.RateLimiter. Two limiters
 // of one shape drift; there is one.
 //
 // # Burp's dialog, in this package's vocabulary
@@ -41,7 +41,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/burpsy-go/burpsy/internal/intruder"
+	"github.com/burpsy-go/burpsy/internal/ratelimit"
 )
 
 // MaxConcurrentCeiling bounds a pool's concurrency, matching the ceiling POST /api/intruder/run
@@ -74,12 +74,12 @@ var ErrNoSuchPool = errors.New("no pool of that name is saved")
 // what a tool references — so two pools sharing one is not a cosmetic clash.
 var ErrDuplicateName = errors.New("a pool of that name already exists")
 
-// Throttle is Burp's "Automatic throttling", expressed in the terms intruder.AutoThrottle already
+// Throttle is Burp's "Automatic throttling", expressed in the terms ratelimit.AutoThrottle already
 // works in.
 //
 // # The one translation in this package
 //
-// Burp says "increase delay in increments of I milliseconds". intruder.AutoThrottle says "divide the
+// Burp says "increase delay in increments of I milliseconds". ratelimit.AutoThrottle says "divide the
 // rate by Factor". Those are the same statement written two ways, and the arithmetic is exact rather
 // than approximate: a delay of D ms is a rate of 1000/D per second, so raising the delay to D+I is a
 // rate of 1000/(D+I), which is the original rate divided by (D+I)/D. So the operator types an
@@ -106,7 +106,7 @@ type Throttle struct {
 	RecoverAfter int `json:"recover_after,omitempty"`
 }
 
-// Default throttle parameters, matching intruder.DefaultAutoThrottle so a pool that leaves them
+// Default throttle parameters, matching ratelimit.DefaultAutoThrottle so a pool that leaves them
 // unset behaves exactly as an intruder attack with auto-throttling on already did.
 const (
 	DefaultThrottleAfter        = 3
@@ -217,7 +217,7 @@ func (p Pool) RequestsPerSecond() (float64, bool) {
 	return 1000.0 / float64(p.DelayMs), true
 }
 
-// ThrottleFactor is the divisor intruder.AutoThrottle needs to express this pool's delay increment,
+// ThrottleFactor is the divisor ratelimit.AutoThrottle needs to express this pool's delay increment,
 // and whether there is a throttle at all. See Throttle for the derivation.
 func (p Pool) ThrottleFactor() (float64, bool) {
 	if p.Throttle == nil || p.DelayMs <= 0 {
@@ -231,8 +231,8 @@ func (p Pool) ThrottleFactor() (float64, bool) {
 // Burst is 1 and not configurable, because "delay between requests" *means* strict spacing: a burst
 // of N would let N requests go out back-to-back after an idle moment, which is the one thing an
 // operator who typed a delay was asking not to happen.
-func (p Pool) Limit() intruder.RateLimit {
-	limit := intruder.RateLimit{Burst: 1, MaxInFlight: p.MaxConcurrent, Name: p.Name}
+func (p Pool) Limit() ratelimit.RateLimit {
+	limit := ratelimit.RateLimit{Burst: 1, MaxInFlight: p.MaxConcurrent, Name: p.Name}
 	if rps, capped := p.RequestsPerSecond(); capped {
 		limit.PerSecond = &rps
 	}
@@ -250,7 +250,7 @@ func (p Pool) Limit() intruder.RateLimit {
 		if recover < 1 {
 			recover = DefaultThrottleRecoverAfter
 		}
-		limit.AutoThrottle = &intruder.AutoThrottle{
+		limit.AutoThrottle = &ratelimit.AutoThrottle{
 			Statuses: statuses, After: after, Factor: factor, RecoverAfter: recover,
 		}
 	}
@@ -270,7 +270,7 @@ type Registry struct {
 	// limiters is the one live limiter per pool, built on first use and dropped when the pool it was
 	// built from changes. See limiter.go for why a shared object needs a shared limiter, and why an
 	// edit applies to the next run rather than to work already in flight.
-	limiters map[string]*intruder.RateLimiter
+	limiters map[string]*ratelimit.RateLimiter
 	// onChange fires after every mutation, so the owner can persist and notify without every call
 	// site remembering to. Never called while mu is held.
 	onChange func()
@@ -279,7 +279,7 @@ type Registry struct {
 // New creates an empty registry. Empty is the honest starting state: no pool has been saved, and
 // every tool runs under its own documented default until one is.
 func New() *Registry {
-	return &Registry{byKey: map[string]Pool{}, limiters: map[string]*intruder.RateLimiter{}}
+	return &Registry{byKey: map[string]Pool{}, limiters: map[string]*ratelimit.RateLimiter{}}
 }
 
 // OnChange installs the post-mutation hook. One slot; re-installing replaces.
@@ -414,10 +414,10 @@ func (r *Registry) Get(name string) (Pool, error) {
 
 // Limit resolves a pool name to the bound a tool runs under. The single resolution point: every
 // tool that accepts a pool name calls this, so "what does this pool mean" has one answer.
-func (r *Registry) Limit(name string) (intruder.RateLimit, error) {
+func (r *Registry) Limit(name string) (ratelimit.RateLimit, error) {
 	p, err := r.Get(name)
 	if err != nil {
-		return intruder.RateLimit{}, err
+		return ratelimit.RateLimit{}, err
 	}
 	return p.Limit(), nil
 }
@@ -488,7 +488,7 @@ func (r *Registry) Restore(pools []Pool) []error {
 	r.order, r.byKey = order, byKey
 	// Every cached limiter goes, not just the ones whose pool changed: Restore replaces the whole set,
 	// so a limiter surviving it would be enforcing bounds from a set that is no longer the saved one.
-	r.limiters = map[string]*intruder.RateLimiter{}
+	r.limiters = map[string]*ratelimit.RateLimiter{}
 	r.mu.Unlock()
 	return refused
 }

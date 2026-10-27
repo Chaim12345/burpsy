@@ -51,5 +51,7 @@ describe("typing a whole request into the Repeater request editor", () => {
   } finally {
    errors.mockRestore();
   }
- });
+  // ~70 keystrokes, each a full editor re-render: about 5.5s on a 4-core runner, past bun's 5s default
+  // (burpsy-react-ui-timing-bounds). The bound guards a hang, not speed.
+ }, 30_000);
 });

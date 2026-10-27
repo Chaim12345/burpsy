@@ -76,14 +76,16 @@ func (s *Server) handleIntruderAgain(w http.ResponseWriter, r *http.Request) {
 			fail(serr.Error())
 			continue
 		}
-		reqID, _ := s.store.Put(raw, core.DirectionRequest)
+		// One capture-gate hold across the messages and the row (burpsy-react-ui-capture-split-web).
+		hold := s.store.HoldCapture()
+		reqID, _ := hold.Put(raw, core.DirectionRequest)
 		reqU := uint64(reqID)
 		row.RequestID = &reqU
 		row.Status = res.Status
 		row.DurationMS = res.Duration.Milliseconds()
 		row.ResponseLen = len(res.Raw)
 		if len(res.Raw) > 0 {
-			respID, _ := s.store.Put(res.Raw, core.DirectionResponse)
+			respID, _ := hold.Put(res.Raw, core.DirectionResponse)
 			respU := uint64(respID)
 			row.ResponseID = &respU
 			ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, TLS: tls,
@@ -95,8 +97,9 @@ func (s *Server) handleIntruderAgain(w http.ResponseWriter, r *http.Request) {
 				st := uint16(*res.Status)
 				ex.Status = &st
 			}
-			s.store.AddExchange(ex)
+			hold.AddExchange(ex)
 		}
+		hold.Release()
 		rows = append(rows, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})

@@ -283,7 +283,7 @@ func TestSessionsAreIsolatedFromEachOtherAndFromTheDefaultContext(t *testing.T) 
 	if err != nil || strings.Contains(html, "Welcome alice") {
 		t.Fatalf("a second session saw the first one's login: %v", err)
 	}
-	html, err = b.RenderedDOM(ctx, app.srv.URL+"/home")
+	html, err = b.renderedDOM(ctx, app.srv.URL+"/home")
 	if err != nil || strings.Contains(html, "Welcome alice") {
 		t.Fatalf("the default context saw the session's login: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestIgnoringCertificateErrorsIsScopedToTheSession(t *testing.T) {
 		t.Fatalf("a session told to accept the certificate failed: %q", rep.Reason)
 	}
 	// The default context — the DOM checks' — still refuses it.
-	if html, err := b.RenderedDOM(ctx, srv.URL+"/"); err == nil && strings.Contains(html, "staging") {
+	if html, err := b.renderedDOM(ctx, srv.URL+"/"); err == nil && strings.Contains(html, "staging") {
 		t.Fatal("the session's certificate relaxation leaked into the shared browser")
 	}
 }

@@ -191,7 +191,7 @@ func openAPIOperation(method, pattern, path string, spec route) map[string]any {
 		"summary":       spec.summary,
 		"x-burpsy-risk": string(spec.risk),
 	}
-	if spec.risk != riskRead && spec.risk != riskAsset {
+	if needsConfirmation(spec.risk) {
 		op["description"] = fmt.Sprintf("Risk class %s: an unattended caller must mint a confirmation "+
 			"for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.", spec.risk)
 	}

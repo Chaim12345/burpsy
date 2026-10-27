@@ -164,15 +164,19 @@ func TestNoSQLiReadOnlyGate(t *testing.T) {
 
 func TestNoSQLiSignaturesAreMongoSpecific(t *testing.T) {
 	for body, want := range map[string]bool{
-		`{"error":"MongoServerError: unknown operator: $foo"}`:             true,
-		`CastError: Cast to ObjectId failed for value "x" at path "_id"`:   true,
-		`MongoDB\\Driver\\Exception\\CommandException`:                     true,
-		`pymongo.errors.OperationFailure: $where`:                          true,
-		`$where clause: SyntaxError: unterminated string literal`:          true,
-		`SyntaxError: Unexpected token ' in JSON at position 12`:           false,
-		`You have an error in your SQL syntax near ''' at line 1`:          false,
-		`TypeError: Cannot read properties of undefined (reading 'mongo')`: false,
-		`<p>We use MongoDB Atlas for storage.</p>`:                         false,
+		`{"error":"MongoServerError: unknown operator: $foo"}`:                                               true,
+		`CastError: Cast to ObjectId failed for value "x" at path "_id"`:                                     true,
+		`MongoDB\\Driver\\Exception\\CommandException`:                                                       true,
+		`pymongo.errors.OperationFailure: $where`:                                                            true,
+		`$where clause: SyntaxError: unterminated string literal`:                                            true,
+		`SyntaxError: Unexpected token ' in JSON at position 12`:                                             false,
+		`You have an error in your SQL syntax near ''' at line 1`:                                            false,
+		`TypeError: Cannot read properties of undefined (reading 'mongo')`:                                   false,
+		`<p>We use MongoDB Atlas for storage.</p>`:                                                           false,
+		`{"error":{"root_cause":[{"type":"query_shard_exception","reason":"Failed to parse query [a\"]"}]}}`: true,
+		`Cannot parse 'title:(x': Encountered "<EOF>" at line 1`:                                             true,
+		`{"error":"invalid_operator","reason":"Invalid operator: $foo"}`:                                     true,
+		`<p>Powered by Elasticsearch and CouchDB.</p>`:                                                       false,
 	} {
 		if got := nosqliSignature(body) != ""; got != want {
 			t.Errorf("nosqliSignature(%q) matched=%v, want %v", body, got, want)

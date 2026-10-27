@@ -75,8 +75,8 @@ the frozen Rust reference (`verify.sh`). Full rules: `docs/DEVELOPMENT-PROCESS.m
 |---|---|---|---|
 | T1 | implementing agent, before reporting | `gofmt -l .`, `go vet ./...`, `go test -count=1 -timeout 30m` on `scripts/affected-go-tests.sh origin/master`; `bun run check` if the UI changed; a negative control per new test | local |
 | T2 | lead, per item merge into the round branch | T1 on the merge result, plus `go build ./...` | local |
-| T3 | CI, every PR into master and every master push | `gate`: gofmt, build, vet; `go test ./... -count=1` + `go test -race ./internal/web/` — full on a master push, the affected set on a PR (full if it touches go.mod/go.sum, `.github/**`, `scripts/ci-*`, testdata); `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`; `review-gate`. Docs/.beads/bench-only changes skip Go and ui | `.github/workflows/go.yml`, `review-gate.yml` |
-| Nightly | CI, 03:17 UTC | `e2e-go.sh`; every shard but `race-web-*` under `-race` (scanner and extscan included) | `.github/workflows/nightly.yml` |
+| T3 | CI, every PR into master and every master push | `gate`: gofmt, build, vet; `go test ./... -count=1` + `go test -race` on `internal/web/` and race-core (`proxy`, `dash`, `pool`, `sender`, `intruder`) — full on a master push, the affected set on a PR (full if it touches go.mod/go.sum, `.github/**`, `scripts/ci-*`, testdata); `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`; `review-gate`; `uat-cli` + `uat-ui` (part of `gate`). Docs/.beads/bench-only changes skip Go and ui | `.github/workflows/go.yml`, `review-gate.yml` |
+| Nightly | CI, 03:17 UTC | `e2e-go.sh`; the Playwright console suite (`ui/e2e/specs`, job `e2e-ui`); every shard but `race-web-*` and `race-core` under `-race` (scanner and extscan included); `fuzz` (all targets, `ci-fuzz.sh`); `bench-vulnapp`, `bench-parity` | `.github/workflows/nightly.yml` |
 | Manual | whoever changed the console | live browser pass: `./ui-live.sh` + `burpsy-go/docs/UI-VERIFICATION.md` | not in CI |
 
 ```bash
@@ -89,7 +89,10 @@ scripts/capped-run.sh -- sh -c 'cd burpsy-go && go test ./... -count=1 -timeout 
 
 Gotchas: `go test ./...` needs `-timeout 30m` (`internal/scanner` alone is ~8 minutes); `bun run
 build` strips types without checking them; agents never commit `dist/app.js` / `style.css` — the
-lead rebuilds once per round with bun 1.4.2.
+lead rebuilds once per round with bun 1.4.2. A browser-driving package (domexec, dominvader,
+blindxss, browser, crawler, scanner, web) FAILS when Chrome cannot launch; `BURPSY_ALLOW_NO_CHROME=1`
+accepts that run deliberately (siblings: `BURPSY_ALLOW_UNVERIFIED_COVERAGE`, `_EXTSCAN`; list in
+`AGENTS.md` Testing Requirements). CI sets none of them.
 
 ## Architecture Overview
 

@@ -1,4 +1,4 @@
-package intruder
+package ratelimit
 
 import (
 	"strings"

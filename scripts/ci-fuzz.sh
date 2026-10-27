@@ -4,15 +4,21 @@
 #
 #   ci-fuzz.sh run     fuzz every target for CI_FUZZ_TIME (default 60s) each; exit 1 if any failed
 #   ci-fuzz.sh list    print "pkg Target" lines
-#   ci-fuzz.sh verify  check that every listed target exists in its package (compiles nothing, runs nothing)
+#   ci-fuzz.sh verify  check that every listed target exists in its package, and that every target
+#                      defined under internal/ is listed (compiles nothing, runs nothing)
 #
 # A listed target that does not exist is a failure, not a skip: a silently shrinking fuzz set is the
 # failure this guard exists to stop. CI_FUZZ_ONLY=<Target> restricts a run to one target.
 set -uo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
-# package-dir target — W3's committed list. Add a line when a fuzz target is added.
+# package-dir target — the committed list. Add a line when a fuzz target is added: verify fails on a
+# target defined under internal/ that is not listed (an unlisted target is never fuzzed, only seeded).
 targets='httputil FuzzRequestURL
 httputil FuzzDechunk
+httputil FuzzParseChunkSize
+httputil FuzzSplitHeadBody
+httputil FuzzHeaderValue
+httputil FuzzHeaderValueExact
 proxy FuzzParseClientHelloALPN
 proxy FuzzAltSvcLearn
 proxy FuzzProxyDechunk
@@ -20,7 +26,15 @@ proxy FuzzReadFullRequest
 proxy FuzzParseRequestLine
 http2 FuzzDecodeFrameHeader
 http2 FuzzReadFrames
-http2 FuzzHpackDecode'
+http2 FuzzHpackDecode
+core FuzzParse
+core FuzzParseWsFrameHeader
+grpcproto FuzzDecode
+grpcproto FuzzParseProto
+apidoc FuzzParse
+bcheck FuzzParse
+query FuzzParse
+session FuzzJSONPath'
 verb=${1:-run}
 fuzztime=${CI_FUZZ_TIME:-60s}
 cd "$repo/burpsy-go" || exit 1
@@ -33,7 +47,14 @@ case "$verb" in
         echo "ci-fuzz: $name is not defined in internal/$pkg" >&2; rc=1
       fi
     done <<<"$targets"
-    [ $rc = 0 ] && echo "ci-fuzz verify: every listed target exists"
+    # The reverse direction: a Fuzz function nobody listed is a parser that is never fuzzed.
+    while IFS=: read -r file name; do
+      pkg=$(dirname "${file#internal/}")
+      if ! grep -qxF "$pkg $name" <<<"$targets"; then
+        echo "ci-fuzz: $name in internal/$pkg is not listed in ci-fuzz.sh" >&2; rc=1
+      fi
+    done < <(grep -rHoE '^func Fuzz[A-Za-z0-9_]+' --include='*_test.go' internal | sed 's/:func /:/')
+    [ $rc = 0 ] && echo "ci-fuzz verify: every listed target exists and every target is listed"
     exit $rc ;;
   run)
     rc=0; ran=0

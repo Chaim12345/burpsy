@@ -271,6 +271,10 @@ func discoverySummary(res extscan.FFUFResult) string {
 		fmt.Fprintf(&b, "; %d were dropped as outside the engagement scope, leaving %d",
 			res.OutOfScope, len(res.Discoveries))
 	}
+	if res.GateRefused > 0 {
+		fmt.Fprintf(&b, "; burpsy's egress gate refused %d out-of-scope request(s) before they were sent",
+			res.GateRefused)
+	}
 	b.WriteString(". A path this wordlist does not contain was never asked for, so an absence here is " +
 		"an absence of guesses rather than of content.")
 	return b.String()
@@ -332,11 +336,16 @@ type discoveryStartReq struct {
 	VariantExtensions string `json:"variant_extensions"`
 }
 
-// extscanConfig is the delegated-tool configuration for this process: the operator's allowlist and
-// nothing else. Bounds fall through to extscan's documented defaults so "what bounds a delegated run"
-// has one answer.
+// extscanConfig is the delegated-tool configuration for this process: the operator's allowlist, and
+// the sender's egress dialer for the run's scope-gating proxy (so a delegated scan leaves through the
+// operator's upstream proxy, SOCKS carrier and resolution table). Bounds fall through to extscan's
+// documented defaults so "what bounds a delegated run" has one answer.
 func (s *Server) extscanConfig() extscan.Config {
-	return extscan.Config{Tools: s.externalTools}
+	cfg := extscan.Config{Tools: s.externalTools}
+	if s.sender != nil {
+		cfg.EgressDial = s.sender.EgressDialContext
+	}
+	return cfg
 }
 
 // handleDiscovery serves POST /api/discovery (start) and GET /api/discovery (list, or one by ?task=).
@@ -561,9 +570,9 @@ func discoveryFinish(ctx context.Context, task *dash.Handle, res extscan.FFUFRes
 		// floor rather than a total.
 		task.FinishWithNote(dash.Breakdown{
 			Found: uint64(len(res.Discoveries)),
-			Gated: uint64(res.OutOfScope),
+			Gated: uint64(res.OutOfScope) + uint64(res.GateRefused), //nolint:gosec // G115: counts are never negative
 		}, fmt.Sprintf("%d path(s) discovered, %d dropped as out of scope",
-			len(res.Discoveries), res.OutOfScope))
+			len(res.Discoveries), res.OutOfScope+res.GateRefused))
 		return "done"
 	case res.Outcome == extscan.OutcomeFailed:
 		task.Fail(res.Err)

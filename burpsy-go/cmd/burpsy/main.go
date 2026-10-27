@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/buildinfo"
 	"log"
 	"os"
 	"os/exec"
@@ -43,6 +44,8 @@ func main() {
 	// Parse flags
 	proxyBind := flag.String("proxy", "127.0.0.1:8080", "proxy bind address")
 	webBind := flag.String("web", "127.0.0.1:8081", "web UI bind address")
+	webAllowedHosts := flag.String("web-allowed-host", "", "comma-separated Host names the console also answers to "+
+		"(name or name:port), for a non-loopback -web reached by DNS name; loopback and the -web address itself are always accepted")
 	captureDir := flag.String("capture-dir", "", "directory for segment-based capture")
 	dbFile := flag.String("db", "", "SQLite database for persistent state (history, findings, scope, rules)")
 	scopeInclude := flag.String("scope-include", "", "include host pattern in scope")
@@ -125,7 +128,12 @@ func main() {
 	upstreamProxyRules := flag.String("upstream-proxy-rule", "",
 		"per-destination upstream proxy rules, comma-separated pattern=URL (e.g. '*.internal=socks5://127.0.0.1:1080,api.example.com=direct'); first match wins, ahead of -upstream-proxy")
 
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.String())
+		return
+	}
 
 	// Before anything is built: this either prints a list and exits, or resolves a name, or refuses one
 	// that does not exist. Resolving it late — after the proxy is listening — would mean a typo takes
@@ -712,6 +720,9 @@ func main() {
 	// flag existed. The provider is lazy, so an audit whose check set contains no DOM check
 	// never starts a browser.
 	if domOpts != nil {
+		// The gated browser sessions (renders, recorded logins) leave through the sender's egress
+		// route — upstream proxy, SOCKS carrier, resolution table — like every other send.
+		domOpts.EgressDial = httpSender.EgressDialContext
 		caps.BrowserProvider = scanner.NewLazyBrowserProvider(*domOpts)
 	}
 	activeScanner := scanner.NewActiveScanner(store, logger).
@@ -832,6 +843,7 @@ func main() {
 		// makes the import endpoint refuse rather than store a setting nothing reads.
 		WithTLSEngine(tlsEngine, *caDir).
 		WithBindAddrs(*proxyBind, *webBind).
+		WithAllowedHosts(mustAllowedHosts(*webAllowedHosts, logger)...).
 		WithDOMEngine(*domEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.

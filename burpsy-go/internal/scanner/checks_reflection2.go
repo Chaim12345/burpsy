@@ -59,6 +59,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 )
 
 // newProbeCanary returns a per-probe unique token. A fixed test value would let a static page that
@@ -552,6 +554,14 @@ func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 				"the "+string(point.Kind)+" parameter "+point.Name+
 					" reached a Server-Side Includes processor that parsed and evaluated the injected directive")}, nil
 		}
+		if strings.Contains(res.Body, trueToken) && esiEvaluated(ctx, h, point) {
+			return []*Finding{buildProbeFinding(cc, ssiInjectionIssue, "firm",
+				"an injected Edge Side Includes comment (<!--esi-->) was removed between two tokens twice, while "+
+					"an ordinary HTML comment in the same place was not",
+				"the "+string(point.Kind)+" parameter "+point.Name+
+					" reached an Edge Side Includes processor (a cache or CDN), which can be made to include "+
+					"other URLs or expose cookies through <esi:include> and <esi:vars>")}, nil
+		}
 	}
 
 	// The two headers Zexx was recovered probing. These stay header-addressed rather than going
@@ -571,6 +581,21 @@ func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 		}
 	}
 	return nil, nil
+}
+
+// esiEvaluated: an ESI processor deletes "<!--esi-->", leaving the tokens either side adjacent.
+// An ordinary comment must survive, so a page that strips all comments does not count.
+func esiEvaluated(ctx context.Context, h *ProbeHarness, point bcheck.InsertionPoint) bool {
+	for i := 0; i < 2; i++ {
+		a, b := newProbeCanary("esa"), newProbeCanary("esb")
+		res, err := h.Send(ctx, point, a+"<!--esi-->"+b)
+		if err != nil || !strings.Contains(res.Body, a+b) || strings.Contains(res.Body, "<!--esi") {
+			return false
+		}
+	}
+	a, b := newProbeCanary("esa"), newProbeCanary("esb")
+	res, err := h.Send(ctx, point, a+"<!--x-->"+b)
+	return err == nil && strings.Contains(res.Body, a+"<!--x-->"+b)
 }
 
 func ssiEvaluated(body, trueToken, falseToken string) bool {

@@ -1,7 +1,6 @@
 package web
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -61,41 +60,29 @@ func TestAgentToolTierIsDeterministicFromTheRiskClass(t *testing.T) {
 	}
 }
 
-// The gate is the reason the tier is not decoration: a confirmation-worthy class must be REFUSED
-// without an explicit per-call human confirmation, and allowed with one.
-func TestTheConfirmationGateRefusesEveryConfirmationWorthyClass(t *testing.T) {
-	confirmWorthy := []riskClass{riskScope, riskAttack, riskCredential, riskDestructive}
-	for _, risk := range confirmWorthy {
+// The confirmation set is exactly scope/attack/credential/destructive. The gate that enforces it is
+// confirm_gate.go (pinned by its own tests); this pins the set itself.
+func TestTheConfirmationSetIsScopeAttackCredentialDestructive(t *testing.T) {
+	for _, risk := range []riskClass{riskScope, riskAttack, riskCredential, riskDestructive} {
 		if !needsConfirmation(risk) {
-			t.Errorf("risk %s does not require confirmation, but it is in the confirmation-worthy set — "+
-				"an unattended caller would be able to invoke it silently", risk)
+			t.Errorf("risk %s does not require confirmation — an unattended caller could invoke it silently", risk)
 		}
-		gate := newConfirmationGate()
-		if err := gate.allow(risk, "call-1"); err == nil {
-			t.Errorf("the gate allowed an unconfirmed %s call — this is the exact bypass the gate exists to close", risk)
-		}
-		// A confirmed call is allowed: the gate is a per-call human decision, not a blanket refusal.
-		gate.confirm("call-1")
-		if err := gate.allow(risk, "call-1"); err != nil {
-			t.Errorf("the gate refused a CONFIRMED %s call: %v — a human said yes and was still refused", risk, err)
-		}
-		// And the confirmation is per-call, not sticky: a second call needs its own yes.
-		if err := gate.allow(risk, "call-2"); err == nil {
-			t.Errorf("confirming call-1 also allowed call-2 on a %s route — confirmation is per-call, or one "+
-				"yes authorises every later call the model decides to make", risk)
+	}
+	for _, risk := range []riskClass{riskRead, riskAsset, riskLocal, riskEgress, riskExecute} {
+		if needsConfirmation(risk) {
+			t.Errorf("risk %s requires confirmation; the set is scope/attack/credential/destructive", risk)
 		}
 	}
 }
 
-// The classes that need no confirmation must not be gated: a read-only tool an agent cannot read
-// with is not a tool.
-func TestTheConfirmationGateDoesNotRefuseReadOnlyClasses(t *testing.T) {
-	for _, risk := range []riskClass{riskRead, riskAsset, riskLocal, riskEgress, riskExecute} {
-		if needsConfirmation(risk) {
-			t.Errorf("risk %s requires confirmation; the acceptance set is scope/attack/credential/destructive", risk)
-		}
-		if err := newConfirmationGate().allow(risk, ""); err != nil {
-			t.Errorf("the gate refused a %s call with no confirmation: %v", risk, err)
+// The published contract says a confirmation is needed exactly where the gate asks for one: a client
+// reading the OpenAPI document must not be told an ungated route is gated, or the reverse.
+func TestTheOpenAPIConfirmationNoteMatchesTheGate(t *testing.T) {
+	for pattern, spec := range manifest {
+		op := openAPIOperation("POST", pattern, pattern, spec)
+		_, says := op["description"].(string)
+		if says != needsConfirmation(spec.risk) {
+			t.Errorf("%s (%s): OpenAPI says confirmation needed=%v, gate needsConfirmation=%v", pattern, spec.risk, says, needsConfirmation(spec.risk))
 		}
 	}
 }
@@ -109,24 +96,5 @@ func TestRiskExecuteIsExcludedFromTheConfirmationSetWithItsReason(t *testing.T) 
 		t.Error("riskExecute now requires confirmation. That is a defensible change — a plugin runs until " +
 			"something stops it — but it is a change of policy, not a bug fix. Reconsider it deliberately " +
 			"and update the comment on riskExecute in route_manifest.go to say why.")
-	}
-}
-
-// The gate's refusal must name the class and what it can do, so a caller refused by it can tell an
-// operator what to confirm rather than being handed a bare 403.
-func TestTheConfirmationGateRefusalNamesTheClassAndItsEffect(t *testing.T) {
-	err := newConfirmationGate().allow(riskDestructive, "call-9")
-	if err == nil {
-		t.Fatal("an unconfirmed destructive call was allowed")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, string(riskDestructive)) {
-		t.Errorf("the refusal does not name the risk class: %q", msg)
-	}
-	if !strings.Contains(msg, "call-9") {
-		t.Errorf("the refusal does not name the call it refused: %q", msg)
-	}
-	if !strings.Contains(msg, "destructive") {
-		t.Errorf("the refusal does not say what the class can do: %q", msg)
 	}
 }

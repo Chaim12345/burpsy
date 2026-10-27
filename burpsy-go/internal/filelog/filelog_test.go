@@ -138,3 +138,18 @@ func TestAnIsolatedScansTrafficIsLoggedAsScanner(t *testing.T) {
 		t.Errorf("all_tools log = %q: a schema item was never sent and must not be logged", a)
 	}
 }
+
+func TestAnExistingLogFileIsMadeOwnerOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.log")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := New(core.NewTrafficStore())
+	defer l.Close()
+	if err := l.Apply(Settings{Requests: map[string]string{"proxy": path}}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v (%v), want 0600", fi.Mode().Perm(), err)
+	}
+}

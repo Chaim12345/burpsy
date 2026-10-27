@@ -10,6 +10,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
@@ -19,10 +20,10 @@ import (
 // — the paths it was asked for — never on a Config literal, because a field set on a literal the
 // crawl never reads is the exact defect shape this test exists to catch.
 //
-// Chrome is required and its absence is a skip here (this is one of several web tests that need it),
-// unlike internal/scanner's counted version: the wiring this proves is also covered without a browser
-// by internal/crawler's stubbed-hook tests, so a machine with no Chrome loses the end-to-end
-// demonstration, not the capability's only proof.
+// Chrome is required and its absence is a counted skip here (domexectest.Skip): the package fails
+// unless BURPSY_ALLOW_NO_CHROME=1. The wiring this proves is also covered without a browser by
+// internal/crawler's stubbed-hook tests, so a deliberately reduced run loses the end-to-end
+// demonstration, not the capability's only proof, but it must still say it lost it.
 
 // interactSite serves a SPA-shaped page whose /scripted link exists only in the DOM a click produces,
 // and records every path it is asked for.
@@ -91,7 +92,7 @@ func startInteractCrawl(t *testing.T, s *Server, seed string, interact bool) cra
 // happened to carry.
 func TestTheCrawlRouteClicksThroughToAScriptRoutedPage(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
 	t.Cleanup(func() { _ = provider.Close() })
@@ -132,7 +133,7 @@ func loopbackScope() *core.Scope {
 // it). The click-revealed route is still crawled, so the pass ran.
 func TestTheCrawlInteractionPassIsScopeGated(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
 	t.Cleanup(func() { _ = provider.Close() })
