@@ -84,8 +84,10 @@ func (s *Server) handleProtobufReflectDecode(w http.ResponseWriter, r *http.Requ
 	}
 	// The authorised path, cleared before any dial: the reflection call path is
 	// the one constant path the fetch will request.
-	if !s.scope.AuthoriseRequest(host, port, "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo", body.Reflect.TLS) {
-		http.Error(w, fmt.Sprintf("scope refuses %s:%d - out-of-scope request handling is set to drop; no fetch was attempted", host, port), http.StatusForbidden)
+	// Strict like Repeater: AuthoriseRequest is the proxy's forward rule and lets out-of-scope through.
+	reflectLine := []byte("POST /grpc.reflection.v1.ServerReflection/ServerReflectionInfo HTTP/2\r\n\r\n")
+	if err := s.scope.AuthoriseRaw(host, port, body.Reflect.TLS, reflectLine); err != nil {
+		http.Error(w, fmt.Sprintf("scope refuses %s:%d - %v; no fetch was attempted", host, port, err), http.StatusForbidden)
 		return
 	}
 	raw, err := decodeBase64Body(w, body.BodyBase64)
