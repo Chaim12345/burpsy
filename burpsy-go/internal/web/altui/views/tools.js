@@ -1,7 +1,7 @@
 import { api, esc } from '../api.js';
 import { toast } from '../components.js';
 
-// TOOLS — offline helpers: decode, encode, hash, compare. Nothing here sends
+// TOOLS - offline helpers: decode, encode, hash, compare. Nothing here sends
 // traffic; every call is computed by the backend from the text you type.
 
 const ENCODINGS = ['url', 'html', 'base64', 'base64url', 'hex', 'gzip', 'deflate', 'octal', 'binary', 'rot13', 'ascii'];

@@ -19,16 +19,17 @@ export function confirmDialog({ challenge, method, url, body, preview }) {
     root.innerHTML = `
       <div class="modal-back">
         <div class="modal" role="dialog" aria-modal="true" aria-label="Confirm action">
-          <div class="risk">⚠ ${risk} — needs your explicit go</div>
+          <div class="risk">⚠ ${risk} - needs your explicit go</div>
           <h3>Confirm this exact call</h3>
           <div class="why">The backend refuses to run this from an unattended caller.
           Approving mints a one-time token for <b>this exact request only</b> (valid ~${esc(challenge.expires_in ?? 60)}s).</div>
           <div class="call">${esc(method)} ${esc(url)}${prettyBody ? '\n\n' + esc(prettyBody) : ''}</div>
-          ${preview ? `<div class="why">Server-resolved call this token authorizes (sha256 ${esc(preview.body_sha256 || 'n/a')}):</div>
-          <div class="call">${esc(preview.method || '')} ${esc(preview.url || '')}${preview.body ? '\n\n' + esc(preview.body) : ''}</div>` : ''}
+          ${preview ? `<details class="why"><summary>Exact request the server will run, and its hash</summary>
+          <div class="hash">sha256 ${esc(preview.body_sha256 || 'n/a')}</div>
+          <div class="call">${esc(preview.method || '')} ${esc(preview.url || '')}${preview.body ? '\n\n' + esc(preview.body) : ''}</div></details>` : ''}
           <div class="modal-btns">
             <button class="act" data-x="cancel">Cancel</button>
-            <button class="act primary" data-x="ok">I mean it — run it</button>
+            <button class="act primary" data-x="ok">I mean it - run it</button>
           </div>
         </div>
       </div>`;

@@ -1,7 +1,7 @@
 import { api, esc, fmtBytes } from '../api.js';
 import { toast, runGated } from '../components.js';
 
-// PROBE — poke it and see: a request workbench (repeater) with an explicit
+// PROBE - poke it and see: a request workbench (repeater) with an explicit
 // dry-run that shows the scope verdict before any byte leaves.
 
 const state = {
@@ -107,7 +107,7 @@ async function doSend(dry) {
       const v = document.getElementById('p-verdict');
       v.style.display = '';
       v.className = 'verdict ' + (r.scope?.allowed ? 'ok' : 'no');
-      v.textContent = `${r.scope?.allowed ? '✓ in scope' : '✗ OUT OF SCOPE — refused'} · ${r.scope?.explanation || ''}`;
+      v.textContent = `${r.scope?.allowed ? '✓ in scope' : '✗ OUT OF SCOPE - refused'} · ${r.scope?.explanation || ''}`;
       if (r.request_utf8 === false) toast('note: request is not valid UTF-8', true);
     } else {
       state.response = r;
@@ -132,7 +132,7 @@ function drawResp() {
   if (!r) { box.textContent = 'Send a request to see the response here.'; meta.style.display = 'none'; if (rm) rm.textContent = ''; return; }
   meta.style.display = '';
   meta.innerHTML = `
-    <span class="st st-${String(r.status || '')[0] || ''}">${r.status ?? '—'}</span>
+    <span class="st st-${String(r.status || '')[0] || ''}">${r.status ?? '-'}</span>
     <span class="mut">${r.duration_ms ?? 0} ms</span>
     <span class="mut">${fmtBytes(r.response?.length ?? 0)}</span>
     ${r.exchange_id != null ? `<span class="mut">exchange #${r.exchange_id}</span>` : ''}`;

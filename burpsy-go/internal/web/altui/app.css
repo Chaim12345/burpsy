@@ -256,3 +256,13 @@ td.mono, .mono { font-family: var(--mono); }
 #view-scope .tools-row input.sc-port { flex: 0 0 80px; min-width: 0; }
 .sc-stage[hidden] { display: none; }
 .modal .why { overflow-wrap: anywhere; }
+.sc-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.sc-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .6px; }
+.sc-form .sc-grow { flex: 1 1 160px; min-width: 0; }
+.sc-form input, .sc-form select { text-transform: none; letter-spacing: 0; font-size: 13px; width: 100%; }
+.sc-form input.sc-port { width: 90px; }
+.modal details.why summary { cursor: pointer; color: var(--text); margin-bottom: 6px; }
+.modal .hash { font-family: var(--mono); font-size: 11px; word-break: break-all; margin: 6px 0; color: var(--text-dim); }
+.modal .why, .modal .call { overflow-wrap: break-word; word-break: normal; }
+.modal .call { overflow-wrap: anywhere; }
+@media (max-width: 760px) { .sc-form .sc-grow { flex-basis: 100%; } .sc-form > label { flex: 1 1 40%; } .sc-form input.sc-port { width: 100%; } }

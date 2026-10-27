@@ -1,7 +1,7 @@
 import { api, esc } from '../api.js';
 import { toast, runGated } from '../components.js';
 
-// SCOPE — what every sender (Probe, and any future lane) is allowed to reach.
+// SCOPE - what every sender (Probe, and any future lane) is allowed to reach.
 // Reading and checking changes nothing. Add/remove/enable/disable change what the
 // backend allows, so each one is staged and only an explicit Apply click sends it.
 
@@ -37,12 +37,12 @@ async function load() {
     <div class="tools-row"><input id="sc-url" class="tools-key" placeholder="https://host/path" spellcheck="false" autocomplete="off"><button class="act" id="sc-check">Check</button></div>
     <div id="sc-verdict" class="tools-out" hidden></div>
     <label class="tools-lab">Add a rule</label>
-    <div class="tools-row">
-      <select id="sc-kind"><option value="include">Include</option><option value="exclude">Exclude</option></select>
-      <input id="sc-pat" placeholder="host, *.wildcard, regex:..., range:CIDR" spellcheck="false" autocomplete="off">
-      <input id="sc-path" placeholder="/path prefix (optional)" spellcheck="false" autocomplete="off">
-      <input id="sc-port" placeholder="port" inputmode="numeric" class="sc-port">
-      <select id="sc-proto"><option value="">http+https</option><option>http</option><option>https</option></select>
+    <div class="sc-form">
+      <label>Kind<select id="sc-kind"><option value="include">Include</option><option value="exclude">Exclude</option></select></label>
+      <label class="sc-grow">Host pattern<input id="sc-pat" placeholder="example.com or *.example.com" spellcheck="false" autocomplete="off"></label>
+      <label class="sc-grow">Path prefix (optional)<input id="sc-path" placeholder="/admin" spellcheck="false" autocomplete="off"></label>
+      <label>Port (optional)<input id="sc-port" placeholder="443" inputmode="numeric" class="sc-port"></label>
+      <label>Scheme<select id="sc-proto"><option value="">http and https</option><option>http</option><option>https</option></select></label>
       <button class="act primary" id="sc-add">Stage rule</button>
     </div>
     <div id="sc-stage" class="sc-stage" hidden></div>`;

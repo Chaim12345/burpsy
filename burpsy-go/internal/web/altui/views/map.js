@@ -1,7 +1,7 @@
 import { api, esc, fmtTime, fmtBytes } from '../api.js';
 import { toast, runGated, hlDot, sevChip } from '../components.js';
 
-// MAP — what do we know: live sitemap tree + HTTP history with filters.
+// MAP - what do we know: live sitemap tree + HTTP history with filters.
 
 const state = {
   tree: [], rows: [], selNode: null, selExchange: null,
@@ -115,7 +115,7 @@ function drawRows() {
       <td class="mono mut">${r.id}</td>
       <td class="mono m-${esc(r.method)}">${esc(r.method)}</td>
       <td class="mono urlcell" title="${esc(r.host)}:${r.port}${esc(r.path)}">${esc(r.host)}:${r.port}${esc(r.path)}</td>
-      <td class="st st-${String(r.status || '')[0] || ''}">${r.status ?? '—'}</td>
+      <td class="st st-${String(r.status || '')[0] || ''}">${r.status ?? '-'}</td>
       <td class="mono mut">${fmtBytes(r.response_len)}</td>
       <td class="mut">${esc(r.mime || '')}</td>
       <td class="mono mut">${fmtTime(r.started_ms)}</td>
@@ -153,7 +153,7 @@ function showDrawer(ex, req, resp) {
     <div class="drawer-head">
       <b class="mono m-${esc(ex.method)}">${esc(ex.method)}</b>
       <span class="mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ex.host)}:${ex.port}${esc(ex.path)}</span>
-      <span class="st st-${String(ex.status || '')[0] || ''}">${ex.status ?? '—'}</span>
+      <span class="st st-${String(ex.status || '')[0] || ''}">${ex.status ?? '-'}</span>
       <button class="act" id="dx-probe">Send to Probe</button>
       <button class="act" id="dx-scope" title="Add this host:port to the engagement scope (needs your explicit confirm)">Add to scope</button>
       <button class="act" id="dx-close">✕</button>

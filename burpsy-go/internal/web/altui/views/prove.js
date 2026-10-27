@@ -1,7 +1,7 @@
 import { api, esc } from '../api.js';
 import { toast, sevChip } from '../components.js';
 
-// PROVE — the evidence: consolidated findings with severity counts, advisory
+// PROVE - the evidence: consolidated findings with severity counts, advisory
 // detail and occurrences that deep-link back into Map.
 
 const state = { findings: [], counts: {}, sel: null };
