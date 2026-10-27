@@ -1,4 +1,19 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(entire trail finding *)",
+      "Bash(entire trail approvals *)",
+      "Bash(entire trail show *)",
+      "Bash(entire trail list *)",
+      "Bash(ENTIRE_TOKEN_STORE=file entire trail finding *)"
+    ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Running `entire trail finding list|show|resolve|dismiss|reopen|update` and `entire trail approvals/show/list` for this repository's Entire trail: resolving or dismissing agent findings on the user's own PR trail, with a reason."
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
