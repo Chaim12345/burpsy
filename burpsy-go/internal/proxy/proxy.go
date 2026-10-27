@@ -3308,7 +3308,9 @@ func readExactly(reader *bufio.Reader, n int) ([]byte, bool) {
 func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
 	var out bytes.Buffer
 	for {
-		line, err := reader.ReadString('\n')
+		// Bounded per line (burpsy-react-ui-bodycap-note-lost): a size line with no newline used to
+		// grow without limit while the body cap below never got a chance to apply.
+		line, err := readHeadLine(reader, httputil.MaxChunkLineBytes)
 		if err != nil {
 			return nil, false
 		}
@@ -3321,11 +3323,13 @@ func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
 		if size == 0 {
 			// The terminal chunk. Trailers, if any, run to the blank line; read and discard them so
 			// the next request on this connection starts at a message boundary.
+			trailerBytes := 0
 			for {
-				trailer, err := reader.ReadString('\n')
+				trailer, err := readHeadLine(reader, maxRequestHeadBytes-trailerBytes)
 				if err != nil {
 					return nil, false
 				}
+				trailerBytes += len(trailer)
 				if strings.TrimSpace(trailer) == "" {
 					return out.Bytes(), true
 				}

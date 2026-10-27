@@ -69,10 +69,10 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 			// Best effort by design: for a declared streaming host the only way this read ends is the
 			// deadline or the cap, so the error is the expected outcome and the bytes are the result.
 			// The head is returned even when no body byte arrived, which is the case the old path lost.
-			body := drainStreamingBody(br)
+			body, streamCapped := drainStreamingBody(br)
 			raw := make([]byte, 0, len(head)+len(body))
 			raw = append(raw, head...)
-			return append(raw, body...), nil, nil
+			return append(raw, body...), streamCapped, nil
 		}
 
 		body, err := httputil.ReadResponseBody(br, head)
@@ -118,10 +118,19 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 // caller has declared that this host's responses do not end, so "the read stopped" is the terminating
 // condition rather than a fault to report. io.CopyN reports io.EOF for a peer that closed and a
 // deadline error for one that simply had nothing more to say inside the window, and neither is news.
-func drainStreamingBody(br *bufio.Reader) []byte {
+//
+// Stopping at the cap is not the same terminating condition, though: the stream was still producing
+// and the record holds only its first maxStreamingBodyBytes. That is reported as a BodyCapError, the
+// same note and the same never-pool rule a capped buffered body gets (burpsy-react-ui-bodycap-note-lost).
+func drainStreamingBody(br *bufio.Reader) ([]byte, *httputil.BodyCapError) {
 	var body bytes.Buffer
-	io.CopyN(&body, br, maxStreamingBodyBytes)
-	return body.Bytes()
+	n, _ := io.CopyN(&body, br, maxStreamingBodyBytes)
+	if n == maxStreamingBodyBytes {
+		return body.Bytes(), &httputil.BodyCapError{
+			Cap: maxStreamingBodyBytes, Received: int(n), Framing: httputil.FramingCloseDelimited,
+		}
+	}
+	return body.Bytes(), nil
 }
 
 // isInterimHead reports whether a response head is a 1xx that is not 101.

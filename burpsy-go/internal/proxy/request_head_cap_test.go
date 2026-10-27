@@ -52,3 +52,40 @@ func TestTheUpstreamDialerIsBounded(t *testing.T) {
 type readerFunc func(p []byte) (int, error)
 
 func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+// The request-side chunk decoder bounds its size lines and its trailer section the way the header
+// block is bounded: an endless size line, or endless trailers after the last chunk, are refused
+// rather than buffered (burpsy-react-ui-bodycap-note-lost).
+func TestTheRequestChunkDecoderBoundsItsLines(t *testing.T) {
+	endless := func(prefix string, line string) *bufio.Reader {
+		sent := false
+		return bufio.NewReader(readerFunc(func(p []byte) (int, error) {
+			if !sent {
+				sent = true
+				return copy(p, prefix), nil
+			}
+			n := 0
+			for n < len(p) {
+				n += copy(p[n:], line)
+			}
+			return n, nil
+		}))
+	}
+	done := make(chan bool, 2)
+	go func() { _, ok := readChunkedBody(endless("", "f")); done <- ok }()
+	go func() { _, ok := readChunkedBody(endless("1\r\na\r\n0\r\n", "X-T: v\r\n")); done <- ok }()
+	for i := 0; i < 2; i++ {
+		select {
+		case ok := <-done:
+			if ok {
+				t.Error("an unbounded chunk stream was accepted as a complete body")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the chunk decoder kept reading an endless line")
+		}
+	}
+	body, ok := readChunkedBody(bufio.NewReader(strings.NewReader("3\r\nabc\r\n0\r\nX-T: v\r\n\r\n")))
+	if !ok || string(body) != "abc" {
+		t.Errorf("a normal chunked body = %q, %v", body, ok)
+	}
+}
