@@ -211,11 +211,14 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 		// and the bytes already read are its beginning — hand them to the
 		// normal path rather than losing them.
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
-		if err != nil {
+		// A short or capped body is forwarded with honest framing and noted, as on the plain
+		// path; this leg ends the connection after the one response either way.
+		salvaged, ok := salvageResponseBody(head, body, err)
+		if !ok {
 			return
 		}
-		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), "", "", serverIPOf(upstream), requestEdited, "", false)
+		responseData := append(salvaged.head, body...)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), salvaged.note, "", serverIPOf(upstream), requestEdited, "", false)
 		return
 	}
 

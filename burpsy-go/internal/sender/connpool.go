@@ -458,7 +458,7 @@ func (s *Sender) exchangePooled(
 			return false
 		}
 	}
-	resp, rerr := readResponse(pc.br, settings.Continue.Understand100, streaming, hook)
+	resp, capped, rerr := readResponse(pc.br, settings.Continue.Understand100, streaming, hook)
 	fired := stop()
 	if rerr != nil {
 		err = fmt.Errorf("read failed: %w", explainCancellation(ctx, rerr))
@@ -467,7 +467,9 @@ func (s *Sender) exchangePooled(
 		return nil, out, silent, err
 	}
 	out = s.finish(host, port, useTLS, pc.negotiated, down, nil, nil, remoteIP(pc.conn), nil)
-	reusable = !fired && ctx.Err() == nil && !streaming && !promoted &&
+	addCapNote(&out, capped)
+	// A body cut at the cap leaves the rest of it on the connection: never reusable.
+	reusable = !fired && ctx.Err() == nil && !streaming && !promoted && capped == nil &&
 		pc.br.Buffered() == 0 && exchangeAllowsReuse(plan.http1, resp)
 	return resp, out, false, nil
 }
