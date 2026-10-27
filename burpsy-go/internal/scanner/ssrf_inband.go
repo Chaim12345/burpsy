@@ -287,7 +287,8 @@ func ssrfInBandProbes(c *ssrfCanaryServer, point bcheck.InsertionPoint, targetHo
 		return out
 	}
 	if !ssrfURLLikePoint(point) {
-		return append(plain(base[:3], "the scanner's canary URL"), plain(base[3:], "a local or metadata resource URL")...)
+		// Azure and Alibaba (base[7:]) go to URL-like points only.
+		return append(plain(base[:3], "the scanner's canary URL"), plain(base[3:7], "a local or metadata resource URL")...)
 	}
 	out := plain(base[:3], "the scanner's canary URL")
 	out = append(out, ssrfLoopbackSpellings(c)...)
