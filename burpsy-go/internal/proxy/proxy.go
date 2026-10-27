@@ -1724,8 +1724,8 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			reqHost, reqPort = host, port
 		}
 
-		requestData := readFullRequest(requestLine, br)
-		if requestData == nil {
+		requestData, headTooLarge := readFullRequestBounded(requestLine, br)
+		if headTooLarge {
 			writeHeadTooLarge(tlsClient)
 			return
 		}
@@ -2327,8 +2327,8 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// request, history recorded that same header-less request, and nothing anywhere
 	// said so. Reading the message once and parsing the Host out of the bytes keeps a
 	// single reader position and one copy of the request.
-	requestData := readFullRequest(requestLine, reader)
-	if requestData == nil {
+	requestData, headTooLarge := readFullRequestBounded(requestLine, reader)
+	if headTooLarge {
 		writeHeadTooLarge(clientConn)
 		return
 	}
@@ -3210,9 +3210,23 @@ func readHeadLine(br *bufio.Reader, limit int) (string, error) {
 	}
 }
 
-// readFullRequest returns nil when the request head is larger than maxRequestHeadBytes; the caller
-// answers 431 and closes the connection.
+// readFullRequestBounded is readFullRequest that also reports a head larger than maxRequestHeadBytes
+// (tooLarge, with no data); the caller answers 431 and closes the connection.
+func readFullRequestBounded(requestLine string, reader *bufio.Reader) (data []byte, tooLarge bool) {
+	data = readFullRequestBody(requestLine, reader, &tooLarge)
+	if tooLarge {
+		return nil, true
+	}
+	return data, false
+}
+
+// readFullRequest reads one request; an oversized head reads as no request (nil).
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
+	data, _ := readFullRequestBounded(requestLine, reader)
+	return data
+}
+
+func readFullRequestBody(requestLine string, reader *bufio.Reader, tooLarge *bool) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(requestLine)
 
@@ -3223,6 +3237,7 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	for {
 		line, err := readHeadLine(reader, maxRequestHeadBytes-buf.Len())
 		if err == errRequestHeadTooLarge {
+			*tooLarge = true
 			return nil
 		}
 		if err != nil {

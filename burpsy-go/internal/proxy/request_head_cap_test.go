@@ -19,8 +19,8 @@ func TestAnEndlessRequestHeadIsRefusedAtTheCap(t *testing.T) {
 		fed += int64(n)
 		return n, nil
 	}))
-	got := readFullRequest("GET / HTTP/1.1\r\n", bufio.NewReader(endless))
-	if got != nil {
+	got, tooLarge := readFullRequestBounded("GET / HTTP/1.1\r\n", bufio.NewReader(endless))
+	if !tooLarge || got != nil {
 		t.Fatalf("an endless head came back as %d bytes instead of being refused", len(got))
 	}
 	if fed > 2*maxRequestHeadBytes {
@@ -33,7 +33,7 @@ func TestAnEndlessRequestHeadIsRefusedAtTheCap(t *testing.T) {
 		}
 		return len(p), nil
 	})
-	if got := readFullRequest("GET / HTTP/1.1\r\n", bufio.NewReader(noNewline)); got != nil {
+	if got, tooLarge := readFullRequestBounded("GET / HTTP/1.1\r\n", bufio.NewReader(noNewline)); !tooLarge {
 		t.Fatalf("a newline-less header line came back as %d bytes", len(got))
 	}
 	// And an ordinary head under the cap is untouched.

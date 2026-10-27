@@ -94,8 +94,8 @@ func FuzzReadFullRequest(f *testing.F) {
 	f.Add("\r\n", "\r\n")
 	f.Add("G\x00T / HTTP/1.1\r\n", "H: v\r\n\r\n")
 	f.Fuzz(func(t *testing.T, requestLine, rest string) {
-		got := readFullRequest(requestLine, bufio.NewReader(strings.NewReader(rest)))
-		if got == nil {
+		got, tooLarge := readFullRequestBounded(requestLine, bufio.NewReader(strings.NewReader(rest)))
+		if tooLarge {
 			// Refused only for a head past the cap; anything smaller must come back.
 			if len(requestLine)+len(rest) <= maxRequestHeadBytes {
 				t.Fatalf("a %d-byte request was refused as an oversized head", len(requestLine)+len(rest))
