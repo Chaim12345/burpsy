@@ -10,6 +10,8 @@ name: Nightly
 #   fuzz     every fuzz target for 2 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
 #            race-web and race-core on every push to master, the race detector covers the whole module.
+#   report   when any job above fails, opens (or comments on) one `nightly-failure` issue naming the
+#            failed jobs and the commit, so a red night reaches someone instead of sitting in the tab.
 #
 # There is no separate plain (non-race) full-suite job: the push to master already runs the full
 # suite on the commit this run tests, and the race run executes the same tests again (a superset,
@@ -230,3 +232,33 @@ jobs:
           name: fuzz-crashers
           path: burpsy-go/internal/*/testdata/fuzz/
           if-no-files-found: ignore
+
+  # A red nightly is a defect on master to file (header). This job files it: one open issue labelled
+  # nightly-failure collects every red night (a new comment per run) until someone closes it. Only
+  # this job gets issues:write; the workflow default stays contents:read.
+  report:
+    needs: [e2e-go, race, bench-vulnapp, bench-parity, fuzz]
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the nightly-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          failed=$(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<<"$RESULTS" | paste -sd, -)
+          body="Nightly failed on ${SHA} — jobs: ${failed:-unknown}. Run: ${RUN_URL}"
+          gh label create nightly-failure --color B60205 --description "A scheduled nightly run failed" 2>/dev/null || true
+          open=$(gh issue list --label nightly-failure --state open --json number --jq '.[0].number')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --title "Nightly failing on master" --label nightly-failure --body "$body"
+          fi
