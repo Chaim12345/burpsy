@@ -1128,7 +1128,7 @@ func (s *Sender) SendRawOutcome(
 		// landing during a failed pooled exchange governs the redial, as it did before
 		// the freeze.
 		if ic := s.pool.take(key, plan.wantH2, s.routeForDialAddr(host, useTLS)); ic != nil {
-			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
+			resp, capped, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
 			if err == nil {
 				s.observeCloseDelimited(key, resp)
 			}
@@ -1141,7 +1141,8 @@ func (s *Sender) SendRawOutcome(
 					}
 				}
 				out := s.finish(host, port, useTLS, ic.negotiated, down, nil, nil, remoteIP(ic.conn), err)
-				s.release(key, ic, plan.http1, resp, err)
+				addCapNote(&out, capped)
+				s.release(key, ic, plan.http1, resp, capped, err)
 				return resp, out, err
 			}
 			// The server closed it while it sat idle; this send gets a fresh connection.
@@ -1152,7 +1153,7 @@ func (s *Sender) SendRawOutcome(
 	if !useTLS {
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
-		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
+		resp, ip, capped, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
 		if err == nil {
 			s.observeCloseDelimited(key, resp)
 		}
@@ -1160,6 +1161,7 @@ func (s *Sender) SendRawOutcome(
 		if connCloseAdded {
 			out.Note = connCloseNote
 		}
+		addCapNote(&out, capped)
 		return resp, out, err
 	}
 
@@ -1253,19 +1255,20 @@ func (s *Sender) SendRawOutcome(
 	if keep {
 		br := bufio.NewReader(conn)
 		stop := watchCancel(ctx, conn)
-		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
+		resp, capped, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
 		stop()
 		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+		addCapNote(&out, capped)
 		if err == nil {
 			s.observeCloseDelimited(key, resp)
 		}
-		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
+		if err == nil && capped == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
 			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route, dialAddr: dialID.dialAddr})
 		}
 		return resp, out, err
 	}
-	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
+	resp, capped, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	if err == nil {
 		s.observeCloseDelimited(key, resp)
 	}
@@ -1273,13 +1276,14 @@ func (s *Sender) SendRawOutcome(
 	if connCloseAdded {
 		out.Note = connCloseNote
 	}
+	addCapNote(&out, capped)
 	return resp, out, err
 }
 
 // release returns a reused connection to the pool when its exchange left it reusable, and closes it
-// otherwise.
-func (s *Sender) release(key string, ic *idleConn, request, response []byte, err error) {
-	if err == nil && reusableAfter(request, response) && ic.br.Buffered() == 0 {
+// otherwise. A body cut at the cap never leaves it reusable: the rest of that body is still on it.
+func (s *Sender) release(key string, ic *idleConn, request, response []byte, capped *httputil.BodyCapError, err error) {
+	if err == nil && capped == nil && reusableAfter(request, response) && ic.br.Buffered() == 0 {
 		s.pool.put(key, ic)
 		return
 	}
@@ -1447,28 +1451,28 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 // — the same fact the TLS path reads off its own connection (burpsy-react-ui-gj4f).
 //
 // With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
-func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
+func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, *httputil.BodyCapError, error) {
 	// The stamp names the identity this dial consumes - see the note at the TLS dial.
 	dialID, derr := s.captureDialIdentity(ctx, host, port, false)
 	if derr != nil {
-		return nil, "", derr
+		return nil, "", nil, derr
 	}
 	conn, err := s.dialPlain(ctx, host, port, dialID)
 	if err != nil {
-		return nil, "", fmt.Errorf("connection failed: %w", err)
+		return nil, "", nil, fmt.Errorf("connection failed: %w", err)
 	}
 	ip := remoteIP(conn)
 	br := bufio.NewReader(conn)
 	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
 	stop := watchCancel(ctx, conn)
-	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
+	resp, capped, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
-	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
+	if keep && err == nil && capped == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
 		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route, dialAddr: dialID.dialAddr})
 	} else {
 		conn.Close()
 	}
-	return resp, ip, err
+	return resp, ip, capped, err
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
@@ -1476,17 +1480,20 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 // host is carried in rather than read off the connection because it decides two things the address
 // cannot: whether this authority's responses are declared open-ended, and — under a resolution
 // override — the connection's remote address is not the host at all.
-func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, error) {
+func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, *httputil.BodyCapError, error) {
 	return s.exchangeHTTP1(ctx, conn, bufio.NewReader(conn), host, raw)
 }
 
 // exchangeHTTP1 is writeHTTP1 on a connection whose reader is kept with it, which a kept-alive
 // connection needs: bytes buffered past one response belong to the connection, not to the read.
-func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Reader, host string, raw []byte) ([]byte, error) {
+//
+// capped is readResponse's: non-nil when the body was cut at the cap, in which case the response is
+// returned, the connection must not be pooled, and the outcome must carry capped.Note().
+func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Reader, host string, raw []byte) ([]byte, *httputil.BodyCapError, error) {
 	settings := s.Network()
 	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
-		return nil, &writeFailure{err: explainCancellation(ctx, err)}
+		return nil, nil, &writeFailure{err: explainCancellation(ctx, err)}
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
@@ -1496,7 +1503,7 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 		// window for this send.
 		promote = overridePromoter(ctx, conn, window)
 	}
-	response, err := readResponse(
+	response, capped, err := readResponse(
 		br,
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
@@ -1506,9 +1513,22 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a
 		// cancelled send as "read failed: i/o timeout" would blame the target for a decision the
 		// operator made. See cancel.go.
-		return nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
+		return nil, nil, fmt.Errorf("read failed: %w", explainCancellation(ctx, err))
 	}
-	return response, nil
+	return response, capped, nil
+}
+
+// addCapNote puts a capped body's note on the outcome, after any note already there, so a send
+// that was both given a Connection: close and cut at the cap says both.
+func addCapNote(out *SendOutcome, capped *httputil.BodyCapError) {
+	if capped == nil {
+		return
+	}
+	if out.Note == "" {
+		out.Note = capped.Note()
+		return
+	}
+	out.Note += "; " + capped.Note()
 }
 
 // setDeadline bounds one exchange by the context's deadline when it has one, and by the configured

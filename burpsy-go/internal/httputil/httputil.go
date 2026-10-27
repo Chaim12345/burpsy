@@ -35,8 +35,12 @@ func ReadHTTPResponse(conn net.Conn) ([]byte, error) {
 // second copy of the parser — so the two cannot drift, which is the same rule the
 // proxy's one-producer capture path follows.
 //
-// firstByte is meaningful only when err is nil; on error it is the zero time. See
-// ReadResponseHeadTimed for how it is taken.
+// firstByte is meaningful only when err is nil or a *BodyCapError; on any other
+// error it is the zero time. See ReadResponseHeadTimed for how it is taken.
+//
+// A body cut at the cap comes back as the head plus the prefix that fit, with
+// the *BodyCapError: the caller decides whether to keep it, and must say so and
+// not reuse the connection if it does.
 func ReadHTTPResponseTimed(conn net.Conn) ([]byte, time.Time, error) {
 	br := bufio.NewReader(conn)
 	head, firstByte, err := ReadResponseHeadTimed(br)
@@ -44,13 +48,14 @@ func ReadHTTPResponseTimed(conn net.Conn) ([]byte, time.Time, error) {
 		return nil, time.Time{}, err
 	}
 	body, err := ReadResponseBody(br, head)
-	if err != nil {
+	var capErr *BodyCapError
+	if err != nil && !errors.As(err, &capErr) {
 		return nil, time.Time{}, err
 	}
 	result := make([]byte, 0, len(head)+len(body))
 	result = append(result, head...)
 	result = append(result, body...)
-	return result, firstByte, nil
+	return result, firstByte, err
 }
 
 // MaxResponseHeadBytes bounds a response head. A handshake answer is a few
@@ -60,9 +65,10 @@ const MaxResponseHeadBytes = 256 * 1024
 
 // MaxResponseBodyBytes bounds a response body. A malicious upstream can declare
 // an arbitrarily large Content-Length or chunk size; without a cap a single
-// response can exhaust the proxy's memory. Reads past the cap are dropped and
-// the body is returned truncated to the limit, exactly as the inflate path in
-// the codec does. 64 MiB matches that cap's order of magnitude.
+// response can exhaust the proxy's memory. Reading stops at the cap and
+// ReadResponseBody returns the prefix with a *BodyCapError, so the cut is
+// never mistaken for a whole body. 64 MiB matches the codec inflate cap's
+// order of magnitude.
 const MaxResponseBodyBytes = 64 * 1024 * 1024
 
 // ReadResponseHead reads one HTTP response head — status line and headers,
@@ -245,8 +251,15 @@ func ResponseFraming(head []byte) (transferEncoding, contentLength string) {
 // that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
 // nothing and returns an empty body, leaving whatever follows in br.
 //
-// A *TruncatedBodyError comes back WITH the bytes that arrived: the peer closed
-// short of its declared Content-Length.
+// Two errors come back WITH the bytes that arrived, and a caller must check for
+// them before treating a non-nil error as "no response":
+//
+//   - *TruncatedBodyError: the peer closed short of its declared Content-Length.
+//   - *BodyCapError: the body passed MaxResponseBodyBytes and reading stopped at
+//     the cap. The bytes are the prefix that fit; the rest was never read, so the
+//     connection's framing is unknowable from here and it must not be reused
+//     (burpsy-react-ui-h1-cap-silent — this used to return the prefix with a nil
+//     error, indistinguishable from a complete body).
 //
 // A chunk size that is not one (a sign, a non-hex byte, too many digits — see
 // ParseChunkSize) is an ordinary error with no body.
@@ -259,8 +272,12 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 
 	// remaining bounds the total body we will buffer, so a malicious upstream
 	// that declares a huge Content-Length or streams endless chunks cannot
-	// exhaust the proxy's memory. Reads past the cap are truncated.
+	// exhaust the proxy's memory. Reaching it ends the read with *BodyCapError.
 	remaining := maxResponseBodyBytes
+	received := 0
+	capped := func(framing string) error {
+		return &BodyCapError{Cap: maxResponseBodyBytes, Received: received, Framing: framing, Declared: cl}
+	}
 
 	switch {
 	case strings.EqualFold(te, "chunked"):
@@ -286,7 +303,7 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 				// The cap fell exactly on a chunk boundary and the peer has another
 				// non-empty chunk: the body is longer than the cap. The size line
 				// just read is not kept — the prefix ends on a whole chunk.
-				return body.Bytes(), nil
+				return body.Bytes(), capped(FramingChunked)
 			}
 			body.WriteString(sizeLine)
 			// Cap the read before allocating: a declared multi-exabyte chunk must
@@ -299,11 +316,13 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 				return nil, fmt.Errorf("reading chunk data: %w", err)
 			}
 			remaining -= int(readSize)
+			received += int(readSize)
 			if readSize < size {
 				// The rest of this chunk is past the cap. It is deliberately not
-				// drained: draining would only let a peer declaring an enormous
-				// chunk keep this read busy for nothing.
-				return body.Bytes(), nil
+				// drained: the connection cannot be reused after a capped body, so
+				// draining would only let a peer declaring an enormous chunk keep
+				// this read busy for nothing.
+				return body.Bytes(), capped(FramingChunked)
 			}
 			// Chunk data is followed by CRLF.
 			var crlf [2]byte
@@ -349,11 +368,24 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 			return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
 		}
 		body.Write(buf)
+		received = len(buf)
+		if readN < n {
+			return body.Bytes(), capped(FramingContentLength)
+		}
 		return body.Bytes(), nil
 	default:
 		// No framing: body runs until EOF (HTTP/1.0 style), capped.
-		if _, err := io.CopyN(&body, br, int64(remaining)); err != nil && err != io.EOF {
+		copied, err := io.CopyN(&body, br, int64(remaining))
+		if err != nil && err != io.EOF {
 			return nil, fmt.Errorf("reading EOF-delimited body: %w", err)
+		}
+		if err == nil {
+			// CopyN filled the cap without seeing EOF. Whether the peer had more
+			// is unknowable without blocking on a close that may never come, so
+			// this reports that reading stopped at the cap rather than claiming
+			// the body was whole.
+			received = int(copied)
+			return body.Bytes(), capped(FramingCloseDelimited)
 		}
 		return body.Bytes(), nil
 	}
@@ -362,6 +394,44 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 // maxResponseBodyBytes is the cap ReadResponseBody applies: MaxResponseBodyBytes, held in a
 // variable so this package's tests can lower it rather than push 64 MiB through every case.
 var maxResponseBodyBytes = MaxResponseBodyBytes
+
+// The framings a BodyCapError can name.
+const (
+	FramingChunked        = "chunked"
+	FramingContentLength  = "content-length"
+	FramingCloseDelimited = "close-delimited"
+)
+
+// BodyCapError reports a response body ReadResponseBody stopped reading at the
+// MaxResponseBodyBytes cap. ReadResponseBody returns the prefix that fit
+// alongside it, so a caller can keep the bytes, but the response is NOT whole:
+// the record must say so (Note) and the connection it came from must not be
+// reused, because the unread remainder is still on it.
+//
+// It is the HTTP/1 counterpart of the h2 and h3 cap notes
+// (sender/h2fields.go, sender/h3.go, the proxy's h3 leg), and Note returns the
+// same wording they use.
+type BodyCapError struct {
+	Cap      int    // the cap in force
+	Received int    // payload bytes kept (chunk framing excluded)
+	Framing  string // FramingChunked, FramingContentLength or FramingCloseDelimited
+	Declared string // the Content-Length value, when the head carried one
+}
+
+// Note is the operator-facing line for the record, worded as the h2/h3 cap notes are.
+func (e *BodyCapError) Note() string {
+	if e.Framing == FramingCloseDelimited {
+		return fmt.Sprintf("the response body reached the %d-byte cap and reading stopped there; anything the peer sent after it was not read", e.Cap)
+	}
+	return fmt.Sprintf("the response body passed the %d-byte cap and was cut there", e.Cap)
+}
+
+func (e *BodyCapError) Error() string {
+	if e.Framing == FramingContentLength {
+		return fmt.Sprintf("%s (%s body, declared Content-Length %s)", e.Note(), e.Framing, e.Declared)
+	}
+	return fmt.Sprintf("%s (%s body)", e.Note(), e.Framing)
+}
 
 // ResponseStatus parses the numeric status code from a raw response's first
 // line, or nil when the line cannot be read. It exists so senders that talk in
