@@ -86,9 +86,9 @@ function renderTabs(): void {
       .map(
         (t) =>
           `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<span class="tab-close" data-close="${t.id}" title="close tab" aria-label="Close tab ${t.id}" role="button">&times;</span></div>`,
       )
-      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
+      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab" aria-label="New tab">+</button>`;
 }
 
 function saveEditorIntoActiveTab(): void {
@@ -159,6 +159,11 @@ async function send(): Promise<void> {
   const tab = tabs.find((t) => t.id === activeId);
   if (!tab) return;
   const sendingId = tab.id;
+  const sendBtn = $<HTMLButtonElement>("#rep-send");
+  if (sendBtn) {
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending…";
+  }
   $("#rep-res")!.textContent = "sending…";
   try {
     const d = await postJSON<SendResp>("/api/repeater/send", {
@@ -177,6 +182,11 @@ async function send(): Promise<void> {
   } catch (e) {
     if (activeId === sendingId) {
       $("#rep-res")!.innerHTML = `<span class="err">${esc((e as Error).message)}</span>`;
+    }
+  } finally {
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Send";
     }
   }
 }
