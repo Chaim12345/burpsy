@@ -268,6 +268,8 @@ func ssrfInBandPayloads(canaryURL string) []string {
 		"file:///c:/windows/win.ini",
 		ssrfAWSMetadataURL,
 		"http://metadata.google.internal/computeMetadata/v1/instance/?recursive=true",
+		"http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+		"http://100.100.100.200/latest/meta-data/",
 	}
 }
 
@@ -448,6 +450,8 @@ type ssrfInBandSignature struct {
 //   - ECS task metadata: a JSON document with a task ARN.
 //   - GCP: the recursive instance document is JSON whose keys include `machineType` and
 //     `serviceAccounts`; a quoted key followed by a colon is the document, not prose mentioning it.
+//   - Azure: the instance document's `azEnvironment` key, or IMDS's own missing-header error.
+//   - Alibaba Cloud: the meta-data listing's `zone-id` key on its own line.
 //
 // Every signature is matched against the body as served AND with JSON string escapes undone, because
 // an application that wraps the fetched content in a JSON field turns its newlines into `\n`.
@@ -461,6 +465,10 @@ var ssrfInBandSignatures = []ssrfInBandSignature{
 	{regexp.MustCompile(`"TaskARN"\s*:\s*"arn:aws:ecs:`), "the ECS task metadata document was read"},
 	{regexp.MustCompile(`"machineType"\s*:\s*"projects/`), "the GCP instance metadata document was read"},
 	{regexp.MustCompile(`"serviceAccounts"\s*:\s*\{`), "the GCP instance metadata document was read"},
+	// Azure IMDS answers a request without its Metadata header with this error, which only IMDS sends.
+	{regexp.MustCompile(`Required metadata header not specified`), "the Azure instance metadata service answered"},
+	{regexp.MustCompile(`"azEnvironment"\s*:\s*"`), "the Azure instance metadata document was read"},
+	{regexp.MustCompile(`(?m)^zone-id\r?$`), "the Alibaba Cloud instance metadata listing was read"},
 }
 
 // ssrfJSONUnescaper undoes the string escapes a JSON encoder applies to fetched content.
