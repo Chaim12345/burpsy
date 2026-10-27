@@ -19,7 +19,7 @@ export async function renderProbe(el) {
   el.innerHTML = `
     <div id="probe-targetbar">
       <span class="pane-title">Probe</span>
-      <input class="target" id="p-target" spellcheck="false" placeholder="enter a target you are authorized to test, e.g. http://host:port" value="${esc(state.target)}">
+      <input class="target" id="p-target" spellcheck="false" placeholder="authorized target, e.g. http://host:port" value="${esc(state.target)}">
       <button class="act" id="p-dry" title="Apply edits and show the scope verdict without sending">Dry run</button>
       <button class="act primary" id="p-send">Send</button>
     </div>

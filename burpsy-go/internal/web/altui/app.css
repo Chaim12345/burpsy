@@ -207,13 +207,18 @@ td.mono, .mono { font-family: var(--mono); }
 @media (max-width: 760px) {
   /* Intentional mobile prioritization: keep highlight, id, method, URL, status;
      drop len/mime/time (recoverable from the drawer). URL shrinks first. */
+  table.rows th:nth-child(2), table.rows td:nth-child(2),
   table.rows th:nth-child(6), table.rows td:nth-child(6),
   table.rows th:nth-child(7), table.rows td:nth-child(7),
   table.rows th:nth-child(8), table.rows td:nth-child(8) { display: none; }
-  .urlcell { max-width: 46vw; }
-  table.rows { table-layout: fixed; }
-  table.rows th:nth-child(1) { width: 18px; }
-  table.rows th:nth-child(2) { width: 30px; }
-  table.rows th:nth-child(3) { width: 56px; }
-  table.rows th:nth-child(5) { width: 52px; }
+  table.rows { table-layout: fixed; width: 100%; }
+  table.rows th, table.rows td { padding: 8px 6px; }
+  .urlcell { max-width: none; }
+  table.rows th:nth-child(1) { width: 14px; }
+  table.rows th:nth-child(3) { width: 74px; }
+  table.rows th:nth-child(5) { width: 58px; }
+}
+
+@media (max-width: 760px) {
+  #probe-targetbar input.target { flex: 1 1 100%; min-width: 0; }
 }
