@@ -73,9 +73,19 @@ func retargetProxy(t *testing.T, scope *core.Scope, choose func(held *intercept.
 	// The operator. Forwards each request-direction hold exactly once, to whatever destination the
 	// test names, and ignores response holds (a retarget is a request-side decision; a response has
 	// already come back from somewhere).
+	// The operator stops with the test (not after a fixed deadline), so no loop outlives it for
+	// goleak to find when a narrow -run selection finishes in milliseconds.
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(stop); <-stopped })
 	go func() {
+		defer close(stopped)
 		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
+			select {
+			case <-stop:
+				return
+			default:
+			}
 			for _, held := range engine.Held() {
 				if held.Direction != intercept.DirectionRequest {
 					continue

@@ -131,15 +131,20 @@ func waitForExchanges(t *testing.T, store *core.TrafficStore, want int) []*core.
 	return nil
 }
 
-// settleThenCountExchanges gives any pending record a chance to land, then reports the count.
-//
-// The mirror of waitForExchanges, for the assertions that want *zero*. Those cannot
-// false-fail on a slow record — they can false-*pass*, reporting success because the
-// record had not happened yet rather than because it never will. A fixed settle is the
-// honest way to assert an absence: there is no event to wait for when the correct
-// behaviour is that nothing happens.
-func settleThenCountExchanges(store *core.TrafficStore) int {
-	time.Sleep(250 * time.Millisecond)
+// countAfterDropDecision asserts an absence against an event rather than a clock. The proxy counts
+// each exchange it forwards but declines to record (Options.NoteOutOfScopeDrop, at the record site
+// itself), so once the counter reaches want the record decision for those exchanges has been made,
+// and the store count read after it is final. A fixed settle (the helper this replaces) could
+// false-pass: a record landing after 250ms on a loaded runner read as "nothing was recorded".
+func countAfterDropDecision(t *testing.T, store *core.TrafficStore, options *Options, want uint64) int {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for options.Counters().DroppedOutOfScope < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("after 5s the proxy has made %d out-of-scope drop decisions, want %d", options.Counters().DroppedOutOfScope, want)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	return len(store.Exchanges())
 }
 
@@ -184,7 +189,7 @@ func TestResponseRulesApplyToOutOfScopePlaintextTraffic(t *testing.T) {
 	if c.ModifiedUnrecorded != 1 {
 		t.Errorf("ModifiedUnrecorded = %d, want 1 — an out-of-scope rewrite leaves no history row and must say so", c.ModifiedUnrecorded)
 	}
-	if got := settleThenCountExchanges(store); got != 0 {
+	if got := countAfterDropDecision(t, store, options, 1); got != 0 {
 		t.Errorf("out-of-scope traffic recorded %d exchanges, want 0", got)
 	}
 }
