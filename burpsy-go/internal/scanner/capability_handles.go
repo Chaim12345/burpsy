@@ -29,6 +29,23 @@ type BrowserProvider interface {
 	Close() error
 }
 
+// scopedBrowsers gates every tab of the shared browser on the engagement scope, so navigations
+// outside RenderedDOMGated (taint, stored, SPA, submit, fragment, interact) cannot leave it.
+type scopedBrowsers struct {
+	BrowserProvider
+	s *ActiveScanner
+}
+
+func (p scopedBrowsers) Browser(ctx context.Context) (*domexec.Browser, error) {
+	b, err := p.BrowserProvider.Browser(ctx)
+	if err == nil && b != nil {
+		if sc := p.s.scope; sc != nil && (!sc.Empty() || sc.AllowAll()) {
+			b.SetDefaultGate(renderScopeGate{scope: sc})
+		}
+	}
+	return b, err
+}
+
 // lazyBrowser starts Chrome at most once, on first use, and remembers a failure so a scan
 // against a machine with no Chrome does not pay the launch cost per check.
 type lazyBrowser struct {
@@ -100,6 +117,9 @@ func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.browsers = p
+	if p != nil {
+		s.browsers = scopedBrowsers{p, s}
+	}
 	if p != nil && s.config != nil {
 		s.config.CheckDOM = true
 	}

@@ -876,7 +876,7 @@ func (b *Browser) RenderedDOMGated(ctx context.Context, targetURL string, opts R
 		started := time.Now()
 		var shot []byte
 		html, reqs, dropped, err := b.renderedDOMIn(ctx, func(ctx context.Context) (context.Context, context.CancelFunc, error) {
-			tabCtx, cancel, err := b.newTab(ctx)
+			tabCtx, cancel, err := b.openTab(ctx)
 			if err != nil {
 				return nil, nil, err
 			}

@@ -172,6 +172,23 @@ type Browser struct {
 	ctxOpts []chromedp.ContextOption
 
 	closeOnce sync.Once
+
+	gateMu sync.RWMutex
+	gate   ScopeGate
+}
+
+// SetDefaultGate makes every tab newTab opens refuse, via Fetch interception, the requests gate
+// does not allow. Nil removes it.
+func (b *Browser) SetDefaultGate(gate ScopeGate) {
+	b.gateMu.Lock()
+	b.gate = gate
+	b.gateMu.Unlock()
+}
+
+func (b *Browser) defaultGate() ScopeGate {
+	b.gateMu.RLock()
+	defer b.gateMu.RUnlock()
+	return b.gate
 }
 
 // NewBrowser starts or attaches to a browser and blocks until it is actually
@@ -351,6 +368,21 @@ func (b *Browser) Close() error {
 // the caller's ctx and this Browser's configured Timeout. The returned cancel
 // must be called to release the tab; it is safe to call multiple times.
 func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	tabCtx, cancel, err := b.openTab(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if g := b.defaultGate(); g != nil {
+		if err := (&Session{b: b, gate: g}).installFetchGate(tabCtx); err != nil {
+			cancel()
+			return nil, nil, fmt.Errorf("domexec: could not scope-gate the tab, so it was not opened: %w", err)
+		}
+	}
+	return tabCtx, cancel, nil
+}
+
+// openTab is newTab without the default gate, for callers that install their own.
+func (b *Browser) openTab(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	if !b.Available() {
 		return nil, nil, errors.New("domexec: browser is closed")
 	}
