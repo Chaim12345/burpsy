@@ -712,6 +712,9 @@ func main() {
 	// flag existed. The provider is lazy, so an audit whose check set contains no DOM check
 	// never starts a browser.
 	if domOpts != nil {
+		// The gated browser sessions (renders, recorded logins) leave through the sender's egress
+		// route — upstream proxy, SOCKS carrier, resolution table — like every other send.
+		domOpts.EgressDial = httpSender.EgressDialContext
 		caps.BrowserProvider = scanner.NewLazyBrowserProvider(*domOpts)
 	}
 	activeScanner := scanner.NewActiveScanner(store, logger).

@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 )
 
 // MaxRenderedLocations bounds how many locations one rendered-DOM audit pass loads.
@@ -123,13 +124,18 @@ func (s *ActiveScanner) AuditCrawlLocations(ctx context.Context, locations map[s
 		go func() {
 			defer wg.Done()
 			for u := range work {
-				rendered, rerr := browser.RenderedDOM(ctx, u)
+				// Gated on the engagement scope: the location was authorised by the crawl, but the
+				// requests its page makes while it renders were not (burpsy-react-ui-browser-render-unscoped).
+				rendered, oc, rerr := gatedRenderer{browser: browser, scope: s.scope}.RenderedDOMWithOptions(ctx, u, domexec.RenderOptions{})
 				mu.Lock()
 				switch {
 				case rerr != nil:
 					out.Failed++
 				default:
 					out.Rendered++
+					if len(oc.Blocked) > 0 {
+						out.ScopeBlocked++
+					}
 					if scriptOnlyContent(wireByURL[u], []byte(rendered)) {
 						out.ScriptOnly++
 						findings = append(findings, RenderedLocationFinding{
@@ -165,7 +171,10 @@ type RenderedAuditSummary struct {
 	Rendered   int
 	Failed     int
 	ScriptOnly int
-	Declined   string
+	// ScopeBlocked counts rendered pages that tried to load something the scope gate refused, so
+	// their rendered DOM is what an in-scope-only browser saw, not the whole page.
+	ScopeBlocked int
+	Declined     string
 }
 
 // hasScript reports whether a wire body carries a <script> element at all. A page with no

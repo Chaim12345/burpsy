@@ -171,7 +171,7 @@ func TestInstrumentedSinksStillCallThroughSoThePageKeepsWorking(t *testing.T) {
 	if len(ObservationsForSink(obs, SinkInnerHTML)) == 0 {
 		t.Fatalf("expected the innerHTML flow to be observed; got %+v", obs)
 	}
-	dom, err := b.RenderedDOM(ctx, url+"#burpsyCanary6")
+	dom, err := b.renderedDOM(ctx, url+"#burpsyCanary6")
 	if err != nil {
 		t.Fatalf("RenderedDOM failed: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestRenderedDOMSeesMarkupThatOnlyExistsAfterScriptRuns(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	dom, err := b.RenderedDOM(ctx, url)
+	dom, err := b.renderedDOM(ctx, url)
 	if err != nil {
 		t.Fatalf("RenderedDOM failed: %v", err)
 	}

@@ -111,7 +111,7 @@ func TestTheNewSinksStillCallThroughSoThePageKeepsWorking(t *testing.T) {
 	if _, err := b.ObserveTaint(context.Background(), url+"#bsycanary", SourceLocationHash, "bsycanary"); err != nil {
 		t.Fatalf("ObserveTaint: %v", err)
 	}
-	dom, err := b.RenderedDOM(context.Background(), url+"#bsycanary")
+	dom, err := b.renderedDOM(context.Background(), url+"#bsycanary")
 	if err != nil {
 		t.Fatalf("RenderedDOM: %v", err)
 	}

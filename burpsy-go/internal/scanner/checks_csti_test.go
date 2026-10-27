@@ -401,7 +401,7 @@ func TestCSTIAgainstTheVulnappTwinsInABrowser(t *testing.T) {
 		t.Run(e.Path, func(t *testing.T) {
 			ex := &core.Exchange{Host: u.Hostname(), Port: uint16(port), Path: e.Path}
 			env := cstiEnv{
-				render: browser,
+				render: gatedRenderer{browser: browser},
 				served: func(ctx context.Context, target string) (string, bool) {
 					body, err := httpGetBody(ctx, target)
 					return body, err == nil

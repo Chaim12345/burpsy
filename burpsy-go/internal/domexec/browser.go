@@ -50,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os/exec"
 	"strings"
 	"sync"
@@ -99,6 +100,17 @@ type Options struct {
 
 	// UserAgent overrides Chrome's default User-Agent header when non-empty.
 	UserAgent string
+
+	// EgressDial, when set, is how a scope-gated session's proxy opens its upstream connections — the
+	// plain-HTTP requests it forwards and the CONNECT tunnels it splices (burpsy-react-ui-browser-render-
+	// unscoped). The caller wires the sender's egress dialer here (sender.Sender.EgressDialContext), so
+	// a render or a recorded login leaves the machine through the operator's upstream proxy, SOCKS
+	// carrier and hostname-resolution table exactly as a Repeater send does. nil dials directly, which
+	// is what a process with no network settings does everywhere.
+	//
+	// It reaches ONLY the gated sessions' proxy. Tabs in the browser's default context (the DOM taint
+	// checks) talk to the network from Chrome itself and are not routed by it.
+	EgressDial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // resolvedTimeout returns opts.Timeout, or the 30s default when unset.

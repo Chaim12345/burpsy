@@ -18,7 +18,7 @@ func TestARenderRecordsTheRequestsThePageIssues(t *testing.T) {
 	</script></body></html>`)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, outcome, err := b.RenderedDOMWithOptions(ctx, url, RenderOptions{})
+	_, outcome, err := b.renderedDOMWithOptions(ctx, url, RenderOptions{})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

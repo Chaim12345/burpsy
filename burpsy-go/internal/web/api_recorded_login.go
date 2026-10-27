@@ -364,7 +364,13 @@ func (s *Server) loginBrowserFor(ctx context.Context) (*domexec.Browser, error) 
 	}
 	s.loginBrowserMu.Lock()
 	if s.loginBrowser == nil {
-		s.loginBrowser = scanner.NewLazyBrowserProvider(domexec.Options{})
+		opts := domexec.Options{}
+		if s.sender != nil {
+			// The session proxy dials through the sender's egress route (upstream proxy, SOCKS
+			// carrier, resolution table), as every other send does.
+			opts.EgressDial = s.sender.EgressDialContext
+		}
+		s.loginBrowser = scanner.NewLazyBrowserProvider(opts)
 	}
 	p := s.loginBrowser
 	s.loginBrowserMu.Unlock()

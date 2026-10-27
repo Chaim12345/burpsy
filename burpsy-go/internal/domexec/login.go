@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/egressgate"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -357,30 +358,4 @@ func runLoginAction(tabCtx context.Context, a LoginAction) error {
 // query parameters — and drops what an identity provider puts in a URL: query values and the fragment.
 // A login's redirect chain carries code=, state=, SAMLResponse= and #access_token=, and a replay result
 // or a crawl report that printed them would be the session it was careful not to print as a cookie.
-func RedactURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" {
-		if i := strings.IndexAny(raw, "?#"); i >= 0 {
-			return raw[:i] + "?…"
-		}
-		return raw
-	}
-	if u.RawQuery != "" {
-		parts := strings.Split(u.RawQuery, "&")
-		for i, p := range parts {
-			name, _, hasValue := strings.Cut(p, "=")
-			if hasValue {
-				parts[i] = name + "=…"
-			}
-		}
-		u.RawQuery = strings.Join(parts, "&")
-	}
-	hadFragment := u.Fragment != "" || u.RawFragment != ""
-	u.Fragment, u.RawFragment = "", ""
-	u.User = nil
-	out := u.String()
-	if hadFragment {
-		out += "#…"
-	}
-	return out
-}
+func RedactURL(raw string) string { return egressgate.RedactURL(raw) }
