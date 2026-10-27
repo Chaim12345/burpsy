@@ -222,3 +222,24 @@ td.mono, .mono { font-family: var(--mono); }
 @media (max-width: 760px) {
   #probe-targetbar input.target { flex: 1 1 100%; min-width: 0; }
 }
+
+/* ---- tools ---- */
+.tools-wrap { flex: 1; overflow: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; max-width: 980px; }
+.tools-tabs, .tools-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tools-row label { font-size: 12px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
+.tools-lab { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); margin-top: 6px; }
+.tools-box { width: 100%; min-height: 110px; font-family: var(--mono); font-size: 13px; resize: vertical; }
+.tools-key { width: 100%; font-family: var(--mono); }
+.tools-out { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-height: 44px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.tools-two { display: flex; gap: 10px; }
+.tools-two > div { flex: 1; min-width: 0; }
+.cmp-op { font-size: 12px; padding: 2px 0; }
+.cmp-insert b { color: #3fb950; } .cmp-delete b { color: #f85149; } .cmp-replace b { color: #d29922; }
+@media (max-width: 760px) { .tools-two { flex-direction: column; } .tools-tab { flex: 1; } }
+.cmp-a { color: #f85149; } .cmp-b { color: #3fb950; }
+@media (max-width: 480px) {
+  #rail { flex: 0 0 62px; }
+  .rail-item { flex-direction: column; gap: 1px; font-size: 10px; padding: 4px 0; min-width: 0; }
+  .rail-ico { font-size: 17px; }
+  .live { width: 34px; font-size: 8px; }
+}
