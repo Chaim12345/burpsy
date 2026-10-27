@@ -156,6 +156,7 @@ var familyEndpoints = []func() []Endpoint{
 	clientRoleEndpoints,
 	ldapLoginEndpoints,
 	fileRefEndpoints,
+	nullByteXSSEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -202,6 +203,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerClientRole,
 	registerLDAPLogin,
 	registerFileRef,
+	registerNullByteXSS,
 }
 
 func coreEndpoints() []Endpoint {
