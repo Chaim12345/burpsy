@@ -18,9 +18,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -1273,6 +1275,35 @@ type Server struct {
 	// wsLive is every WebSocket this relay is pumping right now, by handshake exchange, so Repeater
 	// can attach to one (burpsy-react-ui-wuwf). See ws_live.go.
 	wsLive wsLiveRegistry
+
+	// connPanics counts relay goroutines that panicked and were contained by
+	// recoverConnection. See ConnectionPanics.
+	connPanics atomic.Uint64
+}
+
+// ConnectionPanics reports how many client connections ended in a contained panic. Zero is the
+// only healthy value: each one is a parser or relay bug that a peer's bytes reached, logged with its
+// stack when it happened.
+func (s *Server) ConnectionPanics() uint64 { return s.connPanics.Load() }
+
+// recoverConnection is deferred at the root of every client connection's goroutine. Without it, a
+// panic anywhere in the relay — a hostile origin's response reaching a parser bug is the case that
+// prompted this (burpsy-react-ui-negchunk-panic: chunk size "-1" reached make()) — kills the whole
+// process, every other operator's connection and the console with it. Contained, it costs the one
+// connection it happened on: logged with its stack, counted, and the connection closed by the
+// handler's own deferred Close. It is a backstop, not a fix — the parser bug is still a bug.
+func (s *Server) recoverConnection(clientConn net.Conn) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	s.connPanics.Add(1)
+	remote := ""
+	if addr := clientConn.RemoteAddr(); addr != nil {
+		remote = addr.String()
+	}
+	s.config.logger.Error("proxy connection panicked; connection closed",
+		zap.String("client", remote), zap.Any("panic", r), zap.ByteString("stack", debug.Stack()))
 }
 
 // NewServer creates a new proxy server.
@@ -1473,6 +1504,9 @@ func (s *Server) handleConnection(clientConn net.Conn) {
 // what the next connection does and never what a connection already in flight does.
 func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 	defer clientConn.Close()
+	// Deferred after Close so it runs first: the panic is logged and counted, then the
+	// connection closes.
+	defer s.recoverConnection(clientConn)
 
 	// Set keep-alive
 	if tcpConn, ok := clientConn.(*net.TCPConn); ok {
@@ -3239,14 +3273,12 @@ func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		sizeText := strings.TrimSpace(line)
-		if i := strings.IndexByte(sizeText, ';'); i >= 0 {
-			sizeText = strings.TrimSpace(sizeText[:i])
-		}
-		size, err := strconv.ParseUint(sizeText, 16, 64)
+		// The shared strict parser (httputil.ParseChunkSize): hex digits only, bounded, never signed.
+		parsed, err := httputil.ParseChunkSize(line)
 		if err != nil {
 			return nil, false
 		}
+		size := uint64(parsed)
 		if size == 0 {
 			// The terminal chunk. Trailers, if any, run to the blank line; read and discard them so
 			// the next request on this connection starts at a message boundary.
