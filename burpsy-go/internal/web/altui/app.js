@@ -1,6 +1,7 @@
 import { renderMap, refreshMap } from './views/map.js';
 import { renderProbe, loadExchange } from './views/probe.js';
 import { renderProve, refreshProve } from './views/prove.js';
+import { renderScope, refreshScope } from './views/scope.js';
 import { renderTools } from './views/tools.js';
 import { api } from './api.js';
 
@@ -16,6 +17,7 @@ function switchView(name) {
     if (name === 'probe') renderProbe(el);
     if (name === 'prove') renderProve(el);
     if (name === 'tools') renderTools(el);
+    if (name === 'scope') renderScope(el);
     if (name === 'attack') el.innerHTML = `<div class="empty" style="margin:auto">
       <b>Attack is held in this build.</b><br><br>
       Active scanning, intruder runs and crawls send unbounded traffic at a target.
@@ -24,6 +26,7 @@ function switchView(name) {
   } else {
     if (name === 'map') refreshMap();
     if (name === 'prove') refreshProve();
+    if (name === 'scope') refreshScope();
   }
 }
 

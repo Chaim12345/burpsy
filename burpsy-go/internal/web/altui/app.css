@@ -243,3 +243,16 @@ td.mono, .mono { font-family: var(--mono); }
   .rail-ico { font-size: 17px; }
   .live { width: 34px; font-size: 8px; }
 }
+
+/* ---- scope ---- */
+.sc-state { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.sc-rule { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.sc-rule.off code { opacity: .45; text-decoration: line-through; }
+.sc-rule code { flex: 1; min-width: 0; word-break: break-all; }
+.sc-btns { display: flex; gap: 6px; }
+.sc-stage { border: 1px solid var(--accent); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sc-port { width: 80px; }
+#view-scope .tools-row input { flex: 1; min-width: 120px; }
+#view-scope .tools-row input.sc-port { flex: 0 0 80px; min-width: 0; }
+.sc-stage[hidden] { display: none; }
+.modal .why { overflow-wrap: anywhere; }

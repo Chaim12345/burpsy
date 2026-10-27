@@ -56,6 +56,7 @@ func TestAltAssetsAreServedWithTheRightTypeAndBehindTheCredential(t *testing.T) 
 		"/alt/views/probe.js": "javascript",
 		"/alt/views/prove.js": "javascript",
 		"/alt/views/tools.js": "javascript",
+		"/alt/views/scope.js": "javascript",
 		"/alt/app.css":        "text/css",
 	}
 	for p, typ := range cases {
