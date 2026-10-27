@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/extscan"
@@ -173,7 +172,7 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		return err
 	}
 	if *out != "" {
-		if werr := os.WriteFile(*out, doc, 0o644); werr != nil {
+		if werr := writeReport(*out, doc); werr != nil {
 			return werr
 		}
 		fmt.Fprintf(ctx.out, "wrote %s (%d bytes)\n", *out, len(doc))
