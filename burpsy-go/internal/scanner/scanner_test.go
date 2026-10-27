@@ -128,19 +128,45 @@ func TestAuditFallsBackToStoredResponse(t *testing.T) {
 // A runtime config edit lands atomically from a concurrent dispatcher's point of view: the count
 // is read through the same snapshot discipline the audit uses, so this fails under -race if any
 // reader reaches straight into s.config while PUT /api/scanner/config writes.
+//
+// Without -race it still asserts something: every edit flips TWO family switches together, so a
+// reader may see both on or both off and nothing else. A snapshot with one flipped and not the
+// other, or a dispatch count that is neither the both-on nor the both-off size, is a torn edit —
+// the half-applied configuration a dispatcher would then audit under.
 func TestRuntimeConfigEditIsAtomicAgainstTheDispatchCount(t *testing.T) {
 	s := NewActiveScanner(core.NewTrafficStore(), zap.NewNop())
+	set := func(on bool) func(*ScanConfig) {
+		return func(c *ScanConfig) { c.CheckXXE, c.CheckSqli = on, on }
+	}
+	s.UpdateScanConfig(set(true))
+	countOn := s.ActiveCheckCount()
+	s.UpdateScanConfig(set(false))
+	countOff := s.ActiveCheckCount()
+	// The invariant is only worth asserting if the two states are distinguishable by count.
+	if countOn <= countOff+1 {
+		t.Fatalf("CheckXXE and CheckSqli together move the dispatch count from %d to %d; each must "+
+			"admit at least one check, or a torn edit cannot be told from a whole one", countOff, countOn)
+	}
+
+	check := func(who string) {
+		cfg := s.ConfigSnapshot()
+		if cfg.CheckXXE != cfg.CheckSqli {
+			t.Errorf("%s: torn snapshot: CheckXXE=%v CheckSqli=%v, but every edit sets both together", who, cfg.CheckXXE, cfg.CheckSqli)
+		}
+		if n := s.ActiveCheckCount(); n != countOn && n != countOff {
+			t.Errorf("%s: dispatch count %d is neither the both-on %d nor the both-off %d: a half-applied edit", who, n, countOn, countOff)
+		}
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for i := 0; i < 2000; i++ {
-			s.UpdateScanConfig(func(c *ScanConfig) { c.CheckXXE = i%2 == 0 })
-			_ = s.ActiveCheckCount()
+			s.UpdateScanConfig(set(i%2 == 0))
+			check("writer")
 		}
 	}()
 	for i := 0; i < 2000; i++ {
-		_ = s.ConfigSnapshot()
-		_ = s.ActiveCheckCount()
+		check("reader")
 	}
 	<-done
 }
