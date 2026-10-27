@@ -107,10 +107,21 @@ function advisoryBlock(f) {
   return '';
 }
 
+// safeLink renders a catalogue/reference link only when its scheme is http or
+// https. Any other scheme (javascript:, data:) is shown as plain text: HTML
+// escaping alone does not make a dangerous scheme inert in an href.
+function safeLink(l) {
+  const url = String(l.url || '');
+  if (/^https?:\/\//i.test(url)) {
+    return `<a class="adv-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(l.title || url)}</a>`;
+  }
+  return `<span class="adv-link mut">${esc(l.title || url)}</span>`;
+}
+
 function linksBlock(label, links) {
   if (!links || !links.length) return '';
   return `<div><div class="section-label">${esc(label)}</div><div class="kv" style="flex-direction:column;align-items:flex-start;gap:2px">
-    ${links.map((l) => `<a class="adv-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.title || l.url)}</a>`).join('')}
+    ${links.map(safeLink).join('')}
   </div></div>`;
 }
 
