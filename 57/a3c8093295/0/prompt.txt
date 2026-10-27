@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b031k21g6</task-id>
+<tool-use-id>toolu_01Qk6aRv3o7LzcfGkw88aTkY</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/b031k21g6.output</output-file>
+<status>completed</status>
+<summary>Background command "Run test-honesty affected packages with Chrome" completed (exit code 0)</summary>
+</task-notification>
