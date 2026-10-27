@@ -123,7 +123,7 @@ func (b *Browser) NewSession(gate ScopeGate) (*Session, error) {
 	s := &Session{b: b, gate: gate}
 	params := target.CreateBrowserContext().WithDisposeOnDetach(true)
 	if gate != nil {
-		p, err := startGateProxy(gate, s.recordBlocked)
+		p, err := startGateProxy(gate, s.recordBlocked, b.opts.EgressDial)
 		if err != nil {
 			return nil, err
 		}
@@ -406,18 +406,30 @@ type gateProxy struct {
 	srv    *http.Server
 	gate   ScopeGate
 	record func(string)
-	// transport sends the plain-HTTP requests the proxy allows. No proxy of its own: the session is
-	// the proxy.
+	// dial opens every upstream connection the proxy makes, for a forwarded plain-HTTP request and a
+	// CONNECT tunnel alike: the caller's egress dialer (Options.EgressDial) when one is wired, so the
+	// session leaves through the operator's upstream proxy / SOCKS carrier / resolution table, or a
+	// direct dial when none is.
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// transport sends the plain-HTTP requests the proxy allows. Its Proxy is nil on purpose — the
+	// upstream route is dial's business, so a configured upstream is applied once, not twice.
 	transport *http.Transport
 }
 
-func startGateProxy(gate ScopeGate, record func(string)) (*gateProxy, error) {
+// gateProxyDialTimeout bounds a direct dial when no egress dialer is wired.
+const gateProxyDialTimeout = 15 * time.Second
+
+func startGateProxy(gate ScopeGate, record func(string), dial func(ctx context.Context, network, addr string) (net.Conn, error)) (*gateProxy, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("domexec: could not start the session's scope-gating proxy: %w", err)
 	}
-	p := &gateProxy{ln: ln, gate: gate, record: record, transport: &http.Transport{
-		Proxy: nil, ForceAttemptHTTP2: false, ResponseHeaderTimeout: 30 * time.Second,
+	if dial == nil {
+		d := &net.Dialer{Timeout: gateProxyDialTimeout}
+		dial = d.DialContext
+	}
+	p := &gateProxy{ln: ln, gate: gate, record: record, dial: dial, transport: &http.Transport{
+		Proxy: nil, DialContext: dial, ForceAttemptHTTP2: false, ResponseHeaderTimeout: 30 * time.Second,
 	}}
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = p.srv.Serve(ln) }()
@@ -483,7 +495,9 @@ func (p *gateProxy) tunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "burpsy: refused by the engagement scope", http.StatusForbidden)
 		return
 	}
-	upstream, err := net.DialTimeout("tcp", r.Host, 15*time.Second)
+	dialCtx, cancel := context.WithTimeout(r.Context(), gateProxyDialTimeout)
+	upstream, err := p.dial(dialCtx, "tcp", r.Host)
+	cancel()
 	if err != nil {
 		http.Error(w, "burpsy session proxy: "+err.Error(), http.StatusBadGateway)
 		return
