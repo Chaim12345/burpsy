@@ -244,16 +244,48 @@ jobs:
             ~/.cache/go-build
           key: ${{ steps.env.outputs.cache-key }}
 
+  # The scripts that decide what CI runs (shard selection, the affected-test selector's shard plan,
+  # the review gate, fuzz list, vulncheck gate, beads lint, capped runs, the benchmark scorers) have
+  # self-tests that no job ran, and ci-shard.sh verify (every test in exactly one shard) was named
+  # only in a comment (bead ci-selftest). They run here on every change; a minute of work.
+  ci-selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - name: Script self-tests and shard completeness
+        # NO_PROXY is cleared for the same reason as uat-cli: the bench tests drive a loopback proxy.
+        run: |
+          set -u
+          fail=0
+          for t in scripts/*_test.sh; do echo "::group::$t"; bash "$t" || fail=1; echo "::endgroup::"; done
+          for t in scripts/*_test.py scripts/bench/*_test.py; do
+            echo "::group::$t"; env -u NO_PROXY -u no_proxy python3 -I "$t" || fail=1; echo "::endgroup::"
+          done
+          scripts/ci-shard.sh verify || fail=1
+          exit $fail
+
   # The required check. Branch protection names `gate` (docs/DEVELOPMENT-PROCESS.md section 11), so
   # it stays one check, never skipped (if: always()), that is green only when:
   #   - `changes` succeeded (it also holds the control-byte check), and
-  #   - lint and every test shard succeeded, or — only when `changes` said code=false — they were
-  #     skipped. A failed or cancelled dependency is red in every case, and so is a skip that
-  #     `changes` did not ask for.
+  #   - lint, every test shard and both UAT jobs (uat-cli, uat-ui) succeeded, or — only when
+  #     `changes` said code=false — they were skipped. A failed or cancelled dependency is red in
+  #     every case, and so is a skip that `changes` did not ask for. The UAT jobs are the only
+  #     per-change checks that run the real binary and the real console; they used to be advisory,
+  #     so a console regression could merge green (bead uat-required).
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [changes, lint, test]
+    needs: [changes, lint, test, uat-cli, uat-ui, ci-selftest]
     if: always()
     steps:
       - name: changes, lint and every test shard passed (or were legitimately skipped)
@@ -264,24 +296,31 @@ jobs:
           MODE: ${{ needs.changes.outputs.mode }}
           LINT: ${{ needs.lint.result }}
           TEST: ${{ needs.test.result }}
+          UATCLI: ${{ needs.uat-cli.result }}
+          UATUI: ${{ needs.uat-ui.result }}
+          SELFTEST: ${{ needs.ci-selftest.result }}
         run: |
-          echo "changes: $CHANGES (code=$CODE mode=$MODE)  lint: $LINT  test shards: $TEST"
+          if [ "$SELFTEST" != success ]; then
+            echo "::error::the Go gate is red: the CI script self-tests are $SELFTEST"
+            exit 1
+          fi
+          echo "changes: $CHANGES (code=$CODE mode=$MODE)  lint: $LINT  test shards: $TEST  uat-cli: $UATCLI  uat-ui: $UATUI"
           if [ "$CHANGES" != success ]; then
             echo "::error::the Go gate is red: the changes job is $CHANGES"
             exit 1
           fi
           if [ "$CODE" = false ]; then
-            for r in "$LINT" "$TEST"; do
+            for r in "$LINT" "$TEST" "$UATCLI" "$UATUI"; do
               if [ "$r" != skipped ] && [ "$r" != success ]; then
-                echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST"
+                echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST, uat-cli=$UATCLI, uat-ui=$UATUI"
                 exit 1
               fi
             done
             echo "Only documentation, .beads data or benchmark scripts changed: no Go job needed to run."
             exit 0
           fi
-          if [ "$LINT" != success ] || [ "$TEST" != success ]; then
-            echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST"
+          if [ "$LINT" != success ] || [ "$TEST" != success ] || [ "$UATCLI" != success ] || [ "$UATUI" != success ]; then
+            echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST, uat-cli=$UATCLI, uat-ui=$UATUI"
             exit 1
           fi
           if [ "$MODE" = affected ]; then
@@ -395,8 +434,7 @@ jobs:
   # UAT: the CLI, used the way an operator uses it (beads uat1). scripts/uat-cli.sh builds the real
   # burpsy binary and a fixture target, checks exit codes, proxies a request, audits it through the
   # confirmation gate and requires the reflected XSS the target declares. A short flow on every
-  # change; e2e-go.sh (the broad API suite) stays nightly. Add `uat-cli` and `uat-ui` to the
-  # required checks to make them block a merge.
+  # change; e2e-go.sh (the broad API suite) stays nightly. Part of `gate` (bead uat-required).
   uat-cli:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -449,6 +487,11 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      # The suite is transpiled by Playwright and never type-checked otherwise (ui/tsconfig includes
+      # src only); e2e/tsconfig covers harness, specs, specs-uat and both configs (bead uat-required).
+      - name: Type-check the e2e suite
+        working-directory: burpsy-go/internal/web/ui/e2e
+        run: npx tsc --noEmit -p .
       - name: Browser UAT
         working-directory: burpsy-go/internal/web/ui/e2e
         env:
