@@ -12,6 +12,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
@@ -182,7 +183,7 @@ func TestLiveFramesAreThrottledAtTheSource(t *testing.T) {
 // With a browser, the render pass's frame reaches the view while the crawl runs.
 func TestTheLiveCrawlViewShowsAFrameFromTheRenderPass(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	site := slowSite(t, 12, 150*time.Millisecond)
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})

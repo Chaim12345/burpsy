@@ -13,21 +13,17 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 // startRemoteChrome launches a headless Chrome with a CDP port, the stand-in for a remote engine, and
 // returns its browser websocket URL and its HTTP debugging base.
 func startRemoteChrome(t *testing.T) (wsURL, httpBase string) {
 	t.Helper()
-	var bin string
-	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable", "chrome"} {
-		if p, err := exec.LookPath(name); err == nil {
-			bin = p
-			break
-		}
-	}
-	if bin == "" {
-		t.Skip("no Chrome on PATH")
+	bin, err := resolveChromePath("")
+	if err != nil {
+		domexectest.Skipf(t, "no Chrome on PATH: %v", err)
 	}
 	// Not t.TempDir: killing Chrome's main process does not stop its helper processes at once, and
 	// they keep writing the profile for a moment after Wait returns, so TempDir's single RemoveAll
@@ -44,7 +40,7 @@ func startRemoteChrome(t *testing.T) (wsURL, httpBase string) {
 		t.Fatal(err)
 	}
 	if err := cmd.Start(); err != nil {
-		t.Skipf("could not start Chrome: %v", err)
+		domexectest.Skipf(t, "could not start Chrome: %v", err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	re := regexp.MustCompile(`DevTools listening on (ws://[^\s]+)`)
@@ -63,7 +59,7 @@ func startRemoteChrome(t *testing.T) (wsURL, httpBase string) {
 	select {
 	case wsURL = <-found:
 	case <-time.After(20 * time.Second):
-		t.Skip("Chrome did not report a DevTools URL")
+		domexectest.Skip(t, "Chrome did not report a DevTools URL within 20s")
 	}
 	httpBase = "http://" + strings.SplitN(strings.TrimPrefix(wsURL, "ws://"), "/", 2)[0]
 	return wsURL, httpBase
@@ -111,7 +107,9 @@ func TestARemoteTabIsClosedWhenItsCallersContextIsCancelled(t *testing.T) {
 	wsURL, httpBase := startRemoteChrome(t)
 	b, err := NewBrowser(context.Background(), Options{RemoteURL: wsURL, Timeout: 20 * time.Second})
 	if err != nil {
-		t.Skipf("remote attach failed: %v", err)
+		// Chrome is running and announced its DevTools URL, so attaching to it is the code under
+		// test, not a missing capability: a failure here is a failure.
+		t.Fatalf("remote attach to a running Chrome failed: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
 	before := pageTargets(t, httpBase)

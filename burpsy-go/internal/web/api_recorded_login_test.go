@@ -5,13 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"go.uber.org/zap"
@@ -239,14 +239,9 @@ func newTOTPLoginApp(t *testing.T) *totpLoginApp {
 	return app
 }
 
-func chromeAvailable() bool {
-	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return true
-		}
-	}
-	return false
-}
+// chromeAvailable reports whether domexec would find a Chrome to launch. A false here is a counted
+// skip (domexectest.Skip), never a bare one: see browser_ledger_test.go.
+func chromeAvailable() bool { return domexectest.ChromeOnPath() }
 
 // saveTOTPLogin imports the script against app and converts its recorded code into a TOTP step.
 func saveTOTPLogin(t *testing.T, s *Server, app *totpLoginApp) string {
@@ -274,7 +269,7 @@ func saveTOTPLogin(t *testing.T, s *Server, app *totpLoginApp) string {
 // code, and a crawl launched with the sequence reaches the page only a logged-in user can see.
 func TestARecordedTOTPLoginReplaysAndAuthenticatesACrawlThroughTheRoutes(t *testing.T) {
 	if !chromeAvailable() {
-		t.Skip("no Chrome on PATH")
+		domexectest.Skip(t, "no Chrome on PATH")
 	}
 	app := newTOTPLoginApp(t)
 	s := newTestServer()

@@ -40,7 +40,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -48,6 +47,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
@@ -576,14 +576,8 @@ func (rt *runtimeTarget) storedFindingsFor(t *testing.T, path string, dom bool) 
 	}).byRow
 }
 
-func chromeOnPath() bool {
-	for _, name := range []string{"chromium", "google-chrome", "google-chrome-stable", "chrome"} {
-		if _, err := exec.LookPath(name); err == nil {
-			return true
-		}
-	}
-	return false
-}
+// chromeOnPath reports whether domexec would find a Chrome to launch (the same names it searches).
+func chromeOnPath() bool { return domexectest.ChromeOnPath() }
 
 // seed performs one real request and records the exchange, mirroring what the proxy captures.
 func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpoint) {

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 )
 
 // This package's tests share one headless Chrome process instead of launching one per test.
@@ -34,17 +36,18 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	code := m.Run()
+	code := domexectest.Main(m)
 	if sharedBrowser != nil {
 		_ = sharedBrowser.Close()
 	}
 	os.Exit(code)
 }
 
-// newTestBrowser returns the package's shared Browser, launching it on first use, or skips. Chrome
-// is present on the development box, so these tests do run here; the skip exists so the suite
-// stays green on a host without a browser rather than reporting a missing prerequisite as a code
-// failure.
+// newTestBrowser returns the package's shared Browser, launching it on first use, or skips. The
+// skip is counted (domexectest.Skip): it names the missing prerequisite on the test rather than
+// reporting it as a code failure, and TestMain then fails the package anyway unless
+// BURPSY_ALLOW_NO_CHROME=1 says a run without a browser is intended. A bare skip here once let ~35
+// tests report a green package on a host whose Chrome could not start.
 func newTestBrowser(t *testing.T) *Browser {
 	t.Helper()
 	sharedBrowserOnce.Do(func() {
@@ -59,7 +62,7 @@ func newTestBrowser(t *testing.T) *Browser {
 		}
 	})
 	if sharedBrowserErr != nil {
-		t.Skipf("no browser available, skipping: %v", sharedBrowserErr)
+		domexectest.Skipf(t, "no browser could be launched: %v", sharedBrowserErr)
 	}
 	return sharedBrowser
 }
@@ -238,5 +241,15 @@ func TestTheZeroValueOptionsIsHeadless(t *testing.T) {
 	if (Options{}).Headed {
 		t.Fatal("Options{} requests a visible browser window; headless must be the default because " +
 			"callers that never mention the field are the common case")
+	}
+}
+
+// The ledger's "Chrome on PATH" must mean "domexec would launch it": a test that decided Chrome was
+// present because some other binary name resolved would then fail at launch instead of skipping
+// with a counted reason, and one that missed a name domexec launches would skip a test that could
+// have run.
+func TestTheLedgersChromeNamesAreTheOnesDomexecLaunches(t *testing.T) {
+	if strings.Join(domexectest.ChromeCandidates, ",") != strings.Join(chromeCandidates, ",") {
+		t.Fatalf("domexectest.ChromeCandidates = %v, domexec launches %v", domexectest.ChromeCandidates, chromeCandidates)
 	}
 }

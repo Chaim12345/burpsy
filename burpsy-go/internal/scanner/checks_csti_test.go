@@ -15,6 +15,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 )
 
@@ -379,7 +380,7 @@ func TestCSTIAuthoriseRefusesAnotherOriginAndOutOfScopePaths(t *testing.T) {
 
 func TestCSTIAgainstTheVulnappTwinsInABrowser(t *testing.T) {
 	if !chromeOnPath() {
-		t.Skip("no Chrome on PATH: the CSTI twins are NOT exercised in this run")
+		domexectest.Skip(t, "no Chrome on PATH: the CSTI twins are untested")
 	}
 	srv := httptest.NewServer(vulnapp.Handler())
 	defer srv.Close()

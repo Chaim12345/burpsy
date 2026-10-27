@@ -106,8 +106,34 @@ func TestPageObserverSlotInstalledWhileServing(t *testing.T) {
 	}
 }
 
-// An empty slot observes nothing and does not panic.
+// An empty slot observes nothing and does not panic; a detached slot is empty again; and an observer
+// installed after a page was offered is not handed that page retroactively (the slot forwards, it
+// does not buffer). The zero value is the state main's slot is in until the web server exists.
 func TestPageObserverSlotEmpty(t *testing.T) {
 	var slot PageObserverSlot
+	if fn := slot.fn.Load(); fn != nil {
+		t.Fatal("the zero-value slot holds an observer")
+	}
+	// Panics fail the test on their own; a nil exchange is the hardest input an empty slot can get.
 	slot.Observe(&core.Exchange{}, []byte("x"))
+	slot.Observe(nil, nil)
+
+	var calls []string
+	slot.Set(func(ex *core.Exchange, response []byte) { calls = append(calls, ex.Path+"="+string(response)) })
+	if len(calls) != 0 {
+		t.Fatalf("installing an observer replayed %d page(s) offered while the slot was empty: %v", len(calls), calls)
+	}
+	slot.Observe(&core.Exchange{Path: "/a"}, []byte("A"))
+	if len(calls) != 1 || calls[0] != "/a=A" {
+		t.Fatalf("an installed observer got %v, want exactly the one page offered after Set", calls)
+	}
+
+	slot.Set(nil)
+	if fn := slot.fn.Load(); fn != nil {
+		t.Fatal("Set(nil) left an observer installed")
+	}
+	slot.Observe(&core.Exchange{Path: "/b"}, []byte("B"))
+	if len(calls) != 1 {
+		t.Fatalf("a detached slot still forwarded: %v", calls)
+	}
 }

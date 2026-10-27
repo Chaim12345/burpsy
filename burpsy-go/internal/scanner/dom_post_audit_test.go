@@ -7,13 +7,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
 )
@@ -147,8 +147,10 @@ func auditWithBrowser(t *testing.T, rt *runtimeTarget, c domPostCase, browser Br
 }
 
 func TestDOMEngineDoesNotAbandonPOSTLoginAudits(t *testing.T) {
-	if os.Getenv("BURPSY_ALLOW_NO_CHROME") == "1" {
-		t.Skip("BURPSY_ALLOW_NO_CHROME=1: the DOM engine this regression needs is not available")
+	// Skipped only when Chrome is actually missing, and counted: this used to skip whenever
+	// BURPSY_ALLOW_NO_CHROME=1 was set, even on a machine whose Chrome would have run it.
+	if !chromeOnPath() {
+		domexectest.Skip(t, "no Chrome on PATH: the DOM engine this regression needs is not available")
 	}
 	paths := make([]string, 0, len(domPostCases))
 	for _, c := range domPostCases {

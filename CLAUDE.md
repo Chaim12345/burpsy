@@ -89,7 +89,10 @@ scripts/capped-run.sh -- sh -c 'cd burpsy-go && go test ./... -count=1 -timeout 
 
 Gotchas: `go test ./...` needs `-timeout 30m` (`internal/scanner` alone is ~8 minutes); `bun run
 build` strips types without checking them; agents never commit `dist/app.js` / `style.css` — the
-lead rebuilds once per round with bun 1.4.2.
+lead rebuilds once per round with bun 1.4.2. A browser-driving package (domexec, dominvader,
+blindxss, browser, crawler, scanner, web) FAILS when Chrome cannot launch; `BURPSY_ALLOW_NO_CHROME=1`
+accepts that run deliberately (siblings: `BURPSY_ALLOW_UNVERIFIED_COVERAGE`, `_EXTSCAN`; list in
+`AGENTS.md` Testing Requirements). CI sets none of them.
 
 ## Architecture Overview
 

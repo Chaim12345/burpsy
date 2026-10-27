@@ -15,6 +15,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/domexec/domexectest"
 	"go.uber.org/zap"
 )
 
@@ -148,7 +149,7 @@ func TestMaxStaticTimePerItemStopsThePassAndCountsTheSkip(t *testing.T) {
 
 func TestMaxDynamicTimePerItemIsACountedSkipNotACleanResultOrABreakerTrip(t *testing.T) {
 	if !chromeOnPath() {
-		t.Skip("SKIP: no Chrome on PATH; the dynamic limit is exercised against a real browser load")
+		domexectest.Skip(t, "no Chrome on PATH: the dynamic limit needs a real browser load")
 	}
 	ot := startOverrideTarget(t)
 	// /slow answers after 1.5 s, so a browser load of it cannot finish inside a 1 s item limit.
