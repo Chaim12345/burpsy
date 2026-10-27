@@ -142,6 +142,25 @@ func sqlBooleanShapes() []sqlBooleanShape {
 	return out
 }
 
+// pointBooleanShapes are the shapes that only make sense for some values (v0ei.11):
+//   - a numeric value gets arithmetic: `7-l+l` is still 7, `7-l+r` is another number;
+//   - a sort/order parameter gets a CASE WHEN that is a valid ORDER BY term when l=r and a
+//     multi-row subquery error otherwise.
+func pointBooleanShapes(p bcheck.InsertionPoint) []sqlBooleanShape {
+	var out []sqlBooleanShape
+	if v := strings.TrimSpace(p.BaseValue); v != "" && strings.Trim(v, "0123456789") == "" {
+		out = append(out, formatShape("-%[1]s+%[2]s", false))
+	}
+	name := strings.ToLower(p.Name)
+	for _, k := range []string{"sort", "order", "column", "orderby", "dir"} {
+		if strings.Contains(name, k) {
+			out = append(out, formatShape(",(case when %[1]s=%[2]s then 1 else 1*(select 1 union select 2) end)", false))
+			break
+		}
+	}
+	return out
+}
+
 // sqlOrBooleanShapes is every widening shape.
 func sqlOrBooleanShapes() []sqlBooleanShape {
 	out := make([]sqlBooleanShape, 0, len(sqlOrBooleanFormats))
@@ -291,6 +310,7 @@ func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.In
 // undecided in one probe instead of fifteen pairs each failing to learn it.
 func booleanPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 	shapes := sqlBooleanShapes()
+	shapes = append(shapes, pointBooleanShapes(p)...)
 	if orBooleanEnabled(h) {
 		shapes = append(shapes, sqlOrBooleanShapes()...)
 	}
