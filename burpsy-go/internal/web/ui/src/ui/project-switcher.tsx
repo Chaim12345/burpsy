@@ -2,13 +2,7 @@ import { useId, useState } from "react";
 import { FileWarning, FolderCheck, FolderOpen, FolderPlus } from "lucide-react";
 import { toast } from "sonner";
 import { useOpenProject, useProject, useProjects } from "../lib/data";
-import {
- existingProjectFor,
- newProjectFilename,
- projectEntries,
- readProjectRefusal,
- type ProjectRefusal,
-} from "../lib/project-switch";
+import { existingProjectFor, newProjectFilename, projectEntries, readProjectRefusal, type ProjectRefusal } from "../lib/project-switch";
 import type { ProjectListEntry } from "../lib/types";
 import { Badge, Button, ErrorNotice, Field, Input, Modal, Spinner } from "./primitives";
 
@@ -46,13 +40,7 @@ interface PendingSwitch {
  * never be listed again), and the resulting name is shown before anything is sent. A name that is
  * already listed is said to OPEN that project, not create an empty one.
  */
-export function ProjectSwitcher({
- open,
- onOpenChange,
-}: {
- open: boolean;
- onOpenChange: (open: boolean) => void;
-}): JSX.Element {
+export function ProjectSwitcher({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const projects = useProjects(open);
  const current = useProject();
  const openProject = useOpenProject();
@@ -72,8 +60,8 @@ export function ProjectSwitcher({
  const leaving = !current.data
   ? "the open project"
   : current.data.persisted
-   ? `${current.data.name} (${current.data.database})`
-   : "this in-memory session (no project file — what it holds is not saved anywhere)";
+    ? `${current.data.name} (${current.data.database})`
+    : "this in-memory session (no project file — what it holds is not saved anywhere)";
 
  const close = (next: boolean) => {
   if (!next) {
@@ -157,9 +145,7 @@ export function ProjectSwitcher({
      <section className="notice notice-warn project-confirm" role="group" aria-labelledby={confirmHeadingId}>
       <FileWarning size={15} aria-hidden="true" />
       <div className="stack">
-       <strong id={confirmHeadingId}>
-        {pending.creating ? "Create and switch to a new project?" : "Switch project?"}
-       </strong>
+       <strong id={confirmHeadingId}>{pending.creating ? "Create and switch to a new project?" : "Switch project?"}</strong>
        <span>
         Leaving <strong>{leaving}</strong>.
        </span>
@@ -169,11 +155,10 @@ export function ProjectSwitcher({
         {pending.creating ? " — a new, empty project." : "."}
        </span>
        <span>
-        Every page is reloaded from the project being opened: nothing from the one you are leaving stays on
-        screen. Running crawls and audits are paused for the switch and resumed after it. Repeater tabs and
-        Intruder&apos;s payloads, settings and last report are drafts kept in this browser, so they stay — but
-        Intruder&apos;s base request and its insertion points belong to the project you are leaving and are
-        cleared.
+        Every page is reloaded from the project being opened: nothing from the one you are leaving stays on screen. Running crawls and
+        audits are paused for the switch and resumed after it. Repeater tabs and Intruder&apos;s payloads, settings and last report are
+        drafts kept in this browser, so they stay — but Intruder&apos;s base request and its insertion points belong to the project you are
+        leaving and are cleared.
        </span>
        <div className="page-actions">
         <Button variant="outline" autoFocus disabled={openProject.isPending} onClick={() => setPending(null)}>
@@ -205,15 +190,9 @@ export function ProjectSwitcher({
      {projects.isPending ? (
       <Spinner label="Reading the project directory" />
      ) : projects.isError ? (
-      <ErrorNotice
-       title="Could not list the project files"
-       error={projects.error}
-       onRetry={() => void projects.refetch()}
-      />
+      <ErrorNotice title="Could not list the project files" error={projects.error} onRetry={() => void projects.refetch()} />
      ) : entries.length === 0 ? (
-      <p className="field-hint">
-       {list?.note ?? `No .db project files were found in ${dir || "the project directory"}.`}
-      </p>
+      <p className="field-hint">{list?.note ?? `No .db project files were found in ${dir || "the project directory"}.`}</p>
      ) : (
       <>
        {list?.note ? <p className="field-hint">{list.note}</p> : null}
@@ -258,26 +237,18 @@ export function ProjectSwitcher({
       hint={
        dir
         ? `A bare name is created in ${dir}; an absolute path anywhere. ".db" is added if it is missing.`
-        : "This instance has no project directory, so give an absolute path — a relative one resolves against burpsy's working directory. \".db\" is added if it is missing."
+        : 'This instance has no project directory, so give an absolute path — a relative one resolves against burpsy\'s working directory. ".db" is added if it is missing.'
       }
      >
-      {(id) => (
-       <Input
-        id={id}
-        value={typed}
-        autoComplete="off"
-        spellCheck={false}
-        onChange={(event) => setTyped(event.target.value)}
-       />
-      )}
+      {(id) => <Input id={id} value={typed} autoComplete="off" spellCheck={false} onChange={(event) => setTyped(event.target.value)} />}
      </Field>
      {filename !== "" ? (
       <p className="field-hint" aria-live="polite">
        {typedIsOpen
         ? `${filename} is the project already open.`
         : existing
-         ? `${filename} already exists — this opens ${existing.name}, it does not create an empty project.`
-         : `Will create ${filename}.`}
+          ? `${filename} already exists — this opens ${existing.name}, it does not create an empty project.`
+          : `Will create ${filename}.`}
       </p>
      ) : null}
      <div className="page-actions">

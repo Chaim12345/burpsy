@@ -9,9 +9,9 @@ its speed can be compared before anything else is decided. It is **not** a requi
 1. The pipeline's settings upload `.buildkite/pipeline.yml`: one bootstrap step, `.buildkite/image.sh`,
    on the hosted queue's default image (which has docker).
 2. `image.sh` tags the burpsy agent image with a hash of `.buildkite/Dockerfile` and
-   `scripts/ci-install-tools.sh`. If the cluster's internal registry (`$BUILDKITE_HOSTED_REGISTRY_URL`)
+   `scripts/ci-install-tools.sh` and `burpsy-go/go.mod`. If the cluster's internal registry (`$BUILDKITE_HOSTED_REGISTRY_URL`)
    has no image with that tag, it builds the Dockerfile (from the repository root) and pushes it.
-   Otherwise it reuses it. A pin bump or Dockerfile change builds a new image; everything else
+   Otherwise it reuses it. A pin bump, Dockerfile change or Go bump builds a new image; everything else
    reuses the last one.
 3. It uploads `.buildkite/steps.yml` with `BURPSY_CI_IMAGE` set to that image. Every step then
    runs in it (`image:` at the root of `steps.yml`).
@@ -38,7 +38,7 @@ token to an agent session as an environment secret (`BUILDKITE_API_TOKEN`), neve
 |---|---|
 | `agent image` | (Buildkite only) build or reuse the image |
 | `lint` | `lint` job: gofmt, build, vet |
-| `test` × 7 shards | `test` matrix: `scanner-budget`, `scanner-detect`, `scanner-rest-0`, `scanner-rest-1`, `rest`, `race-web-0`, `race-web-1` (always the full suite; affected mode is GitHub PRs only) |
+| `test` × 8 shards | `test` matrix: `scanner-budget`, `scanner-detect`, `scanner-rest-0`, `scanner-rest-1`, `rest`, `race-web-0`, `race-web-1`, `race-core` (always the full suite; affected mode is GitHub PRs only) |
 | `ui` | `ui` job: `bun run check`, build, bundle freshness |
 
 The `beads` and `review-gate` checks stay on GitHub only: they depend on GitHub's merge commit,

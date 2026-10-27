@@ -10,12 +10,12 @@
  */
 
 export interface Span {
-  /** Start of the span to transform, a char index into the input. */
-  from: number;
-  /** End of the span to transform (exclusive). */
-  to: number;
-  /** True when the span is the entire input — the default, whole-input case. */
-  whole: boolean;
+ /** Start of the span to transform, a char index into the input. */
+ from: number;
+ /** End of the span to transform (exclusive). */
+ to: number;
+ /** True when the span is the entire input — the default, whole-input case. */
+ whole: boolean;
 }
 
 /**
@@ -28,20 +28,20 @@ export interface Span {
  * are clamped, so a stale selection can never index outside the string.
  */
 export function resolveSelection(length: number, from: number | null, to: number | null): Span {
-  if (from === null || to === null) return { from: 0, to: length, whole: true };
-  const lo = Math.max(0, Math.min(from, to, length));
-  const hi = Math.max(0, Math.min(Math.max(from, to), length));
-  if (lo >= hi) return { from: 0, to: length, whole: true };
-  return { from: lo, to: hi, whole: false };
+ if (from === null || to === null) return { from: 0, to: length, whole: true };
+ const lo = Math.max(0, Math.min(from, to, length));
+ const hi = Math.max(0, Math.min(Math.max(from, to), length));
+ if (lo >= hi) return { from: 0, to: length, whole: true };
+ return { from: lo, to: hi, whole: false };
 }
 
 export interface SplitInput {
-  /** Text before the span, rendered plain and left untouched by the transform. */
-  before: string;
-  /** The span fed through the transform pipeline. */
-  span: string;
-  /** Text after the span, rendered plain and left untouched by the transform. */
-  after: string;
+ /** Text before the span, rendered plain and left untouched by the transform. */
+ before: string;
+ /** The span fed through the transform pipeline. */
+ span: string;
+ /** Text after the span, rendered plain and left untouched by the transform. */
+ after: string;
 }
 
 /**
@@ -50,9 +50,9 @@ export interface SplitInput {
  * is what guarantees the unselected text survives a per-selection transform.
  */
 export function splitInput(input: string, selection: Span): SplitInput {
-  return {
-    before: input.slice(0, selection.from),
-    span: input.slice(selection.from, selection.to),
-    after: input.slice(selection.to),
-  };
+ return {
+  before: input.slice(0, selection.from),
+  span: input.slice(selection.from, selection.to),
+  after: input.slice(selection.to),
+ };
 }

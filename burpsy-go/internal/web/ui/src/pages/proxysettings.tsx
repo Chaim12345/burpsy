@@ -17,20 +17,9 @@ import { SimpleTable } from "../ui/table";
 import { formatCount } from "../lib/api";
 import { useProxyOptions, useSetProxyOptions } from "../lib/data.proxyoptions";
 import type { ProxyListenerRow } from "../lib/data.proxylistener";
-import {
- useAddProxyListener,
- useProxyListener,
- useRemoveProxyListener,
- useUpdateProxyListener,
-} from "../lib/data.proxylistener";
+import { useAddProxyListener, useProxyListener, useRemoveProxyListener, useUpdateProxyListener } from "../lib/data.proxylistener";
 import type { InvisibleChoice, ListenerDraft } from "../lib/proxy-listener";
-import {
- REDIRECT_CAVEAT,
- describeListener,
- draftFromListener,
- emptyListenerDraft,
- listenerDraftToBody,
-} from "../lib/proxy-listener";
+import { REDIRECT_CAVEAT, describeListener, draftFromListener, emptyListenerDraft, listenerDraftToBody } from "../lib/proxy-listener";
 import { TlsPassthroughSection } from "./settings";
 
 // One row of the panel: key, label, what it does. Order matches proxy.OptionKeys.
@@ -81,22 +70,22 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
   key: "strip_accept_encoding",
   label: "Strip Accept-Encoding from requests",
   // Not "the only way to read a compressed body" any more: unpack_compressed_responses below decodes
-  // gzip and deflate in place. What stripping still buys is the encodings this build has no decoder
-  // for (br, zstd), at the price of changing what the client asked the origin for.
+  // gzip, deflate, br and zstd in place. What stripping still buys is an encoding chain, at the
+  // price of changing what the client asked the origin for.
   detail:
-   "Ask the origin for an uncompressed response (it may compress anyway, and can see the header is gone). Not needed for gzip or deflate when Unpack compressed responses is on; useful for br and zstd, which this build cannot decode.",
+   "Ask the origin for an uncompressed response (it may compress anyway, and can see the header is gone). Not needed for gzip, deflate, br or zstd when Unpack compressed responses is on; useful for encoding chains, which this build does not unwind.",
  },
  {
   key: "unpack_compressed_requests",
   label: "Unpack compressed requests",
   detail:
-   "Decompress a gzip or deflate request body before forwarding, fixing its headers. The origin then receives the uncompressed body, which it may reject. br and zstd are forwarded as sent.",
+   "Decompress a gzip, deflate, br or zstd request body before forwarding, fixing its headers. The origin then receives the uncompressed body, which it may reject.",
  },
  {
   key: "unpack_compressed_responses",
   label: "Unpack compressed responses",
   detail:
-   "Decompress a gzip or deflate response body, fixing its headers, so the rules above can rewrite it; the browser and history get the decompressed body. br and zstd stay compressed (counted below); HTTP/2 responses are not reached.",
+   "Decompress a gzip, deflate, br or zstd response body, fixing its headers, so the rules above can rewrite it; the browser and history get the decompressed body. Encoding chains stay compressed (counted below); HTTP/2 responses are not reached.",
  },
 ];
 
@@ -127,7 +116,9 @@ export function ProxySettingsPage(): JSX.Element {
       <label key={sw.key} className="switch-row" htmlFor={`proxy-opt-${sw.key}`}>
        <span>
         <span>{sw.label}</span>
-        <span className="cell-dim" style={{ display: "block" }}>{sw.detail}</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         {sw.detail}
+        </span>
        </span>
        <Switch
         id={`proxy-opt-${sw.key}`}
@@ -161,17 +152,17 @@ export function ProxySettingsPage(): JSX.Element {
       value={c.skipped_compressed}
       detail={
        d.options["unpack_compressed_responses"] === true
-        ? "unpacking is on; the rest are br, zstd or undecodable"
-        : "turn on Unpack compressed responses to reach gzip and deflate"
+        ? "unpacking is on; the rest are chains or undecodable"
+        : "turn on Unpack compressed responses to reach gzip, deflate, br and zstd"
       }
      />
      {/* The subset of the one above where unpacking was on and could not help — a different answer
-         to an operator who just ticked the box: "the switch is off" is fixable, "this build has no
-         brotli decoder" is not (proxy.Counters.SkippedUnsupportedEncoding). */}
+         to an operator who just ticked the box: "the switch is off" is fixable, "this build cannot
+         decode that encoding" is not (proxy.Counters.SkippedUnsupportedEncoding). */}
      <Metric
       label="Skipped: unsupported encoding"
       value={c.skipped_unsupported_encoding}
-      detail="unpacking on, but br, zstd, a chain, or a corrupt body"
+      detail="unpacking on, but a chain, or a corrupt body"
       tone={c.skipped_unsupported_encoding > 0 ? "warn" : undefined}
      />
      <Metric label="Skipped: not HTML" value={c.skipped_not_html} />
@@ -181,9 +172,8 @@ export function ProxySettingsPage(): JSX.Element {
     </div>
     {c.responses_considered > 0 && c.responses_modified === 0 ? (
      <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>
-      Rules have looked at {formatCount(c.responses_considered)}{" "}
-      {c.responses_considered === 1 ? "response" : "responses"} and changed none — either nothing matches or every
-      switch is off. That is stated rather than left to look like a clean pass.
+      Rules have looked at {formatCount(c.responses_considered)} {c.responses_considered === 1 ? "response" : "responses"} and changed none
+      — either nothing matches or every switch is off. That is stated rather than left to look like a clean pass.
      </p>
     ) : null}
    </Card>
@@ -195,9 +185,9 @@ export function ProxySettingsPage(): JSX.Element {
       <span>
        <span>Strip Sec-WebSocket-Extensions from handshakes</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Remove the client's permessage-deflate offer before an upgrade is forwarded, so the origin cannot negotiate
-        compression and frames are captured in the clear. On by default; turn it off for an origin that requires the
-        extension — compressed frames are then recorded with a note. Applies from the next WebSocket handshake.
+        Remove the client's permessage-deflate offer before an upgrade is forwarded, so the origin cannot negotiate compression and frames
+        are captured in the clear. On by default; turn it off for an origin that requires the extension — compressed frames are then
+        recorded with a note. Applies from the next WebSocket handshake.
        </span>
       </span>
       <Switch
@@ -209,22 +199,20 @@ export function ProxySettingsPage(): JSX.Element {
          { strip_sec_websocket_extensions: on },
          {
           onSuccess: () =>
-           toast.success(
-            `Sec-WebSocket-Extensions stripping ${on ? "on" : "off"} — applies from the next WebSocket handshake`,
-           ),
+           toast.success(`Sec-WebSocket-Extensions stripping ${on ? "on" : "off"} — applies from the next WebSocket handshake`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-dont_log_out_of_scope">
       <span>
        <span>Don't log out-of-scope traffic</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Keep the history panel free of traffic the scope excludes: the request is still forwarded and the response is
-        still delivered to the browser, only the record is dropped, and each drop is counted below. On by default —
-        this store has never held out-of-scope exchanges. Turn it off to log everything the proxy sees, including the
-        excluded traffic.
+        Keep the history panel free of traffic the scope excludes: the request is still forwarded and the response is still delivered to the
+        browser, only the record is dropped, and each drop is counted below. On by default — this store has never held out-of-scope
+        exchanges. Turn it off to log everything the proxy sees, including the excluded traffic.
        </span>
       </span>
       <Switch
@@ -235,23 +223,20 @@ export function ProxySettingsPage(): JSX.Element {
         setOptions.mutate(
          { dont_log_out_of_scope: on },
          {
-          onSuccess: () =>
-           toast.success(
-            `Out-of-scope logging ${on ? "suppressed" : "kept"} — applies from the next exchange`,
-           ),
+          onSuccess: () => toast.success(`Out-of-scope logging ${on ? "suppressed" : "kept"} — applies from the next exchange`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-strip_proxy_headers">
       <span>
        <span>Strip Proxy-* headers from requests</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Remove every Proxy-Connection / Proxy-Authorization / … header before the request is forwarded — the family
-        talks to proxies, not to origins, and Burp strips it for the same reason. On by default; turn it off to send
-        them, which is occasionally what testing an origin's own Proxy-header handling needs. Applies from the next
-        request.
+        Remove every Proxy-Connection / Proxy-Authorization / … header before the request is forwarded — the family talks to proxies, not to
+        origins, and Burp strips it for the same reason. On by default; turn it off to send them, which is occasionally what testing an
+        origin's own Proxy-header handling needs. Applies from the next request.
        </span>
       </span>
       <Switch
@@ -265,16 +250,17 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`Proxy-* stripping ${on ? "on" : "off"} — applies from the next request`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-set_connection_close">
       <span>
        <span>Set &quot;Connection: close&quot; on requests and responses</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Rewrite the request's Connection header to close and set it on the response, so both directions end after one
-        exchange. Off by default — the relay already honours whatever the client asked for; forcing close trades
-        keep-alive throughput for determinism. Applies from the next request.
+        Rewrite the request's Connection header to close and set it on the response, so both directions end after one exchange. Off by
+        default — the relay already honours whatever the client asked for; forcing close trades keep-alive throughput for determinism.
+        Applies from the next request.
        </span>
       </span>
       <Switch
@@ -288,14 +274,16 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`Connection: close ${on ? "forced" : "left to the client"} — applies from the next request`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-use_http10_to_server">
       <span>
        <span>Use HTTP/1.0 in requests to server</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Send every forwarded request with an HTTP/1.0 request line, for a legacy origin that mishandles HTTP/1.1. Only the version token changes. Applies from the next request.
+        Send every forwarded request with an HTTP/1.0 request line, for a legacy origin that mishandles HTTP/1.1. Only the version token
+        changes. Applies from the next request.
        </span>
       </span>
       <Switch
@@ -309,14 +297,16 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`HTTP/1.0 to the server ${on ? "on" : "off"}`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-use_http10_to_client">
       <span>
        <span>Use HTTP/1.0 in responses to client</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Answer the browser with an HTTP/1.0 status line. History records the response as the browser received it. Applies from the next response.
+        Answer the browser with an HTTP/1.0 status line. History records the response as the browser received it. Applies from the next
+        response.
        </span>
       </span>
       <Switch
@@ -330,14 +320,16 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`HTTP/1.0 to the client ${on ? "on" : "off"}`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-suppress_error_messages">
       <span>
        <span>Suppress burpsy error messages in browser</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Close the connection instead of sending burpsy's own explanatory error page (a refused scope, a failed CONNECT, an unattributable request). The event is still logged and counted.
+        Close the connection instead of sending burpsy's own explanatory error page (a refused scope, a failed CONNECT, an unattributable
+        request). The event is still logged and counted.
        </span>
       </span>
       <Switch
@@ -351,14 +343,16 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`Error messages ${on ? "suppressed" : "shown"}`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <label className="switch-row" htmlFor="proxy-opt-disable_web_interface">
       <span>
        <span>Disable web interface at http://burpsy</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Stop the listener answering http://burpsy, http://burpsuite and its own address with the welcome page and CA certificate. Useful on a listener bound to an unprotected interface.
+        Stop the listener answering http://burpsy, http://burpsuite and its own address with the welcome page and CA certificate. Useful on
+        a listener bound to an unprotected interface.
        </span>
       </span>
       <Switch
@@ -372,21 +366,28 @@ export function ProxySettingsPage(): JSX.Element {
           onSuccess: () => toast.success(`Web interface ${on ? "disabled" : "enabled"}`),
           onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
          },
-        )}
+        )
+       }
       />
      </label>
      <SimpleTable headers={["Adjustment", "Count"]}>
       <tr>
        <td>Accept-Encoding stripped from requests</td>
-       <td><Badge>{formatCount(c.accept_encoding_stripped)}</Badge></td>
+       <td>
+        <Badge>{formatCount(c.accept_encoding_stripped)}</Badge>
+       </td>
       </tr>
       <tr>
        <td>Responses dechunked before rule matching</td>
-       <td><Badge>{formatCount(c.dechunked)}</Badge></td>
+       <td>
+        <Badge>{formatCount(c.dechunked)}</Badge>
+       </td>
       </tr>
       <tr>
        <td>HTTP/2 responses relayed without rewriting</td>
-       <td><Badge>{formatCount(c.relayed_http2)}</Badge></td>
+       <td>
+        <Badge>{formatCount(c.relayed_http2)}</Badge>
+       </td>
       </tr>
       <tr>
        <td>Out-of-scope exchanges not logged</td>
@@ -453,8 +454,7 @@ function ProxyListenerSection(): JSX.Element {
   setDraft(draftFromListener(row));
   setEditing(row.id);
  };
- const failureText = (failure: unknown, fallback: string) =>
-  failure instanceof Error ? failure.message : fallback;
+ const failureText = (failure: unknown, fallback: string) => (failure instanceof Error ? failure.message : fallback);
 
  const submit = () => {
   const parsed = listenerDraftToBody(draft);
@@ -556,9 +556,9 @@ function ProxyListenerSection(): JSX.Element {
       <span>
        <span>Force use of TLS</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        The connection this proxy opens to the destination uses TLS whatever the client used to reach the listener — the
-        setup a plaintext client in front of an HTTPS origin needs. It changes the leg to the destination only: traffic
-        that arrives through CONNECT is already TLS upstream, so this setting is already satisfied for it.
+        The connection this proxy opens to the destination uses TLS whatever the client used to reach the listener — the setup a plaintext
+        client in front of an HTTPS origin needs. It changes the leg to the destination only: traffic that arrives through CONNECT is
+        already TLS upstream, so this setting is already satisfied for it.
        </span>
       </span>
       <Switch
@@ -572,9 +572,8 @@ function ProxyListenerSection(): JSX.Element {
       <span>
        <span>Support HTTP/2</span>
        <span className="cell-dim" style={{ display: "block" }}>
-        Offer HTTP/2 to clients on this listener. Turn it off to hold a client with a broken HTTP/2 stack to HTTP/1.1
-        without turning interception on. It changes the browser leg only; each affected row says the request was carried
-        over HTTP/1.1 and why.
+        Offer HTTP/2 to clients on this listener. Turn it off to hold a client with a broken HTTP/2 stack to HTTP/1.1 without turning
+        interception on. It changes the browser leg only; each affected row says the request was carried over HTTP/1.1 and why.
        </span>
       </span>
       <Switch
@@ -617,7 +616,9 @@ function ProxyListenerSection(): JSX.Element {
       <tr>
        <td>
         <span>{row.id === "default" ? "default (-proxy-bind)" : row.id}</span>
-        <span className="cell-dim" style={{ display: "block" }}>{describeListener(row, globalInvisible)}</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         {describeListener(row, globalInvisible)}
+        </span>
        </td>
        <td>{row.bound_addr || "—"}</td>
        <td>
@@ -626,13 +627,7 @@ function ProxyListenerSection(): JSX.Element {
          : "—"}
        </td>
        <td>{row.force_tls ? <Badge tone="warn">Forced</Badge> : "—"}</td>
-       <td>
-        {row.invisible === null
-         ? `Inherit (${globalInvisible ? "on" : "off"})`
-         : row.invisible
-           ? "On"
-           : "Off"}
-       </td>
+       <td>{row.invisible === null ? `Inherit (${globalInvisible ? "on" : "off"})` : row.invisible ? "On" : "Off"}</td>
        <td>
         <div className="toolbar">
          <Button variant="outline" onClick={() => openEdit(row)} disabled={editing === row.id}>
@@ -666,22 +661,23 @@ function ProxyListenerSection(): JSX.Element {
     {editing === "new" ? form("Add listener") : null}
    </SimpleTable>
    <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>
-    The <strong>default</strong> listener is the one <code>-proxy-bind</code> opened. It can be re-bound but not removed:
-    it is the address the in-browser panel and the startup banner report, and an empty collection would be a proxy with no
-    way in. Removing any other listener stops it accepting immediately; the exchanges it is already relaying run to
-    completion.
+    The <strong>default</strong> listener is the one <code>-proxy-bind</code> opened. It can be re-bound but not removed: it is the address
+    the in-browser panel and the startup banner report, and an empty collection would be a proxy with no way in. Removing any other listener
+    stops it accepting immediately; the exchanges it is already relaying run to completion.
    </p>
    {anyRedirect ? (
-    <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>{REDIRECT_CAVEAT}</p>
+    <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>
+     {REDIRECT_CAVEAT}
+    </p>
    ) : null}
    <div className="switch-grid" style={{ marginTop: "var(--gap)" }}>
     <label className="switch-row" htmlFor="proxy-opt-invisible_proxy">
      <span>
       <span>Support invisible proxying (every listener set to inherit)</span>
       <span className="cell-dim" style={{ display: "block" }}>
-       For clients that were never told about the proxy: accept an origin-form request (GET /path) whose only authority
-       is the Host header, instead of refusing it. On by default — this engine has always honoured the header. This is
-       the process-wide default; a listener above can override it in either direction, and applies from the next request.
+       For clients that were never told about the proxy: accept an origin-form request (GET /path) whose only authority is the Host header,
+       instead of refusing it. On by default — this engine has always honoured the header. This is the process-wide default; a listener
+       above can override it in either direction, and applies from the next request.
       </span>
      </span>
      <Switch

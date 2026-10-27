@@ -55,9 +55,10 @@
 > session.
 >
 > - **Gap 1's raw frame layer** — `internal/http2/{frame,hpack,malformed}.go`
->   (1,849 lines against 1,640 of tests). The HPACK Huffman seam is *identical in
->   Rust* (`HuffmanNotImplemented`, "slice 2b's seam"), so it is parity rather
->   than a Go shortfall. No send path, deliberately.
+>   (1,849 lines against 1,640 of tests). No send path, deliberately.
+>   UPDATE 2026-10-25 (bead cgim): the HPACK Huffman seam is closed in Go —
+>   string literals decode through x/net/http2/hpack, malformed Huffman is
+>   HpackHuffmanInvalid; the Rust port keeps its seam (documented divergence).
 > - **Gap 3 (audit engine)** — ledger, dispatch scope, dispositions, budgets and
 >   both circuit breakers, wired into the real audit path. Its tests caught two
 >   genuine semantic defects in the first implementation (inverted per-URL dedup;
@@ -1613,6 +1614,46 @@ work: record the discovered-but-not-queued subresource hosts as an explicit cove
 report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
 honest one and is the smaller.
 
+## Crawl discovery-switch defaults: Burp ships three on; burpsy's no-config crawl matches two (2026-10-25, burpsy-react-ui-qpdp)
+
+**Burp's shipped defaults, established from the shipped configuration library itself.**
+`resources/Preferences/CrawlDefaults.json`, read out of the current community JAR (build 47134,
+fetched 2026-10-25 from the official `product=community&type=Jar` endpoint, central directory parsed
+over HTTP ranges; the JAR was never executed):
+
+- `crawler.customization.parse_api_definitions`: **true**
+- `crawler.customization.parse_soap_wsdls`: **true**
+- `crawler.customization.perform_graphql_introspection`: **true**
+- `crawler.customization.guess_hidden_graphql_endpoints`: **false** (Burp's own off, already honoured)
+
+None of the 29 `resources/BuiltInConfigs/*.json` files overrides any of the three — the keys appear in
+`CrawlDefaults.json` alone — so every shipped crawl configuration runs with all three on. Confidence
+across builds: every sibling value this ledger already cites from the 2026.7.1 (build 51467) tree is
+byte-identical in 47134 (`maximum_link_depth` 4, `maximum_crawl_time` 150,
+`maximum_unique_locations` 1500, `maximum_request_count` 0, `allow_out_of_scope_resources` true,
+`maximum_speculative_links` 1000, `timeout_for_in_progress_resource_requests` 10), so the defaults
+file did not change between the two builds.
+
+**Decision: match two, decline one — deliberately.** A burpsy crawl launched with no named
+configuration now reads API definitions and SOAP WSDLs it fetches, like Burp's does. Both readers
+are read-only against traffic the crawl already sent: the document arrives as an ordinary linked
+page whatever the switch says, and the operations it declares enter through `admit()` as ordinary
+GET discoveries, so nothing about the default writes to the target. `perform_graphql_introspection`
+stays **off** without a named configuration even though Burp ships it on: it is the one switch of
+the three that makes the crawl originate a POST of its own initiative, and a burpsy crawl that was
+not asked does not write — the same rule `submit_forms` carries as "a requirement rather than a
+default" (`api_crawl.go`), and the reason the GraphQL reader was put behind its own switch at all
+(`crawler/graphql.go`: "a crawl that sends traffic nobody asked for is the failure mode this
+package is built to avoid"). An operator who wants Burp's exact posture names a configuration with
+the key on; one who wants the documents unread names a configuration with them off.
+
+**The caveat that travels with this.** A *named* configuration still replaces rather than overlays:
+Burp applies a library entry over its defaults, while burpsy's bool parse cannot distinguish "the
+file says false" from "the file never mentions the key", so a saved configuration that omits these
+keys runs both readers off — Burp would run them on. Closing that needs the pointer-family
+treatment `error_handling` got (o0c5), and is not this bead. Recorded here so the remaining
+divergence is visible rather than rediscovered.
+
 ## Intruder and Repeater send settings (burpsy-react-ui-xixe.1, Phase 1, 2026-10-08)
 
 Burp-parity, not Rust-parity: `crates/` has none of these. Recorded here because each one is a
@@ -2375,9 +2416,11 @@ the two differ. Burp evidence is the decompiled agent registry
   Brotli-compressed content received in responses."
 - **burpsy:** on by default per tab (`unpack_responses`, off only when a tab says `false`); the send's answer
   carries `response_unpacked` beside the bytes that arrived, and the pane shows it with an "unpacked gzip"
-  badge. gzip and deflate decode; a `br` response is shown as it arrived with `unpack_error` naming why.
-- **Divergence:** no Brotli decoder in this build (`httputil.Unpackable`), and unpacking is display-only — the
-  stored exchange keeps the compressed bytes, where Burp's Repeater message is the unpacked one.
+  badge. gzip, deflate, br and zstd decode (br/zstd via the andybalholm/brotli and klauspost/compress
+  libraries, made direct dependencies 2026-10-25 under bead mi8d); an encoding chain is shown as it
+  arrived with `unpack_error` naming why.
+- **Divergence:** unpacking is display-only — the stored exchange keeps the compressed bytes, where
+  Burp's Repeater message is the unpacked one.
 
 ### Streaming response timeout — which responses it applies to (of0z)
 - **Burp:** `settings/tools/repeater.html` — "Streaming responses timeout … controls how long Repeater keeps a

@@ -108,6 +108,15 @@ type pooledConn struct {
 	// before saying anything" (stale; safe to retry an idempotent request) from a partial answer.
 	read *atomic.Int64
 	key  string
+	// owner, route and dialAddr are the reuse stamp (o388, caller-owned pool). A ConnPool is passed
+	// in and may be shared between Senders, and two Senders' generation numbers are independent
+	// counters that can be equal while their settings differ, so the generation alone cannot say
+	// "same settings". The owner pointer says which Sender dialled this connection; only that
+	// Sender may take it. route and dialAddr let that Sender re-check, at take time, that its
+	// settings are still the ones the connection was dialled under (same helper as the Sender pools).
+	owner    *Sender
+	route    string
+	dialAddr string
 }
 
 // countingConn counts what is read off a connection.
@@ -306,10 +315,17 @@ func (s *Sender) sendReusing(
 		return nil, SendOutcome{}, err
 	}
 	if mayIdle {
+		routeFor := s.routeForDialAddr(host, useTLS)
 		for {
 			pc := pool.takeIdle(key)
 			if pc == nil {
 				break
+			}
+			if pc.owner != s || pc.route != routeFor(pc.dialAddr) {
+				// Dialled by another Sender, or under settings since changed: never carries this
+				// request. Closed like a dead connection; the slot is already held.
+				_ = pc.conn.Close()
+				continue
 			}
 			if !aliveCheck(pc) {
 				pc.conn.Close()
@@ -337,7 +353,12 @@ func (s *Sender) sendReusing(
 
 	// A fresh connection, within the live bound.
 	pool.makeRoom()
-	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key)
+	id, cerr := s.captureDialIdentity(ctx, host, port, useTLS)
+	if cerr != nil {
+		pool.releaseSlot()
+		return nil, SendOutcome{}, cerr
+	}
+	pc, err := s.dialPooled(ctx, host, port, useTLS, plan, key, id)
 	if err != nil {
 		pool.releaseSlot()
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
@@ -358,17 +379,17 @@ func (s *Sender) sendReusing(
 }
 
 // dialPooled opens one connection for the pool, through the same dial sites SendRawOutcome uses.
-func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTLS bool, plan sendPlan, key string) (*pooledConn, error) {
+func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTLS bool, plan sendPlan, key string, id dialIdentity) (*pooledConn, error) {
 	var conn net.Conn
 	negotiated := ""
 	if !useTLS {
-		c, err := s.dialPlain(ctx, host, port)
+		c, err := s.dialPlain(ctx, host, port, id)
 		if err != nil {
 			return nil, err
 		}
 		conn = c
 	} else {
-		c, n, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
+		c, n, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2), id)
 		if err != nil {
 			return nil, err
 		}
@@ -385,6 +406,9 @@ func (s *Sender) dialPooled(ctx context.Context, host string, port uint16, useTL
 		negotiated: negotiated,
 		read:       read,
 		key:        key,
+		owner:      s,
+		route:      id.route,
+		dialAddr:   id.dialAddr,
 	}, nil
 }
 
@@ -522,17 +546,20 @@ func exchangeAllowsReuse(req, resp []byte) bool {
 	if connectionSaysClose(respHeaders) {
 		return false
 	}
-	head := resp[:bytes.Index(resp, []byte("\r\n\r\n"))+4]
-	return classifyFraming(head) != framingEOF
+	head, _, ok := httputil.CutHead(resp)
+	if !ok {
+		return false
+	}
+	return classifyFraming(resp[:len(head)+4]) != framingEOF
 }
 
 // splitHead cuts a message into its start line and parsed header fields.
 func splitHead(msg []byte) (start string, headers textproto.MIMEHeader, ok bool) {
-	end := bytes.Index(msg, []byte("\r\n\r\n"))
-	if end < 0 {
+	head, _, ok := httputil.CutHead(msg)
+	if !ok {
 		return "", nil, false
 	}
-	block := msg[:end+4]
+	block := msg[:len(head)+4]
 	nl := bytes.Index(block, []byte("\r\n"))
 	start = string(block[:nl])
 	headers, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(block[nl+2:]))).ReadMIMEHeader()

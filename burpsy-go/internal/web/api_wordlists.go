@@ -43,10 +43,6 @@ type wordlistEntry struct {
 // their own door (POST /api/intruder/payload-files), because an upload's limits and
 // path-traversal rules belong to the upload handler, not to a listing.
 func (s *Server) handleWordlists(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed: GET /api/wordlists", http.StatusMethodNotAllowed)
-		return
-	}
 	out := make([]wordlistEntry, 0, 8)
 	for _, name := range intruder.BuiltinWordlistNames() {
 		out = append(out, wordlistEntry{

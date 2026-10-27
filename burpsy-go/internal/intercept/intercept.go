@@ -1282,6 +1282,36 @@ func (e *Engine) Hold(m *Message) *Held {
 	return h
 }
 
+// HoldForced queues a message the proxy's extension hook forced a hold on
+// (burpsy-react-ui-wiwh): the operator's rules did not ask for it, so
+// shouldHold is skipped deliberately. Everything else — the id, the snapshot,
+// the change signal — is Hold's own path, so a forced hold is
+// indistinguishable in the queue from one the rules produced, which is the
+// point: the operator resolves it exactly as they resolve any hold.
+func (e *Engine) HoldForced(m *Message) *Held {
+	e.mu <- struct{}{}
+	defer e.signalChange()
+	defer func() { <-e.mu }()
+	e.nextID++
+	h := &Held{
+		ID:        e.nextID,
+		Direction: m.Direction,
+		Host:      m.Host,
+		Port:      m.Port,
+		TLS:       m.TLS,
+		Method:    m.Method,
+		Path:      m.Path,
+		Status:    m.Status,
+		Opcode:    m.Opcode,
+		ClientIP:  m.ClientIP,
+		Raw:       append([]byte{}, m.Raw...),
+		HeldAt:    time.Now(),
+		done:      make(chan struct{}),
+	}
+	e.held[h.ID] = h
+	return h
+}
+
 // SetAnnotation writes the operator's comment and highlight onto one held message.
 // Empty highlight clears it — "" is the picker's no-colour value, the same
 // vocabulary every other annotated surface uses. Unknown ids error rather than

@@ -183,10 +183,6 @@ type healthProbe struct {
 
 // handleCollaboratorHealth serves POST /api/collaborator/health.
 func (s *Server) handleCollaboratorHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	reg, configured := s.wiredScanner().OOBRegistration()
 	if !configured {
 		status := s.collaboratorStatusNow(false)

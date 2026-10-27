@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -1026,10 +1027,6 @@ func (lr *sessionLoginRuns) observed(ruleID int64) []sessionStepDto {
 // they are logged in. HandleRecovery and EnsureLoggedIn were fully implemented and tested with no
 // caller outside their own package; this is the caller.
 func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sessionLoginReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1240,7 +1237,15 @@ func validityName(v session.ValidityState) string {
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	// Normalise before encoding: a nil slice would otherwise leave the process as null, and the
+	// UI types these collections as arrays (burpsy-react-ui-j0s2). See json_nil_slice.go.
+	// A top-level untyped nil normalises to an invalid Value; it encodes as null as it always did.
+	// The header is already written, so an encode error (a client that went away) has nowhere to go.
+	if body == nil {
+		_ = json.NewEncoder(w).Encode(nil)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(normalizeNilSlices(reflect.ValueOf(body)).Interface())
 }
 
 // stepDtoToMacroStep converts one wire step into the coordinator's shape. Headers arrive as an ordered

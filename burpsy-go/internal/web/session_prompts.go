@@ -187,19 +187,11 @@ type sessionPromptResolveResp struct {
 
 // handleSessionPrompts is GET /api/session/prompts — the pending browser-recovery prompts.
 func (s *Server) handleSessionPrompts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, sessionPromptsResp{Prompts: s.prompts.pending()})
 }
 
 // handleSessionPromptResolve is POST /api/session/prompts/{id}/resolve — the operator's answer.
 func (s *Server) handleSessionPromptResolve(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/session/prompts/")
 	idStr = strings.TrimSuffix(idStr, "/resolve")
 	id, err := strconv.ParseUint(idStr, 10, 64)

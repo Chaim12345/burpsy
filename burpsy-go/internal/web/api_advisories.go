@@ -122,10 +122,6 @@ func advisoryMatches(d *advisory.Definition, needle string) bool {
 // ?q= searches name and description prose. ?severity= restricts to one typical severity and is
 // validated rather than tolerated, per the tree's refuse-by-default rule for input it cannot read.
 func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	severity := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("severity")))
 	if severity != "" && !knownAdvisorySeverity(severity) {
@@ -184,10 +180,6 @@ func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
 // The method is checked before the path. A caller who POSTs here has the verb wrong whatever segment
 // they sent, and "wrong verb" is the more actionable answer than "no such definition".
 func (s *Server) handleAdvisoryDetail(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	segment := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/advisories/"), "/")
 	if segment == "" || strings.Contains(segment, "/") {
 		http.Error(w, "Expected one type index: /api/advisories/{typeIndex}", http.StatusNotFound)

@@ -33,7 +33,9 @@ import (
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
+	"github.com/hashicorp/golang-lru/v2"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 // DefaultCADir returns the default CA directory path.
@@ -269,17 +271,39 @@ func matchPattern(pattern, host string) bool {
 // choice. The NotBefore backdate absorbs a client clock a few minutes fast.
 const leafValidityDays = 397
 
+// leafCacheBound caps each per-host leaf cache (burpsy-react-ui-iyew). The old
+// sync.Map pool held one RSA keypair per host forever, so a long session crawling
+// thousands of vhosts — or a client scanning invented SNI names — grew it without
+// limit. Eviction under the bound costs only a re-mint on the next visit. A var
+// rather than a const so tests can shrink it; production code must not touch it.
+var leafCacheBound = 4096
+
 // TlsEngine handles TLS certificate generation and signing.
 type TlsEngine struct {
-	mu       sync.Mutex
-	caCert   *x509.Certificate
-	caPriv   *rsa.PrivateKey
-	certPool sync.Map // cache of generated certificates
+	// mu guards the caCert/caPriv pair during an ImportCA/RegenerateCA swap. Leaf
+	// minting reads the pair under RLock, so first visits to DIFFERENT hosts mint
+	// in parallel — the old code held one Lock around RSA keygen, serialising every
+	// first visit behind whichever host was minting (burpsy-react-ui-iyew) — while
+	// the swap still waits for every in-flight mint, so no leaf is signed by a
+	// half-swapped pair.
+	mu     sync.RWMutex
+	caCert *x509.Certificate
+	caPriv *rsa.PrivateKey
+
+	// poolMu guards the two LRU caches below (lru.Cache is not goroutine-safe). It
+	// is held only for O(1) Get/Add/Purge, never around key generation.
+	poolMu   sync.Mutex
+	certPool *lru.Cache[string, *tls.Certificate] // bounded cache of CA-signed leaves
+	mint     singleflight.Group                   // per-host dedup of CA-signed mints
+
 	// selfSigned caches the self-signed leaves a listener in CertModeSelfSigned serves
 	// (burpsy-react-ui-4trc). SEPARATE from certPool on purpose: the two modes produce
 	// different certificates for the same hostname, and one cache would hand a listener
-	// whichever mode happened to ask first.
-	selfSigned sync.Map
+	// whichever mode happened to ask first. Bounded by the same leafCacheBound
+	// (burpsy-react-ui-iyew): a self-signed listener is just as reachable by a
+	// hostname scan.
+	selfSigned *lru.Cache[string, *tls.Certificate]
+	selfMint   singleflight.Group
 }
 
 // GetCertificate returns or generates a certificate for the given host.
@@ -293,19 +317,50 @@ type TlsEngine struct {
 // the CA validate every leaf.
 func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 	// Check cache first
-	if cert, ok := e.certPool.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+	e.poolMu.Lock()
+	cached, ok := e.certPool.Get(host)
+	e.poolMu.Unlock()
+	if ok {
+		return cached, nil
 	}
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	// singleflight shares one mint between concurrent first visits to the SAME
+	// host; different hosts proceed in parallel (burpsy-react-ui-iyew).
+	v, err, _ := e.mint.Do(host, func() (any, error) {
+		// RLock, not Lock: mints for different hosts overlap. ImportCA's write
+		// Lock waits for this RLock, which is also what keeps the cache add below
+		// from landing after the swap's purge — the purge cannot run while a mint
+		// is in flight.
+		e.mu.RLock()
+		defer e.mu.RUnlock()
 
-	// Double-checked after taking the lock: two concurrent misses for the same
-	// host would otherwise mint two leaves, and only one would be kept.
-	if cert, ok := e.certPool.Load(host); ok {
-		return cert.(*tls.Certificate), nil
+		// Re-checked inside the flight: a completed earlier flight may have added
+		// the leaf after our fast-path miss.
+		e.poolMu.Lock()
+		cached, ok := e.certPool.Get(host)
+		e.poolMu.Unlock()
+		if ok {
+			return cached, nil
+		}
+
+		cert, err := e.mintCALeaf(host)
+		if err != nil {
+			return nil, err
+		}
+		e.poolMu.Lock()
+		e.certPool.Add(host, cert)
+		e.poolMu.Unlock()
+		return cert, nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return v.(*tls.Certificate), nil
+}
 
+// mintCALeaf generates and signs a fresh leaf for host. Callers hold e.mu at
+// least for reading, so the CA pair cannot change under it.
+func (e *TlsEngine) mintCALeaf(host string) (*tls.Certificate, error) {
 	// Generate new key for this host
 	hostPriv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -358,15 +413,11 @@ func (e *TlsEngine) GetCertificate(host string) (*tls.Certificate, error) {
 
 	// Leaf first, then the CA. Leaf is filled in so crypto/tls does not
 	// re-parse the DER on every handshake.
-	cert := &tls.Certificate{
+	return &tls.Certificate{
 		Certificate: [][]byte{leafDER, e.caCert.Raw},
 		PrivateKey:  hostPriv,
 		Leaf:        leaf,
-	}
-
-	// Cache it
-	e.certPool.Store(host, cert)
-	return cert, nil
+	}, nil
 }
 
 // LoadOrGenerateCA loads or generates a CA certificate.
@@ -487,9 +538,19 @@ func loadCA(certData, keyData []byte) (*TlsEngine, error) {
 		return nil, err
 	}
 
+	pool, err := lru.New[string, *tls.Certificate](leafCacheBound)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create leaf cache: %w", err)
+	}
+	selfSignedPool, err := lru.New[string, *tls.Certificate](leafCacheBound)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create self-signed leaf cache: %w", err)
+	}
 	return &TlsEngine{
-		caCert: caCert,
-		caPriv: caKey,
+		caCert:     caCert,
+		caPriv:     caKey,
+		certPool:   pool,
+		selfSigned: selfSignedPool,
 	}, nil
 }
 
@@ -540,11 +601,12 @@ func (e *TlsEngine) ImportCA(certPEM, keyPEM []byte) error {
 	defer e.mu.Unlock()
 	e.caCert = loaded.caCert
 	e.caPriv = loaded.caPriv
-	// Every cached leaf was signed by the CA just replaced. See above.
-	e.certPool.Range(func(key, _ any) bool {
-		e.certPool.Delete(key)
-		return true
-	})
+	// Every cached leaf was signed by the CA just replaced. See above. The write
+	// Lock above already excludes in-flight mints (they hold RLock), so no leaf
+	// signed by the old CA can be added after this purge.
+	e.poolMu.Lock()
+	e.certPool.Purge()
+	e.poolMu.Unlock()
 	return nil
 }
 
@@ -695,6 +757,14 @@ type ProxyConfig struct {
 	// leg of an intercepted connection. Nil — the default — means none is ever
 	// offered. See WithClientCerts.
 	clientCerts alpn.ClientCertSource
+	// tlsFingerprints selects the ClientHello the upstream leg presents per target host.
+	// Nil — the default — presents Go's own hello everywhere. See WithTLSFingerprints.
+	tlsFingerprints *sender.TLSFingerprints
+	// altSvc is the proxy's record of origin h3 advertisements (burpsy-react-ui-vln3), learned
+	// from responses burpsy itself forwarded. It lives here rather than on the Server because an
+	// origin's advertisement is a fact about the origin, not about which port burpsy listened on
+	// (integrator ruling D). Never nil after NewProxyConfig.
+	altSvc *altSvcTable
 	// options is the live, operator-editable option set: the response modification
 	// rules, the Accept-Encoding strip and the WebSocket handshake strip. Never nil
 	// after NewProxyConfig, and the same pointer the web API holds — see WithOptions
@@ -708,6 +778,8 @@ type ProxyConfig struct {
 	// send. Set before NewServer rather than after: the field is read by every relay
 	// goroutine, so a later write would be a data race, not a late binding.
 	toolLog *toollog.ToolLog
+	// trafficHook is the extension traffic seam; see traffic_hook.go.
+	trafficHook trafficHookState
 	// pageObserver sees each recorded exchange with its response bytes (t3zk).
 	pageObserver func(ex *core.Exchange, response []byte)
 	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
@@ -809,6 +881,25 @@ type ProxyConfig struct {
 type NetworkSettings struct {
 	Resolution sender.ResolutionSettings
 	Continue   sender.ContinueSettings
+	// http3AltSvc is the mandatory kill switch for the h3 Alt-Svc leg (burpsy-react-ui-vln3,
+	// integrator ruling C): when on - the default - forwarded responses teach the proxy which
+	// origins advertise HTTP/3 and later forwards to those origins may ride QUIC. Off makes the
+	// feature inert: nothing learned, nothing ridden. Unexported so the zero value cannot be
+	// mistaken for a choice; the seed and the switch are the accessors below.
+	http3AltSvc bool
+}
+
+// SetHTTP3AltSvc flips the h3 Alt-Svc kill switch (ruling C).
+func (n *NetworkSettings) SetHTTP3AltSvc(on bool) {
+	if n == nil {
+		return
+	}
+	n.http3AltSvc = on
+}
+
+// HTTP3AltSvcEnabled reports whether the h3 Alt-Svc leg is live. Default ON.
+func (n *NetworkSettings) HTTP3AltSvcEnabled() bool {
+	return n != nil && n.http3AltSvc
 }
 
 // NewNetworkSettings returns the live holder with the defaults this leg has always had plus the one
@@ -816,7 +907,8 @@ type NetworkSettings struct {
 // any client and Burp does the same (burpsy-react-ui-o1eu).
 func NewNetworkSettings() *NetworkSettings {
 	return &NetworkSettings{
-		Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		Continue:    sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		http3AltSvc: true,
 	}
 }
 
@@ -846,6 +938,7 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		scope:   core.NewScopeAllowEverything(),
 		options: NewOptions(),
 		logger:  zap.NewNop(), // Default to nop logger
+		altSvc:  newAltSvcTable(),
 		// Never nil, so the console can push a Network-panel edit without a nil check and the
 		// dial paths can read it unconditionally. The zero value is every previous behaviour:
 		// no override, dial the name as given, and forward interim bytes verbatim
@@ -854,6 +947,8 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		// (sender.DefaultNetworkSettings).
 		network: &NetworkSettings{
 			Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+			// Default ON per ruling C: the operator's switch is SetHTTP3AltSvc, not a zero value.
+			http3AltSvc: true,
 		},
 	}
 	// On, matching Burp's default. A proxy that let permessage-deflate be
@@ -977,6 +1072,18 @@ func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 // answer to it.
 func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
 	c.clientCerts = source
+	return c
+}
+
+// WithTLSFingerprints binds host patterns to browser ClientHello fingerprints for the upstream
+// leg (63pf-followup). It is the intercepted-traffic half of the sender's 63pf setting: an
+// operator who bound a browser to a host gets that browser's hello from Repeater and from an
+// intercepted session alike, instead of Go's hello giving the proxy away on one leg and not the
+// other. Nil — the default — keeps Go's own hello on every dial, byte-identical to before the
+// option existed. There is deliberately no implicit sharing with SenderConfig.TLSFingerprints:
+// the two legs are wired explicitly, per the integrator ruling.
+func (c *ProxyConfig) WithTLSFingerprints(fingerprints *sender.TLSFingerprints) *ProxyConfig {
+	c.tlsFingerprints = fingerprints
 	return c
 }
 
@@ -1393,13 +1500,10 @@ func (s *Server) handleConnectionOn(clientConn net.Conn, spec ListenerSpec) {
 		_ = tcpConn.SetReadDeadline(time.Time{})
 	}
 
-	parts := strings.Fields(strings.TrimSpace(requestLine))
-	if len(parts) < 2 {
+	method, target, ok := parseRequestLine(requestLine)
+	if !ok {
 		return
 	}
-
-	method := parts[0]
-	target := parts[1]
 
 	// Handle CONNECT requests
 	if strings.ToUpper(method) == "CONNECT" {
@@ -1575,12 +1679,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		if err != nil {
 			return
 		}
-		parts := strings.Fields(strings.TrimSpace(requestLine))
-		if len(parts) < 2 {
+		method, reqTarget, ok := parseRequestLine(requestLine)
+		if !ok {
 			return
 		}
-		method := parts[0]
-		reqTarget := parts[1]
 
 		// Requests inside the tunnel are origin-form: GET /path HTTP/1.1.
 		reqHost, reqPort, path := parseTarget(reqTarget)
@@ -1616,11 +1718,32 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		reqStages := messageStages{original: requestData}
 		requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, reqHost, reqPort, path, reqTLS)
 		reqStages.auto = requestData
+		// The extension traffic hook, in the slot traffic_hook.go states: after the
+		// automatic rules, before the hold, so the hook's forced decision feeds the
+		// hold below and its drop mirrors the operator's own on this path — a silent
+		// close of the tunnel iteration. A replacement cannot move the destination:
+		// the dial target is this tunnel's authority, not the bytes.
+		var hookIntercept *bool
+		if res := s.applyTrafficHook(context.Background(), "request", requestData); res.Dropped {
+			return
+		} else {
+			requestData = res.Raw
+			hookIntercept = res.Intercept
+		}
 		// Intercept: hold the decrypted request before it is forwarded upstream.
-		if s.config.intercept != nil {
-			if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
+		if s.config.intercept != nil && (hookIntercept == nil || *hookIntercept) {
+			msg := withClientIP(clientConn, intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
-			))); held != nil {
+			))
+			// A hook-forced hold bypasses the operator's rules exactly; the hook's
+			// DoNotIntercept already skipped this block. See intercept.HoldForced.
+			var held *intercept.Held
+			if hookIntercept != nil {
+				held = s.config.intercept.HoldForced(msg)
+			} else {
+				held = s.config.intercept.Hold(msg)
+			}
+			if held != nil {
 				action, raw, edited, heldEdited := held.Wait()
 				requestEdited = heldEdited
 				if action == intercept.ActionDrop {
@@ -1654,6 +1777,18 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// re-read from them rather than kept from the client's line — see requestLineOf. Above the
 		// scope check deliberately: the check below is the egress fence, and it must ask about the URL
 		// this request is going to.
+		method, path = refreshedRequestLine(requestData, method, path)
+
+		// The session seam (burpsy-react-ui-9llt), in the same slot the plaintext leg gives it:
+		// after every byte-level transform and the operator's hold, before the scope check, so
+		// the origin, history and the operator's edit see one set of bytes. One insertion covers
+		// everything this loop forwards — ordinary tunnel requests, retargets and WebSocket
+		// upgrades over TLS all read the rewritten bytes below. Nil coordinator is the unwired
+		// default and the call is a byte-for-byte no-op.
+		requestData = s.withSessionRules(requestData, reqHost, method, path, reqPort, reqTLS)
+		// A Cookie insert or a post-re-login rebuild rewrote the head, so the method and path
+		// are re-read from the final bytes, the same rule refreshedRequestLine states above:
+		// what is recorded and what is sent must agree with each other.
 		method, path = refreshedRequestLine(requestData, method, path)
 
 		// Scope decides retention, not egress: an excluded request is still
@@ -1699,13 +1834,13 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				s.writeProxyError(tlsClient, wsRetargetRefusalResponse())
 				continue
 			}
-			responseData, serverIP, firstByte, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
+			forwarded, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
 			if err != nil {
 				s.config.logger.Error("retargeted forward failed", zap.Error(err))
 				return
 			}
 			completed := time.Now()
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited, downgrade, false, nil) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, forwarded.response, startTime, forwarded.firstByte, completed, forwarded.serverIP, requestEdited, downgrade, false, forwarded.note, forwarded.protocol) {
 				return
 			}
 			continue
@@ -1737,12 +1872,31 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			}
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
-				if err != nil {
+				var truncated *httputil.TruncatedBodyError
+				if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 					return
+				}
+				if truncated != nil {
+					// The same salvage the plaintext leg has (stream_response.go): a short
+					// Content-Length body forwards close-delimited rather than dropping the
+					// exchange. The truncation note travels with the record.
+					head = httputil.CloseDelimitedHead(head)
+					s.config.logger.Warn("response body truncated by upstream",
+						zap.String("path", path), zap.String("declared", truncated.Declared),
+						zap.Int("received", truncated.Received), zap.Error(err))
 				}
 				responseData := append(head, body...)
 				completed := time.Now()
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
+				var note *string
+				if truncated != nil {
+					t := "upstream closed the response body short of its declared Content-Length (" +
+						truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
+						"the partial body was forwarded close-delimited"
+					note = &t
+				}
+				// A truncated body leaves the upstream connection's framing unknowable, so
+				// this response ends the keep-alive loop either way.
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
 					return
 				}
 				continue
@@ -1844,13 +1998,32 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		}
 
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
-		if err != nil {
+		var truncated *httputil.TruncatedBodyError
+		if err != nil && (!errors.As(err, &truncated) || len(body) == 0) {
 			return
+		}
+		if truncated != nil {
+			// Truncation salvage, TLS leg (arch review: the TLS leg kept the old
+			// drop-the-exchange shape after the plaintext leg was fixed). The declared
+			// framing is false now, so the head goes out close-delimited and the record
+			// carries exactly what was lost; the upstream connection's framing is
+			// unknowable from here, so the keep-alive loop ends with this response.
+			head = httputil.CloseDelimitedHead(head)
+			s.config.logger.Warn("response body truncated by upstream",
+				zap.String("path", path), zap.String("declared", truncated.Declared),
+				zap.Int("received", truncated.Received), zap.Error(err))
 		}
 		responseData := append(head, body...)
 		completed := time.Now()
+		var note *string
+		if truncated != nil {
+			t := "upstream closed the response body short of its declared Content-Length (" +
+				truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
+				"the partial body was forwarded close-delimited"
+			note = &t
+		}
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
 			return
 		}
 	}
@@ -1883,11 +2056,29 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 // with its four stage boundaries — and a copy of those steps is how the two paths started disagreeing
 // about what a response row means. The write is the ONLY step streaming does differently, so it is
 // the only step this flag changes. See stream_response.go for why streaming cannot hold or rewrite.
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool, extraNote *string) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool, extraNote *string, protocol ...core.Protocol) bool {
+	// The carrier of the upstream leg, for the row. Variadic so the persistent-tunnel and
+	// plaintext paths - always HTTP/1.1, by the ALPN policy that built them - keep their call
+	// sites unchanged; the retargeted forward (vln3) is the one path that can ride HTTP/3 and
+	// passes what forwardRequest established. A row stamps HTTP/3 only when QUIC carried it.
+	rowProtocol := core.ProtocolHTTP1
+	if len(protocol) > 0 {
+		rowProtocol = protocol[0]
+	}
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
 	respStages := messageStages{original: responseData}
+	// The extension traffic hook, first on the origin's bytes — the mirror of the
+	// request side's placement, so the operator's static rules below apply to what
+	// the extension produced. The drop is applied at the hold site below, where the
+	// serving decision lives.
+	var hookDropped bool
+	if res := s.applyTrafficHook(context.Background(), "response", responseData); res.Dropped {
+		hookDropped = true
+	} else {
+		responseData = res.Raw
+	}
 	// Apply Match & Replace on response
 	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
 	// Then the blanket response modification rules. This order, not the other one:
@@ -1920,10 +2111,20 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// why the stream was cut.
 	notes := extraNote
 	keepServing := true
+	// The extension hook's response drop suppresses the origin's bytes exactly as
+	// the operator's hold-drop does: the exchange is still recorded, with a note
+	// naming the actor, and the client receives nothing.
+	if hookDropped {
+		keepServing = false
+		notes = extensionDropNote()
+	}
 	// responseEdited is the operator's own edit to the response half, paired below with the request
 	// half this function was handed.
 	var responseEdited bool
-	if s.config.intercept != nil {
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what the
+	// client gets, and holding the bytes would invite an operator Drop that overwrites the note
+	// naming the extension as the actor — the mirror of the request side returning on res.Dropped.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
@@ -1974,7 +2175,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			Started:   startTime,
 			FirstByte: firstByte,
 			Completed: completed,
-			Protocol:  core.ProtocolHTTP1,
+			Protocol:  rowProtocol,
 
 			RequestOriginal:  reqStages.original,
 			RequestAuto:      reqStages.auto,
@@ -2114,7 +2315,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// keeps the control from being a no-op — invisible_proxy is seeded ON, so a plain
 		// "listener OR global" would have made a listener ticked OFF still answer
 		// origin-form requests.
-		if h := headerValue(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
+		if h, _ := httputil.HeaderValueExact(requestHead(requestData), "Host"); h != "" && spec.invisibleWith(s.config.options.Get(OptInvisibleProxy)) {
 			host, port = parseHostPort(h)
 		}
 	}
@@ -2200,6 +2401,16 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	scheme := spec.ForceTLS
 	requestData = s.applyMatchReplace(matchreplace.DirRequest, requestData, host, port, path, scheme)
 	reqStages.auto = requestData
+	// The extension traffic hook, in the slot traffic_hook.go states. A drop closes
+	// the connection without a byte — Burp drop semantics: the request vanishes; a
+	// fabricated 403 is bytes no server sent. The tunnel path drops the same way.
+	var hookIntercept *bool
+	if res := s.applyTrafficHook(context.Background(), "request", requestData); res.Dropped {
+		return
+	} else {
+		requestData = res.Raw
+		hookIntercept = res.Intercept
+	}
 	// Intercept: hold the request for the operator before it is forwarded.
 	// A held request blocks this connection until resolved; a drop closes the
 	// connection without reaching upstream. heldNote/heldHighlight carry the
@@ -2209,14 +2420,21 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// exchange ends in — the plain response below or a WebSocket handshake. See
 	// intercept.Held.userEdited for why it is read from the hold and not recomputed from the bytes.
 	var requestEdited bool
-	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
+	if s.config.intercept != nil && (hookIntercept == nil || *hookIntercept) {
+		msg := withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
-		))); held != nil {
+		))
+		// A hook-forced hold bypasses the operator's rules exactly; see intercept.HoldForced.
+		var held *intercept.Held
+		if hookIntercept != nil {
+			held = s.config.intercept.HoldForced(msg)
+		} else {
+			held = s.config.intercept.Hold(msg)
+		}
+		if held != nil {
 			action, raw, retarget, heldEdited := held.Wait()
 			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
-				clientConn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
 				return
 			}
 			requestData = raw
@@ -2375,6 +2593,15 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
 	respStages := messageStages{original: responseData}
+	// The extension traffic hook, first on the origin's bytes — the mirror of the
+	// request side's placement, as in handleTLSResponse. The drop is applied at
+	// the hold site below, where the drop decision lives.
+	var hookDropped bool
+	if res := s.applyTrafficHook(context.Background(), "response", responseData); res.Dropped {
+		hookDropped = true
+	} else {
+		responseData = res.Raw
+	}
 	// Apply Match & Replace on response, then the blanket response modification
 	// rules — same order, and for the same reason, as handleTLSResponse.
 	responseData = s.applyMatchReplace(matchreplace.DirResponse, responseData, host, port, path, tls)
@@ -2388,7 +2615,16 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// responseEdited is the operator's own edit to the response half; requestEdited, above, is the
 	// other half of the same flag.
 	var responseEdited bool
-	if s.config.intercept != nil {
+	// The extension hook's response drop takes the same shape as the operator's:
+	// recorded with a note naming the actor, nothing served to the client.
+	if hookDropped {
+		dropped = true
+		notes = extensionDropNote()
+	}
+	// A hook-dropped response is not held (PR #363 review): the drop has already decided what
+	// the client gets; a hold would invite an operator Drop whose note overwrites the one
+	// naming the extension as the actor.
+	if s.config.intercept != nil && !hookDropped {
 		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
 		))); held != nil {
@@ -2476,6 +2712,15 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 // invisible in the bytes themselves. Recording nothing would let an operator
 // drop a response and leave history showing a request that was never answered —
 // the one reading of it that is definitely wrong.
+// extensionDropNote is the recorded row's explanation when an extension's proxy
+// hook dropped the response — the operator's hold-drop note's sibling, naming a
+// different actor so history never blames the operator for a plugin's decision.
+func extensionDropNote() *string {
+	note := "[burpsy] an extension dropped this response, so the client received nothing. " +
+		"The bytes recorded here are the origin's answer as it stood when it was dropped — the only record that it arrived at all."
+	return &note
+}
+
 func interceptDropNote() *string {
 	note := "[burpsy] the operator dropped this response, so the client received nothing. " +
 		"The bytes recorded here are the response as it stood when it was dropped — the origin's " +
@@ -2880,6 +3125,22 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 // nothing calls would leave the reader-consuming shape available to the next caller
 // that needs a header early, which is exactly how the bug arrived.
 
+// parseRequestLine splits a request line into method and target. The split is
+// strings.Fields over the trimmed line: any whitespace separates, leading and
+// trailing whitespace is dropped, and tokens past the second are ignored — so
+// "GET /a b HTTP/1.1" yields method GET and target /a, with the version token
+// never examined. Fewer than two tokens is not a request. This is the split both
+// the plaintext listener and the tunnel loop made inline; it is extracted so the
+// most smuggling-critical parse burpsy owns is a named contract with pins and a
+// fuzz target (ibhs), and it is deliberately behavior-preserving.
+func parseRequestLine(requestLine string) (method, target string, ok bool) {
+	parts := strings.Fields(strings.TrimSpace(requestLine))
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // readFullRequest reads one whole HTTP request off the client connection: the request line, the
 // header block, and the body under the framing the head actually declares.
 //
@@ -3049,7 +3310,7 @@ func rewriteChunkedToLength(head string, bodyLen int) string {
 // headerInt reads a numeric header, case-insensitively. ok is false when the field is absent or
 // unparseable, so a caller cannot mistake "no length" for "length zero".
 func headerInt(head, name string) (int, bool) {
-	value, ok := headerValueFold(head, name)
+	value, ok := httputil.HeaderValue([]byte(head), name)
 	if !ok {
 		return 0, false
 	}
@@ -3063,7 +3324,7 @@ func headerInt(head, name string) (int, bool) {
 // headerHasToken reports whether a comma-separated header carries token, case-insensitively. Used
 // for Transfer-Encoding, where "chunked" may be one of several codings and may carry parameters.
 func headerHasToken(head, name, token string) bool {
-	value, ok := headerValueFold(head, name)
+	value, ok := httputil.HeaderValue([]byte(head), name)
 	if !ok {
 		return false
 	}
@@ -3073,20 +3334,6 @@ func headerHasToken(head, name, token string) bool {
 		}
 	}
 	return false
-}
-
-// headerValueFold returns the first value of a named header, whatever case it was written in.
-func headerValueFold(head, name string) (string, bool) {
-	for _, line := range strings.Split(head, "\n") {
-		field, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(field), name) {
-			return value, true
-		}
-	}
-	return "", false
 }
 
 // serverIPOf is the destination's resolved IP as this socket actually reached it, for history's IP
@@ -3336,16 +3583,89 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	return conn, nil
 }
 
-func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) ([]byte, string, time.Time, error) {
+// h3EgressPossible reports whether an h3 leg could honor the configured egress (PR #363
+// review): QUIC dials the advertised endpoint directly, so an upstream proxy or the SOCKS
+// carrier would be silently bypassed. With either in force the Alt-Svc table is not ridden.
+func (s *Server) h3EgressPossible() bool {
+	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
+		return false
+	}
+	_, _, _, carrierSet := s.carrier().Configured()
+	return !carrierSet
+}
+
+// h3UncertainDeliveryError marks an HTTP/3 attempt that failed after its connection existed.
+// That is not proof the origin received or processed the request - delivery is uncertain and
+// unknowable from here - so the caller must not replay it over another carrier: an automatic
+// retry is how a non-idempotent request reaches the origin twice (PR #363 review).
+type h3UncertainDeliveryError struct{ err error }
+
+func (e *h3UncertainDeliveryError) Error() string { return e.err.Error() }
+func (e *h3UncertainDeliveryError) Unwrap() error { return e.err }
+
+// forwardResult is one forward's response plus the honest record of what carried it: the
+// protocol the bytes actually rode and, when an h3 attempt fell back, a note naming the attempt
+// and the carrier (burpsy-react-ui-vln3 ruling A). The exchange row is built from these, never
+// from what was hoped.
+type forwardResult struct {
+	response  []byte
+	serverIP  string
+	firstByte time.Time
+	protocol  core.Protocol
+	note      *string
+}
+
+func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tls bool) (forwardResult, error) {
+	// HTTP/3 selection (vln3): a live advertisement this proxy learned from the origin's own
+	// responses, the operator's kill switch on, and the request carriable - then the forward
+	// rides QUIC. A request h3 has nowhere to put is not an error here: nothing was attempted,
+	// and HTTP/1.1 carrying it is the ordinary truth of the row.
+	// forForwarding runs once, up front, so an h3 attempt and the h1 leg write the same
+	// bytes: the platform-auth headers it injects belong to the exchange whichever carrier
+	// rides it (PR #363 review).
+	forwardBytes := s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))
+	var h3Note *string
+	// h3EgressPossible: QUIC dials the advertised endpoint directly, so with an upstream
+	// proxy or the SOCKS carrier in force the Alt-Svc table is not ridden at all - the h1
+	// leg, which honors both, carries the request (PR #363 review).
+	if tls && s.config.network.HTTP3AltSvcEnabled() && s.h3EgressPossible() {
+		if endpoint, ok := s.config.altSvc.h3Endpoint(host, port, time.Now()); ok {
+			result, attempted, err := s.forwardH3(forwardBytes, host, port, endpoint)
+			if err == nil {
+				// The h3 leg's response teaches the same lessons the h1 leg's would: an auth
+				// challenge is what lets the NEXT request authenticate, and an Alt-Svc
+				// advertisement refreshes the very table that sent this request over QUIC
+				// (PR #363 review).
+				if headEnd := requestHeadEnd(result.response); headEnd > 0 {
+					learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(result.response[:headEnd]))
+					if value, ok := httputil.HeaderValue(result.response[:headEnd], "alt-svc"); ok {
+						s.config.altSvc.learn(host, port, value, time.Now())
+					}
+				}
+				return result, nil
+			}
+			if attempted {
+				var uncertain *h3UncertainDeliveryError
+				if errors.As(err, &uncertain) {
+					// Delivery is uncertain: replaying over another carrier could deliver
+					// the request twice. Surface the failure, never fall back automatically.
+					return forwardResult{}, uncertain.err
+				}
+				// Ruling A: the fallback carries the record of both the attempt and the carrier.
+				note := fmt.Sprintf("HTTP/3 was advertised by this origin and attempted; the endpoint did not answer QUIC (%v); the exchange was carried over HTTP/1.1", err)
+				h3Note = &note
+			}
+		}
+	}
 	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
-		return nil, "", time.Time{}, err
+		return forwardResult{}, err
 	}
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
-	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
-		return nil, serverIP, time.Time{}, err
+	if _, err := upstreamConn.Write(forwardBytes); err != nil {
+		return forwardResult{serverIP: serverIP}, err
 	}
 
 	// The first-byte instant is read here so a caller building an exchange row can report TTFB
@@ -3365,9 +3685,90 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 		// learned nonce outlives the connection in the credential store rather than in a socket.
 		if headEnd := requestHeadEnd(resp); headEnd > 0 {
 			learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(resp[:headEnd]))
+			// Alt-Svc discovery (vln3): only responses burpsy itself received teach the table, and
+			// only while the operator's kill switch leaves the leg live.
+			if tls && s.config.network.HTTP3AltSvcEnabled() {
+				if value, ok := httputil.HeaderValue(resp[:headEnd], "alt-svc"); ok {
+					s.config.altSvc.learn(host, port, value, time.Now())
+				}
+			}
 		}
 	}
-	return resp, serverIP, firstByte, err
+	if err != nil {
+		return forwardResult{serverIP: serverIP}, err
+	}
+	return forwardResult{response: resp, serverIP: serverIP, firstByte: firstByte, protocol: core.ProtocolHTTP1, note: h3Note}, nil
+}
+
+// h3AttemptTimeout bounds one QUIC attempt. A handshake either completes promptly or the
+// endpoint is not there; the ruling-A fallback must not stall the client leg while UDP silence
+// is litigated.
+const h3AttemptTimeout = 3 * time.Second
+
+// forwardH3 carries one forward over HTTP/3 to the origin's advertised endpoint (vln3).
+// requestData is already the for-forwarding bytes (platform auth applied), the same bytes the
+// h1 leg would write. The bool reports whether a QUIC attempt actually happened: a request the
+// carriability bar refuses is not an attempt, so its "failure" earns no fallback note - HTTP/1.1
+// was always going to carry it, and the row saying so needs no explanation. The TLS policy is
+// the proxy's own: the same verify switch, roots and version floor dialUpstreamTLS applies, over
+// a different carrier.
+func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoint string) (forwardResult, bool, error) {
+	plan, err := sender.PlanH3(requestData)
+	if err != nil {
+		return forwardResult{}, false, err
+	}
+	policy := s.config.TLS()
+	tlsConfig := &tls.Config{ServerName: host, NextProtos: []string{"h3"}}
+	policy.applyToH3(tlsConfig)
+	if source := s.clientCertSource(); source != nil {
+		if cert := source.For(host); cert != nil {
+			tlsConfig.Certificates = []tls.Certificate{*cert}
+		}
+	}
+
+	// The host-resolution override the TCP legs honor applies to the endpoint dial (PR #363
+	// review): the override replaces the lookup, not the name - SNI and :authority stay the
+	// origin's, exactly as dialUpstreamFor keeps them.
+	dialAddress := endpoint
+	if n := s.config.network; n != nil {
+		if endpointHost, endpointPort, splitErr := net.SplitHostPort(endpoint); splitErr == nil {
+			if portNum, convErr := strconv.ParseUint(endpointPort, 10, 16); convErr == nil {
+				dialAddress = n.Resolution.DialAddress(context.Background(), endpointHost, uint16(portNum))
+			}
+		}
+	}
+
+	// The pre-existing lifecycle is preserved exactly: the WHOLE attempt stays under the
+	// h3AttemptTimeout budget it always had - a slow origin still costs the client 3s, no
+	// more. What changed is what a failure means (PR #363 review): the dial is bounded
+	// inside that budget, and a dial failure means no request byte left this proxy, so the
+	// h1 fallback is honest; a failure after the connection exists leaves delivery
+	// uncertain - the origin may or may not have the request - so that error comes back
+	// typed and forwardRequest surfaces it instead of replaying automatically.
+	// forwardRequest owns no caller context (the h1 leg runs under Background by design),
+	// so this budget is the bound an idle peer gets, as it was before the split.
+	ctx, cancel := context.WithTimeout(context.Background(), h3AttemptTimeout)
+	defer cancel()
+	resp, maybeDelivered, truncated, err := httputil.RoundTripH3Measured(h3AttemptTimeout, ctx, tlsConfig, dialAddress, plan.Authority, plan.Method, plan.Path, plan.Headers, plan.Body)
+	if err != nil {
+		if maybeDelivered {
+			return forwardResult{}, true, &h3UncertainDeliveryError{err: err}
+		}
+		return forwardResult{}, true, err
+	}
+	// firstByte is the attempt's completion: RoundTripH3Measured reads the body inside the one
+	// call, so no earlier instant is honestly available here. Documented rather than faked.
+	result := forwardResult{
+		response:  resp,
+		serverIP:  dialAddress,
+		firstByte: time.Now(),
+		protocol:  core.ProtocolHTTP3,
+	}
+	if truncated {
+		note := fmt.Sprintf("the HTTP/3 response body passed the %d-byte cap and was cut there", httputil.MaxResponseBodyBytes)
+		result.note = &note
+	}
+	return result, true, nil
 }
 
 // readHTTPResponse reads one complete HTTP response from conn, respecting

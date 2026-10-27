@@ -251,3 +251,17 @@ func TestAnUnknownTokenSendsNothing(t *testing.T) {
 		t.Errorf("the unknown-token fetch created %d exchange(s): a guessable path must have no effect", after-before)
 	}
 }
+
+// fxxm: /reissue/{token...} is the old subtree with a named remainder. The bare prefix, a nested
+// path and an unknown token all answer the same 410 body the TrimPrefix handler gave (the token is
+// whatever follows /reissue/, slashes included, and none of them names a live token).
+func TestAReissueRemainderKeepsTheOldGoneAnswer(t *testing.T) {
+	s := newTestServer()
+	const gone = "this re-issue URL has already been used or has expired"
+	for _, path := range []string{"/reissue/", "/reissue/a/b", "/reissue/nosuchtoken"} {
+		rec := get(t, s, path)
+		if rec.Code != http.StatusGone || !strings.Contains(rec.Body.String(), gone) {
+			t.Errorf("GET %s = %d %q, want 410 with the expired-URL body", path, rec.Code, rec.Body.String())
+		}
+	}
+}

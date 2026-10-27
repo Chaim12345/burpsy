@@ -76,6 +76,9 @@ func TestAListenerWithHTTP2OffHoldsTheClientToHTTP11(t *testing.T) {
 			TLSClientConfig:   &tls.Config{RootCAs: pool, NextProtos: []string{"h2", "http/1.1"}},
 			ForceAttemptHTTP2: true,
 		}}
+		// u5jf: close idle transport connections at test end so persist-conn
+		// and relay goroutines cannot outlive the test.
+		t.Cleanup(client.CloseIdleConnections)
 		resp, err := client.Get(fmt.Sprintf("https://%s:%d/p", thost, tport))
 		if err != nil {
 			t.Fatalf("request through proxy: %v", err)

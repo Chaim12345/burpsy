@@ -126,7 +126,11 @@ type ActiveScanner struct {
 	nativeOnce sync.Once
 	// jwtKeys caches each origin's published JWT verification keys (*jwtHostKeyEntry by origin),
 	// so the algorithm-confusion probe fetches a host's JWKS once per scanner, not per request.
-	jwtKeys    sync.Map
+	jwtKeys sync.Map
+	// cl0Probes holds each endpoint's CL.0 smuggled-prefix result (cl0Result by authority and
+	// path): the smuggling row and "Client-side desync" both read it, and the probe - which can
+	// leave a response on a shared back-end connection - is sent once, not once per row.
+	cl0Probes  sync.Map
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }
@@ -138,6 +142,20 @@ type ActiveScanner struct {
 // work may be admitted before the engine stops. The two share no field, so they cannot disagree.
 // Timeout is the one that could have: it is read by ActiveScanner.AuditConfig as the source of the
 // audit's wall-clock budget rather than being duplicated there.
+// SecondIdentity is the credential set of a second, low-privilege account on the audited
+// application (burpsy-react-ui-0vzb.46). Every field is json:"-" so the credentials can never
+// be marshaled into a persisted document; see ScanConfig.SecondIdentity.
+type SecondIdentity struct {
+	// CookieHeader is the full Cookie header value for identity B (replaces the audited
+	// request's Cookie header on two-identity replays).
+	CookieHeader string `json:"-"`
+	// AuthorizationHeader is the full Authorization header value for identity B.
+	AuthorizationHeader string `json:"-"`
+	// APIKeyHeader and APIKeyValue carry an API-key credential as a header name/value pair.
+	APIKeyHeader string `json:"-"`
+	APIKeyValue  string `json:"-"`
+}
+
 type ScanConfig struct {
 	MaxConcurrency int
 	Timeout        time.Duration
@@ -187,10 +205,20 @@ type ScanConfig struct {
 	// explicitly declined request-smuggling/client-side-desync entries in the same family
 	// (checks_cache.go).
 	CheckCachePoisoning bool
-	// CheckCorpus admits the loaded BCheck corpus's active checks into the audit set. Set by
-	// WithCorpusChecks when a corpus is loaded; WithConfig can switch it off. Off with a corpus
-	// loaded audits the built-ins alone, which is the honest opt-out.
+	// CheckCorpus admits the loaded and bundled BCheck corpora's active checks into the audit
+	// set. Set by WithCorpusChecks when a corpus is loaded and by WithBundledCorpus when the
+	// compiled-in corpus is attached; WithConfig can switch it off. Off with a corpus attached
+	// audits the built-ins alone, which is the honest opt-out.
 	CheckCorpus bool
+	// DisableGraphQLIngest switches off the GraphQL ingestion validation gate
+	// (graphql_ingest.go): at ingestion, gqlparser validates the parent document of every
+	// derived GraphQL argument point, and a document no GraphQL server would accept yields
+	// no argument points - probing inside it would measure the server's parser error path,
+	// not a resolver. The zero value keeps the gate ON: it is ingestion hygiene shared by
+	// every check rather than a check family, so a plain ScanConfig{} must not defeat it,
+	// and auditing exactly the string-scan shape bcheck derives unvalidated takes this
+	// deliberate opt-out.
+	DisableGraphQLIngest bool
 	// CheckExtendedCoverage admits every remaining catalog TypeIndex the registry declares — the
 	// Task 6 completeness sweep's native (header/CORS/CSP, cache poisoning/deception) and explicit
 	// declined rows. Off by default: these rows have no individual ScanConfig switch of their own
@@ -275,7 +303,10 @@ type ScanConfig struct {
 	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go and
 	// checks_final.go: GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy
 	// files, XXE and entity expansion, file-upload and OpenAPI discovery, React2Shell
-	// fingerprinting, the SQL-in-parameter heuristic, and the final sixteen. Off by default.
+	// fingerprinting, the SQL-in-parameter heuristic, and the final sixteen. It also admits the
+	// CL.0 smuggled-prefix probe (the smuggling row's CL.0 technique and "Client-side desync"),
+	// which behind a pooling front end can leave a response queued on a shared back-end connection.
+	// Off by default.
 	CheckExtendedActive bool
 	// CheckOutOfBand narrows CheckExtendedActive to also admit the five rows that cannot reach
 	// a verdict without something outside this process: the four collaborator rows (out-of-band
@@ -319,6 +350,42 @@ type ScanConfig struct {
 	// and a credential-less control both refuse what the swapped id returned. Read-only probes (GET,
 	// or a POST naming a read operation). Off by default.
 	CheckIDOR bool
+	// CheckIDORTwoIdentity admits the two-identity cross-read upgrade of the IDOR check
+	// (checks_idor.go, burpsy-react-ui-0vzb.46): the original request - identity A's own object -
+	// is replayed under the configured SecondIdentity's credentials (identity B). B being served
+	// A's object, while the anonymous control is refused, shows the object needs only a login; the
+	// finding is firm when an owner field names A's own user id (from A's JWT) and tentative
+	// otherwise, since a shared login-only record answers every account alike. Read-only probes under the
+	// same request-shape rules as CheckIDOR. Off by default; inert until SecondIdentity is set.
+	CheckIDORTwoIdentity bool
+	// CheckBFLA admits the broken function-level authorization pass (burpsy-react-ui-0vzb.46):
+	// the SecondIdentity (the low-privilege account) replays a privileged operation the audit's own
+	// traffic captured (an admin-typed path, with the captured method), and a 2xx the anonymous
+	// control is refused is reported under "Broken access control". GET/HEAD only unless
+	// CheckAPIWrites also admits replaying a captured POST/PUT/PATCH; DELETE never. Off by default;
+	// inert until SecondIdentity is set.
+	CheckBFLA bool
+	// CheckMassAssignment admits the mass-assignment pass (burpsy-react-ui-0vzb.46): a privileged
+	// field the object's own read response or the API's OpenAPI schema names but the request never
+	// carried (role, isAdmin, ...) is added to a replayed write, reported only when a re-read shows
+	// the field persisted with the injected value. Off by default, and inert until CheckAPIWrites
+	// also admits write probes.
+	CheckMassAssignment bool
+	// CheckAPIWrites is the explicit opt-in for ACTIVE WRITE probes against the audited
+	// application (burpsy-react-ui-0vzb.46): without it every technique that would mutate server
+	// state - mass assignment's write-and-reread, BFLA's replay of a captured POST/PUT/PATCH -
+	// declines rather than probe. A captured write can reach the target up to three times (the
+	// probe baseline as the audited identity, the replay, the anonymous control). Off by default.
+	CheckAPIWrites bool
+	// SecondIdentity carries the credentials of a SECOND account on the audited application: the
+	// low-privilege counterpart of the audited exchange's identity for the two-identity
+	// authorization techniques above. Set only the channels the audited requests actually use.
+	//
+	// These credentials are NEVER persisted: every field is tagged json:"-", so marshaling this
+	// config - including the scan configuration library's document save - cannot write them out,
+	// and unmarshaling cannot read them back. They reach the scanner threaded in memory at scan
+	// start only.
+	SecondIdentity SecondIdentity `json:"-"`
 	// CheckLoginRateLimit admits the login rate-limiting check (checks_auth_logic.go): on a POST
 	// that carries an identity and a password or one-time-code parameter, a burst of failed attempts
 	// under an INVENTED identity, reporting "Authentication attempts not rate limited" only when every
@@ -406,6 +473,27 @@ type ScanConfig struct {
 	// Forwarded as its own probe, for an access-control (401/403) or rate-limit (429) differential and
 	// for the claimed address reflected. Off by default: it claims loopback to refused pages.
 	CheckClientIPSpoofing bool
+	// CheckServerSidePrototypePollution admits the non-destructive JSON __proto__ techniques
+	// (checks_sppj.go, 0vzb.3): json-spaces and status-override probes, each reverted after it
+	// answers. Off by default: the probe replays the application's own POST, which on a
+	// state-changing endpoint is the operator's call.
+	CheckServerSidePrototypePollution bool
+	// CheckRaceConditions admits the single-packet race check (checks_race.go, 0vzb.8): on a
+	// state-changing endpoint whose path or body carries single-use semantics (redeem, coupon,
+	// transfer, vote...), a sequential control pair then one synchronized group racing a fresh
+	// token; a finding stands only when the group wins more than the control's one. Off by
+	// default: it replays a state-changing request several times in one burst.
+	CheckRaceConditions bool
+	// CheckOAuth admits the OAuth/OIDC bundle (checks_oauth.go, 0vzb.9): passive reads of a
+	// captured authorize request (implicit flow answered, no state honoured, PKCE absent or
+	// plain) and the active redirect_uri manipulation replay. Off by default.
+	CheckOAuth bool
+	// CheckURLAuthBypass admits the URL-interpretation access-bypass check (checks_url_bypass.go,
+	// 0vzb.4): on a safe-method request refused with 401/403, normalised spellings of the path
+	// (/%2e/admin, ..;/, trailing %20/%09) and the X-Original-URL / X-Rewrite-URL override headers on
+	// an allowed carrier page. Off by default: it replays a refused request under spellings meant to
+	// defeat the refusal.
+	CheckURLAuthBypass bool
 	// CheckCookieAttributes admits burpsy's two cookie rows (checks_cookie_attrs.go, 0vzb.19), read from
 	// captured Set-Cookie headers: a __Host-/__Secure- cookie a browser rejects for missing its prefix's
 	// attributes, and a session cookie with no effective SameSite restriction. Passive; off by default
@@ -518,8 +606,12 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 		store:  store,
 		logger: logger,
 		config: &ScanConfig{
-			MaxConcurrency:     10,
-			Timeout:            30 * time.Second,
+			MaxConcurrency: 10,
+			// The audit budget fallback (ActiveScanner.AuditConfig). One default for every
+			// binary: the CLI sets the same value explicitly (WithScanTimeout), and the
+			// desktop - which wires neither a ScanConfig.Timeout nor an AuditConfig -
+			// inherits it here. A separate 30s was the desktop/CLI budget fork.
+			Timeout:            DefaultAuditBudget,
 			CheckSqli:          true,
 			CheckXss:           true,
 			CheckPathTraversal: true,
@@ -573,6 +665,16 @@ func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
 	s.mu.Lock()
 	s.config = config
 	s.mu.Unlock()
+	return s
+}
+
+// WithScanTimeout sets ScanConfig.Timeout alone, leaving the rest of the configuration as built.
+// It exists for the CLI's no--scan-config path: the audit budget then resolves through the same
+// ScanConfig.Timeout the desktop uses (AuditConfig's fallback), so a persisted project override
+// drives the audit budget on BOTH binaries instead of mutating a field one binary never read
+// (arch review W2).
+func (s *ActiveScanner) WithScanTimeout(d time.Duration) *ActiveScanner {
+	s.config.Timeout = d
 	return s
 }
 
@@ -651,12 +753,20 @@ func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner 
 	return s
 }
 
-// WithBundledCorpus supplies the corpus compiled into the binary. Unlike WithCorpusChecks it does
-// NOT switch CheckCorpus on: the bundled set is available, not enabled, and an operator turns it on
-// with check_corpus (burpsy-react-ui-0vzb.21). A nil or empty slice clears it.
+// WithBundledCorpus supplies the corpus compiled into the binary and, like WithCorpusChecks,
+// switches CheckCorpus on: the corpus the binary ships is part of the default audit set, and the
+// honest opt-out is check_corpus off (WithConfig), exactly as for a loaded corpus. The old shape —
+// attached but never dispatched unless the operator knew the switch existed — was under-coverage
+// that looked like a working scanner: a default run reported "audited" while the 111 compiled-in
+// PortSwigger checks sat loaded and silent (architecture review, weakness 7). A nil or empty slice
+// clears the set without touching the switch, so a process with no bundled corpus does not quietly
+// turn a knob that gates nothing.
 func (s *ActiveScanner) WithBundledCorpus(checks []*bcheck.Check) *ActiveScanner {
 	s.mu.Lock()
 	s.bundled = checks
+	if s.config != nil && len(checks) > 0 {
+		s.config.CheckCorpus = true
+	}
 	s.mu.Unlock()
 	return s
 }

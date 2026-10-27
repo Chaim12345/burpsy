@@ -31,22 +31,12 @@ describe("editorFontStack", () => {
 });
 
 describe("the editor font family is wired end to end", () => {
- // Structural, the ui-scale.test.ts style: the preference travels store → app.tsx custom property →
- // editor theme, and no unit test of editorFontStack can see that wire.
- const app = readFileSync(join(import.meta.dir, "..", "app.tsx"), "utf8");
+ // The store -> <html> property -> persistence legs are pinned by rendering the hook that applies
+ // them: ui/use-theme-effect.test.tsx (vln1). What stays a source pin is the editor theme's CSS
+ // string, which happy-dom cannot resolve (a stylesheet-style check, left by design).
  const editor = readFileSync(join(import.meta.dir, "..", "ui", "editor.tsx"), "utf8");
- const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
-
- test("app.tsx sets --editor-font-family from the stack, and removes it for the default", () => {
-  expect(app).toMatch(/setProperty\("--editor-font-family"/);
-  expect(app).toMatch(/removeProperty\("--editor-font-family"\)/);
- });
 
  test("the editor theme reads --editor-font-family with the --font-mono fallback", () => {
   expect(editor).toMatch(/var\(--editor-font-family, var\(--font-mono\)\)/);
- });
-
- test("the store persists the preference, so a chosen face survives a reload", () => {
-  expect(store).toMatch(/editorFontFamily: state\.editorFontFamily/);
  });
 });

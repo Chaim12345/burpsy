@@ -6,15 +6,13 @@ import type { ConsoleView, ExtensionApis, ExtensionList, ExtensionView, InvokeRe
 
 /* --- reads --------------------------------------------------------------- */
 
-export const useExtensions = (): UseQueryResult<ExtensionList> =>
-  useResource<ExtensionList>(keys.extensions, "/api/extensions");
+export const useExtensions = (): UseQueryResult<ExtensionList> => useResource<ExtensionList>(keys.extensions, "/api/extensions");
 
 /**
  * The protocol contract, served from the same table the Go dispatcher is checked against. Fetched
  * rather than written into this file: a second copy of a wire protocol drifts and nothing notices.
  */
-export const useExtensionApis = (): UseQueryResult<ExtensionApis> =>
-  useResource<ExtensionApis>(keys.extensionApis, "/api/extensions/apis");
+export const useExtensionApis = (): UseQueryResult<ExtensionApis> => useResource<ExtensionApis>(keys.extensionApis, "/api/extensions/apis");
 
 /**
  * One plugin's two consoles, in one read.
@@ -27,20 +25,20 @@ export const useExtensionApis = (): UseQueryResult<ExtensionApis> =>
  * look live and not be.
  */
 export function useExtensionConsole(name: string | null, limit = 500): UseQueryResult<ConsoleView> {
-  return useResource<ConsoleView>(
-    keys.extensionConsole(name ?? "", limit),
-    `/api/extensions/console${query({ name: name ?? "", limit })}`,
-    name !== null,
-  );
+ return useResource<ConsoleView>(
+  keys.extensionConsole(name ?? "", limit),
+  `/api/extensions/console${query({ name: name ?? "", limit })}`,
+  name !== null,
+ );
 }
 
 /* --- writes -------------------------------------------------------------- */
 
 function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
-  const client = useQueryClient();
-  return (prefixes) => {
-    for (const prefix of prefixes) void client.invalidateQueries({ queryKey: prefix });
-  };
+ const client = useQueryClient();
+ return (prefixes) => {
+  for (const prefix of prefixes) void client.invalidateQueries({ queryKey: prefix });
+ };
 }
 
 /**
@@ -51,24 +49,22 @@ function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
  * mismatch are three different problems with three different fixes.
  */
 export function useLoadExtension() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (name: string) =>
-      api<{ extension: ExtensionView }>("/api/extensions/load", json("POST", { name })),
-    // One prefix covers both: keys.extensionConsole is keyed under ["extensions"], so the row and
-    // whatever the load wrote to its console refetch together. onSettled rather than onSuccess — a
-    // failed load is the case where the console is worth re-reading.
-    onSettled: () => invalidate([keys.extensions]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (name: string) => api<{ extension: ExtensionView }>("/api/extensions/load", json("POST", { name })),
+  // One prefix covers both: keys.extensionConsole is keyed under ["extensions"], so the row and
+  // whatever the load wrote to its console refetch together. onSettled rather than onSuccess — a
+  // failed load is the case where the console is worth re-reading.
+  onSettled: () => invalidate([keys.extensions]),
+ });
 }
 
 export function useUnloadExtension() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (name: string) =>
-      api<{ extension: ExtensionView }>("/api/extensions/unload", json("POST", { name })),
-    onSettled: () => invalidate([keys.extensions]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (name: string) => api<{ extension: ExtensionView }>("/api/extensions/unload", json("POST", { name })),
+  onSettled: () => invalidate([keys.extensions]),
+ });
 }
 
 /**
@@ -86,12 +82,11 @@ export function useUnloadExtension() {
  * 409 is the honest answer to a caller that asked anyway.
  */
 export function useMoveExtension() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (body: { name: string; direction: "up" | "down" }) =>
-      api<ExtensionList>("/api/extensions/order", json("POST", body)),
-    onSettled: () => invalidate([keys.extensions]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: { name: string; direction: "up" | "down" }) => api<ExtensionList>("/api/extensions/order", json("POST", body)),
+  onSettled: () => invalidate([keys.extensions]),
+ });
 }
 
 /**
@@ -101,18 +96,20 @@ export function useMoveExtension() {
  * in this engine, so a caller passing 0 means the first one and not "none".
  */
 export function useInvokeExtension() {
-  const invalidate = useInvalidate();
-  return useMutation({
-    mutationFn: (body: {
-      name: string;
-      registration: string;
-      exchange?: number;
-      message?: number;
-      raw?: string;
-      selection?: string;
-    }) => api<{ result: InvokeResult }>("/api/extensions/invoke", json("POST", body)),
-    // The invocation counters live on the row, and anything the plugin logged is on its console;
-    // both sit under the ["extensions"] prefix.
-    onSettled: () => invalidate([keys.extensions]),
-  });
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (body: {
+   name: string;
+   registration: string;
+   exchange?: number;
+   message?: number;
+   raw?: string;
+   selection?: string;
+   selected?: { exchange: number; raw?: string }[];
+   editor?: { message?: number; raw?: string };
+  }) => api<{ result: InvokeResult }>("/api/extensions/invoke", json("POST", body)),
+  // The invocation counters live on the row, and anything the plugin logged is on its console;
+  // both sit under the ["extensions"] prefix.
+  onSettled: () => invalidate([keys.extensions]),
+ });
 }

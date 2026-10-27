@@ -13,23 +13,23 @@
 
 /** A half-open region of a raw message: `[start, end)` in string-index terms. */
 export interface Span {
-  start: number;
-  end: number;
+ start: number;
+ end: number;
 }
 
 export interface ParsedMessage {
-  startLine: string;
-  headers: [string, string][];
-  body: string;
-  /** Byte offset in the original string where the body begins. */
-  bodyOffset: number;
+ startLine: string;
+ headers: [string, string][];
+ body: string;
+ /** Byte offset in the original string where the body begins. */
+ bodyOffset: number;
 }
 
 /** Where the head stops and the body starts. Shared so every function agrees on the boundary. */
 function headBounds(raw: string): { headEnd: number; bodyOffset: number } {
-  const separator = /\r?\n\r?\n/.exec(raw);
-  if (!separator) return { headEnd: raw.length, bodyOffset: raw.length };
-  return { headEnd: separator.index, bodyOffset: separator.index + separator[0].length };
+ const separator = /\r?\n\r?\n/.exec(raw);
+ if (!separator) return { headEnd: raw.length, bodyOffset: raw.length };
+ return { headEnd: separator.index, bodyOffset: separator.index + separator[0].length };
 }
 
 /**
@@ -38,27 +38,27 @@ function headBounds(raw: string): { headEnd: number; bodyOffset: number } {
  * with `split(/\r?\n/)`, which the previous parser used.
  */
 function lineEnd(raw: string, from: number, limit: number): number {
-  const newline = raw.indexOf("\n", from);
-  const stop = newline < 0 || newline > limit ? limit : newline;
-  return stop > from && raw.charCodeAt(stop - 1) === 13 ? stop - 1 : stop;
+ const newline = raw.indexOf("\n", from);
+ const stop = newline < 0 || newline > limit ? limit : newline;
+ return stop > from && raw.charCodeAt(stop - 1) === 13 ? stop - 1 : stop;
 }
 
 /** Index just past the line ending that begins at `at`, or `at` when there is none. */
 function skipEol(raw: string, at: number): number {
-  if (raw.charCodeAt(at) === 13 && raw.charCodeAt(at + 1) === 10) return at + 2;
-  const code = raw.charCodeAt(at);
-  return code === 13 || code === 10 ? at + 1 : at;
+ if (raw.charCodeAt(at) === 13 && raw.charCodeAt(at + 1) === 10) return at + 2;
+ const code = raw.charCodeAt(at);
+ return code === 13 || code === 10 ? at + 1 : at;
 }
 
 /** Index where the line ending immediately *before* `at` begins, or `at` when there is none. */
 function eolStart(raw: string, at: number): number {
-  if (raw.charCodeAt(at - 1) !== 10) return at;
-  return raw.charCodeAt(at - 2) === 13 ? at - 2 : at - 1;
+ if (raw.charCodeAt(at - 1) !== 10) return at;
+ return raw.charCodeAt(at - 2) === 13 ? at - 2 : at - 1;
 }
 
 export interface HeaderSpan extends Span {
-  name: string;
-  value: string;
+ name: string;
+ value: string;
 }
 
 /**
@@ -71,76 +71,76 @@ export interface HeaderSpan extends Span {
  * silent corruption of the message being sent.
  */
 export function headerSpans(raw: string): HeaderSpan[] {
-  const { headEnd } = headBounds(raw);
-  const out: HeaderSpan[] = [];
-  let cursor = skipEol(raw, lineEnd(raw, 0, headEnd));
-  while (cursor < headEnd) {
-    const start = cursor;
-    const end = lineEnd(raw, start, headEnd);
-    const line = raw.slice(start, end);
-    const colon = line.indexOf(":");
-    if (colon > 0) out.push({ name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim(), start, end });
-    cursor = skipEol(raw, end);
-    if (cursor <= start) break;
-  }
-  return out;
+ const { headEnd } = headBounds(raw);
+ const out: HeaderSpan[] = [];
+ let cursor = skipEol(raw, lineEnd(raw, 0, headEnd));
+ while (cursor < headEnd) {
+  const start = cursor;
+  const end = lineEnd(raw, start, headEnd);
+  const line = raw.slice(start, end);
+  const colon = line.indexOf(":");
+  if (colon > 0) out.push({ name: line.slice(0, colon).trim(), value: line.slice(colon + 1).trim(), start, end });
+  cursor = skipEol(raw, end);
+  if (cursor <= start) break;
+ }
+ return out;
 }
 
 export function parseMessage(raw: string): ParsedMessage {
-  const { headEnd, bodyOffset } = headBounds(raw);
-  return {
-    startLine: raw.slice(0, lineEnd(raw, 0, headEnd)),
-    headers: headerSpans(raw).map(({ name, value }) => [name, value] as [string, string]),
-    body: raw.slice(bodyOffset),
-    bodyOffset,
-  };
+ const { headEnd, bodyOffset } = headBounds(raw);
+ return {
+  startLine: raw.slice(0, lineEnd(raw, 0, headEnd)),
+  headers: headerSpans(raw).map(({ name, value }) => [name, value] as [string, string]),
+  body: raw.slice(bodyOffset),
+  bodyOffset,
+ };
 }
 
 export function headerValue(headers: [string, string][], name: string): string | undefined {
-  const wanted = name.toLowerCase();
-  return headers.find(([key]) => key.toLowerCase() === wanted)?.[1];
+ const wanted = name.toLowerCase();
+ return headers.find(([key]) => key.toLowerCase() === wanted)?.[1];
 }
 
 export interface RequestLine {
-  method: string;
-  target: string;
-  version: string;
+ method: string;
+ target: string;
+ version: string;
 }
 
 export function parseRequestLine(startLine: string): RequestLine | null {
-  const parts = startLine.trim().split(/\s+/);
-  if (parts.length < 2) return null;
-  return { method: parts[0] ?? "", target: parts[1] ?? "", version: parts[2] ?? "" };
+ const parts = startLine.trim().split(/\s+/);
+ if (parts.length < 2) return null;
+ return { method: parts[0] ?? "", target: parts[1] ?? "", version: parts[2] ?? "" };
 }
 
 export interface StatusLine {
-  version: string;
-  status: number;
-  reason: string;
+ version: string;
+ status: number;
+ reason: string;
 }
 
 export function parseStatusLine(startLine: string): StatusLine | null {
-  const match = /^(HTTP\/[\d.]+)\s+(\d{3})\s*(.*)$/.exec(startLine.trim());
-  if (!match) return null;
-  return { version: match[1] ?? "", status: Number(match[2]), reason: match[3] ?? "" };
+ const match = /^(HTTP\/[\d.]+)\s+(\d{3})\s*(.*)$/.exec(startLine.trim());
+ if (!match) return null;
+ return { version: match[1] ?? "", status: Number(match[2]), reason: match[3] ?? "" };
 }
 
 export function isResponse(raw: string): boolean {
-  return /^HTTP\/[\d.]+\s+\d{3}/.test(raw.trimStart());
+ return /^HTTP\/[\d.]+\s+\d{3}/.test(raw.trimStart());
 }
 
 /** A name/value pair together with the region of the raw message it came from. */
 export interface PairSpan extends Span {
-  name: string;
-  value: string;
-  /**
-   * How the region is written, when writing it back needs to know. A JSON member
-   * is `"key": value` and its value keeps its type; a query or cookie pair is
-   * `name=value` and everything in it is text.
-   */
-  form?: "json";
-  /** A JSON member's value exactly as it is written, so a number can stay a number. */
-  source?: string;
+ name: string;
+ value: string;
+ /**
+  * How the region is written, when writing it back needs to know. A JSON member
+  * is `"key": value` and its value keeps its type; a query or cookie pair is
+  * `name=value` and everything in it is text.
+  */
+ form?: "json";
+ /** A JSON member's value exactly as it is written, so a number can stay a number. */
+ source?: string;
 }
 
 /**
@@ -148,66 +148,68 @@ export interface PairSpan extends Span {
  * `offset` shifts the spans into the coordinates of the message the string came from.
  */
 export function pairSpans(input: string, offset = 0): PairSpan[] {
-  const out: PairSpan[] = [];
-  let cursor = 0;
-  while (cursor <= input.length) {
-    const found = input.indexOf("&", cursor);
-    const stop = found < 0 ? input.length : found;
-    if (stop > cursor) {
-      const chunk = input.slice(cursor, stop);
-      const equals = chunk.indexOf("=");
-      out.push({
-        name: safeDecode(equals < 0 ? chunk : chunk.slice(0, equals)),
-        value: equals < 0 ? "" : safeDecode(chunk.slice(equals + 1)),
-        start: offset + cursor,
-        end: offset + stop,
-      });
-    }
-    cursor = stop + 1;
+ const out: PairSpan[] = [];
+ let cursor = 0;
+ while (cursor <= input.length) {
+  const found = input.indexOf("&", cursor);
+  const stop = found < 0 ? input.length : found;
+  if (stop > cursor) {
+   const chunk = input.slice(cursor, stop);
+   const equals = chunk.indexOf("=");
+   out.push({
+    name: safeDecode(equals < 0 ? chunk : chunk.slice(0, equals)),
+    value: equals < 0 ? "" : safeDecode(chunk.slice(equals + 1)),
+    start: offset + cursor,
+    end: offset + stop,
+   });
   }
-  return out;
+  cursor = stop + 1;
+ }
+ return out;
 }
 
 /** Name/value pairs from a query string or an urlencoded body. */
 export function parsePairs(input: string): [string, string][] {
-  return pairSpans(input).map(({ name, value }) => [name, value] as [string, string]);
+ return pairSpans(input).map(({ name, value }) => [name, value] as [string, string]);
 }
 
 function safeDecode(input: string): string {
-  try {
-    return decodeURIComponent(input.replace(/\+/g, " "));
-  } catch {
-    return input;
-  }
+ try {
+  return decodeURIComponent(input.replace(/\+/g, " "));
+ } catch {
+  return input;
+ }
 }
 
 export function queryOf(target: string): [string, string][] {
-  const mark = target.indexOf("?");
-  if (mark < 0) return [];
-  const hash = target.indexOf("#", mark);
-  return parsePairs(target.slice(mark + 1, hash < 0 ? undefined : hash));
+ const mark = target.indexOf("?");
+ if (mark < 0) return [];
+ const hash = target.indexOf("#", mark);
+ return parsePairs(target.slice(mark + 1, hash < 0 ? undefined : hash));
 }
 
 /** Request cookies come from one Cookie header; response cookies from each Set-Cookie. */
 export function cookiesOf(headers: [string, string][], response: boolean): [string, string][] {
-  if (response) {
-    return headers
-      .filter(([name]) => name.toLowerCase() === "set-cookie")
-      .map(([, value]) => {
-        const first = value.split(";")[0] ?? "";
-        const equals = first.indexOf("=");
-        return equals < 0 ? [first.trim(), ""] : [first.slice(0, equals).trim(), first.slice(equals + 1).trim()];
-      });
-  }
-  const jar = headerValue(headers, "cookie");
-  if (!jar) return [];
-  return jar
-    .split(";")
-    .map((chunk) => {
-      const equals = chunk.indexOf("=");
-      return equals < 0 ? ([chunk.trim(), ""] as [string, string]) : ([chunk.slice(0, equals).trim(), chunk.slice(equals + 1).trim()] as [string, string]);
-    })
-    .filter(([name]) => name !== "");
+ if (response) {
+  return headers
+   .filter(([name]) => name.toLowerCase() === "set-cookie")
+   .map(([, value]) => {
+    const first = value.split(";")[0] ?? "";
+    const equals = first.indexOf("=");
+    return equals < 0 ? [first.trim(), ""] : [first.slice(0, equals).trim(), first.slice(equals + 1).trim()];
+   });
+ }
+ const jar = headerValue(headers, "cookie");
+ if (!jar) return [];
+ return jar
+  .split(";")
+  .map((chunk) => {
+   const equals = chunk.indexOf("=");
+   return equals < 0
+    ? ([chunk.trim(), ""] as [string, string])
+    : ([chunk.slice(0, equals).trim(), chunk.slice(equals + 1).trim()] as [string, string]);
+  })
+  .filter(([name]) => name !== "");
 }
 
 /**
@@ -221,33 +223,33 @@ export function cookiesOf(headers: [string, string][], response: boolean): [stri
  * possibility rather than documenting it.
  */
 function bodyParamSpansIn(body: string, contentType: string | undefined, offset: number): PairSpan[] {
-  if (!body.trim()) return [];
-  const type = (contentType ?? "").toLowerCase();
-  if (type.includes("application/x-www-form-urlencoded")) {
-    const lead = body.length - body.trimStart().length;
-    return pairSpans(body.trim(), offset + lead);
-  }
-  if (type.includes("json")) {
-    return jsonMemberSpans(body, offset).map(({ name, source, start, end }) => ({
-      name,
-      value: jsonDisplay(source),
-      form: "json" as const,
-      source,
-      start,
-      end,
-    }));
-  }
-  return [];
+ if (!body.trim()) return [];
+ const type = (contentType ?? "").toLowerCase();
+ if (type.includes("application/x-www-form-urlencoded")) {
+  const lead = body.length - body.trimStart().length;
+  return pairSpans(body.trim(), offset + lead);
+ }
+ if (type.includes("json")) {
+  return jsonMemberSpans(body, offset).map(({ name, source, start, end }) => ({
+   name,
+   value: jsonDisplay(source),
+   form: "json" as const,
+   source,
+   start,
+   end,
+  }));
+ }
+ return [];
 }
 
 export function bodyParamsOf(body: string, contentType: string | undefined): [string, string][] {
-  return bodyParamSpansIn(body, contentType, 0).map(({ name, value }) => [name, value] as [string, string]);
+ return bodyParamSpansIn(body, contentType, 0).map(({ name, value }) => [name, value] as [string, string]);
 }
 
 /** Body parameters of a whole message, with spans in the message's own coordinates. */
 export function bodyParamSpans(raw: string): PairSpan[] {
-  const { headers, body, bodyOffset } = parseMessage(raw);
-  return bodyParamSpansIn(body, headerValue(headers, "content-type"), bodyOffset);
+ const { headers, body, bodyOffset } = parseMessage(raw);
+ return bodyParamSpansIn(body, headerValue(headers, "content-type"), bodyOffset);
 }
 
 /**
@@ -256,18 +258,18 @@ export function bodyParamSpans(raw: string): PairSpan[] {
  * rather than offering a field that would do nothing.
  */
 export function bodyParamsEditable(raw: string): boolean {
-  const type = (headerValue(parseMessage(raw).headers, "content-type") ?? "").toLowerCase();
-  return type.includes("application/x-www-form-urlencoded") || type.includes("json");
+ const type = (headerValue(parseMessage(raw).headers, "content-type") ?? "").toLowerCase();
+ return type.includes("application/x-www-form-urlencoded") || type.includes("json");
 }
 
 /** A JSON member's value as text: the decoded string for a string, the source otherwise. */
 function jsonDisplay(source: string): string {
-  if (!source.startsWith('"')) return source;
-  try {
-    return JSON.parse(source) as string;
-  } catch {
-    return source;
-  }
+ if (!source.startsWith('"')) return source;
+ try {
+  return JSON.parse(source) as string;
+ } catch {
+  return source;
+ }
 }
 
 /**
@@ -276,39 +278,45 @@ function jsonDisplay(source: string): string {
  * than mangled by a guess.
  */
 export function prettyMessage(raw: string): string {
-  const { startLine, headers, body, bodyOffset } = parseMessage(raw);
-  if (!body.trim()) return raw;
-  const type = (headerValue(headers, "content-type") ?? "").toLowerCase();
-  let pretty: string | null = null;
+ const { startLine, headers, body, bodyOffset } = parseMessage(raw);
+ if (!body.trim()) return raw;
+ const type = (headerValue(headers, "content-type") ?? "").toLowerCase();
+ let pretty: string | null = null;
 
-  if (type.includes("json") || looksLikeJson(body)) {
-    try {
-      pretty = JSON.stringify(JSON.parse(body), null, 2);
-    } catch {
-      pretty = null;
-    }
-  } else if (type.includes("xml") || type.includes("html") || /^\s*<[a-z!?]/i.test(body)) {
-    pretty = prettyMarkup(body);
-  } else if (type.includes("css") || looksLikeCss(body)) {
-    pretty = prettyCss(body);
-  } else if (type.includes("javascript") || type.includes("ecmascript") || looksLikeJs(body)) {
-    pretty = prettyJs(body);
+ if (type.includes("json") || looksLikeJson(body)) {
+  try {
+   pretty = JSON.stringify(JSON.parse(body), null, 2);
+   // JSON has no text nodes, so compactMessage rebuilds it whole and the separator never reaches the wire.
+   if (raw.includes("\r\n")) pretty = pretty.replace(/\n/g, "\r\n");
+  } catch {
+   pretty = null;
   }
+ } else if (type.includes("xml") || type.includes("html") || /^\s*<[a-z!?]/i.test(body)) {
+  pretty = prettyMarkup(body, raw.includes("\r\n") ? "\r\n" : "\n");
+ } else if (type.includes("css") || looksLikeCss(body)) {
+  pretty = prettyCss(body);
+ } else if (type.includes("javascript") || type.includes("ecmascript") || looksLikeJs(body)) {
+  pretty = prettyJs(body);
+ }
 
-  if (pretty === null) return raw;
-  void startLine;
-  return raw.slice(0, bodyOffset) + pretty;
+ if (pretty === null) return raw;
+ void startLine;
+ // The editor splits a document on one separator, CRLF whenever the message holds one, so a JSON body
+ // pretty-printed with bare LFs under a CRLF head would show as one line; it takes the head's separator
+ // above (PR 363 review). Markup takes it only at the tag breaks prettyMarkup inserts, so a text node's
+// own newlines are never rewritten; CSS and JS keep LF, since their write-back keeps the pretty text.
+ return raw.slice(0, bodyOffset) + pretty;
 }
 
 /** A CSS body: the text IS one when it looks like rules, so a text/css label is not required. */
 function looksLikeCss(body: string): boolean {
-  return /[{]\s*[-a-zA-Z]+\s*:/.test(body) || /[}][^{}]*[{]/.test(body);
+ return /[{]\s*[-a-zA-Z]+\s*:/.test(body) || /[}][^{}]*[{]/.test(body);
 }
 
 /** A JavaScript body: sniffed from statements, since a label is often missing on responses. */
 function looksLikeJs(body: string): boolean {
-  const trimmed = body.trim();
-  return /\b(function|var|let|const|if|for|while|return|=>)\b/.test(trimmed) && !trimmed.startsWith("<");
+ const trimmed = body.trim();
+ return /\b(function|var|let|const|if|for|while|return|=>)\b/.test(trimmed) && !trimmed.startsWith("<");
 }
 
 /**
@@ -316,12 +324,14 @@ function looksLikeJs(body: string): boolean {
  * verbatim — reformatting one would change what the document says.
  */
 function prettyCss(body: string): string {
-  return body
-    .replace(/\s*{\s*/g, " {\n  ")
-    .replace(/;\s*(?=[^\s}])/g, ";\n  ")
-    .replace(/\s*}\s*/g, "\n}\n")
-    .replace(/\n\s*\n/g, "\n")
-    .trim() + "\n";
+ return (
+  body
+   .replace(/\s*{\s*/g, " {\n  ")
+   .replace(/;\s*(?=[^\s}])/g, ";\n  ")
+   .replace(/\s*}\s*/g, "\n}\n")
+   .replace(/\n\s*\n/g, "\n")
+   .trim() + "\n"
+ );
 }
 
 /**
@@ -330,37 +340,37 @@ function prettyCss(body: string): string {
  * indentation changes nothing the bytes say, and can break a template literal's meaning).
  */
 function prettyJs(body: string): string {
-  let out = "";
-  let i = 0;
-  const n = body.length;
-  while (i < n) {
-    const ch = body[i]!;
-    if (ch === '"' || ch === "'" || ch === "`") {
-      let j = i + 1;
-      while (j < n && body[j] !== ch) {
-        if (body[j] === "\\") j += 1;
-        j += 1;
-      }
-      out += body.slice(i, Math.min(j + 1, n));
-      i = Math.min(j + 1, n);
-      continue;
-    }
-    if (ch === "/" && body[i + 1] === "/") {
-      const end = body.indexOf("\n", i);
-      out += body.slice(i, end < 0 ? n : end);
-      i = end < 0 ? n : end;
-      continue;
-    }
-    out += ch;
-    if ((ch === ";" || ch === "{" || ch === "}") && body[i + 1] !== "\n") out += "\n";
-    i += 1;
+ let out = "";
+ let i = 0;
+ const n = body.length;
+ while (i < n) {
+  const ch = body[i]!;
+  if (ch === '"' || ch === "'" || ch === "`") {
+   let j = i + 1;
+   while (j < n && body[j] !== ch) {
+    if (body[j] === "\\") j += 1;
+    j += 1;
+   }
+   out += body.slice(i, Math.min(j + 1, n));
+   i = Math.min(j + 1, n);
+   continue;
   }
-  return out;
+  if (ch === "/" && body[i + 1] === "/") {
+   const end = body.indexOf("\n", i);
+   out += body.slice(i, end < 0 ? n : end);
+   i = end < 0 ? n : end;
+   continue;
+  }
+  out += ch;
+  if ((ch === ";" || ch === "{" || ch === "}") && body[i + 1] !== "\n") out += "\n";
+  i += 1;
+ }
+ return out;
 }
 
 function looksLikeJson(body: string): boolean {
-  const trimmed = body.trim();
-  return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+ const trimmed = body.trim();
+ return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
 }
 
 /**
@@ -378,36 +388,46 @@ function looksLikeJson(body: string): boolean {
  * agree with what the Pretty view showed.
  */
 export function compactMessage(pretty: string): string {
-  const { body, bodyOffset } = parseMessage(pretty);
-  if (!body.trim()) return pretty;
-  const trimmed = body.trim();
-  if (
-    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
-    (trimmed.startsWith("[") && trimmed.endsWith("]"))
-  ) {
-    try {
-      return pretty.slice(0, bodyOffset) + JSON.stringify(JSON.parse(body));
-    } catch {
-      return pretty;
-    }
+ const { body, bodyOffset } = parseMessage(pretty);
+ if (!body.trim()) return pretty;
+ const trimmed = body.trim();
+ if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+  try {
+   return pretty.slice(0, bodyOffset) + JSON.stringify(JSON.parse(body));
+  } catch {
+   return pretty;
   }
-  return pretty.slice(0, bodyOffset) + body.replace(/>\n\s*</g, "><");
+ }
+ return pretty.slice(0, bodyOffset) + body.replace(/>\r?\n\s*</g, "><");
 }
 
-function prettyMarkup(input: string): string {
-  const withBreaks = input.replace(/></g, ">\n<");
-  let depth = 0;
-  return withBreaks
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (/^<\/[^>]+>/.test(trimmed)) depth = Math.max(0, depth - 1);
-      const indented = "  ".repeat(depth) + trimmed;
-      const opens = /^<[^/!?][^>]*[^/]>$/.test(trimmed) && !/^<(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)\b/i.test(trimmed);
-      if (opens) depth += 1;
-      return indented;
-    })
-    .join("\n");
+/**
+ * Indents markup with one break between tags: adjacent tags, and tags the body already separated with
+ * a line break (the break and the whitespace around it are replaced). `sep` is the break it writes,
+ * the message's own separator, so a CRLF response's Pretty view splits into lines in an editor that
+ * splits on CRLF. A line break inside a text node keeps its own CR/LF; only the indentation around it
+ * changes.
+ */
+function prettyMarkup(input: string, sep = "\n"): string {
+ let depth = 0;
+ const indent = (line: string) => {
+  const trimmed = line.trim();
+  if (/^<\/[^>]+>/.test(trimmed)) depth = Math.max(0, depth - 1);
+  const indented = "  ".repeat(depth) + trimmed;
+  const opens =
+   /^<[^/!?][^>]*[^/]>$/.test(trimmed) && !/^<(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)\b/i.test(trimmed);
+  if (opens) depth += 1;
+  return indented;
+ };
+ return input
+  .split(/(?<=>)(?:[ \t]*\r?\n\s*)?(?=<)/)
+  .map((part) =>
+   part
+    .split(/(\r?\n)/)
+    .map((piece, i) => (i % 2 === 1 ? piece : indent(piece)))
+    .join(""),
+  )
+  .join(sep);
 }
 
 /* ==== the message editor's hide-headers lists (burpsy-react-ui-whr) ========
@@ -433,12 +453,7 @@ function prettyMarkup(input: string): string {
 
 /** Request headers the eye hides out of the box: what the client's own stack adds to every
  *  request and no application behaviour lives in. */
-export const DEFAULT_HIDE_REQUEST_HEADERS: string[] = [
- "accept",
- "accept-encoding",
- "accept-language",
- "connection",
-];
+export const DEFAULT_HIDE_REQUEST_HEADERS: string[] = ["accept", "accept-encoding", "accept-language", "connection"];
 
 /** Response headers the eye hides out of the box: connection and framing bookkeeping, cache
  *  validators, and server metadata. Deliberately excludes `set-cookie` (a rotated session
@@ -560,11 +575,11 @@ export function hexDumpBytes(bytes: Uint8Array): string {
 
 /** The body alone, for the Render view's sandboxed iframe. */
 export function bodyOf(raw: string): string {
-  return parseMessage(raw).body;
+ return parseMessage(raw).body;
 }
 
 export function contentTypeOf(raw: string): string {
-  return headerValue(parseMessage(raw).headers, "content-type") ?? "";
+ return headerValue(parseMessage(raw).headers, "content-type") ?? "";
 }
 
 /* ==== the JSON scanner ====================================================
@@ -576,61 +591,61 @@ export function contentTypeOf(raw: string): string {
  */
 
 export interface JsonMemberSpan extends Span {
-  name: string;
-  /** The member's value exactly as written. */
-  source: string;
+ name: string;
+ /** The member's value exactly as written. */
+ source: string;
 }
 
 function skipWhitespace(text: string, at: number): number {
-  let cursor = at;
-  while (cursor < text.length && /\s/.test(text[cursor]!)) cursor += 1;
-  return cursor;
+ let cursor = at;
+ while (cursor < text.length && /\s/.test(text[cursor]!)) cursor += 1;
+ return cursor;
 }
 
 /** Index just past the JSON string literal starting at `at`, or -1 if there is not one. */
 function endOfJsonString(text: string, at: number): number {
-  if (text[at] !== '"') return -1;
-  let cursor = at + 1;
-  while (cursor < text.length) {
-    const character = text[cursor];
-    if (character === "\\") {
-      cursor += 2;
-      continue;
-    }
-    if (character === '"') return cursor + 1;
-    cursor += 1;
+ if (text[at] !== '"') return -1;
+ let cursor = at + 1;
+ while (cursor < text.length) {
+  const character = text[cursor];
+  if (character === "\\") {
+   cursor += 2;
+   continue;
   }
-  return -1;
+  if (character === '"') return cursor + 1;
+  cursor += 1;
+ }
+ return -1;
 }
 
 /** Index just past the JSON value starting at `at`, or -1 if it is unterminated. */
 function endOfJsonValue(text: string, at: number): number {
-  const first = text[at];
-  if (first === '"') return endOfJsonString(text, at);
-  if (first === "{" || first === "[") {
-    let depth = 0;
-    let cursor = at;
-    while (cursor < text.length) {
-      const character = text[cursor]!;
-      if (character === '"') {
-        const end = endOfJsonString(text, cursor);
-        if (end < 0) return -1;
-        cursor = end;
-        continue;
-      }
-      if (character === "{" || character === "[") depth += 1;
-      else if (character === "}" || character === "]") {
-        depth -= 1;
-        if (depth === 0) return cursor + 1;
-      }
-      cursor += 1;
-    }
-    return -1;
-  }
-  // A number, true, false or null: runs until a structural character or space.
+ const first = text[at];
+ if (first === '"') return endOfJsonString(text, at);
+ if (first === "{" || first === "[") {
+  let depth = 0;
   let cursor = at;
-  while (cursor < text.length && !/[,}\]\s]/.test(text[cursor]!)) cursor += 1;
-  return cursor > at ? cursor : -1;
+  while (cursor < text.length) {
+   const character = text[cursor]!;
+   if (character === '"') {
+    const end = endOfJsonString(text, cursor);
+    if (end < 0) return -1;
+    cursor = end;
+    continue;
+   }
+   if (character === "{" || character === "[") depth += 1;
+   else if (character === "}" || character === "]") {
+    depth -= 1;
+    if (depth === 0) return cursor + 1;
+   }
+   cursor += 1;
+  }
+  return -1;
+ }
+ // A number, true, false or null: runs until a structural character or space.
+ let cursor = at;
+ while (cursor < text.length && !/[,}\]\s]/.test(text[cursor]!)) cursor += 1;
+ return cursor > at ? cursor : -1;
 }
 
 /**
@@ -642,31 +657,31 @@ function endOfJsonValue(text: string, at: number): number {
  * hand the Inspector spans that no longer mean what they say.
  */
 export function jsonMemberSpans(text: string, offset = 0): JsonMemberSpan[] {
-  const out: JsonMemberSpan[] = [];
-  let cursor = skipWhitespace(text, 0);
-  if (text[cursor] !== "{") return [];
-  cursor = skipWhitespace(text, cursor + 1);
-  while (cursor < text.length && text[cursor] !== "}") {
-    const start = cursor;
-    const keyEnd = endOfJsonString(text, cursor);
-    if (keyEnd < 0) return [];
-    let name: string;
-    try {
-      name = JSON.parse(text.slice(cursor, keyEnd)) as string;
-    } catch {
-      return [];
-    }
-    cursor = skipWhitespace(text, keyEnd);
-    if (text[cursor] !== ":") return [];
-    cursor = skipWhitespace(text, cursor + 1);
-    const valueEnd = endOfJsonValue(text, cursor);
-    if (valueEnd < 0) return [];
-    out.push({ name, source: text.slice(cursor, valueEnd), start: offset + start, end: offset + valueEnd });
-    cursor = skipWhitespace(text, valueEnd);
-    if (text[cursor] !== ",") break;
-    cursor = skipWhitespace(text, cursor + 1);
+ const out: JsonMemberSpan[] = [];
+ let cursor = skipWhitespace(text, 0);
+ if (text[cursor] !== "{") return [];
+ cursor = skipWhitespace(text, cursor + 1);
+ while (cursor < text.length && text[cursor] !== "}") {
+  const start = cursor;
+  const keyEnd = endOfJsonString(text, cursor);
+  if (keyEnd < 0) return [];
+  let name: string;
+  try {
+   name = JSON.parse(text.slice(cursor, keyEnd)) as string;
+  } catch {
+   return [];
   }
-  return out;
+  cursor = skipWhitespace(text, keyEnd);
+  if (text[cursor] !== ":") return [];
+  cursor = skipWhitespace(text, cursor + 1);
+  const valueEnd = endOfJsonValue(text, cursor);
+  if (valueEnd < 0) return [];
+  out.push({ name, source: text.slice(cursor, valueEnd), start: offset + start, end: offset + valueEnd });
+  cursor = skipWhitespace(text, valueEnd);
+  if (text[cursor] !== ",") break;
+  cursor = skipWhitespace(text, cursor + 1);
+ }
+ return out;
 }
 
 /* ==== writing ==============================================================
@@ -679,7 +694,7 @@ export function jsonMemberSpans(text: string, offset = 0): JsonMemberSpan[] {
  */
 
 function splice(raw: string, span: Span, text: string): string {
-  return raw.slice(0, span.start) + text + raw.slice(span.end);
+ return raw.slice(0, span.start) + text + raw.slice(span.end);
 }
 
 /**
@@ -688,37 +703,37 @@ function splice(raw: string, span: Span, text: string): string {
  * for them, so they are removed rather than encoded.
  */
 function oneLine(input: string): string {
-  return input.replace(/[\r\n]+/g, "");
+ return input.replace(/[\r\n]+/g, "");
 }
 
 /** The line ending this message uses, so an inserted line matches the rest of it. */
 export function eolOf(raw: string): "\r\n" | "\n" {
-  const newline = raw.indexOf("\n");
-  if (newline < 0) return "\r\n";
-  return newline > 0 && raw.charCodeAt(newline - 1) === 13 ? "\r\n" : "\n";
+ const newline = raw.indexOf("\n");
+ if (newline < 0) return "\r\n";
+ return newline > 0 && raw.charCodeAt(newline - 1) === 13 ? "\r\n" : "\n";
 }
 
 export function byteLength(input: string): number {
-  return new TextEncoder().encode(input).length;
+ return new TextEncoder().encode(input).length;
 }
 
 /* ---- the start line ------------------------------------------------------ */
 
 /** The whitespace-separated tokens of the start line: method, target, version — or version, status. */
 export function startLineSpans(raw: string): Span[] {
-  const { headEnd } = headBounds(raw);
-  const end = lineEnd(raw, 0, headEnd);
-  const spans: Span[] = [];
-  let cursor = 0;
-  const space = (at: number) => raw.charCodeAt(at) === 32 || raw.charCodeAt(at) === 9;
-  while (cursor < end) {
-    while (cursor < end && space(cursor)) cursor += 1;
-    if (cursor >= end) break;
-    const start = cursor;
-    while (cursor < end && !space(cursor)) cursor += 1;
-    spans.push({ start, end: cursor });
-  }
-  return spans;
+ const { headEnd } = headBounds(raw);
+ const end = lineEnd(raw, 0, headEnd);
+ const spans: Span[] = [];
+ let cursor = 0;
+ const space = (at: number) => raw.charCodeAt(at) === 32 || raw.charCodeAt(at) === 9;
+ while (cursor < end) {
+  while (cursor < end && space(cursor)) cursor += 1;
+  if (cursor >= end) break;
+  const start = cursor;
+  while (cursor < end && !space(cursor)) cursor += 1;
+  spans.push({ start, end: cursor });
+ }
+ return spans;
 }
 
 /**
@@ -727,15 +742,15 @@ export function startLineSpans(raw: string): Span[] {
  * parser may depend on.
  */
 export function setStartLineToken(raw: string, index: number, text: string): string {
-  const spans = startLineSpans(raw);
-  const clean = oneLine(text).replace(/\s+/g, "");
-  const span = spans[index];
-  if (span) return splice(raw, span, clean);
-  // A start line short of that field gets it appended, so setting a version on a
-  // two-token request line adds one instead of silently doing nothing.
-  if (index !== spans.length) return raw;
-  const end = lineEnd(raw, 0, headBounds(raw).headEnd);
-  return `${raw.slice(0, end)} ${clean}${raw.slice(end)}`;
+ const spans = startLineSpans(raw);
+ const clean = oneLine(text).replace(/\s+/g, "");
+ const span = spans[index];
+ if (span) return splice(raw, span, clean);
+ // A start line short of that field gets it appended, so setting a version on a
+ // two-token request line adds one instead of silently doing nothing.
+ if (index !== spans.length) return raw;
+ const end = lineEnd(raw, 0, headBounds(raw).headEnd);
+ return `${raw.slice(0, end)} ${clean}${raw.slice(end)}`;
 }
 
 /**
@@ -744,34 +759,34 @@ export function setStartLineToken(raw: string, index: number, text: string): str
  * contain spaces.
  */
 export function setStartLineTail(raw: string, index: number, text: string): string {
-  const end = lineEnd(raw, 0, headBounds(raw).headEnd);
-  const span = startLineSpans(raw)[index];
-  const clean = oneLine(text);
-  if (!span) return `${raw.slice(0, end)}${clean === "" ? "" : ` ${clean}`}${raw.slice(end)}`;
-  return raw.slice(0, span.start) + clean + raw.slice(end);
+ const end = lineEnd(raw, 0, headBounds(raw).headEnd);
+ const span = startLineSpans(raw)[index];
+ const clean = oneLine(text);
+ if (!span) return `${raw.slice(0, end)}${clean === "" ? "" : ` ${clean}`}${raw.slice(end)}`;
+ return raw.slice(0, span.start) + clean + raw.slice(end);
 }
 
 /* ---- headers ------------------------------------------------------------- */
 
 export function setHeaderAt(raw: string, index: number, name: string, value: string): string {
-  const span = headerSpans(raw)[index];
-  if (!span) return raw;
-  return splice(raw, span, `${oneLine(name)}: ${oneLine(value)}`);
+ const span = headerSpans(raw)[index];
+ if (!span) return raw;
+ return splice(raw, span, `${oneLine(name)}: ${oneLine(value)}`);
 }
 
 export function removeHeaderAt(raw: string, index: number): string {
-  const span = headerSpans(raw)[index];
-  if (!span) return raw;
-  // The line ending that goes with a header is the one BEFORE it. The last
-  // header's own terminator is the first half of the blank-line separator, so
-  // taking the following one instead would merge the head into the body.
-  return raw.slice(0, eolStart(raw, span.start)) + raw.slice(span.end);
+ const span = headerSpans(raw)[index];
+ if (!span) return raw;
+ // The line ending that goes with a header is the one BEFORE it. The last
+ // header's own terminator is the first half of the blank-line separator, so
+ // taking the following one instead would merge the head into the body.
+ return raw.slice(0, eolStart(raw, span.start)) + raw.slice(span.end);
 }
 
 /** Append a header to the end of the head, using the message's own line ending. */
 export function addHeader(raw: string, name: string, value: string): string {
-  const { headEnd } = headBounds(raw);
-  return `${raw.slice(0, headEnd)}${eolOf(raw)}${oneLine(name)}: ${oneLine(value)}${raw.slice(headEnd)}`;
+ const { headEnd } = headBounds(raw);
+ return `${raw.slice(0, headEnd)}${eolOf(raw)}${oneLine(name)}: ${oneLine(value)}${raw.slice(headEnd)}`;
 }
 
 /* ---- the body, and the length that has to agree with it ------------------ */
@@ -787,22 +802,22 @@ export function addHeader(raw: string, name: string, value: string): string {
  * rather than a correction.
  */
 export function fixContentLength(raw: string): string {
-  const { headers, body } = parseMessage(raw);
-  if (headerValue(headers, "transfer-encoding") !== undefined) return raw;
-  const length = String(byteLength(body));
-  const index = headers.findIndex(([name]) => name.toLowerCase() === "content-length");
-  if (index >= 0) {
-    const existing = headers[index]!;
-    return existing[1] === length ? raw : setHeaderAt(raw, index, existing[0], length);
-  }
-  return body === "" ? raw : addHeader(raw, "Content-Length", length);
+ const { headers, body } = parseMessage(raw);
+ if (headerValue(headers, "transfer-encoding") !== undefined) return raw;
+ const length = String(byteLength(body));
+ const index = headers.findIndex(([name]) => name.toLowerCase() === "content-length");
+ if (index >= 0) {
+  const existing = headers[index]!;
+  return existing[1] === length ? raw : setHeaderAt(raw, index, existing[0], length);
+ }
+ return body === "" ? raw : addHeader(raw, "Content-Length", length);
 }
 
 /** Replace the body, keeping the head byte-identical apart from Content-Length. */
 export function setBody(raw: string, body: string): string {
-  const { headEnd, bodyOffset } = headBounds(raw);
-  const separator = raw.slice(headEnd, bodyOffset) || eolOf(raw).repeat(2);
-  return fixContentLength(`${raw.slice(0, headEnd)}${separator}${body}`);
+ const { headEnd, bodyOffset } = headBounds(raw);
+ const separator = raw.slice(headEnd, bodyOffset) || eolOf(raw).repeat(2);
+ return fixContentLength(`${raw.slice(0, headEnd)}${separator}${body}`);
 }
 
 /* ---- query parameters ---------------------------------------------------- */
@@ -814,52 +829,52 @@ export function setBody(raw: string, body: string): string {
  * touch changes shape.
  */
 function encodePair(input: string): string {
-  return encodeURIComponent(input);
+ return encodeURIComponent(input);
 }
 
 /** Where the request target's query string lives, excluding the "?" and any fragment. */
 export function querySpan(raw: string): Span | null {
-  const target = startLineSpans(raw)[1];
-  if (!target) return null;
-  const text = raw.slice(target.start, target.end);
-  const mark = text.indexOf("?");
-  if (mark < 0) return null;
-  const hash = text.indexOf("#", mark);
-  return { start: target.start + mark + 1, end: hash < 0 ? target.end : target.start + hash };
+ const target = startLineSpans(raw)[1];
+ if (!target) return null;
+ const text = raw.slice(target.start, target.end);
+ const mark = text.indexOf("?");
+ if (mark < 0) return null;
+ const hash = text.indexOf("#", mark);
+ return { start: target.start + mark + 1, end: hash < 0 ? target.end : target.start + hash };
 }
 
 export function querySpans(raw: string): PairSpan[] {
-  const span = querySpan(raw);
-  return span ? pairSpans(raw.slice(span.start, span.end), span.start) : [];
+ const span = querySpan(raw);
+ return span ? pairSpans(raw.slice(span.start, span.end), span.start) : [];
 }
 
 export function setQueryParamAt(raw: string, index: number, name: string, value: string): string {
-  const span = querySpans(raw)[index];
-  if (!span) return raw;
-  return splice(raw, span, `${encodePair(name)}=${encodePair(value)}`);
+ const span = querySpans(raw)[index];
+ if (!span) return raw;
+ return splice(raw, span, `${encodePair(name)}=${encodePair(value)}`);
 }
 
 export function removeQueryParamAt(raw: string, index: number): string {
-  const spans = querySpans(raw);
-  const span = spans[index];
-  if (!span) return raw;
-  // The separator goes with the parameter, so removing one never leaves "a=1&&c=3".
-  if (index > 0) return raw.slice(0, spans[index - 1]!.end) + raw.slice(span.end);
-  if (spans.length > 1) return raw.slice(0, span.start) + raw.slice(spans[1]!.start);
-  // The last parameter takes the "?" with it, leaving a bare path.
-  const query = querySpan(raw)!;
-  return raw.slice(0, query.start - 1) + raw.slice(query.end);
+ const spans = querySpans(raw);
+ const span = spans[index];
+ if (!span) return raw;
+ // The separator goes with the parameter, so removing one never leaves "a=1&&c=3".
+ if (index > 0) return raw.slice(0, spans[index - 1]!.end) + raw.slice(span.end);
+ if (spans.length > 1) return raw.slice(0, span.start) + raw.slice(spans[1]!.start);
+ // The last parameter takes the "?" with it, leaving a bare path.
+ const query = querySpan(raw)!;
+ return raw.slice(0, query.start - 1) + raw.slice(query.end);
 }
 
 export function addQueryParam(raw: string, name: string, value: string): string {
-  const pair = `${encodePair(name)}=${encodePair(value)}`;
-  const query = querySpan(raw);
-  if (query) return `${raw.slice(0, query.end)}${query.end > query.start ? "&" : ""}${pair}${raw.slice(query.end)}`;
-  const target = startLineSpans(raw)[1];
-  if (!target) return raw;
-  const hash = raw.slice(target.start, target.end).indexOf("#");
-  const at = hash < 0 ? target.end : target.start + hash;
-  return `${raw.slice(0, at)}?${pair}${raw.slice(at)}`;
+ const pair = `${encodePair(name)}=${encodePair(value)}`;
+ const query = querySpan(raw);
+ if (query) return `${raw.slice(0, query.end)}${query.end > query.start ? "&" : ""}${pair}${raw.slice(query.end)}`;
+ const target = startLineSpans(raw)[1];
+ if (!target) return raw;
+ const hash = raw.slice(target.start, target.end).indexOf("#");
+ const at = hash < 0 ? target.end : target.start + hash;
+ return `${raw.slice(0, at)}?${pair}${raw.slice(at)}`;
 }
 
 /* ---- request cookies ----------------------------------------------------- */
@@ -871,64 +886,64 @@ export function addQueryParam(raw: string, name: string, value: string): string 
  * whose name is empty is not a cookie. `message.test.ts` asserts the two agree.
  */
 export function cookieSpans(raw: string): PairSpan[] {
-  const header = headerSpans(raw).find(({ name }) => name.toLowerCase() === "cookie");
-  if (!header) return [];
-  const line = raw.slice(header.start, header.end);
-  const colon = line.indexOf(":");
-  const base = header.start + colon + 1;
-  const jar = line.slice(colon + 1);
-  const out: PairSpan[] = [];
-  let cursor = 0;
-  while (cursor <= jar.length) {
-    const found = jar.indexOf(";", cursor);
-    const stop = found < 0 ? jar.length : found;
-    const chunk = jar.slice(cursor, stop);
-    const equals = chunk.indexOf("=");
-    const name = (equals < 0 ? chunk : chunk.slice(0, equals)).trim();
-    if (name !== "") {
-      const lead = chunk.length - chunk.trimStart().length;
-      out.push({
-        name,
-        value: equals < 0 ? "" : chunk.slice(equals + 1).trim(),
-        start: base + cursor + lead,
-        end: base + cursor + lead + chunk.trim().length,
-      });
-    }
-    cursor = stop + 1;
+ const header = headerSpans(raw).find(({ name }) => name.toLowerCase() === "cookie");
+ if (!header) return [];
+ const line = raw.slice(header.start, header.end);
+ const colon = line.indexOf(":");
+ const base = header.start + colon + 1;
+ const jar = line.slice(colon + 1);
+ const out: PairSpan[] = [];
+ let cursor = 0;
+ while (cursor <= jar.length) {
+  const found = jar.indexOf(";", cursor);
+  const stop = found < 0 ? jar.length : found;
+  const chunk = jar.slice(cursor, stop);
+  const equals = chunk.indexOf("=");
+  const name = (equals < 0 ? chunk : chunk.slice(0, equals)).trim();
+  if (name !== "") {
+   const lead = chunk.length - chunk.trimStart().length;
+   out.push({
+    name,
+    value: equals < 0 ? "" : chunk.slice(equals + 1).trim(),
+    start: base + cursor + lead,
+    end: base + cursor + lead + chunk.trim().length,
+   });
   }
-  return out;
+  cursor = stop + 1;
+ }
+ return out;
 }
 
 /** A ";" would split one cookie into two, so it goes the way CR and LF do. */
 function oneCookie(input: string): string {
-  return input.replace(/[\r\n;]+/g, "");
+ return input.replace(/[\r\n;]+/g, "");
 }
 
 export function setCookieAt(raw: string, index: number, name: string, value: string): string {
-  const span = cookieSpans(raw)[index];
-  if (!span) return raw;
-  return splice(raw, span, `${oneCookie(name)}=${oneCookie(value)}`);
+ const span = cookieSpans(raw)[index];
+ if (!span) return raw;
+ return splice(raw, span, `${oneCookie(name)}=${oneCookie(value)}`);
 }
 
 export function removeCookieAt(raw: string, index: number): string {
-  const spans = cookieSpans(raw);
-  const span = spans[index];
-  if (!span) return raw;
-  if (index > 0) return raw.slice(0, spans[index - 1]!.end) + raw.slice(span.end);
-  if (spans.length > 1) return raw.slice(0, span.start) + raw.slice(spans[1]!.start);
-  // The last cookie takes the header with it: an empty `Cookie:` is not a jar.
-  const header = headerSpans(raw).findIndex(({ name }) => name.toLowerCase() === "cookie");
-  return removeHeaderAt(raw, header);
+ const spans = cookieSpans(raw);
+ const span = spans[index];
+ if (!span) return raw;
+ if (index > 0) return raw.slice(0, spans[index - 1]!.end) + raw.slice(span.end);
+ if (spans.length > 1) return raw.slice(0, span.start) + raw.slice(spans[1]!.start);
+ // The last cookie takes the header with it: an empty `Cookie:` is not a jar.
+ const header = headerSpans(raw).findIndex(({ name }) => name.toLowerCase() === "cookie");
+ return removeHeaderAt(raw, header);
 }
 
 export function addCookie(raw: string, name: string, value: string): string {
-  const pair = `${oneCookie(name)}=${oneCookie(value)}`;
-  const spans = cookieSpans(raw);
-  const last = spans.at(-1);
-  if (last) return `${raw.slice(0, last.end)}; ${pair}${raw.slice(last.end)}`;
-  const header = headerSpans(raw).find(({ name: key }) => key.toLowerCase() === "cookie");
-  if (!header) return addHeader(raw, "Cookie", pair);
-  return splice(raw, header, `Cookie: ${pair}`);
+ const pair = `${oneCookie(name)}=${oneCookie(value)}`;
+ const spans = cookieSpans(raw);
+ const last = spans.at(-1);
+ if (last) return `${raw.slice(0, last.end)}; ${pair}${raw.slice(last.end)}`;
+ const header = headerSpans(raw).find(({ name: key }) => key.toLowerCase() === "cookie");
+ if (!header) return addHeader(raw, "Cookie", pair);
+ return splice(raw, header, `Cookie: ${pair}`);
 }
 
 /* ---- body parameters ----------------------------------------------------- */
@@ -941,52 +956,52 @@ export function addCookie(raw: string, name: string, value: string): string {
  * silently change the type the server will see.
  */
 function jsonValueText(source: string, next: string): string {
-  if (!source.startsWith('"')) {
-    try {
-      JSON.parse(next);
-      return next;
-    } catch {
-      // Not JSON, so it can only go in as a string.
-    }
+ if (!source.startsWith('"')) {
+  try {
+   JSON.parse(next);
+   return next;
+  } catch {
+   // Not JSON, so it can only go in as a string.
   }
-  return JSON.stringify(next);
+ }
+ return JSON.stringify(next);
 }
 
 export function setBodyParamAt(raw: string, index: number, name: string, value: string): string {
-  const span = bodyParamSpans(raw)[index];
-  if (!span) return raw;
-  const replacement =
-    span.form === "json"
-      ? `${JSON.stringify(oneLine(name))}: ${jsonValueText(span.source ?? '""', value)}`
-      : `${encodePair(name)}=${encodePair(value)}`;
-  return fixContentLength(splice(raw, span, replacement));
+ const span = bodyParamSpans(raw)[index];
+ if (!span) return raw;
+ const replacement =
+  span.form === "json"
+   ? `${JSON.stringify(oneLine(name))}: ${jsonValueText(span.source ?? '""', value)}`
+   : `${encodePair(name)}=${encodePair(value)}`;
+ return fixContentLength(splice(raw, span, replacement));
 }
 
 export function removeBodyParamAt(raw: string, index: number): string {
-  const spans = bodyParamSpans(raw);
-  const span = spans[index];
-  if (!span) return raw;
-  // The separator that joined it to a neighbour goes too, so the list stays well
-  // formed — "&&" in a form body and a trailing comma in JSON are both malformed.
-  let from = span.start;
-  let to = span.end;
-  if (index > 0) from = spans[index - 1]!.end;
-  else if (spans.length > 1) to = spans[1]!.start;
-  return fixContentLength(raw.slice(0, from) + raw.slice(to));
+ const spans = bodyParamSpans(raw);
+ const span = spans[index];
+ if (!span) return raw;
+ // The separator that joined it to a neighbour goes too, so the list stays well
+ // formed — "&&" in a form body and a trailing comma in JSON are both malformed.
+ let from = span.start;
+ let to = span.end;
+ if (index > 0) from = spans[index - 1]!.end;
+ else if (spans.length > 1) to = spans[1]!.start;
+ return fixContentLength(raw.slice(0, from) + raw.slice(to));
 }
 
 export function addBodyParam(raw: string, name: string, value: string): string {
-  const { body, bodyOffset } = parseMessage(raw);
-  const json = contentTypeOf(raw).toLowerCase().includes("json");
-  const last = bodyParamSpans(raw).at(-1);
-  const text = json ? `${JSON.stringify(oneLine(name))}: ${JSON.stringify(value)}` : `${encodePair(name)}=${encodePair(value)}`;
-  if (last) return fixContentLength(`${raw.slice(0, last.end)}${json ? ", " : "&"}${text}${raw.slice(last.end)}`);
-  if (!json) return setBody(raw, text);
-  // A JSON body with no members yet: write into the object if there is one, else make one.
-  const brace = body.indexOf("{");
-  if (brace < 0) return setBody(raw, `{${text}}`);
-  const at = bodyOffset + brace + 1;
-  return fixContentLength(`${raw.slice(0, at)}${text}${raw.slice(at)}`);
+ const { body, bodyOffset } = parseMessage(raw);
+ const json = contentTypeOf(raw).toLowerCase().includes("json");
+ const last = bodyParamSpans(raw).at(-1);
+ const text = json ? `${JSON.stringify(oneLine(name))}: ${JSON.stringify(value)}` : `${encodePair(name)}=${encodePair(value)}`;
+ if (last) return fixContentLength(`${raw.slice(0, last.end)}${json ? ", " : "&"}${text}${raw.slice(last.end)}`);
+ if (!json) return setBody(raw, text);
+ // A JSON body with no members yet: write into the object if there is one, else make one.
+ const brace = body.indexOf("{");
+ if (brace < 0) return setBody(raw, `{${text}}`);
+ const at = bodyOffset + brace + 1;
+ return fixContentLength(`${raw.slice(0, at)}${text}${raw.slice(at)}`);
 }
 
 /* ---- reordering (burpsy-react-ui-ybmd) ------------------------------------ */
@@ -1002,31 +1017,31 @@ export function addBodyParam(raw: string, name: string, value: string): string {
  * behind the operator's back.
  */
 function swapSpans(raw: string, a: Span, b: Span): string {
-  const [first, second] = a.start < b.start ? [a, b] : [b, a];
-  if (first.end > second.start) return raw;
-  return (
-    raw.slice(0, first.start) +
-    raw.slice(second.start, second.end) +
-    raw.slice(first.end, second.start) +
-    raw.slice(first.start, first.end) +
-    raw.slice(second.end)
-  );
+ const [first, second] = a.start < b.start ? [a, b] : [b, a];
+ if (first.end > second.start) return raw;
+ return (
+  raw.slice(0, first.start) +
+  raw.slice(second.start, second.end) +
+  raw.slice(first.end, second.start) +
+  raw.slice(first.start, first.end) +
+  raw.slice(second.end)
+ );
 }
 
 /** Which span list a reorder moves within. */
 export type ReorderDomain = "header" | "query" | "cookie" | "body";
 
 function spansOf(raw: string, domain: ReorderDomain): Span[] {
-  switch (domain) {
-    case "header":
-      return headerSpans(raw);
-    case "query":
-      return querySpans(raw);
-    case "cookie":
-      return cookieSpans(raw);
-    case "body":
-      return bodyParamSpans(raw);
-  }
+ switch (domain) {
+  case "header":
+   return headerSpans(raw);
+  case "query":
+   return querySpans(raw);
+  case "cookie":
+   return cookieSpans(raw);
+  case "body":
+   return bodyParamSpans(raw);
+ }
 }
 
 /**
@@ -1035,11 +1050,11 @@ function spansOf(raw: string, domain: ReorderDomain): Span[] {
  * Content-Length still tells the truth without being touched.
  */
 export function moveItem(raw: string, domain: ReorderDomain, index: number, direction: -1 | 1): string {
-  const spans = spansOf(raw, domain);
-  const from = spans[index];
-  const to = spans[index + direction];
-  if (!from || !to) return raw;
-  return swapSpans(raw, from, to);
+ const spans = spansOf(raw, domain);
+ const from = spans[index];
+ const to = spans[index + direction];
+ if (!from || !to) return raw;
+ return swapSpans(raw, from, to);
 }
 
 /**
@@ -1050,9 +1065,9 @@ export function moveItem(raw: string, domain: ReorderDomain, index: number, dire
  * HTTP/1 case where the server does want it recomputed.
  */
 export function withContentLength(head: string, bodyLength: number): string {
-  const re = /^(content-length:)[^\r\n]*/im;
-  if (re.test(head)) return head.replace(re, `$1 ${bodyLength}`);
-  return head;
+ const re = /^(content-length:)[^\r\n]*/im;
+ if (re.test(head)) return head.replace(re, `$1 ${bodyLength}`);
+ return head;
 }
 
 /**
@@ -1065,9 +1080,9 @@ export function withContentLength(head: string, bodyLength: number): string {
  * exact request octets. The caller is responsible for the head's Content-Length matching the body.
  */
 export function faithfulRequestBase64(requestText: string, bodyBase64: string): string {
-  const offset = parseMessage(requestText).bodyOffset;
-  const head = requestText.slice(0, offset);
-  return btoa(head + atob(bodyBase64));
+ const offset = parseMessage(requestText).bodyOffset;
+ const head = requestText.slice(0, offset);
+ return btoa(head + atob(bodyBase64));
 }
 
 /**
@@ -1082,7 +1097,7 @@ export function faithfulRequestBase64(requestText: string, bodyBase64: string): 
  * keeps it, so editing headers around a binary body still works.
  */
 export function requestBodyChanged(prev: string, next: string): boolean {
-  return prev.slice(parseMessage(prev).bodyOffset) !== next.slice(parseMessage(next).bodyOffset);
+ return prev.slice(parseMessage(prev).bodyOffset) !== next.slice(parseMessage(next).bodyOffset);
 }
 
 /**
@@ -1092,14 +1107,14 @@ export function requestBodyChanged(prev: string, next: string): boolean {
  * resolver ignores it.
  */
 export function requestTargetPath(raw: string): string | undefined {
-  const target = /^[A-Z]+ (\S+)/.exec(raw)?.[1];
-  if (!target) return undefined;
-  if (target.startsWith("/")) return target;
-  try {
-    return new URL(target).pathname;
-  } catch {
-    return undefined;
-  }
+ const target = /^[A-Z]+ (\S+)/.exec(raw)?.[1];
+ if (!target) return undefined;
+ if (target.startsWith("/")) return target;
+ try {
+  return new URL(target).pathname;
+ } catch {
+  return undefined;
+ }
 }
 
 /**
@@ -1111,12 +1126,12 @@ export function requestTargetPath(raw: string): string | undefined {
  * resend. Read-only views can use body_base64 directly.
  */
 export function editableBodyBase64(view: { text?: string; body_base64?: string; content_encoding?: string }): string | undefined {
-  if (!view.body_base64) return undefined;
-  const encoding = view.content_encoding?.trim().toLowerCase();
-  if (encoding && encoding !== "identity") return undefined;
-  const head = (view.text ?? "").slice(0, parseMessage(view.text ?? "").bodyOffset);
-  if (/^transfer-encoding:[^\r\n]*chunked/im.test(head)) return undefined;
-  return view.body_base64;
+ if (!view.body_base64) return undefined;
+ const encoding = view.content_encoding?.trim().toLowerCase();
+ if (encoding && encoding !== "identity") return undefined;
+ const head = (view.text ?? "").slice(0, parseMessage(view.text ?? "").bodyOffset);
+ if (/^transfer-encoding:[^\r\n]*chunked/im.test(head)) return undefined;
+ return view.body_base64;
 }
 
 /**
@@ -1127,30 +1142,30 @@ export function editableBodyBase64(view: { text?: string; body_base64?: string; 
  * yields nothing.
  */
 export function cookieHeaderTokens(line: string): { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] {
-  const colon = line.indexOf(":");
-  if (colon <= 0) return [];
-  const header = line.slice(0, colon).trim().toLowerCase();
-  if (header !== "cookie" && header !== "set-cookie") return [];
-  const out: { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] = [];
-  let cursor = colon + 1;
-  while (cursor < line.length) {
-    const semi = line.indexOf(";", cursor);
-    const stop = semi < 0 ? line.length : semi;
-    const chunk = line.slice(cursor, stop);
-    const lead = chunk.length - chunk.trimStart().length;
-    const pair = chunk.trim();
-    if (pair !== "") {
-      const start = cursor + lead;
-      const eq = pair.indexOf("=");
-      if (eq < 0) {
-        out.push({ cls: "cookie-name", start, end: start + pair.length });
-      } else {
-        if (eq > 0) out.push({ cls: "cookie-name", start, end: start + eq });
-        if (eq + 1 < pair.length) out.push({ cls: "cookie-value", start: start + eq + 1, end: start + pair.length });
-      }
-    }
-    if (header === "set-cookie") break;
-    cursor = stop + 1;
+ const colon = line.indexOf(":");
+ if (colon <= 0) return [];
+ const header = line.slice(0, colon).trim().toLowerCase();
+ if (header !== "cookie" && header !== "set-cookie") return [];
+ const out: { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] = [];
+ let cursor = colon + 1;
+ while (cursor < line.length) {
+  const semi = line.indexOf(";", cursor);
+  const stop = semi < 0 ? line.length : semi;
+  const chunk = line.slice(cursor, stop);
+  const lead = chunk.length - chunk.trimStart().length;
+  const pair = chunk.trim();
+  if (pair !== "") {
+   const start = cursor + lead;
+   const eq = pair.indexOf("=");
+   if (eq < 0) {
+    out.push({ cls: "cookie-name", start, end: start + pair.length });
+   } else {
+    if (eq > 0) out.push({ cls: "cookie-name", start, end: start + eq });
+    if (eq + 1 < pair.length) out.push({ cls: "cookie-value", start: start + eq + 1, end: start + pair.length });
+   }
   }
-  return out;
+  if (header === "set-cookie") break;
+  cursor = stop + 1;
+ }
+ return out;
 }

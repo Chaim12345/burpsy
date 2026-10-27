@@ -228,10 +228,6 @@ const auditItemsEmptyHint = "no exchange has been queued for audit in this proce
 
 // handleScannerAuditItems serves GET /api/scanner/audit-items: the audit queue.
 func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	limit := defaultAuditItemPageSize
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -362,10 +358,6 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	// The body is optional, exactly as it is on /api/audit/{id}: absent means the server default, and

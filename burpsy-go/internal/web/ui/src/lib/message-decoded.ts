@@ -27,7 +27,10 @@ export interface MessageReading {
  * choice; without it a decodable message reads decoded, because that is the only readable form.
  * A message with no `decoded` always reads as captured, whatever the preference.
  */
-export function messageReading(view: Pick<MessageView, "text" | "decoded" | "decode_error" | "content_encoding">, preferRaw: boolean): MessageReading {
+export function messageReading(
+ view: Pick<MessageView, "text" | "decoded" | "decode_error" | "content_encoding">,
+ preferRaw: boolean,
+): MessageReading {
  const canDecode = typeof view.decoded === "string";
  const encoding = view.content_encoding?.trim() || undefined;
  const decodeError = view.decode_error?.trim() || undefined;

@@ -52,8 +52,7 @@ export interface CaCertState {
  * which is not what types.ts's `Scope` describes. Shares the ["scope"] key so a
  * scope change invalidates both readers.
  */
-export const useScopeView = (): UseQueryResult<ScopeViewWithLibraries> =>
- useResource<ScopeViewWithLibraries>(keys.scope, "/api/scope");
+export const useScopeView = (): UseQueryResult<ScopeViewWithLibraries> => useResource<ScopeViewWithLibraries>(keys.scope, "/api/scope");
 
 /** The full session rule shape: steps, extractions, validity, scope, max_attempts. */
 export const useSessionRulesFull = (): UseQueryResult<SessionRulesResponse> =>
@@ -78,17 +77,27 @@ export interface CookieJarWriteResult {
 
 export function useCookieJarWrite() {
  const client = useQueryClient();
- return useMutation<CookieJarWriteResult, Error, { action: "set" | "remove" | "clear" | "monitor"; host?: string; port?: number; tls?: boolean; name?: string; value?: string; tools?: string[] }>({
+ return useMutation<
+  CookieJarWriteResult,
+  Error,
+  {
+   action: "set" | "remove" | "clear" | "monitor";
+   host?: string;
+   port?: number;
+   tls?: boolean;
+   name?: string;
+   value?: string;
+   tools?: string[];
+  }
+ >({
   mutationFn: (vars) => api<CookieJarWriteResult>("/api/session/cookies", json("POST", vars)),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.sessionCookies }),
  });
 }
 
-export const useProtocols = (): UseQueryResult<ProtocolReport> =>
- useResource<ProtocolReport>(keys.protocols, "/api/protocols");
+export const useProtocols = (): UseQueryResult<ProtocolReport> => useResource<ProtocolReport>(keys.protocols, "/api/protocols");
 
-export const useEventHubStats = (): UseQueryResult<EventHubStats> =>
- useResource<EventHubStats>(policyKeys.eventStats, "/api/events/stats");
+export const useEventHubStats = (): UseQueryResult<EventHubStats> => useResource<EventHubStats>(policyKeys.eventStats, "/api/events/stats");
 
 /** The live TLS passthrough list. Edits through the mutations below take effect immediately. */
 export const usePassthrough = (): UseQueryResult<PassthroughView> =>
@@ -147,8 +156,7 @@ export interface CaStatus {
  directory?: string;
 }
 
-export const useCaStatus = (): UseQueryResult<CaStatus> =>
- useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
+export const useCaStatus = (): UseQueryResult<CaStatus> => useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
 
 /**
  * GET /api/session/prompts — the pending browser-recovery prompts, oldest first.
@@ -174,8 +182,7 @@ export const useSessionPrompts = (): UseQueryResult<SessionPromptsResponse> =>
  */
 export function useResolveSessionPrompt(id: number) {
  return useMutation({
-  mutationFn: (body: { recovered: boolean }) =>
-   api<SessionPromptResolveResponse>(`/api/session/prompts/${id}/resolve`, json("POST", body)),
+  mutationFn: (body: { recovered: boolean }) => api<SessionPromptResolveResponse>(`/api/session/prompts/${id}/resolve`, json("POST", body)),
  });
 }
 
@@ -327,8 +334,7 @@ function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
  */
 export function useTestMatchReplace() {
  return useMutation({
-  mutationFn: (request: MatchReplaceTestRequest) =>
-   api<MatchReplaceTestResponse>("/api/tools/rules/test", json("POST", request)),
+  mutationFn: (request: MatchReplaceTestRequest) => api<MatchReplaceTestResponse>("/api/tools/rules/test", json("POST", request)),
  });
 }
 
@@ -336,8 +342,7 @@ export function useTestMatchReplace() {
 export function useSessionLogin() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (probe: SessionMacroStep) =>
-   api<SessionLoginResponse>("/api/session/login", json("POST", { probe })),
+  mutationFn: (probe: SessionMacroStep) => api<SessionLoginResponse>("/api/session/login", json("POST", { probe })),
   onSuccess: () => invalidate([["session"]]),
  });
 }
@@ -349,8 +354,7 @@ export function useSessionLogin() {
 export function useUpdateSessionMacro() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (id: number) =>
-   api<{ steps: SessionMacroStep[] }>(`/api/session/rules/${id}/update-macro`, json("POST", {})),
+  mutationFn: (id: number) => api<{ steps: SessionMacroStep[] }>(`/api/session/rules/${id}/update-macro`, json("POST", {})),
   onSuccess: () => invalidate([["session"]]),
  });
 }
@@ -403,8 +407,7 @@ export function useRecordMacroSteps() {
  */
 export function useTestSessionRule() {
  return useMutation({
-  mutationFn: (id: number) =>
-   api<SessionTestResponse>(`/api/session/rules/${id}/test`, json("POST", {})),
+  mutationFn: (id: number) => api<SessionTestResponse>(`/api/session/rules/${id}/test`, json("POST", {})),
  });
 }
 
@@ -426,16 +429,14 @@ export function useSessionTrace() {
 export function useSessionTraceEnable() {
  const client = useQueryClient();
  return useMutation({
-  mutationFn: (enabled: boolean) =>
-   api<SessionTraceEnableResponse>("/api/session/trace/enable", json("POST", { enabled })),
+  mutationFn: (enabled: boolean) => api<SessionTraceEnableResponse>("/api/session/trace/enable", json("POST", { enabled })),
   onSuccess: () => void client.invalidateQueries({ queryKey: policyKeys.sessionTrace }),
  });
 }
 
 export function useAnalyzeSessionRule() {
  return useMutation({
-  mutationFn: (id: number) =>
-   api<SessionAnalyzeResponse>(`/api/session/rules/${id}/analyze`, json("POST", {})),
+  mutationFn: (id: number) => api<SessionAnalyzeResponse>(`/api/session/rules/${id}/analyze`, json("POST", {})),
  });
 }
 
@@ -457,8 +458,7 @@ export function useApplySessionExtractions() {
  */
 export function useSendFrameProgram() {
  return useMutation({
-  mutationFn: (request: FrameProgramRequest) =>
-   api<FrameProgramResponse>("/api/http2/program", json("POST", request)),
+  mutationFn: (request: FrameProgramRequest) => api<FrameProgramResponse>("/api/http2/program", json("POST", request)),
  });
 }
 
@@ -492,8 +492,7 @@ export function useAddPassthrough() {
 export function useRemovePassthrough() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (pattern: string) =>
-   api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
+  mutationFn: (pattern: string) => api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
   onSuccess: () => invalidate([policyKeys.passthrough]),
  });
 }
@@ -571,8 +570,7 @@ export interface ScopeLibraryResult {
 export function useUpdateScopeLibrary() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (update: ScopeLibraryUpdate) =>
-   api<ScopeLibraryResult>("/api/scope", json("POST", update)),
+  mutationFn: (update: ScopeLibraryUpdate) => api<ScopeLibraryResult>("/api/scope", json("POST", update)),
   onSuccess: () => invalidate([keys.scope]),
  });
 }

@@ -350,17 +350,19 @@ func TestABundledCheckExcludedAsAFalsePositiveStillMisfires(t *testing.T) {
 	}
 }
 
-// The bundled set is available and not enabled: attaching it leaves check_corpus off, so a default
-// audit dispatches none of it until the operator turns the switch on.
-func TestTheBundledCorpusIsOffUntilCheckCorpusIsOn(t *testing.T) {
+// The bundled set is part of the default audit: attaching it switches check_corpus on, exactly
+// like a loaded corpus, so a default audit dispatches it — the attached-but-never-dispatched
+// shape was under-coverage that looked like a working scanner (architecture review, weakness 7).
+// The operator's off switch is check_corpus, and it must keep working.
+func TestTheBundledCorpusDispatchesByDefault(t *testing.T) {
 	checks, err := bundled.Checks()
 	if err != nil {
 		t.Fatal(err)
 	}
 	store := core.NewTrafficStore()
 	sc := NewActiveScanner(store, zap.NewNop()).WithBundledCorpus(checks)
-	if sc.ConfigSnapshot().CheckCorpus {
-		t.Fatal("attaching the bundled corpus turned check_corpus on")
+	if !sc.ConfigSnapshot().CheckCorpus {
+		t.Fatal("attaching the bundled corpus did not turn check_corpus on")
 	}
 	countCorpus := func() int {
 		n := 0
@@ -371,15 +373,18 @@ func TestTheBundledCorpusIsOffUntilCheckCorpusIsOn(t *testing.T) {
 		}
 		return n
 	}
+	if n := countCorpus(); n == 0 {
+		t.Fatal("with the bundled corpus attached, no bundled check is in the dispatch set")
+	}
+	// The honest opt-out: check_corpus off removes the bundled set from the dispatch set.
+	cfg := sc.ConfigSnapshot()
+	cfg.CheckCorpus = false
+	sc.WithConfig(&cfg)
 	if n := countCorpus(); n != 0 {
 		t.Fatalf("with check_corpus off, %d bundled checks are in the dispatch set", n)
 	}
-	cfg := sc.ConfigSnapshot()
 	cfg.CheckCorpus = true
 	sc.WithConfig(&cfg)
-	if n := countCorpus(); n == 0 {
-		t.Fatal("with check_corpus on, no bundled check is in the dispatch set")
-	}
 	// A loaded check of the same name replaces the bundled one rather than running beside it.
 	sc.WithCorpusChecks([]*bcheck.Check{checks[0]})
 	seen := map[string]int{}

@@ -9,7 +9,8 @@ import { api, json } from "./api";
 export interface DomInvaderHit {
  id: number;
  /** "source" (the canary entered the page) or "sink" (it reached a sink). */
- kind: "source" | "sink";
+ kind: "source" | "sink" | "pollution-source" | "pollution-gadget";
+ property?: string; technique?: string; limitations?: string;
  /** The sink tag for a sink hit, or the source name for a source hit. */
  sink: string;
  /** The browser-readable sources carrying the canary when the hit fired. */
@@ -24,7 +25,12 @@ export interface DomInvaderHit {
  received_unix_ms: number;
 }
 
+export interface PollutionConfig {
+ enabled: boolean; target: string; query: boolean; hash: boolean; json: boolean; nested: boolean; properties: string[];
+}
+export interface PollutionResult { hits: DomInvaderHit[]; blocked: string[]; limitations: string; probes: number; errors: string[]; }
 export interface DomInvaderView {
+ pollution: PollutionConfig;
  canary: string;
  enabled: boolean;
  hits: DomInvaderHit[];
@@ -43,7 +49,7 @@ export function useDomInvader(): UseQueryResult<DomInvaderView> {
 
 export function useSetDomInvader() {
  const client = useQueryClient();
- return useMutation<DomInvaderView, Error, { canary?: string; enabled?: boolean }>({
+ return useMutation<DomInvaderView, Error, { canary?: string; enabled?: boolean; pollution?: PollutionConfig }>({
   mutationFn: (body) => api<DomInvaderView>("/api/dominvader", json("PUT", body)),
   onSuccess: (view) => client.setQueryData(domInvaderKey, view),
  });
@@ -53,6 +59,14 @@ export function useClearDomInvaderHits() {
  const client = useQueryClient();
  return useMutation<void, Error, void>({
   mutationFn: () => api<void>("/api/dominvader/hits", json("DELETE")),
+  onSuccess: () => void client.invalidateQueries({ queryKey: domInvaderKey }),
+ });
+}
+
+export function useScanDomPollution() {
+ const client = useQueryClient();
+ return useMutation<PollutionResult, Error, void>({
+  mutationFn: () => api<PollutionResult>("/api/dominvader/scan", json("POST", {})),
   onSuccess: () => void client.invalidateQueries({ queryKey: domInvaderKey }),
  });
 }

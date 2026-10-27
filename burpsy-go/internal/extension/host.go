@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 )
@@ -61,6 +63,12 @@ var (
 	ErrNotLoaded = errors.New("plugin is not loaded")
 	// ErrUnknownRegistration means the plugin never registered that id.
 	ErrUnknownRegistration = errors.New("plugin registered no such id")
+	// ErrSelectionTooLarge is a hotkey invocation carrying more than MaxHotkeySelection rows.
+	ErrSelectionTooLarge = errors.New("hotkey selection too large")
+	// ErrInvalidSelection is a hotkey context the plugin could not act on: a selected row with no
+	// exchange id (it would serialise as null where the protocol says int), a negative id, or an
+	// editor carrying neither a message id nor text.
+	ErrInvalidSelection = errors.New("invalid hotkey context")
 )
 
 // Config is the operator's allowlist and every bound this host imposes.
@@ -86,6 +94,17 @@ type Config struct {
 	// not silently mean "burpsy executed three binaries on boot" — see NewHost's own note. A plugin
 	// author who is iterating turns it on; an operator running someone else's plugins leaves it off.
 	ReloadOnStart bool
+	// HookTimeout bounds one traffic hook call; zero takes DefaultHookTimeout. HookFailureLimit
+	// consecutive failures suspend a plugin's hooks for HookCooldown (zero takes the defaults).
+	HookTimeout      time.Duration
+	HookFailureLimit int
+	HookCooldown     time.Duration
+	// Grants maps a plugin's allowlist name to the plugin->host methods the operator has
+	// allowed it (see GrantableMethods). A method not listed answers CodeNoGrant. Check the
+	// operator's input with ValidateGrants.
+	Grants map[string][]string
+	// Services is what the grants reach. A nil field answers CodeNotWired.
+	Services Services
 	// AutoReload re-loads a loaded plugin when its executable changes on disk, so an author who has
 	// just rebuilt does not have to press Unload and Load to see the new binary.
 	//
@@ -124,6 +143,15 @@ func (c Config) withDefaults() Config {
 	if c.ReloadInterval <= 0 {
 		c.ReloadInterval = DefaultReloadInterval
 	}
+	if c.HookTimeout <= 0 {
+		c.HookTimeout = DefaultHookTimeout
+	}
+	if c.HookFailureLimit <= 0 {
+		c.HookFailureLimit = DefaultHookFailureLimit
+	}
+	if c.HookCooldown <= 0 {
+		c.HookCooldown = DefaultHookCooldown
+	}
 	if c.Logger == nil {
 		c.Logger = zap.NewNop()
 	}
@@ -135,6 +163,8 @@ func (c Config) withDefaults() Config {
 type plugin struct {
 	name string
 	spec PluginSpec
+	// grants is the sorted, de-duplicated set the operator allowed this plugin.
+	grants []string
 
 	console *console
 
@@ -143,6 +173,12 @@ type plugin struct {
 	// hold mu for its duration.
 	invocations atomic.Int64
 	failures    atomic.Int64
+
+	// Traffic hook accounting (hooks.go). Reset on every load.
+	hookCalls      atomic.Int64
+	hookFails      atomic.Int64
+	hookStreak     atomic.Int64
+	hookSuspendEnd atomic.Int64 // unix nanos; 0 when not suspended
 
 	mu       sync.Mutex
 	state    State
@@ -181,6 +217,15 @@ type Host struct {
 // keeps "burpsy was started with -plugins" from meaning "burpsy executed three
 // binaries on boot" — the load is an act the operator performs and the route
 // classifies accordingly.
+// SetServices injects what the host methods reach (hostapi.go's Services). It
+// exists for the composition root: NewHost runs before the web server and the
+// sender exist, and plugins load later still, so the services are assembled
+// between the two. Call before the first Load — a write after one is a data
+// race against the load reading cfg.Services, not a late binding.
+func (h *Host) SetServices(s Services) {
+	h.cfg.Services = s
+}
+
 func NewHost(cfg Config) *Host {
 	cfg = cfg.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -189,6 +234,7 @@ func NewHost(cfg Config) *Host {
 		h.byName[name] = &plugin{
 			name:    name,
 			spec:    spec,
+			grants:  cleanGrants(cfg.Grants[name]),
 			state:   StateUnloaded,
 			console: newConsole(cfg.MaxConsoleLines, cfg.MaxConsoleLineBytes),
 		}
@@ -412,13 +458,18 @@ func (h *Host) Load(name string) (PluginView, error) {
 	p.stopping = false
 	p.registrations = nil
 	p.refused = 0
+	p.hookCalls.Store(0)
+	p.hookFails.Store(0)
+	p.hookStreak.Store(0)
+	p.hookSuspendEnd.Store(0)
 	p.manifest = Manifest{}
 	spec := p.spec
 	p.mu.Unlock()
 
 	p.console.append(StreamOutput, SourceHost, "loading "+spec.Path)
 
-	sess, err := spawn(h.ctx, name, spec, p.console, h.cfg.MaxMessageBytes)
+	sess, err := spawn(h.ctx, name, spec, p.console, h.cfg.MaxMessageBytes,
+		newHostAPI(name, p.grants, h.cfg.Services), h.cfg.CallTimeout)
 	if err != nil {
 		return p.markFailed(err.Error()), err
 	}
@@ -517,7 +568,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case seen[reg.ID]:
 			refuse(fmt.Sprintf("%q is declared twice; an invoke could not say which was meant", reg.ID))
 		case !validKinds[reg.Kind]:
-			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action and hotkey",
+			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action, hotkey, payload-generator, payload-processor, http-handler, proxy-handler and websocket-handler",
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
@@ -650,6 +701,19 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		return InvokeResult{}, fmt.Errorf("%q registration %q: %w", name, params.Registration, ErrUnknownRegistration)
 	}
 
+	if kind == KindHotKey {
+		if len(params.Selected) > MaxHotkeySelection {
+			return InvokeResult{}, fmt.Errorf("%q registration %q: %d rows, limit %d: %w",
+				name, params.Registration, len(params.Selected), MaxHotkeySelection, ErrSelectionTooLarge)
+		}
+		if err := validateHotkeyContext(params); err != nil {
+			return InvokeResult{}, fmt.Errorf("%q registration %q: %w", name, params.Registration, err)
+		}
+	} else {
+		// Only hotkey.invoke documents these; do not widen another method's params.
+		params.Selected, params.Editor = nil, nil
+	}
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -669,6 +733,16 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
 	case KindHotKey:
 		err = sess.call(callCtx, "hotkey.invoke", params, &result)
+	case KindHTTPHandler:
+		err = sess.call(callCtx, "http.handle", params, &result)
+	case KindProxyHandler:
+		err = sess.call(callCtx, "proxy.handle", params, &result)
+	case KindWebSocketHandler:
+		err = sess.call(callCtx, "websocket.handle", params, &result)
+	case KindPayloadGenerator:
+		err = sess.call(callCtx, "payload.generate", params, &result)
+	case KindPayloadProcessor:
+		err = sess.call(callCtx, "payload.process", params, &result)
 	default:
 		// Unreachable: validate() refuses any other kind at load. Kept as a real
 		// error rather than a panic so a future kind added to validKinds and not
@@ -682,6 +756,119 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		return InvokeResult{}, err
 	}
 	return result, nil
+}
+
+// RegistrationKind reports the kind of one plugin's registration, for composition layers
+// that must refuse a misaddressed payload source or rule before any payload is generated —
+// the same check GeneratePayload and ProcessPayload repeat at call time.
+func (h *Host) RegistrationKind(name, registration string) (Kind, error) {
+	return h.kindOf(name, registration)
+}
+
+// ErrWrongKind is a payload call against a registration of the other payload kind.
+var ErrWrongKind = errors.New("registration has a different kind")
+
+func (h *Host) kindOf(name, registration string) (Kind, error) {
+	p, err := h.lookup(name)
+	if err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, reg := range p.registrations {
+		if reg.ID == registration {
+			return reg.Kind, nil
+		}
+	}
+	return "", fmt.Errorf("%q registration %q: %w", name, registration, ErrUnknownRegistration)
+}
+
+func encodePayload(b []byte) (string, string) {
+	if utf8.Valid(b) {
+		return string(b), ""
+	}
+	return base64.StdEncoding.EncodeToString(b), "base64"
+}
+
+func decodePayload(s *string, encoding string) ([]byte, error) {
+	if s == nil {
+		return nil, nil
+	}
+	switch encoding {
+	case "":
+		return []byte(*s), nil
+	case "base64":
+		return base64.StdEncoding.DecodeString(*s)
+	}
+	return nil, fmt.Errorf("unknown payload encoding %q", encoding)
+}
+
+// GeneratePayload asks a payload-generator registration for the payload at position. done is
+// true when the plugin has no more. The Intruder engine is the caller.
+func (h *Host) GeneratePayload(ctx context.Context, name, registration string, position int) (payload []byte, done bool, err error) {
+	kind, err := h.kindOf(name, registration)
+	if err != nil {
+		return nil, false, err
+	}
+	if kind != KindPayloadGenerator {
+		return nil, false, fmt.Errorf("%q registration %q is %q: %w", name, registration, kind, ErrWrongKind)
+	}
+	res, err := h.Invoke(ctx, name, InvokeParams{Registration: registration, Position: &position})
+	if err != nil {
+		return nil, false, err
+	}
+	if res.Done {
+		return nil, true, nil
+	}
+	if res.Payload == nil {
+		return nil, false, fmt.Errorf("%q registration %q answered neither a payload nor done", name, registration)
+	}
+	out, err := decodePayload(res.Payload, res.Encoding)
+	if err != nil {
+		return nil, false, fmt.Errorf("%q registration %q: undecodable payload: %w", name, registration, err)
+	}
+	return out, false, nil
+}
+
+// ProcessPayload runs a payload-processor registration over one payload. skip is true when the
+// plugin drops it. On any error the returned payload is nil, so the caller keeps the original.
+func (h *Host) ProcessPayload(ctx context.Context, name, registration string, payload, base []byte) (out []byte, skip bool, err error) {
+	kind, err := h.kindOf(name, registration)
+	if err != nil {
+		return nil, false, err
+	}
+	if kind != KindPayloadProcessor {
+		return nil, false, fmt.Errorf("%q registration %q is %q: %w", name, registration, kind, ErrWrongKind)
+	}
+	ptext, penc := encodePayload(payload)
+	params := InvokeParams{Registration: registration, Payload: &ptext, Encoding: penc}
+	if base != nil {
+		btext, benc := encodePayload(base)
+		if benc != "" && penc == "" {
+			// One encoding field covers both; send both as base64 when either needs it.
+			ptext, penc = base64.StdEncoding.EncodeToString(payload), "base64"
+			params.Payload, params.Encoding = &ptext, penc
+		}
+		if penc == "base64" && benc == "" {
+			btext = base64.StdEncoding.EncodeToString(base)
+		}
+		params.BaseValue = &btext
+	}
+	res, err := h.Invoke(ctx, name, params)
+	if err != nil {
+		return nil, false, err
+	}
+	if res.Action == "skip" {
+		return nil, true, nil
+	}
+	if res.Payload == nil {
+		return nil, false, fmt.Errorf("%q registration %q answered neither a payload nor skip", name, registration)
+	}
+	out, err = decodePayload(res.Payload, res.Encoding)
+	if err != nil {
+		return nil, false, fmt.Errorf("%q registration %q: undecodable payload: %w", name, registration, err)
+	}
+	return out, false, nil
 }
 
 // markFailed records a load that did not complete and returns the row to serve.
@@ -726,8 +913,17 @@ func (p *plugin) viewLocked() PluginView {
 		Invocations:          int(p.invocations.Load()),
 		InvocationFailures:   int(p.failures.Load()),
 	}
+	view.HookCalls = int(p.hookCalls.Load())
+	view.HookFailures = int(p.hookFails.Load())
+	view.HookSuspended = p.hookSuspendEnd.Load() > time.Now().UnixNano()
+	view.Grants = append([]string{}, p.grants...)
+	view.HostCalls = map[string]int{}
 	if p.session != nil {
 		view.ProtocolErrors = int(p.session.protocolErrors.Load())
+		if api := p.session.api; api != nil {
+			view.HostCalls = api.countsCopy()
+			view.RefusedHostCalls = int(api.refused.Load())
+		}
 	}
 	return view
 }
@@ -737,4 +933,40 @@ func orUnnamed(value string) string {
 		return "(unnamed)"
 	}
 	return value
+}
+
+func cleanGrants(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, g := range in {
+		if isGrantable(g) && !seen[g] {
+			seen[g] = true
+			out = append(out, g)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateHotkeyContext refuses a context that would reach the plugin malformed. Ids are
+// non-negative (0 is real); a nil id is refused rather than sent as null. An Editor must carry a
+// message id or text: {} says nothing and is not the same as absent.
+func validateHotkeyContext(p InvokeParams) error {
+	for i, row := range p.Selected {
+		if row.Exchange == nil {
+			return fmt.Errorf("selected[%d] has no exchange id: %w", i, ErrInvalidSelection)
+		}
+		if *row.Exchange < 0 {
+			return fmt.Errorf("selected[%d] exchange id %d is negative: %w", i, *row.Exchange, ErrInvalidSelection)
+		}
+	}
+	if e := p.Editor; e != nil {
+		if e.Message == nil && e.Raw == "" {
+			return fmt.Errorf("editor carries neither a message id nor text: %w", ErrInvalidSelection)
+		}
+		if e.Message != nil && *e.Message < 0 {
+			return fmt.Errorf("editor message id %d is negative: %w", *e.Message, ErrInvalidSelection)
+		}
+	}
+	return nil
 }

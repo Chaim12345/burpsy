@@ -57,10 +57,6 @@ type graphqlSitemapResp struct {
 }
 
 func (s *Server) handleGraphQLSitemap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req graphqlSitemapReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil || req.ExchangeID == nil {
 		http.Error(w, `body must be JSON {"exchange_id": n} naming the exchange whose response is the introspection answer`, http.StatusBadRequest)

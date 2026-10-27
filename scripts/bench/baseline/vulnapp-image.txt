@@ -1,0 +1,10 @@
+# VulnerableApp image pin for the nightly bench and local bench recipes.
+# sasanlabs/owasp-vulnerableapp:latest resolved to this digest via the Docker Hub API
+# (repositories/sasanlabs/owasp-vulnerableapp/tags/latest) on 2026-10-26, when :latest
+# had last_updated 2026-10-26T17:35:34Z. The tag moved that same day; without the pin a
+# nightly can report score regressions burpsy did not cause, or hide real ones.
+sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149
+#
+# The score baseline scripts/bench/baseline/vulnapp.json (bead j1mk.38) does not exist yet.
+# When it is generated, generate it against THIS digest and record any later pin change
+# here together with a regenerated baseline.

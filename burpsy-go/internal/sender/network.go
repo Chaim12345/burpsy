@@ -42,6 +42,10 @@ type NetworkSettings struct {
 	// h2 off for every send: nil means Burp's default, which is keep-alive off and h2 on.
 	HTTP1 *HTTP1Settings `json:"http1,omitempty"`
 	HTTP2 *HTTP2Settings `json:"http2,omitempty"`
+	// HTTP3 is burpsy's own panel - Burp speaks no h3. Pointer for the same reason as HTTP1/HTTP2:
+	// a document written before it existed unmarshals nil, and nil must mean the default (the
+	// Alt-Svc leg ON, vln3 ruling C), which a zero struct would read as off.
+	HTTP3 *HTTP3Settings `json:"http3,omitempty"`
 }
 
 // HTTP1Settings is Burp's "HTTP/1" panel.
@@ -63,6 +67,19 @@ func (n NetworkSettings) KeepAliveHTTP1() bool { return n.HTTP1 != nil && n.HTTP
 
 // DefaultToHTTP2 reports whether a send that names no protocol may use h2.
 func (n NetworkSettings) DefaultToHTTP2() bool { return n.HTTP2 == nil || n.HTTP2.EnableHTTP2 }
+
+// HTTP3Settings is burpsy's own "HTTP/3" panel (burpsy-react-ui-kidb); Burp has no equivalent.
+type HTTP3Settings struct {
+	// EnableHTTP3AltSvc governs the proxy's Alt-Svc leg: when on (the default), forwarded
+	// responses teach the proxy which origins advertise HTTP/3 and later forwards to those
+	// origins may ride QUIC, disclosed on the exchange row (vln3). Off makes the leg inert:
+	// nothing learned, nothing ridden. Operator-explicit h3 pins (0hgx phase 1) are unaffected -
+	// the switch governs discovery, not an explicit instruction.
+	EnableHTTP3AltSvc bool `json:"enable_http3_alt_svc"`
+}
+
+// RideHTTP3AltSvc reports whether the proxy's Alt-Svc leg is live. Default ON.
+func (n NetworkSettings) RideHTTP3AltSvc() bool { return n.HTTP3 == nil || n.HTTP3.EnableHTTP3AltSvc }
 
 // TLSSettings is how the operator governs the certificate the TARGET presents.
 //
@@ -287,8 +304,9 @@ type TimeoutSettings struct {
 	ConnectMS int `json:"connect_ms"`
 	// ReadMS bounds the wait for a response to begin arriving. Zero means no bound of its own.
 	ReadMS int `json:"read_ms"`
-	// TotalMS bounds one whole exchange, dial through last body byte. Zero means unbounded, which is
-	// only sane when the caller supplies a context deadline instead.
+	// TotalMS bounds one whole exchange, dial through last body byte. Zero names no bound of its
+	// own; when the caller's context has no deadline either, a built-in bound still ends the
+	// exchange rather than letting a silent peer hang it forever.
 	TotalMS int `json:"total_ms"`
 }
 
@@ -911,9 +929,10 @@ func (n NetworkSettings) exchangeTimeout() time.Duration {
 // been declared open-ended and the ordinary read or total bound for everything else.
 //
 // The fall-through order matters: read_ms is the specific bound and wins when set, total_ms stands in
-// when it is not, and zero means "no deadline of our own" so the caller's context decides. Returning
-// the total here rather than nothing is what preserves the previous behaviour, where
-// SenderConfig.Timeout was the only deadline a raw read ever had.
+// when it is not, and zero means "no bound of our own" - the caller's context decides when it has a
+// deadline, and the built-in defaultExchangeBound decides when it does not. Returning the total here
+// rather than nothing is what preserves the previous behaviour, where SenderConfig.Timeout was the
+// only deadline a raw read ever had.
 func (n NetworkSettings) readTimeout(host string) time.Duration {
 	if n.Streaming.isStreaming(host) {
 		return time.Duration(n.Streaming.TimeoutMS) * time.Millisecond

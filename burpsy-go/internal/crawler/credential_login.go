@@ -1,0 +1,596 @@
+package crawler
+
+// Application-login credentials (burpsy-react-ui-uzil). Burp's login-functions model: the crawl
+// discovers the application's own login form — an input type=password with a non-empty name —
+// and logs in with each provided username/password pair in turn, then crawls the content behind
+// the login carrying the session it earned.
+//
+// # Why this rides the frontier instead of a side channel
+//
+// A credential login IS a form submission: same urlencoded POST, same scope gate, same rate
+// limit, same capture (CRAWL-02). Building it as frontier items keeps every one of those
+// properties and gives the run's history one honest account of what was sent. What differs from
+// an ordinary submission is three things:
+//
+//   - The values are the configured credentials, not the placeholder fill an ordinary form gets.
+//   - The response's Set-Cookie is harvested into the crawl's session jar, the same jar a
+//     recorded login maintains, so every later request carries the session (buildRequest).
+//   - The STORED exchange masks the credential values (maskValues on the item): the bytes on the
+//     wire carry them, the bytes history keeps do not. This is the bead's "never logged/stored
+//     beyond the run's need" condition applied to the exchange store, on the HeadersWithheld
+//     precedent — the secret reaches the target and nothing else.
+//
+// # Phased credentials, one crawl (burpsy-react-ui-crediso)
+//
+// With several credentials the crawl runs in PHASES, Burp's model: the unauthenticated phase
+// first (it discovers the login form and bounces off the pages that want a session), then one
+// phase per credential. A phase begins when the previous phase's frontier drains: the whole
+// per-credential session state is rebuilt — jar, re-login closure, and the report's
+// current-session fields — and the form is submitted with this credential as the phase's first
+// act, ADMITTED TO THE FRONTIER so cancellation, the suite pause and the request/duration
+// budgets gate it like every other send. The pages the unauthenticated phase bounced off
+// (401/403, GET-only, bounded) are re-fetched WITH the session, and the phase's transport-failure
+// retries run before the boundary retires its session — a retry an ended phase still owes is
+// abandoned and counted, never sent under the next phase's session. Frontier dedup, the template
+// quota, expiry detection and the link-walk decision are all namespaced or reset per phase, so
+// each credential re-crawls the application behind its own login — per-phase state, no
+// cross-credential leakage. What stays global is the location COUNT: identical content is one
+// location however many phases fetched it. One login form per crawl: the FIRST identified login
+// form is the one every phase answers, the same "one auth method" reading as New's BrowserLogin
+// refusal; later login forms are noted and ignored.
+//
+// # What session loss does
+//
+// A credential session installs the same loginState a recorded login does, with a formLogin as
+// its BrowserLogin: the session-expiry detector's re-login re-sends the form submission through
+// the ordinary send-and-capture path and harvests the fresh cookie. One pipeline, one report.
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+)
+
+// loginFunctionsKeyRows are the three login-switches of Burp's crawl-key vocabulary
+// (burpsy-react-ui-uzil): the two login_functions keys Burp's shipped CrawlDefaults carry (both
+// true there; opt-in here, writes-are-opt-in) and crawl_optimization's
+// crawl_using_provided_logins_only. Registered through the cross-file seam rather than added to
+// burpconfig.go's table, on the errorhandling.go precedent: the family lives beside the
+// behaviour it switches, and the merge it avoids is the point of the seam.
+func init() {
+	for _, r := range []burpCrawlConfigKey{
+		{burpKey: "crawler/login_functions/attempt_to_self_register_a_user", loginField: "AttemptSelfRegister"},
+		{burpKey: "crawler/login_functions/trigger_login_failures", loginField: "TriggerLoginFailures"},
+		{burpKey: "crawler/crawl_optimization/crawl_using_provided_logins_only", loginField: "ProvidedLoginsOnly"},
+	} {
+		registerBurpCrawlKey(r)
+	}
+}
+
+// applyLoginKey decodes one login-functions switch: a bool, refused rather than coerced, on the
+// same rule the customization switches follow.
+func (c *CrawlConfig) applyLoginKey(row burpCrawlConfigKey, raw json.RawMessage) error {
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+	}
+	switch row.loginField {
+	case "AttemptSelfRegister":
+		c.AttemptSelfRegister = b
+	case "TriggerLoginFailures":
+		c.TriggerLoginFailures = b
+	case "ProvidedLoginsOnly":
+		c.ProvidedLoginsOnly = b
+	}
+	return nil
+}
+
+// maxAuthChallenged bounds the remembered set of URLs the unauthenticated phase bounced off.
+const maxAuthChallenged = 1000
+
+// maskedPlaceholder is what the stored exchange carries in place of each credential value. The
+// tool's own name, like the form filler: an operator who finds it in history knows what wrote it.
+const maskedPlaceholder = "burpsy-masked"
+
+// maskStoredValues returns the request bytes as history may keep them: every occurrence of each
+// secret — raw and urlencoded, since a urlencoded body carries the encoded form — replaced by
+// the placeholder. The wire bytes are built from the unmasked item; only the stored copy passes
+// through here.
+func maskStoredValues(raw []byte, secrets []string) []byte {
+	if len(secrets) == 0 {
+		return raw
+	}
+	out := raw
+	for _, s := range secrets {
+		if s == "" {
+			continue
+		}
+		out = bytes.ReplaceAll(out, []byte(s), []byte(maskedPlaceholder))
+		if enc := url.QueryEscape(s); enc != s {
+			out = bytes.ReplaceAll(out, []byte(enc), []byte(maskedPlaceholder))
+		}
+	}
+	return out
+}
+
+// credentialLoginForm is the crawl's record of the application's login form: the first form the
+// discovery pass identified on Burp's rule when credentials are configured. The phases build
+// their login submissions from it at phase start — the form is discovered in the unauthenticated
+// phase and answered in each credential phase.
+type credentialLoginForm struct {
+	action        *url.URL // resolved against the page that carried the form
+	method        string
+	fields        []formField
+	passwordField string
+	usernameField string
+	label         string
+	foundAt       string
+	depth         int
+}
+
+// recordLoginForm keeps the first identified login form. One login function per crawl — the
+// same "one auth method" reading as New's BrowserLogin refusal — so a LATER login form is
+// ignored, and the ignoring is recorded: content behind a second login function is a coverage
+// hole the operator can see, not a silent choice.
+func (c *Crawler) recordLoginForm(f discoveredForm, base, u *url.URL, depth int) {
+	if c.loginForm != nil {
+		// The SAME form found again - a header login box on another page, or the page
+		// fetched again in a credential phase - is not a second login function: nothing was
+		// ignored, so nothing is recorded (PR #363 review: the record exists to show the
+		// operator a coverage hole, and an identical form is not one).
+		if sameLoginForm(c.loginForm, f, u) {
+			return
+		}
+		c.skips.record(SkipRecord{
+			Reason: SkipLoginFormIgnored, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "the crawl answers the first login form it found (" + c.loginForm.foundAt + "); this later one is ignored",
+		})
+		return
+	}
+	c.loginForm = &credentialLoginForm{
+		action: u, method: f.method, fields: f.fields,
+		passwordField: f.passwordField, usernameField: f.usernameField,
+		label: f.label, foundAt: base.String(), depth: depth,
+	}
+}
+
+// sameLoginForm reports whether f, resolved to u, is the recorded login form found again
+// rather than a second one: same resolved action, method and field names, in order.
+func sameLoginForm(recorded *credentialLoginForm, f discoveredForm, u *url.URL) bool {
+	if recorded.method != f.method || recorded.action.String() != u.String() {
+		return false
+	}
+	if len(recorded.fields) != len(f.fields) {
+		return false
+	}
+	for i := range recorded.fields {
+		if recorded.fields[i].name != f.fields[i].name {
+			return false
+		}
+	}
+	return true
+}
+
+// buildCredentialLoginItem maps one credential onto the recorded login form's fields: the
+// password onto the password field, the username onto the text field before it, every other
+// field as the page declared it. The wire bytes carry the values; the stored exchange masks them.
+func (c *Crawler) buildCredentialLoginItem(cred LoginCredential) (frontierItem, *SkipRecord) {
+	f := c.loginForm
+	values := url.Values{}
+	mappedUser, mappedPass := false, false
+	for _, fl := range f.fields {
+		v := fl.value
+		switch fl.name {
+		case f.passwordField:
+			v = cred.Password
+			mappedPass = true
+		case f.usernameField:
+			v = cred.Username
+			mappedUser = true
+		}
+		values.Add(fl.name, v)
+	}
+	if !mappedUser && f.usernameField == "" && cred.Username != "" {
+		// No text field accompanies the password one (a password-only form, e.g. a PIN
+		// gate). The password still maps; the username has nowhere to go and is not sent.
+		// credPhase is already incremented, so it numbers this credential.
+		c.skips.record(SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: f.action.String(), Method: f.method, Text: f.label,
+			FoundAt: f.foundAt,
+			Detail: fmt.Sprintf("credential %d's username has no text field to map onto; "+
+				"only the password was sent", c.credPhase),
+		})
+		// Not a refusal of the submission itself: the password still maps.
+	}
+	if !mappedPass {
+		// Discovery marked the form on a named password input, so this cannot happen; if a
+		// future edit breaks that invariant, sending the password nowhere is the safe answer.
+		return frontierItem{}, &SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: f.action.String(), Method: f.method, Text: f.label,
+			FoundAt: f.foundAt,
+			Detail:  "login form has no named password field to carry the credential",
+		}
+	}
+	item := frontierItem{
+		url: f.action, method: f.method, depth: f.depth, foundAt: f.foundAt, text: f.label,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+		// The stored copy of this request masks both values; the wire copy carries them.
+		maskValues: []string{cred.Username, cred.Password},
+		loginCred:  cred.Username,
+	}
+	for _, fl := range f.fields {
+		item.fieldNames = append(item.fieldNames, fl.name)
+	}
+	return item, nil
+}
+
+// startNextCredentialPhase begins the next credential's crawl phase, Burp's phased model
+// (burpsy-react-ui-crediso): the unauthenticated phase runs first; then each credential in turn
+// gets its own crawl behind its own login.
+//
+// A phase boundary ends the whole SESSION: the jar (dropped, never carried into the next login),
+// the re-login closure (it re-sends the login of the phase that built it, so a phase that has
+// not logged in has NONE — the expiry path refuses rather than invoke another phase's), and the
+// report's current-session fields (the crawl ends described by the phase it ended in: a failed
+// phase is unauthenticated, whatever an earlier phase earned) are rebuilt; the expiry detector's
+// template memory, the walk decision's location set and the follow-up pass budget restart. What
+// deliberately ACCUMULATES across phases is the ledger: the report's counters (Attempts,
+// Succeeded, Failed, Relogins) and the global location count.
+//
+// The phase's first act is the login submission, ADMITTED TO THE FRONTIER like every other
+// request — so the run loop's own gates decide whether it is sent: cancellation, the suite pause,
+// and the request/duration budgets apply to a phase login exactly as to any other send, and an
+// exhausted budget refuses the next phase's login outright with the named stop.
+//
+// A failed login does not stop the crawl (Burp's rule): the attempt is recorded, the challenged
+// URLs are NOT seeded (there is no session to re-fetch them with), and the next credential's
+// phase begins when the small admitted set drains.
+func (c *Crawler) startNextCredentialPhase(ctx context.Context, rep *Report, lim *LimitReport) bool {
+	if c.loginForm == nil {
+		return false
+	}
+	for c.credPhase < len(c.cfg.LoginCredentials) {
+		cred := c.cfg.LoginCredentials[c.credPhase]
+		c.credPhase++ // phases are 1-indexed by the counter: phase N answers credentials[N-1]
+		if c.login != nil {
+			// The previous phase's session ends here — all of it. The report accumulates across
+			// phases on the same loginState; everything that IS the session is the phase's own.
+			c.login.jar = nil
+			c.login.login = nil
+			c.login.report.Authenticated = false
+			c.login.report.Label = ""
+			c.login.report.Verified = false
+			c.login.report.CookieNames = []string{}
+			c.login.report.FinalURL = ""
+		}
+		c.templateOK = map[string]bool{}
+		// Traversal restarts too: pages an earlier phase walked are walked again behind this
+		// phase's session. The global location count is untouched — only the walk decision resets.
+		c.phaseLocations = map[string]locationEntry{}
+		c.phaseLocationShapes = map[string][]string{}
+		c.challengedSeeded = false
+		c.followUpPassesSpent = 0
+		item, refusal := c.buildCredentialLoginItem(cred)
+		if refusal != nil {
+			c.skips.record(*refusal)
+			continue
+		}
+		item.phase = c.credPhase
+		// Admitted through the same tail as every other request — scope, dedup, template quota,
+		// capacity — so a refusal is recorded by the same machinery with the same honesty.
+		if c.enqueue(item, item.foundAt, lim) {
+			rep.FormsSubmitted++
+		}
+		return true
+	}
+	return false
+}
+
+// completeCredentialLogin harvests the session a login submission earned. Called from perform
+// after the exchange is captured, so a failed login's exchange is still history (CRAWL-02) and
+// only the session accounting lives here.
+func (c *Crawler) completeCredentialLogin(item frontierItem, rawResponse []byte, rep *Report, lim *LimitReport) {
+	cookies := cookiesFromRawResponse(item.url, rawResponse)
+	st := c.login
+	if st == nil || st.report.Method != "credentials" {
+		// The first credential login of this crawl. A crawl with both a recorded login and
+		// credentials never reaches here — New refuses it (one authentication method per scan,
+		// Burp's own rule) — so this branch is the credentials-only case.
+		st = &loginState{report: LoginReport{Method: "credentials", CookieNames: []string{}, Blocked: []string{}, RenderBlocked: []string{}}}
+		c.login = st
+	}
+	st.report.Attempts++
+	if len(cookies) == 0 {
+		st.report.Failed++
+		st.report.LastFailure = "the login response set no session cookie"
+		return
+	}
+	st.report.Succeeded++
+	st.report.Authenticated = true
+	st.report.Label = item.loginCred
+	if c.credLoginLocationBase < 0 {
+		// The baseline is the first SUCCESS, not the first attempt: a login that never
+		// succeeds unlocked nothing, and a failed first attempt must not peg the count.
+		c.credLoginLocationBase = len(c.locations)
+	}
+	// This credential's jar replaces whatever the phase boundary left (already dropped in
+	// startNextCredentialPhase), so the rest of this phase drains under this session.
+	jar, _ := cookiejar.New(nil)
+	hc := make([]*http.Cookie, 0, len(cookies))
+	names := make([]string, 0, len(cookies))
+	for _, lc := range cookies {
+		// The full attribute set, on recorded_login.attempt's mapping: a cookie the application
+		// scoped by Domain or marked Secure/HttpOnly keeps exactly that scope in the jar — an
+		// attribute dropped here would send the session where the application said it must not
+		// go, or read as a different cookie than the one issued.
+		// G124 flags the unset SameSite, but this is a CLIENT jar rebuild, not a Set-Cookie:
+		// Secure/HttpOnly/Domain/Path arrive from the issued cookie and are preserved, and
+		// net/http/cookiejar's send decision (jar.go shouldSend) reads scheme, host, path and
+		// the secure flag - SameSite is never consulted on send, so the replayed request is
+		// byte-identical with or without it. Attribute preservation is covered by the
+		// /admin-scoped cookie test in credential_login_test.go.
+		c := &http.Cookie{Name: lc.Name, Value: lc.Value, Path: lc.Path, Secure: lc.Secure, HttpOnly: lc.HTTPOnly} //nolint:gosec // client-side jar replay of the issued attributes; cookiejar.shouldSend never consults SameSite (grounding comment above)
+		if !lc.HostOnly {
+			c.Domain = lc.Domain
+		}
+		hc = append(hc, c)
+		if !loginHasString(names, lc.Name) {
+			names = append(names, lc.Name)
+		}
+	}
+	// The jar is keyed on the channel the cookie actually arrived over — unlike attempt()'s
+	// rebuild, which has only CDP's word for the cookie and guesses the scheme from Secure.
+	jar.SetCookies(&url.URL{Scheme: item.url.Scheme, Host: item.url.Host, Path: "/"}, hc)
+	st.jar = jar
+	st.report.CookieNames = names
+	st.report.FinalURL = item.url.String()
+	// The phase's first successful login re-fetches the pages the unauthenticated phase bounced
+	// off, WITH the session (burpsy-react-ui-crediso). A failed phase never reaches here: its
+	// report's Authenticated stays false and nothing is seeded for a session that does not exist.
+	if c.credPhase > 0 && !c.challengedSeeded {
+		c.challengedSeeded = true
+		for _, u := range c.authChallenged {
+			parsed, err := url.Parse(u)
+			if err != nil {
+				continue
+			}
+			c.enqueue(frontierItem{url: parsed, method: "GET", depth: item.depth, foundAt: item.url.String(), text: "re-fetch with session"}, item.url.String(), lim)
+		}
+	}
+	// Session loss after a credential login re-sends this same submission: the formLogin is the
+	// BrowserLogin the session gate's re-login path already knows how to run.
+	st.login = &formLogin{
+		label: item.loginCred,
+		send:  c.credentialLoginSend(item, rep, lim),
+	}
+}
+
+// formLogin is the BrowserLogin a credential session re-logs-in through: its "replay" is the
+// form submission, sent again through the same chokepoint and capture as any crawl request.
+type formLogin struct {
+	label string
+	send  func(ctx context.Context) LoginAttempt
+}
+
+func (f *formLogin) Label() string { return f.label }
+
+func (f *formLogin) Login(ctx context.Context) LoginAttempt { return f.send(ctx) }
+
+// credentialLoginSend re-sends one credential submission and reports the outcome as a
+// LoginAttempt, so loginState.attempt's jar refill and counters work unchanged. The re-send is
+// captured like the original (masked); a capture failure does not fail the login — the session
+// the target granted is real whether or not history could keep the exchange — but it counts
+// against the run's Failed total, as any uncaptured fetch does.
+func (c *Crawler) credentialLoginSend(item frontierItem, rep *Report, lim *LimitReport) func(ctx context.Context) LoginAttempt {
+	return func(ctx context.Context) LoginAttempt {
+		raw := c.buildRequest(item)
+		as := c.senderFor(item.url)
+		global := c.limiter.Acquire()
+		host := c.limiterFor(item.url).Acquire()
+		res, err := as.Send(ctx, raw)
+		host.Release()
+		global.Release()
+		if err != nil {
+			return LoginAttempt{Reason: "the login re-send failed: " + err.Error()}
+		}
+		if len(res.Raw) > c.limits.MaxCaptureBytes {
+			rep.NotCaptured++
+			lim.record(StopCaptureBytes)
+		} else if _, cerr := c.cfg.Capture.Record(scanner.CapturedExchange{
+			Host:     item.url.Hostname(),
+			Port:     portOf(item.url),
+			TLS:      strings.EqualFold(item.url.Scheme, "https"),
+			Method:   item.method,
+			Path:     item.url.RequestURI(),
+			Request:  maskStoredValues(raw, item.maskValues),
+			Response: res.Raw,
+			Started:  time.Now().Add(-res.Duration),
+			Duration: res.Duration,
+			Protocol: core.ProtocolHTTP1,
+			ServerIP: res.Outcome.ServerIP,
+			Source:   c.captureSource(),
+		}); cerr != nil {
+			rep.Failed++
+		} else {
+			rep.Fetched++
+		}
+		cookies := cookiesFromRawResponse(item.url, res.Raw)
+		if len(cookies) == 0 {
+			return LoginAttempt{Reason: "the login response set no session cookie"}
+		}
+		return LoginAttempt{Succeeded: true, Cookies: cookies, FinalURL: item.url.String()}
+	}
+}
+
+// cookiesFromRawResponse parses the Set-Cookie headers of one raw response into LoginCookies,
+// defaulting the absent Domain to the serving host (host-only, RFC 6265) and the absent Path to
+// "/" — close to the RFC's default-path rule for the login endpoints this sees, which answer at
+// their own path or redirect from it.
+func cookiesFromRawResponse(u *url.URL, rawResponse []byte) []LoginCookie {
+	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(rawResponse)), nil)
+	if err != nil {
+		return nil
+	}
+	_ = resp.Body.Close()
+	set := resp.Cookies()
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]LoginCookie, 0, len(set))
+	for _, sc := range set {
+		lc := LoginCookie{
+			Name: sc.Name, Value: sc.Value, Domain: sc.Domain,
+			Path: sc.Path, Secure: sc.Secure, HTTPOnly: sc.HttpOnly,
+		}
+		if lc.Domain == "" {
+			lc.Domain = u.Hostname()
+			lc.HostOnly = true
+		} else {
+			lc.Domain = strings.TrimPrefix(lc.Domain, ".")
+		}
+		if lc.Path == "" {
+			lc.Path = "/"
+		}
+		out = append(out, lc)
+	}
+	return out
+}
+
+// invalidUsername is the deliberately-wrong username of a trigger_login_failures submission.
+// Fixed rather than generated: the value must be invalid on every application, a stable string
+// keeps two runs of one crawl byte-comparable, and the tool's own name tells the operator who
+// wrote the row (the fillerText rule).
+const invalidUsername = "burpsy-invalid-user"
+
+// admitInvalidUsernameLogin enqueues one login submission with a username no application has,
+// so the crawl sees the application's bad-login response (Burp's trigger_login_failures). The
+// values are not credentials — nothing is masked — and the response is not harvested: a session
+// granted to a deliberately invalid username is not one to crawl with.
+func (c *Crawler) admitInvalidUsernameLogin(f discoveredForm, base, u *url.URL, depth int, rep *Report, lim *LimitReport) {
+	if f.method == "GET" {
+		c.skips.record(SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "a login form that submits GET would place usernames in the URL; not submitted",
+		})
+		return
+	}
+	values := url.Values{}
+	for _, fl := range f.fields {
+		v := fl.value
+		switch fl.name {
+		case f.usernameField:
+			v = invalidUsername
+		case f.passwordField:
+			v = fillValue("password", "")
+		}
+		values.Add(fl.name, v)
+	}
+	item := frontierItem{
+		url: u, method: f.method, depth: depth, foundAt: base.String(), text: f.label,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+	}
+	for _, fl := range f.fields {
+		item.fieldNames = append(item.fieldNames, fl.name)
+	}
+	if c.enqueue(item, base.String(), lim) {
+		rep.FormsSubmitted++
+	}
+}
+
+// admitSelfRegistration enqueues one registration submission with a generated account (Burp's
+// attempt_to_self_register_a_user). The username and password are generated per run — a fixed
+// account would already exist on the second scan, and the registration would fail for the wrong
+// reason. The generated password is masked in the stored exchange: it is a credential this run
+// created, and history does not keep credentials. The session the registration earns is
+// harvested exactly like a credential login's.
+func (c *Crawler) admitSelfRegistration(f discoveredForm, base, u *url.URL, depth int, rep *Report, lim *LimitReport) {
+	if f.method == "GET" {
+		c.skips.record(SkipRecord{
+			Reason: SkipFormNotSubmittable, URL: u.String(), Method: f.method, Text: f.label,
+			FoundAt: base.String(),
+			Detail:  "a registration form that submits GET would place the generated credentials in the URL; not submitted",
+		})
+		return
+	}
+	username := "burpsy-" + randHex(4)
+	password := "Burpsy-" + randHex(5)
+	values := url.Values{}
+	for _, fl := range f.fields {
+		v := fl.value
+		switch fl.name {
+		case f.usernameField:
+			v = username
+		default:
+			for _, pf := range f.passwordFields {
+				if fl.name == pf {
+					v = password
+					break
+				}
+			}
+		}
+		values.Add(fl.name, v)
+	}
+	item := frontierItem{
+		url: u, method: f.method, depth: depth, foundAt: base.String(), text: f.label,
+		body:        []byte(values.Encode()),
+		contentType: "application/x-www-form-urlencoded",
+		// Both halves of the generated credential are masked in the stored exchange: "credentials
+		// never stored" is true for the account this run created exactly as for one the operator
+		// provided.
+		maskValues: []string{username, password},
+		loginCred:  username,
+	}
+	for _, fl := range f.fields {
+		item.fieldNames = append(item.fieldNames, fl.name)
+	}
+	if c.enqueue(item, base.String(), lim) {
+		rep.FormsSubmitted++
+		// The same success-path bookkeeping admitForm does for an ordinary submission
+		// (PR #363 review): the per-form cap check runs BEFORE the registration branch, so a
+		// registration that never increments the count is a registration the cap never stops -
+		// the generated credentials make every body unique, and without the count the only
+		// remaining bound was MaxTemplateVisits, about twenty accounts on a site whose footer
+		// carries the register form. The destination goes on the record too: a fresh body is a
+		// new destination by the threshold's own key, which is exactly its reading.
+		if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+			c.formSubmissions[f.signature(base)]++
+		}
+		if threshold := c.cfg.FormSubmissionOptimizationThreshold; threshold > 0 {
+			sig := f.signature(base)
+			set := c.formDestinations[sig]
+			if set == nil {
+				set = make(map[string]struct{})
+				c.formDestinations[sig] = set
+			}
+			set[item.method+" "+item.url.String()+" "+string(item.body)] = struct{}{}
+		}
+	}
+}
+
+// randHex returns n random bytes hex-encoded (2n characters), for the generated self-registration
+// account. crypto/rand: the value is an account password, and a predictable one would be a
+// credential anyone reading this source knows.
+func randHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail on a supported platform; if it ever does, the crawl's clock
+		// still gives a value no other run reuses.
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%x", b)
+}

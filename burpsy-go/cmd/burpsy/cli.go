@@ -130,7 +130,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		corpusChecks = ps.ActiveChecks()
 		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
 	}
-	bundledChecks, berr := bundledCorpus(bchecksDir, logger)
+	bundledChecks, berr := bundledCorpus(logger)
 	if berr != nil {
 		return nil, berr
 	}
@@ -173,26 +173,21 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 				return sent.Raw, nil
 			}),
 		// WithScope, so the audit engine refuses an out-of-scope exchange before it plans any work
-		// and refuses any probe whose own URL leaves the engagement. WithCorpusChecks is a no-op
-		// when no corpus was loaded, so the built-in table is the whole set then. WithToolRunner
-		// carries the -tools allowlist; a nil runner keeps tool checks counted-but-excluded.
-		//
-		// The five capability handles below close the gap where the engine could do work the
-		// shipped binary could never reach: without the ledger the 10 stored/second-order checks
-		// refuse, without the coordinator access-control and CSRF refuse, without the JS/JWT
-		// checks those families refuse despite vendored data compiled into the binary. The
-		// session coordinator is ctx.sess itself — the same single-handle rule as Scope — so the
-		// session rules the CLI edits govern the scanner's comparisons too.
+		// and refuses any probe whose own URL leaves the engagement. The capability recipe is the
+		// shared one (internal/scanner/wiring.go): ledgers, JS-library and JWT checks construct
+		// by default; the tool runner carries the -tools allowlist (nil keeps tool checks
+		// counted-but-excluded); the corpus checks are a no-op when no corpus was loaded, so the
+		// built-in table is the whole set then. The session coordinator is ctx.sess itself,
+		// attached below — the same single-handle rule as Scope — so the session rules the CLI
+		// edits govern the scanner's comparisons too.
 		scanner: scanner.NewActiveScanner(store, logger).
 			WithSender(sender.NewSender(senderCfg)).
 			WithScope(scope).
-			WithCorpusChecks(corpusChecks).
-			WithBundledCorpus(bundledChecks).
-			WithToolRunner(toolRunner).
-			WithStoredLedger(scanner.NewStoredLedger()).
-			WithProvenanceLedger(scanner.NewProvenanceLedger()).
-			WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
-			WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())),
+			WithCapabilities(scanner.CapabilityWiring{
+				CorpusChecks:  corpusChecks,
+				BundledCorpus: bundledChecks,
+				ToolRunner:    toolRunner,
+			}),
 		mr:        matchreplace.NewRuleSet(),
 		toolLog:   toollog.New(),
 		organizer: organizer.New(),

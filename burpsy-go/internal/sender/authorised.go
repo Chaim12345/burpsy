@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,11 +21,35 @@ type ScopeChecker interface {
 	AuthoriseRaw(host string, port uint16, isTLS bool, raw []byte) error
 }
 
+// SendFailure names why one authorised send produced no response, as a kind rather than a
+// string, so a caller reporting an unproven check can tell "the target never saw the bytes"
+// apart from "the bytes were never allowed to leave" without matching on message text.
+type SendFailure int
+
+const (
+	// SendFailureNone marks a send that reached the transport and answered.
+	SendFailureNone SendFailure = iota
+	// SendFailureScope marks bytes the scope gate refused. Kept distinct from a pacing
+	// decline: the operator fixes one with a scope rule and the other with a pool.
+	SendFailureScope
+	// SendFailurePacing marks a group the pacer declined to admit atomically. A synchronized
+	// group that cannot go out together must not trickle out one paced send at a time -
+	// staggered "simultaneous" sends report a race that was never run.
+	SendFailurePacing
+	// SendFailureTransport marks a send that reached the wire and failed there.
+	SendFailureTransport
+)
+
 // AuthorisedResult is one authorised send's outcome.
 type AuthorisedResult struct {
 	Raw      []byte
 	Duration time.Duration
 	Status   *int
+	// Err is why this send produced no usable response, nil when it did. Carried on the
+	// result so a group's per-member failures keep their member's index.
+	Err error
+	// Failure classifies Err; SendFailureNone when Err is nil.
+	Failure SendFailure
 	// Outcome is which protocol carried the send, and why it was not HTTP/2 when it was not.
 	//
 	// Carried on the result rather than left to Sender.Protocols, because a caller that ran one payload
@@ -86,6 +111,20 @@ type Pacer interface {
 	// returns an error only when ctx ends first, and on error nothing must be released — a caller
 	// that got an error never held a slot.
 	Pace(ctx context.Context) (release func(), err error)
+}
+
+// GroupPacer is the optional second contract a Pacer can satisfy: one atomic reservation for
+// a whole synchronized group. SendSynchronizedGroup type-asserts for it, and a Pacer without
+// it declines synchronized groups rather than pacing them one send at a time - per-send
+// acquires would stagger the releases the group exists to align, and N-1 of the members
+// would also go uncounted against the rate budget. intruder.RateLimiter and
+// pool.ContextPacer satisfy it; a custom Pacer that predates the contract declines groups
+// loudly instead of sending them wrong.
+type GroupPacer interface {
+	// PaceN reserves n slots and spends n rate tokens atomically: the caller holds the whole
+	// group or nothing, and the one release gives every slot back. An error means nothing was
+	// held.
+	PaceN(ctx context.Context, n int) (release func(), err error)
 }
 
 // NewAuthorisedSender binds a scope gate and a raw sender to one named target.
@@ -151,11 +190,19 @@ func (a *AuthorisedSender) SendAs(ctx context.Context, raw []byte, pref Protocol
 		return AuthorisedResult{}, err
 	}
 	defer release()
+	// The traffic hook runs after scope and pacing: a plugin sees only requests that were
+	// already allowed to exist, and its replacement must pass the same scope gate before it
+	// may leave (http_hook.go).
+	raw, err = a.hookRequest(ctx, raw)
+	if err != nil {
+		return AuthorisedResult{}, err
+	}
 	start := time.Now()
 	resp, outcome, err := a.net.SendRawOutcome(ctx, a.host, a.port, a.tls, raw, pref)
 	if err != nil {
 		return AuthorisedResult{}, err
 	}
+	resp = a.hookResponse(ctx, resp)
 	a.sent.Add(1)
 	return AuthorisedResult{
 		Raw:      resp,
@@ -163,6 +210,119 @@ func (a *AuthorisedSender) SendAs(ctx context.Context, raw []byte, pref Protocol
 		Status:   httputil.ResponseStatus(resp),
 		Outcome:  outcome,
 	}, nil
+}
+
+// SendSynchronizedGroup sends raws as one synchronized race group: HTTP/1.1, every request's
+// final byte withheld until every member is holding its own, then released together. It is
+// the scanner's single-packet race surface (burpsy-react-ui-0vzb.8), mirroring the Repeater
+// orchestration in internal/web/api_repeater_group.go through this sender's two gates.
+//
+// Scope: every member's bytes are authorised before anything is written, and the first
+// refusal refuses the whole group with the refusal counted like a Send refusal - a partial
+// race group is not a smaller measurement, it is a different one. Pacing: the group acquires
+// once, atomically, through the pacer's GroupPacer contract; a pacer that cannot do that, or
+// a pool that cannot admit the group, declines with SendFailurePacing on every member.
+// A nil pacer paces nothing, exactly as Send.
+//
+// The returned slice is in member order, one entry per raw, each with its own outcome or its
+// own error and failure kind; Sent moves only for members whose bytes actually left. The
+// group error is non-nil only when the group as a whole never ran - scope refusal or pacing
+// decline - never because one member failed on the wire, which is that member's result.
+func (a *AuthorisedSender) SendSynchronizedGroup(ctx context.Context, raws [][]byte) ([]AuthorisedResult, error) {
+	if len(raws) == 0 {
+		return nil, errors.New("refused: a synchronized group has no members")
+	}
+	// Traffic hooks rewrite members before the scope gate, so the gate authorises the bytes that
+	// will actually race; a hook replacement that fails scope refuses the whole group, never a
+	// part of it. Response hooks are deliberately not applied to group members: a race
+	// measurement compares what the target did, not what a plugin made of it.
+	if a.net.hook() != nil {
+		hooked := make([][]byte, len(raws))
+		for i, raw := range raws {
+			hr, err := a.hookRequest(ctx, raw)
+			if err != nil {
+				return nil, err
+			}
+			hooked[i] = hr
+		}
+		raws = hooked
+	}
+	for _, raw := range raws {
+		if err := a.scope.AuthoriseRaw(a.host, a.port, a.tls, raw); err != nil {
+			a.refused.Add(1)
+			return nil, err
+		}
+	}
+	release := func() {}
+	if a.pace != nil {
+		gp, ok := a.pace.(GroupPacer)
+		if !ok {
+			err := errors.New("declined: pacing cannot admit the group atomically (the configured pacer has no group contract)")
+			return declinedGroup(len(raws), err), err
+		}
+		r, err := gp.PaceN(ctx, len(raws))
+		if err != nil {
+			wrapped := fmt.Errorf("declined: pacing cannot admit %d at once: %w", len(raws), err)
+			return declinedGroup(len(raws), wrapped), wrapped
+		}
+		if r != nil {
+			release = r
+		}
+	}
+	defer release()
+
+	ready := make(chan struct{}, len(raws))
+	released := make(chan struct{})
+	barrier := SyncPoints{Ready: ready, Release: released}
+
+	results := make([]AuthorisedResult, len(raws))
+	var wg sync.WaitGroup
+	for i, raw := range raws {
+		wg.Add(1)
+		go func(i int, raw []byte) {
+			defer wg.Done()
+			start := time.Now()
+			resp, outcome, err := a.net.SendSynchronized(ctx, a.host, a.port, a.tls, raw, barrier)
+			if err != nil {
+				results[i] = AuthorisedResult{Err: err, Failure: SendFailureTransport, Outcome: outcome}
+				return
+			}
+			a.sent.Add(1)
+			results[i] = AuthorisedResult{
+				Raw:      resp,
+				Duration: time.Since(start),
+				Status:   httputil.ResponseStatus(resp),
+				Outcome:  outcome,
+			}
+		}(i, raw)
+	}
+	// Every member signals readiness exactly once, failure included, so len(raws) signals
+	// fill the barrier. The ctx branch only covers a member cancelled before it could
+	// signal; the senders' own holds select on ctx.Done regardless.
+	var releaseOnce sync.Once
+	go func() {
+		defer releaseOnce.Do(func() { close(released) })
+		for range raws {
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	return results, nil
+}
+
+// declinedGroup marks every member of a group that never ran with the one decline, so the
+// caller's per-member report reads "unproven: pacing" for each rather than one bare error
+// detached from the members it stopped.
+func declinedGroup(n int, err error) []AuthorisedResult {
+	results := make([]AuthorisedResult, n)
+	for i := range results {
+		results[i] = AuthorisedResult{Err: err, Failure: SendFailurePacing}
+	}
+	return results
 }
 
 // SendRequest is the typed half of the chokepoint: the same AuthoriseRaw gate as Send, for a caller

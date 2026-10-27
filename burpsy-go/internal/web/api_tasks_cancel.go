@@ -3,27 +3,129 @@ package web
 import (
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/dash"
 )
 
 // ---- Task row actions ----------------------------------------------------------------------------
 //
-// The /api/tasks/ subtree carries every per-task action the dashboard row offers
-// (burpsy-react-ui-r6q):
+// The /api/tasks family is one pattern per action (burpsy-react-ui-fxxm, batch 2), so the manifest
+// says what each route is and the mux owns every 405:
 //
-//	POST /api/tasks/{id}/cancel   — stop one running task (as before)
-//	POST /api/tasks/{id}/again    — scan again: start the same kind of work at the same target
-//	DELETE /api/tasks/{id}        — remove one finished task from the list
+//	GET    /api/tasks/{id}          — one task's row and an async task's finished body
+//	DELETE /api/tasks/{id}          — remove one finished task from the list
+//	POST   /api/tasks/{id}/cancel   — stop one running task
+//	POST   /api/tasks/{id}/again    — scan again: start the same kind of work at the same target
+//	POST   /api/tasks/{id}/pause    — hold one task at its next gate
+//	POST   /api/tasks/{id}/resume   — release one task's hold
+//	POST   /api/tasks/pause         — hold EVERY running task (suite-wide)
+//	POST   /api/tasks/resume        — release the suite-wide hold
+//
+// Until batch 2 one subtree handler switched on the path tail, and the verb guards lived inside
+// whichever branch ran — the drift class behind burpsy-react-ui-0gg5, where GET /api/tasks/pause
+// answered 200 and set the suite-wide gate. The method patterns make that shape unwritable: a
+// wrong verb never reaches a handler.
 //
 // The registry's own contracts do the honesty work: cancel of nothing-running answers false and
 // this route reports 404, so a stale dashboard row's button says "gone" instead of pretending;
 // delete of a RUNNING task is refused with 409, because a list entry that vanishes while its work
 // keeps going is a lie about what is happening now.
 
+// taskID parses the {id} wildcard as a task id. Failing is a written 404, so callers return
+// immediately on false.
+func taskID(w http.ResponseWriter, r *http.Request) (uint64, bool) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid task id", http.StatusNotFound)
+		return 0, false
+	}
+	return id, true
+}
+
+func (s *Server) noTaskRegistry(w http.ResponseWriter) bool {
+	if s.tasks != nil {
+		return false
+	}
+	http.Error(w, "No task registry is configured in this process", http.StatusServiceUnavailable)
+	return true
+}
+
+// handleTaskByID serves the row's own verbs. The mux admitted only GET and DELETE; the switch
+// names them rather than trusting that silently.
+func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleTaskGet(w, r)
+	case http.MethodDelete:
+		s.handleTaskDelete(w, r)
+	default:
+		w.Header().Set("Allow", "GET, DELETE")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleTaskCancel asks one running task to stop.
 func (s *Server) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
-	s.taskAction(w, r, "cancel")
+	if s.noTaskRegistry(w) {
+		return
+	}
+	id, ok := taskID(w, r)
+	if !ok {
+		return
+	}
+	if !s.tasks.Cancel(id) {
+		http.Error(w, "No running task with that id", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": id})
+}
+
+// handleTaskPause and handleTaskResume are Burp's per-task Pause / Resume (burpsy-react-ui-g0ba),
+// beside the suite-wide pair below.
+func (s *Server) handleTaskPause(w http.ResponseWriter, r *http.Request) { s.setTaskPaused(w, r, true) }
+func (s *Server) handleTaskResume(w http.ResponseWriter, r *http.Request) {
+	s.setTaskPaused(w, r, false)
+}
+
+func (s *Server) setTaskPaused(w http.ResponseWriter, r *http.Request, pause bool) {
+	if s.noTaskRegistry(w) {
+		return
+	}
+	id, ok := taskID(w, r)
+	if !ok {
+		return
+	}
+	switch err := s.tasks.SetTaskPaused(id, pause); err {
+	case nil:
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "paused": pause})
+	case dash.ErrNoSuchTask:
+		http.Error(w, err.Error(), http.StatusNotFound)
+	default:
+		http.Error(w, err.Error(), http.StatusConflict)
+	}
+}
+
+// handleTasksPauseAll and handleTasksResumeAll are the suite-wide gate (burpsy-react-ui-8gw):
+// Burp's dashboardPauseAllTasksButton and dashboardResumeAllTasksButton. Distinct routes, not task
+// ids — the gate is registry state, so they answer for every running task at once. The count in
+// the answer says whether anything was actually holding; pausing an empty dashboard is fine, but
+// "paused 0 tasks" is the honest version of that reply.
+func (s *Server) handleTasksPauseAll(w http.ResponseWriter, r *http.Request) { s.setAllPaused(w, true) }
+func (s *Server) handleTasksResumeAll(w http.ResponseWriter, r *http.Request) {
+	s.setAllPaused(w, false)
+}
+
+func (s *Server) setAllPaused(w http.ResponseWriter, pause bool) {
+	if s.noTaskRegistry(w) {
+		return
+	}
+	var n int
+	if pause {
+		n = s.tasks.PauseAll()
+	} else {
+		n = s.tasks.ResumeAll()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paused": s.tasks.Paused(), "running": n})
 }
 
 // handleTaskAgain re-runs a task: scan again. Only crawl-kind tasks re-run today, because a crawl
@@ -33,12 +135,10 @@ func (s *Server) handleTaskCancel(w http.ResponseWriter, r *http.Request) {
 // The re-run goes through the same startCrawl the New scan dialog uses, so a scan-again crawl
 // validates, registers and accounts exactly like a hand-typed one.
 func (s *Server) handleTaskAgain(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if s.noTaskRegistry(w) {
 		return
 	}
-	id, ok := s.taskIDOf(w, r)
+	id, ok := taskID(w, r)
 	if !ok {
 		return
 	}
@@ -72,16 +172,10 @@ func (s *Server) handleTaskAgain(w http.ResponseWriter, r *http.Request) {
 // handleTaskDelete removes one finished task from the list. The registry refuses a running task;
 // this surfaces that refusal as 409 with the reason, rather than as a bare failure.
 func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		w.Header().Set("Allow", http.MethodDelete)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	if s.noTaskRegistry(w) {
 		return
 	}
-	if s.tasks == nil {
-		http.Error(w, "No task registry is configured in this process", http.StatusServiceUnavailable)
-		return
-	}
-	id, ok := s.taskIDOf(w, r)
+	id, ok := taskID(w, r)
 	if !ok {
 		return
 	}
@@ -95,107 +189,6 @@ func (s *Server) handleTaskDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
-}
-
-// taskAction dispatches the subtree by suffix, the way the single /cancel route used to. A path
-// that is just the id (DELETE) or carries no known action verb is routed by verb here.
-func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
-	if s.tasks == nil {
-		http.Error(w, "No task registry is configured in this process", http.StatusServiceUnavailable)
-		return
-	}
-	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
-	// The suite-wide pause (burpsy-react-ui-8gw): Burp's dashboardPauseAllTasksButton and
-	// dashboardResumeAllTasksButton. Distinct ids, not a task sub-path — the gate is registry
-	// state, so /api/tasks/pause and /api/tasks/resume answer for every running task at once.
-	// The count in the answer says whether anything was actually holding; pausing an empty
-	// dashboard is fine, but "paused 0 tasks" is the honest version of that reply.
-	// Every branch below changes state, so each one states its verb. The two inline branches —
-	// pause/resume and /cancel — had no guard at all, because they are handled here rather than
-	// delegated to handleTaskAgain/handleTaskDelete, which do check (burpsy-react-ui-0gg5). That
-	// made GET /api/tasks/pause answer 200 and set the suite-wide gate, so a prefetcher, a link
-	// scanner or an <img> on any page the operator visited could pause the dashboard or cancel a
-	// running task — no body, no custom header, no preflight.
-	requirePost := func() bool {
-		if r.Method == http.MethodPost {
-			return true
-		}
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return false
-	}
-	switch rest {
-	case "pause", "resume":
-		if !requirePost() {
-			return
-		}
-		var n int
-		if rest == "pause" {
-			n = s.tasks.PauseAll()
-		} else {
-			n = s.tasks.ResumeAll()
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"paused": s.tasks.Paused(), "running": n})
-		return
-	}
-	switch {
-	case strings.HasSuffix(rest, "/cancel"):
-		if !requirePost() {
-			return
-		}
-		idStr := strings.TrimSuffix(rest, "/cancel")
-		id, err := strconv.ParseUint(idStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid task id", http.StatusNotFound)
-			return
-		}
-		if !s.tasks.Cancel(id) {
-			http.Error(w, "No running task with that id", http.StatusNotFound)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"cancelled": id})
-	case strings.HasSuffix(rest, "/pause"), strings.HasSuffix(rest, "/resume"):
-		// Burp's per-task Pause / Resume (burpsy-react-ui-g0ba), beside the suite-wide pair above.
-		if !requirePost() {
-			return
-		}
-		pause := strings.HasSuffix(rest, "/pause")
-		id, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSuffix(rest, "/pause"), "/resume"), 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid task id", http.StatusNotFound)
-			return
-		}
-		switch err := s.tasks.SetTaskPaused(id, pause); err {
-		case nil:
-			writeJSON(w, http.StatusOK, map[string]any{"id": id, "paused": pause})
-		case dash.ErrNoSuchTask:
-			http.Error(w, err.Error(), http.StatusNotFound)
-		default:
-			http.Error(w, err.Error(), http.StatusConflict)
-		}
-	case strings.HasSuffix(rest, "/again"):
-		s.handleTaskAgain(w, r)
-	case r.Method == http.MethodGet && !strings.Contains(strings.Trim(rest, "/"), "/"):
-		// Read one task: its row and, for async work, its finished body (burpsy-react-ui-wdza).
-		s.handleTaskGet(w, r)
-	default:
-		s.handleTaskDelete(w, r)
-	}
-}
-
-// taskIDOf parses the task id from a path of the form /api/tasks/{id}[|/suffix]. Failing is a
-// written 404, so callers return immediately on false.
-func (s *Server) taskIDOf(w http.ResponseWriter, r *http.Request) (uint64, bool) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
-	for _, suffix := range []string{"/cancel", "/again", "/pause", "/resume"} {
-		rest = strings.TrimSuffix(rest, suffix)
-	}
-	id, err := strconv.ParseUint(strings.Trim(rest, "/"), 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid task id", http.StatusNotFound)
-		return 0, false
-	}
-	return id, true
 }
 
 // taskByID snapshots one task by id, or nil when there is no such row.

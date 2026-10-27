@@ -1353,10 +1353,6 @@ type matchReplaceTestReq struct {
 // to this input", and scope is a question about an exchange. Reporting a rule as skipped here would
 // be inventing a verdict from a URL nobody supplied.
 func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req matchReplaceTestReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1685,10 +1681,6 @@ type toolLogSetCommentReq struct {
 // (burpsy-react-ui-5da). The body carries the whole comment; empty clears it. Unknown ids
 // 404 rather than succeeding quietly, so a note addressed at a trimmed row cannot read as saved.
 func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPatch {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/tools/log/")
 	if !ok {
 		http.Error(w, "Usage: PATCH /api/tools/log/{id} with {comment}", http.StatusBadRequest)
@@ -1794,10 +1786,6 @@ type toolsDecodeReq struct {
 }
 
 func (s *Server) handleToolsDecode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req toolsDecodeReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1999,10 +1987,6 @@ type toolsEncodeReq struct {
 }
 
 func (s *Server) handleToolsEncode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req toolsEncodeReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -2085,10 +2069,6 @@ type toolsHashReq struct {
 }
 
 func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req toolsHashReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -2175,10 +2155,6 @@ type toolsCompareReq struct {
 // silently defaulting: "I asked for words and got bytes" is exactly the kind of quiet substitution
 // this engine does not do.
 func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req toolsCompareReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -2372,8 +2348,7 @@ type organizerItemReq struct {
 }
 
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/")
-	idStr = strings.TrimSuffix(idStr, "/")
+	idStr := strings.TrimSuffix(r.PathValue("rest"), "/")
 	// The status write is a subpath, not the item id: /{id}/status must be split before the id is
 	// parsed, or Atoi("1/status") fails and every status PUT would be answered "Invalid item id".
 	// Same shape as the session-rule detail handler's /update-macro and /run suffix routes.
@@ -2491,8 +2466,7 @@ type organizerCollectionUpdateReq struct {
 // "inbox" as the literal id in the move path is deliberate: collection 0 is not a collection, and
 // making the UI mint a fake numeric id for it would be a second lie about the id space.
 func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/collections")
-	rest = strings.Trim(rest, "/")
+	rest := strings.Trim(r.PathValue("rest"), "/")
 
 	if rest == "" {
 		switch r.Method {

@@ -64,7 +64,7 @@ var uiRouteExempt = map[string]string{
 		"SERVER half now, with this reason, is exactly what the exemption exists for — the route is " +
 		"operator-facing by design (the operator's right-click) while the console string lands with " +
 		"the menu work. Remove this exemption when the UI half wires the action.",
-	"/reissue/": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
+	"/reissue/{token...}": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
 		"(Burp's request-in-browser dialog hands the URL to the operator the same way — " +
 		"repeatRequestInBrowserRenderUrlTxtField); the SPA never fetches this path, it only " +
 		"DISPLAYS it, and the reachability test scans for fetch call sites",
@@ -77,9 +77,9 @@ var uiRouteExempt = map[string]string{
 	"/api/sitemap/record": "agent-facing (Burp's add_to_sitemap MCP tool, served as sitemap_record, " +
 		"burpsy-react-ui-4bfp): the console's history rows are already on the map because the map " +
 		"follows the store, and the console's own Add to site map uses POST /api/sitemap",
-	"/api/datasets/": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
+	"/api/datasets/{rest...}": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
 		"datasets MCP tool, burpsy-react-ui-co88); the console pages each list through its own route",
-	"/api/skills/": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
+	"/api/skills/{rest...}": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
 		"console's Skills card lists and switches skills through /api/skills and /api/skills/disabled",
 	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
 		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
@@ -223,6 +223,14 @@ func readUISourceForRoutes(t *testing.T) (string, int) {
 		default:
 			return nil
 		}
+		// The generated route tables (gen:gated-routes) mirror the manifest; a route's presence in
+		// them says nothing about whether the console can reach it - they would mask genuine gaps
+		// from TestEveryOperatorFacingRoute and trip TestNoKnownGapWasQuietlyFixed the moment a
+		// missing-surface route is regenerated in (47id's /api/protobuf/reflect-decode did exactly
+		// that). Generated files are not callers.
+		if base := filepath.Base(path); base == "gated-routes.ts" || base == "route-risk.ts" {
+			return nil
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -260,10 +268,15 @@ func TestEveryOperatorFacingRouteIsReferencedFromTheConsole(t *testing.T) {
 		if _, known := uiRouteMissingSurface[pattern]; known {
 			continue
 		}
-		// A subtree pattern ends in "/" and the console builds the full URL by appending an id, so
-		// the literal that appears in the source is the prefix without its trailing slash — e.g.
-		// `/api/exchange/${id}`. Match on the trimmed form for those.
-		needle := strings.TrimSuffix(pattern, "/")
+		// The console builds a full URL by appending or interpolating an id, so the literal
+		// that appears in the source is the prefix — e.g. `/api/exchange/${id}`. A subtree
+		// pattern ends in "/"; a {param} pattern starts its template at the brace. Match on
+		// the trimmed prefix for both.
+		needle := pattern
+		if brace := strings.Index(needle, "{"); brace >= 0 {
+			needle = needle[:brace]
+		}
+		needle = strings.TrimSuffix(needle, "/")
 		if !strings.Contains(corpus, needle) {
 			unreferenced = append(unreferenced, pattern)
 		}

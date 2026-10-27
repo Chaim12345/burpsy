@@ -5,10 +5,10 @@ package httputil
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
-	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -130,21 +130,11 @@ func ResponseIsFrameless(head []byte) bool {
 	if !responseHasBody(head) {
 		return false
 	}
-	headerBlock := head
-	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
-		headerBlock = headerBlock[idx+1:]
-	}
-	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-	mimeHead, err := h.ReadMIMEHeader()
-	if err != nil {
-		// An unparseable head is not treated as frameless. Refusing to stream is the safe direction:
-		// the buffered path is what this proxy did for every response before streaming existed.
+	te, cl := ResponseFraming(head)
+	if cl != "" {
 		return false
 	}
-	if strings.TrimSpace(mimeHead.Get("Content-Length")) != "" {
-		return false
-	}
-	if strings.TrimSpace(mimeHead.Get("Transfer-Encoding")) != "" {
+	if te != "" {
 		return false
 	}
 	return true
@@ -162,16 +152,8 @@ func ResponseIsChunked(head []byte) bool {
 	if !responseHasBody(head) {
 		return false
 	}
-	headerBlock := head
-	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
-		headerBlock = headerBlock[idx+1:]
-	}
-	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-	mimeHead, err := h.ReadMIMEHeader()
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(mimeHead.Get("Transfer-Encoding")), "chunked")
+	te, _ := ResponseFraming(head)
+	return strings.EqualFold(te, "chunked")
 }
 
 // responseHasBody reports whether a response head can be followed by a body at all.
@@ -194,6 +176,70 @@ func responseHasBody(head []byte) bool {
 	return !(len(statusLine) >= 12 && (statusLine[9] == '1' || string(statusLine[9:12]) == "204" || string(statusLine[9:12]) == "304"))
 }
 
+// ResponseFraming reads the two fields a body reader needs — Transfer-Encoding and
+// Content-Length — out of a response head, tolerating header lines that are not well-formed.
+//
+// net/textproto's ReadMIMEHeader refuses a whole block over one malformed line: a header value
+// split by a CRLF injection leaves a fragment with no colon, which is exactly the input the refusal
+// fires on, and refusing turned the entire response — injected bytes included — into one "malformed
+// MIME header" error. Those injected bytes are the evidence a CRLF probe exists to collect, so the
+// reader must see past the line it cannot use rather than discard the message that carries it
+// (burpsy-react-ui-0vzb.24). A line with no colon is not framing information, so skipping it costs
+// the reader nothing; the framing fields themselves still parse, and obs-fold continuations join
+// the field they continue the way ReadMIMEHeader joined them.
+//
+// Values come back as written (whitespace-trimmed), first occurrence winning — ReadMIMEHeader.Get's
+// own rule — so callers keep their existing comparisons.
+func ResponseFraming(head []byte) (transferEncoding, contentLength string) {
+	// Skip the status line; the fields live after it.
+	rest := head
+	idx := bytes.IndexByte(rest, '\n')
+	if idx < 0 {
+		return "", ""
+	}
+	rest = rest[idx+1:]
+	// continued says which field an obs-fold line continues, so "Transfer-Encoding: gzip" followed
+	// by "\tchunked" reads the way ReadMIMEHeader would have joined it.
+	var continued *string
+	for len(rest) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(rest, '\n'); idx >= 0 {
+			line, rest = rest[:idx], rest[idx+1:]
+		} else {
+			line, rest = rest, nil
+		}
+		line = bytes.TrimRight(line, "\r")
+		if len(line) == 0 {
+			break
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if continued != nil {
+				*continued = *continued + " " + strings.TrimSpace(string(line))
+			}
+			continue
+		}
+		name, value, ok := bytes.Cut(line, []byte(":"))
+		if !ok {
+			// The malformed line itself: evidence for whoever reads the bytes, not framing
+			// information for whoever reads the body.
+			continued = nil
+			continue
+		}
+		value = bytes.TrimSpace(value)
+		switch {
+		case strings.EqualFold(string(name), "Transfer-Encoding") && transferEncoding == "":
+			transferEncoding = string(value)
+			continued = &transferEncoding
+		case strings.EqualFold(string(name), "Content-Length") && contentLength == "":
+			contentLength = string(value)
+			continued = &contentLength
+		default:
+			continued = nil
+		}
+	}
+	return transferEncoding, contentLength
+}
+
 // ReadResponseBody reads the body that follows a response head, per the
 // head's framing. head must be exactly what ReadResponseHead returned. A head
 // that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
@@ -201,23 +247,14 @@ func responseHasBody(head []byte) bool {
 func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 	var body bytes.Buffer
 	if responseHasBody(head) {
-		// Skip the status line; ReadMIMEHeader expects headers only.
-		headerBlock := head
-		if idx := bytes.Index(headerBlock, []byte("\r\n")); idx != -1 {
-			headerBlock = headerBlock[idx+2:]
-		}
-		h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-		mimeHead, err := h.ReadMIMEHeader()
-		if err != nil {
-			return nil, fmt.Errorf("parsing response headers: %w", err)
-		}
+		te, cl := ResponseFraming(head)
 
 		// remaining bounds the total body we will buffer, so a malicious upstream
 		// that declares a huge Content-Length or streams endless chunks cannot
 		// exhaust the proxy's memory. Reads past the cap are truncated.
 		remaining := MaxResponseBodyBytes
 
-		if te := mimeHead.Get("Transfer-Encoding"); strings.EqualFold(te, "chunked") {
+		if strings.EqualFold(te, "chunked") {
 			// Read chunked body until the terminating zero chunk.
 			for {
 				sizeLine, err := br.ReadString('\n')
@@ -279,7 +316,7 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					break
 				}
 			}
-		} else if cl := mimeHead.Get("Content-Length"); cl != "" {
+		} else if cl != "" {
 			n, err := strconv.ParseInt(cl, 10, 64)
 			if err != nil || n < 0 {
 				return nil, fmt.Errorf("bad Content-Length %q", cl)
@@ -292,8 +329,26 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					readN = int64(remaining)
 				}
 				buf := make([]byte, readN)
-				if _, err := io.ReadFull(br, buf); err != nil {
-					return nil, fmt.Errorf("reading body: %w", err)
+				if n, err := io.ReadFull(br, buf); err != nil {
+					// Only a clean end-of-stream shortage is a truncated body to
+					// salvage: the peer closed short, so the partial is everything it
+					// ever sent — OWASP Juice Shop's serve-index /ftp/ listing
+					// declares 59 more bytes than it ever writes. Hand the partial
+					// body back with a typed error so a caller that can frame it
+					// honestly (close-delimited, see CloseDelimitedHead) may use it;
+					// callers that cannot discard it on err exactly as before.
+					//
+					// Any other failure — a timeout, a cancellation, a reset — means
+					// the origin was still writing when the read died, and salvaging
+					// that partial as if the reply had completed would invent bytes
+					// the origin never sent (PR #363 review: a body read that hits
+					// the caller's deadline mid-stream must fail the send, not
+					// complete it).
+					if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+						return nil, fmt.Errorf("reading body: %w", err)
+					}
+					body.Write(buf[:n])
+					return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
 				}
 				remaining -= int(readN)
 				body.Write(buf)
@@ -329,4 +384,85 @@ func ResponseStatus(raw []byte) *int {
 		return nil
 	}
 	return &n
+}
+
+// TruncatedBodyError reports a response body that ended before its declared
+// Content-Length with a clean EOF: the peer closed (or stopped) short. A read
+// that failed for any other reason — a timeout, a cancellation, a reset — is
+// never this error, because the origin was still writing and the partial is
+// not "everything it sent". It carries the partial
+// body alongside (ReadResponseBody returns it as the result value) because the
+// bytes that arrived are still evidence — the honest framing for them is
+// close-delimited, which CloseDelimitedHead builds.
+type TruncatedBodyError struct {
+	Declared string // the Content-Length value the head claimed
+	Received int    // the body bytes that actually arrived
+	Err      error  // the underlying read error
+}
+
+func (e *TruncatedBodyError) Error() string {
+	return fmt.Sprintf("reading body: %v (declared Content-Length %s, received %d)", e.Err, e.Declared, e.Received)
+}
+
+func (e *TruncatedBodyError) Unwrap() error { return e.Err }
+
+// CloseDelimitedHead reframes a response head for a body that is delimited by
+// the end of the connection rather than by its declared framing: Content-Length
+// is now false, and Connection/Keep-Alive promise a reusable connection that a
+// close-delimited body cannot keep. Transfer-Encoding is left alone: a chunked
+// body that ended early is not salvageable this way (its partial bytes still
+// carry chunk framing), so no caller should reach this helper for one.
+func CloseDelimitedHead(head []byte) []byte {
+	lines := bytes.Split(head, []byte("\r\n"))
+	out := lines[:0]
+	for _, line := range lines {
+		lower := bytes.ToLower(line)
+		if bytes.HasPrefix(lower, []byte("content-length:")) ||
+			bytes.HasPrefix(lower, []byte("connection:")) ||
+			bytes.HasPrefix(lower, []byte("keep-alive:")) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return bytes.Join(out, []byte("\r\n"))
+}
+
+// EnsureConnectionClose returns rawRequest with its head declaring
+// "Connection: close", replacing any Connection lines it already carries.
+// The sender uses it after an authority has answered close-delimited once
+// (an HTTP/1.0-style response, or a truncated Content-Length body salvaged
+// via CloseDelimitedHead): on such an authority the connection is gone
+// anyway, and asking for the close up front turns "wait out the peer's
+// keep-alive timer for bytes that never come" into an EOF that arrives with
+// the body - OWASP Juice Shop's serve-index /ftp/ listing otherwise costs
+// ~5s per fetch (59 phantom bytes, server-side keep-alive hold).
+//
+// A request whose head is not CRLF-terminated is returned unchanged:
+// editing bytes one cannot parse is how a proxy corrupts a body.
+func EnsureConnectionClose(rawRequest []byte) []byte {
+	head, rest, ok := bytes.Cut(rawRequest, []byte("\r\n\r\n"))
+	if !ok {
+		return rawRequest
+	}
+	lines := bytes.Split(head, []byte("\r\n"))
+	out := lines[:1] // the request line is always kept
+	wrote := false
+	for _, line := range lines[1:] {
+		if bytes.HasPrefix(bytes.ToLower(line), []byte("connection:")) {
+			if !wrote {
+				out = append(out, []byte("Connection: close"))
+				wrote = true
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	if !wrote {
+		out = append(out, []byte("Connection: close"))
+	}
+	head = bytes.Join(out, []byte("\r\n"))
+	result := make([]byte, 0, len(head)+4+len(rest))
+	result = append(result, head...)
+	result = append(result, '\r', '\n', '\r', '\n')
+	return append(result, rest...)
 }

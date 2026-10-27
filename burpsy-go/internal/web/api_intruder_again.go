@@ -38,11 +38,6 @@ type intruderAgainRow struct {
 }
 
 func (s *Server) handleIntruderAgain(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req intruderAgainReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Body must be {\"target\": \"https://host:port\", \"request_ids\": [...]}", http.StatusBadRequest)

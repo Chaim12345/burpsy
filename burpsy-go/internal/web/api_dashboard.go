@@ -90,10 +90,6 @@ type dashboardResp struct {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	messages, exchanges := s.store.Count()
 	entries := s.toolLog.All()
 	activity := make([]toolLogEntry, 0, dashboardActivityLimit)
@@ -136,10 +132,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 // the dashboard reads and nothing else. DELETE only; anything else is a 405 the route manifest's
 // verb test checks for.
 func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	s.events.Clear()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"cleared": true})

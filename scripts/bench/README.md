@@ -26,7 +26,7 @@ Two things it is not:
 
 ```bash
 # 1. the target (Docker or the released jar; the app serves http on 9090)
-docker run --rm -p 9090:9090 sasanlabs/owasp-vulnerableapp:latest
+docker run --rm -p 9090:9090 sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149
 
 # 2. burpsy, scoped to the target, on a known proxy/web pair
 go build -o /tmp/burpsy ./cmd/burpsy
@@ -186,3 +186,39 @@ Two consequences of the drop that the script handles, and that a hand-started in
 (`vulnapp_build_requests.py` regenerates it from the app's source and its `/scanner` and
 `/allEndPoint` answers). Its cookies, tokens and accounts are placeholders; the seeders replace them
 at run time, and nothing seeded is ever written back to it.
+
+## Parity diff (j1mk.1)
+
+`parity.py` is the comparison step of the parity harness: it diffs burpsy's findings with a reference
+tool's on the same target, per class (both found, reference-only = a burpsy miss to file as a bead,
+burpsy-only = verify TP or FP), and scores both against the target's labels when a truth list is
+given. Input is JSON lists of `{url, parameter, class, technique?}`; an adapter per reference tool
+turns that tool's own output into this shape. Output is `parity.json` plus `parity.md`.
+
+    python3 scripts/bench/parity.py --burpsy B.json --reference R.json [--truth T.json] --out DIR --ref-name sqlmap
+    python3 scripts/bench/parity_test.py
+
+## Parity harness (j1mk.1)
+
+`parity_run.py` is the harness every class bead uses: one class spec in `parity_specs.CLASSES`
+(seed targets, the scanner rows the comparison counts, the reference tool's argv, ground truth
+where the target declares it), then per class it collects burpsy's findings through the proxy and
+audit API, runs the pinned reference tool (`parity_tools.py` — pinned URL + SHA-256 + stamp, same
+discipline as `ci-install-tools.sh`, each pin's note recording the tool's maintenance status when
+checked), adapts both sides to the shared finding shape (`parity_adapters.py`), and diffs them
+with `parity.py`. Output per class: `burpsy.json`, `reference.json`, `reference.raw.txt`,
+`truth.json` when given, `parity.json`, `parity.md`; plus one line per run in `history.jsonl`, so
+the nightly trend is readable without digging artifacts.
+
+    python3 scripts/bench/parity_run.py --list
+    python3 scripts/bench/parity_run.py --all --out /tmp/parity \
+      --burpsy-web http://127.0.0.1:18081 --burpsy-proxy http://127.0.0.1:18080
+
+Nightly: the `bench-parity` job in `.github/workflows/nightly.yml` (report, not a gate);
+`nightly-parity.sh` is the capped local/agent entry point (it wraps `scripts/capped-run.sh`, which
+CI deliberately does not use).
+
+Not built yet: the containerised public suites (OWASP Benchmark, WAVSEP, DVWA, Juice Shop) — they
+need Docker, which the agent sandboxes do not have — and the per-class specs, which land with
+their beads (j1mk.13 hidden parameters vs Arjun, j1mk.14 CORS vs Corsy, j1mk.15 CRLF vs crlfuzz,
+...).

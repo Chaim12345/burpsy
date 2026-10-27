@@ -3,6 +3,7 @@ package proxy
 import (
 	"strings"
 
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/netauth"
 )
 
@@ -160,13 +161,7 @@ func applyPlatformAuth(source PlatformAuthSource, requestData []byte, host, meth
 // blank line, and inserting at this index puts it after — which reads to the origin as the first
 // bytes of the body. The distinction is the whole reason this is two functions rather than one.
 func requestHeadEnd(requestData []byte) int {
-	if i := strings.Index(string(requestData), "\r\n\r\n"); i >= 0 {
-		return i + 4
-	}
-	if i := strings.Index(string(requestData), "\n\n"); i >= 0 {
-		return i + 2
-	}
-	return -1
+	return httputil.HeadEnd(requestData)
 }
 
 // requestHeaderInsertPoint returns the index at which a header line may be inserted: just past the
@@ -177,11 +172,8 @@ func requestHeadEnd(requestData []byte) int {
 // credential at the front of the body; the test below is what caught it, and it is why the two are
 // separate functions with names that say which is which.
 func requestHeaderInsertPoint(requestData []byte) int {
-	if i := strings.Index(string(requestData), "\r\n\r\n"); i >= 0 {
-		return i
-	}
-	if i := strings.Index(string(requestData), "\n\n"); i >= 0 {
-		return i
+	if head, _, _, ok := httputil.SplitHeadBody(requestData); ok {
+		return len(head)
 	}
 	return -1
 }
@@ -205,17 +197,15 @@ func hasAuthorizationHeader(head []byte) bool {
 // headerLines returns the head's header lines, without the request line and without the terminating
 // blank line.
 func headerLines(head []byte) []string {
-	text := string(head)
-	// Drop the request line.
-	if i := strings.IndexByte(text, '\n'); i >= 0 {
-		text = text[i+1:]
-	}
-	// Drop the terminating blank line, in either spelling.
-	text = strings.TrimSuffix(text, "\r\n\r\n")
-	text = strings.TrimSuffix(text, "\n\n")
-	var out []string
-	for _, line := range strings.Split(text, "\n") {
-		out = append(out, strings.TrimSuffix(line, "\r"))
+	lines := httputil.HeadLines(head)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		// A trailing line ending yields a trailing empty line; the blank separator inside a
+		// malformed head reads the same way. Neither is a header, so neither reaches a caller.
+		if len(line) == 0 {
+			continue
+		}
+		out = append(out, string(line))
 	}
 	return out
 }

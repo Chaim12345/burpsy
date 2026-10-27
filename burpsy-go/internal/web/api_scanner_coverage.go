@@ -23,10 +23,6 @@ type coveragePartitionView struct {
 
 // handleScannerCoverage serves GET /api/scanner/coverage with passive check runtime coverage.
 func (s *Server) handleScannerCoverage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.passiveScanner == nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -64,8 +60,8 @@ func (s *Server) handleScannerCoverage(w http.ResponseWriter, r *http.Request) {
 		"checks":    checks,
 		"skips":     report.Skips,
 		"partition": partition,
-		// Responses the checks ran on with a body this build could not decode (br, zstd, a broken
-		// stream) — a caveat on every clean result over them (burpsy-react-ui-jgnf).
+		// Responses the checks ran on with a body this build could not decode (an encoding
+		// chain, a broken stream) — a caveat on every clean result over them (burpsy-react-ui-jgnf).
 		"undecoded_bodies": report.UndecodedBodies,
 	})
 }

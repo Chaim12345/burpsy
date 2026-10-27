@@ -122,7 +122,7 @@ func TestAnUndecodableEncodingSaysSoRatherThanRenderingNothing(t *testing.T) {
 		t.Errorf("content_encoding = %q, want br", view.ContentEncoding)
 	}
 	if view.Decoded != nil {
-		t.Error("a brotli body was reported as decoded by a build with no brotli decoder")
+		t.Error("a corrupt brotli body was reported as decoded")
 	}
 	// "burpsy cannot read this" and "there was nothing to read" must not merge into one blank pane.
 	if !strings.Contains(view.DecodeError, "br") {

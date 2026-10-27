@@ -31,18 +31,63 @@ function readFailure(text: string, fallback: string): string {
 export const CONFIRM_HEADER = "X-Burpsy-Confirm";
 
 /**
- * The manifest pattern a path resolves to, by the gate's own rule (routeRiskFor in
- * confirm_gate.go): the LONGEST pattern the path has as a segment-bounded prefix, "/" matching
- * everything. Longest over every pattern, gated or not, because an ungated pattern can be the
- * longest match under a gated one.
+ * The manifest pattern a path resolves to, by the gate's own rule (routeRiskFor and patternMatches in
+ * confirm_gate.go): among the patterns the path falls under, the one with the most literal text
+ * (the mux's literal-beats-wildcard rule), "/" matching everything. Over every pattern, gated or
+ * not, because an ungated pattern can be the most specific match under a gated one.
+ *
+ * Patterns are in their mux spelling: "{x...}" as the last segment is the remainder (the prefix
+ * subtree, empty and nested paths included), "{x}" is one non-empty segment, "{$}" anchors the one
+ * path with the trailing slash. A tie in literal text is a conflict the mux would not have let
+ * through; the server then picks the more severe risk class, which this table does not carry, so
+ * the client fails closed the same way: the gated entry, then the pattern string.
  */
 export function manifestPatternFor(path: string, table: Readonly<Record<string, boolean>> = ROUTE_GATED): string | undefined {
  let best: string | undefined;
  for (const pattern of Object.keys(table)) {
-  if (pattern !== "/" && !hasSegmentPrefix(path, pattern)) continue;
-  if (best === undefined || pattern.length > best.length) best = pattern;
+  if (pattern !== "/" && !patternMatches(pattern, path)) continue;
+  if (best === undefined) {
+   best = pattern;
+   continue;
+  }
+  const mine = literalLen(pattern);
+  const theirs = literalLen(best);
+  if (
+   mine > theirs ||
+   (mine === theirs && (Boolean(table[pattern]) > Boolean(table[best]) || (table[pattern] === table[best] && pattern < best)))
+  )
+   best = pattern;
  }
  return best;
+}
+
+/** A pattern's literal text: its length with every {wildcard} removed (confirm_gate.go literalLen). */
+function literalLen(pattern: string): number {
+ return pattern.replace(/\{[^}]*\}/g, "").length;
+}
+
+/** Whether `path` falls under `pattern` (confirm_gate.go patternMatches). */
+function patternMatches(pattern: string, path: string): boolean {
+ // A trailing "{name...}" is the remainder wildcard: it resolves as the subtree, the prefix up to
+ // and including its last slash.
+ const slash = pattern.lastIndexOf("/");
+ if (slash >= 0 && pattern.endsWith("...}") && pattern.slice(slash + 1).startsWith("{")) pattern = pattern.slice(0, slash + 1);
+ if (pattern.endsWith("/{$}")) {
+  const p = pattern.slice(0, -"{$}".length).split("/");
+  const a = path.split("/");
+  return a.length === p.length && segmentsMatch(p, a);
+ }
+ if (!pattern.includes("{")) return hasSegmentPrefix(path, pattern);
+ const subtree = pattern.endsWith("/");
+ const p = (subtree ? pattern.slice(0, -1) : pattern).split("/");
+ const a = path.split("/");
+ if (subtree) return a.length >= p.length && segmentsMatch(p, a.slice(0, p.length));
+ return a.length === p.length && segmentsMatch(p, a);
+}
+
+/** A "{...}" segment matches one non-empty segment; anything else must be equal. */
+function segmentsMatch(patternSegments: string[], pathSegments: string[]): boolean {
+ return patternSegments.every((seg, i) => (seg.startsWith("{") && seg.endsWith("}") ? pathSegments[i] !== "" : seg === pathSegments[i]));
 }
 
 function hasSegmentPrefix(path: string, pattern: string): boolean {
@@ -131,7 +176,8 @@ export async function describeCall(url: string, init: RequestInit = {}): Promise
  else if (body instanceof Blob) description.body_base64 = base64OfBytes(new Uint8Array(await body.arrayBuffer()));
  else if (body instanceof ArrayBuffer) description.body_base64 = base64OfBytes(new Uint8Array(body));
  else if (ArrayBuffer.isView(body)) description.body_base64 = base64OfBytes(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
- else throw new ApiError("this request's body is assembled by the browser at send time, so it cannot be confirmed as the exact call", 0, "");
+ else
+  throw new ApiError("this request's body is assembled by the browser at send time, so it cannot be confirmed as the exact call", 0, "");
  return description;
 }
 
@@ -161,7 +207,8 @@ export async function mintConfirmation(url: string, init: RequestInit = {}): Pro
  } catch {
   parsed = {};
  }
- if (!parsed.token || !parsed.binding || !parsed.call) throw new ApiError("the confirmation endpoint returned no token bound to a call", response.status, text);
+ if (!parsed.token || !parsed.binding || !parsed.call)
+  throw new ApiError("the confirmation endpoint returned no token bound to a call", response.status, text);
  return { token: parsed.token, binding: parsed.binding, call: parsed.call, expiresAt: Date.now() + (parsed.expires_in ?? 60) * 1000 };
 }
 
@@ -421,25 +468,27 @@ export function csvCell(value: string | number | null | undefined): string {
  return `"${guarded.replace(/"/g, '""')}"`;
 }
 
-export function historyToCSV(exchanges: {
- id: number;
- started_ms: number;
- method: string;
- host: string;
- port: number;
- path: string;
- status: number | null;
- response_len: number;
- mime?: string;
- duration_ms: number;
- tls?: boolean;
- notes?: string | null;
- /** Burp's "Edited" flag (burpsy-react-ui-c05, corrected by sd0d): the operator edited this row by
-  *  hand in Intercept — not merely "burpsy's bytes differ from the peer's", which is true of traffic
-  *  nobody touched. Optional because a caller holding an older row shape still exports; absent reads
-  *  as "not edited", which is the flag's own default. */
- variants?: { edited: boolean };
-}[]): string {
+export function historyToCSV(
+ exchanges: {
+  id: number;
+  started_ms: number;
+  method: string;
+  host: string;
+  port: number;
+  path: string;
+  status: number | null;
+  response_len: number;
+  mime?: string;
+  duration_ms: number;
+  tls?: boolean;
+  notes?: string | null;
+  /** Burp's "Edited" flag (burpsy-react-ui-c05, corrected by sd0d): the operator edited this row by
+   *  hand in Intercept — not merely "burpsy's bytes differ from the peer's", which is true of traffic
+   *  nobody touched. Optional because a caller holding an older row shape still exports; absent reads
+   *  as "not edited", which is the flag's own default. */
+  variants?: { edited: boolean };
+ }[],
+): string {
  // Extension and Query are derived here rather than read off the row, for the same reason the
  // history table derives them: they are a property of the path, which the export already has.
  // Both doors -- this button and the desktop shell's File > Export History -- render through this
@@ -451,8 +500,21 @@ export function historyToCSV(exchanges: {
  // question with a different answer — see Exchange variants for the readings that carry it — and
  // this column deliberately does not answer both, which is what sd0d was.)
  const headers = [
-  "ID", "Timestamp", "Method", "Host", "Port", "Path", "Extension", "Query", "TLS",
-  "Edited", "Status", "Length", "MIME", "Duration", "Comment",
+  "ID",
+  "Timestamp",
+  "Method",
+  "Host",
+  "Port",
+  "Path",
+  "Extension",
+  "Query",
+  "TLS",
+  "Edited",
+  "Status",
+  "Length",
+  "MIME",
+  "Duration",
+  "Comment",
  ];
  const rows = exchanges.map((ex) => [
   ex.id,
@@ -478,19 +540,21 @@ export function historyToCSV(exchanges: {
  * Serialise tool-log rows to CSV (burpsy-react-ui-656). Same guard, same quoting, one shape:
  * the columns the Logger table shows, index data only — the log stores no request bodies.
  */
-export function toolLogToCSV(entries: {
- id: number;
- started_ms: number;
- tool: string;
- host: string;
- port: number;
- method: string;
- path: string;
- status: number | null;
- response_len: number | null;
- duration_ms: number;
- comment: string;
-}[]): string {
+export function toolLogToCSV(
+ entries: {
+  id: number;
+  started_ms: number;
+  tool: string;
+  host: string;
+  port: number;
+  method: string;
+  path: string;
+  status: number | null;
+  response_len: number | null;
+  duration_ms: number;
+  comment: string;
+ }[],
+): string {
  const headers = ["ID", "Timestamp", "Tool", "Host", "Port", "Method", "Path", "Status", "Length", "Duration", "Comment"];
  const rows = entries.map((e) => [
   e.id,
@@ -513,14 +577,16 @@ export function toolLogToCSV(entries: {
  * exchange id rather than the exchange body — the Organizer's export shares History's
  * index-rows-only rule.
  */
-export function organizerToCSV(items: {
- id: number;
- title: string;
- note: string;
- highlight: string;
- workflow_status: string;
- exchange: number;
-}[]): string {
+export function organizerToCSV(
+ items: {
+  id: number;
+  title: string;
+  note: string;
+  highlight: string;
+  workflow_status: string;
+  exchange: number;
+ }[],
+): string {
  const headers = ["ID", "Title", "Note", "Highlight", "Status", "Exchange"];
  const rows = items.map((item) => [item.id, item.title, item.note, item.highlight, item.workflow_status, item.exchange]);
  return [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
@@ -566,7 +632,7 @@ export function requestFromUrl(input: string): { target: string; protocol: strin
  const slash = rest.indexOf("/");
  const hostPort = slash >= 0 ? rest.slice(0, slash) : rest;
  const path = slash >= 0 ? rest.slice(slash) : "/";
- const pathPart = path && !path.startsWith("/") ? `/${path}` : (path || "/");
+ const pathPart = path && !path.startsWith("/") ? `/${path}` : path || "/";
  // Split host and port.
  const colonIdx = hostPort.lastIndexOf(":");
  let host = hostPort;

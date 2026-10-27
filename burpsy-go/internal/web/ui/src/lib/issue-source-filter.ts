@@ -24,10 +24,7 @@ export const ISSUE_SOURCE_FILTERS: { value: IssueSourceFilter; label: string }[]
  * manual, because that is what "no run raised it" means. Dropping it instead would silently hide
  * every legacy row the moment an operator picked "Manual", which reads as the tool losing data.
  */
-export function filterByIssueSource<T extends { source?: string }>(
- findings: readonly T[],
- filter: IssueSourceFilter,
-): T[] {
+export function filterByIssueSource<T extends { source?: string }>(findings: readonly T[], filter: IssueSourceFilter): T[] {
  if (!filter) return [...findings];
  return findings.filter((f) => issueSourceOf(f) === filter);
 }

@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036687424,
+  "name": "Race condition (single-packet)",
+  "description": "<p>The application enforces a single-use limit as check-then-set with a window between the check and the record: the same request sent one at a time succeeded exactly once, but a synchronized group of requests — every member's last byte released together — succeeded more than once with one token. This is the single-packet attack: the group arrives within one check-then-set window, so every member passes the check before any member's record lands. The same primitive over-redeems coupons and vouchers, double-spends balances, and defeats one-per-actor limits on votes, claims and invitations.</p>\n<p>This row is burpsy's own: Burp's catalogue has no race-condition row; PortSwigger ships the single-packet attack as the Turbo Intruder extension, whose issues carry the generic extension-generated type.</p>",
+  "remediation": "<p>Enforce single-use limits atomically: a database unique constraint with an insert that fails on conflict, a conditional update whose WHERE clause includes the not-yet-redeemed predicate, or a lock held across the check and the record. Never check and then set in separate steps. Where the limit is financial, reconcile per-token success counts against the ledger.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "PortSwigger Research: Smashing the state machine — the hidden potential of web race conditions",
+      "url": "https://portswigger.net/research/smashing-the-state-machine"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: Race conditions",
+      "url": "https://portswigger.net/web-security/race-conditions"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')",
+      "url": "https://cwe.mitre.org/data/definitions/362.html"
+    },
+    {
+      "title": "CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition",
+      "url": "https://cwe.mitre.org/data/definitions/367.html"
+    }
+  ]
+}

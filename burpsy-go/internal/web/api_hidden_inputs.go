@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -299,8 +300,14 @@ func (s *Server) fileHiddenInputs(res scanner.HiddenInputResult, taskID uint64) 
 		nf.Evidence = in.Evidence
 		// One finding per hidden input, not one per endpoint: the store's default key is name plus
 		// location, which would fold two hidden headers on one page into a single issue. The path
-		// stays in the key so the same name on two endpoints is two findings.
-		nf.MergeKey = nf.Target.Path + "\x00" + string(in.Kind) + "\x00" + in.Name
+		// stays in the key so the same name on two endpoints is two findings. Query-stripped, the
+		// same rule the store's dedup key applies: an endpoint is its path, and /login?next=/a is
+		// not a second endpoint with the same hidden header.
+		mergePath := nf.Target.Path
+		if i := strings.IndexByte(mergePath, '?'); i >= 0 {
+			mergePath = mergePath[:i]
+		}
+		nf.MergeKey = mergePath + "\x00" + string(in.Kind) + "\x00" + in.Name
 		ids = append(ids, s.findings.Add(nf))
 	}
 	return ids

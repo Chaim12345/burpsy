@@ -17,13 +17,18 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
+
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 func gzipResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip: %v", err)
 	}
@@ -34,7 +39,7 @@ func deflateResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zlib.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("zlib: %v", err)
 	}
@@ -55,7 +60,7 @@ func chunkedGzipResponse(t *testing.T, body string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(body))
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
 	if err := zw.Close(); err != nil {
 		t.Fatalf("gzip: %v", err)
 	}
@@ -101,11 +106,11 @@ func TestAResponseRuleReachesAGzippedBodyWhenUnpackingIsOn(t *testing.T) {
 		t.Errorf("Content-Encoding survived on a decompressed body\n%q", text)
 	}
 	// And the length must follow the body it now describes.
-	_, body, _, ok := splitMessage(out)
+	_, body, _, ok := httputil.SplitHeadBody(out)
 	if !ok {
 		t.Fatal("the rebuilt response has no separator")
 	}
-	if got := headerValue(out[:bytes.Index(out, []byte("\r\n\r\n"))], "Content-Length"); got != strconv.Itoa(len(body)) {
+	if got, _ := httputil.HeaderValue(out[:bytes.Index(out, []byte("\r\n\r\n"))], "Content-Length"); got != strconv.Itoa(len(body)) {
 		t.Errorf("Content-Length = %q, body is %d bytes", got, len(body))
 	}
 
@@ -131,8 +136,8 @@ func TestUnpackingWorksOnDeflateAndOnChunkedFraming(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := NewOptions()
-			o.Set(OptUnpackCompressedResponses, true)
-			o.Set(OptRemoveAllJavaScript, true)
+			_ = o.Set(OptUnpackCompressedResponses, true)
+			_ = o.Set(OptRemoveAllJavaScript, true)
 			text := string(o.ApplyResponse(tc.resp))
 			if strings.Contains(text, "<script>") {
 				t.Errorf("the script survived\n%q", text)
@@ -151,7 +156,7 @@ func TestUnpackingWorksOnDeflateAndOnChunkedFraming(t *testing.T) {
 // that is decompressed and matched by no rule has still been changed for the better.
 func TestUnpackingAloneDecompressesTheBody(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	text := string(o.ApplyResponse(gzipResponse(t, scriptedPage)))
 	if !strings.Contains(text, scriptedPage) {
@@ -164,7 +169,7 @@ func TestUnpackingAloneDecompressesTheBody(t *testing.T) {
 
 func TestWithUnpackingOffACompressedResponseIsUntouchedAndCounted(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
 	in := gzipResponse(t, scriptedPage)
 	out := o.ApplyResponse(in)
@@ -183,17 +188,72 @@ func TestWithUnpackingOffACompressedResponseIsUntouchedAndCounted(t *testing.T) 
 	}
 }
 
+func TestAResponseRuleReachesBrotliAndZstdBodiesWhenUnpackingIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		encoding string
+		pack     func(*testing.T, string) []byte
+	}{
+		{"brotli", "br", func(t *testing.T, body string) []byte {
+			var buf bytes.Buffer
+			w := brotli.NewWriter(&buf)
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}},
+		{"zstd", "zstd", func(t *testing.T, body string) []byte {
+			var buf bytes.Buffer
+			w, err := zstd.NewWriter(&buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return buf.Bytes()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := NewOptions()
+			if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+				t.Fatal(err)
+			}
+			if err := o.Set(OptRemoveAllJavaScript, true); err != nil {
+				t.Fatal(err)
+			}
+			out := o.ApplyResponse(encodedResponse(tc.pack(t, scriptedPage), tc.encoding))
+			text := string(out)
+			if strings.Contains(text, "<script>") {
+				t.Errorf("the script survived: the rule did not reach the %s-decoded body\n%q", tc.encoding, text)
+			}
+			if !strings.Contains(text, "<p>hello</p>") {
+				t.Errorf("the rest of the page is gone\n%q", text)
+			}
+			if c := o.Counters(); c.UnpackedResponses != 1 || c.SkippedCompressed != 0 {
+				t.Errorf("counters = %+v, want one unpacked and none skipped", c)
+			}
+		})
+	}
+}
+
 func TestAnUndecodableEncodingIsLeftAloneAndSaysWhy(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
-	// br has no decoder in this build. The body is deliberately not brotli — nothing gets far enough
-	// to look at it, which is the point: the encoding is refused by name.
+	// A body labelled br that is not brotli: corrupt streams are refused by name, never partly
+	// rewritten. (A body that IS brotli unpacks — the case below it.)
 	in := encodedResponse([]byte("\x00\x01\x02not brotli"), "br")
 	out := o.ApplyResponse(in)
 	if !bytes.Equal(in, out) {
-		t.Error("a brotli response was modified by a build with no brotli decoder")
+		t.Error("a corrupt brotli response was partly rewritten")
 	}
 	c := o.Counters()
 	if c.SkippedCompressed != 1 || c.SkippedUnsupportedEncoding != 1 {
@@ -206,8 +266,8 @@ func TestAnUndecodableEncodingIsLeftAloneAndSaysWhy(t *testing.T) {
 
 func TestACorruptCompressedBodyIsLeftWhollyAlone(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
-	o.Set(OptRemoveAllJavaScript, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptRemoveAllJavaScript, true)
 
 	// A body labelled gzip that is not. Half a document is worse than none: a rule would rewrite the
 	// part it could see and the browser would receive a page cut in the middle.
@@ -223,7 +283,7 @@ func TestACorruptCompressedBodyIsLeftWhollyAlone(t *testing.T) {
 
 func TestAnUncompressedResponseIsNotCountedAsASkip(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	in := htmlResponse(scriptedPage)
 	out := o.ApplyResponse(in)
@@ -239,11 +299,11 @@ func TestAnUncompressedResponseIsNotCountedAsASkip(t *testing.T) {
 
 func TestUnpackingARequestBody(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedRequests, true)
+	_ = o.Set(OptUnpackCompressedRequests, true)
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(`{"q":"alpha"}`))
+	_, _ = zw.Write([]byte(`{"q":"alpha"}`)) // a bytes.Buffer cannot refuse
 	zw.Close()
 	packed := buf.Bytes()
 	in := []byte("POST /search HTTP/1.1\r\nHost: shop.test\r\nContent-Encoding: gzip\r\n" +
@@ -272,11 +332,11 @@ func TestUnpackingARequestBody(t *testing.T) {
 // silently start rewriting request bodies the origin expects compressed.
 func TestTheTwoUnpackSwitchesAreIndependent(t *testing.T) {
 	o := NewOptions()
-	o.Set(OptUnpackCompressedResponses, true)
+	_ = o.Set(OptUnpackCompressedResponses, true)
 
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(`{"q":"alpha"}`))
+	_, _ = zw.Write([]byte(`{"q":"alpha"}`)) // a bytes.Buffer cannot refuse
 	zw.Close()
 	packed := buf.Bytes()
 	in := []byte("POST /search HTTP/1.1\r\nHost: shop.test\r\nContent-Encoding: gzip\r\n" +
@@ -288,5 +348,63 @@ func TestTheTwoUnpackSwitchesAreIndependent(t *testing.T) {
 	}
 	if c := o.Counters(); c.UnpackedRequests != 0 {
 		t.Errorf("unpacked_requests = %d", c.UnpackedRequests)
+	}
+}
+
+func gzippedBytes(t *testing.T, body string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	_, _ = zw.Write([]byte(body)) // a bytes.Buffer cannot refuse; Close below surfaces a stream error
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// A field name padded with whitespace before its colon is not a Content-Encoding this proxy
+// recognizes (burpsy-react-ui-6858 fix round): recognition of Content-Encoding is
+// smuggling-adjacent, so the strict read the retired headerValue used is pinned per path — a
+// padded line leaves the compressed body exactly as it arrived, the way a strict origin parser
+// would leave it.
+func TestAPaddedContentEncodingIsNotUnpackedOnEitherPath(t *testing.T) {
+	body := gzippedBytes(t, "hello")
+
+	resp := append([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding : gzip\r\n\r\n"), body...)
+	o := NewOptions()
+	if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := o.ApplyResponse(resp); !bytes.Equal(out, resp) {
+		t.Errorf("a padded Content-Encoding got the response unpacked:\n%q", out)
+	}
+
+	req := append([]byte("POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Encoding : gzip\r\n\r\n"), body...)
+	r := NewOptions()
+	if err := r.Set(OptUnpackCompressedRequests, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := r.ApplyRequest(req); !bytes.Equal(out, req) {
+		t.Errorf("a padded Content-Encoding got the request unpacked:\n%q", out)
+	}
+}
+
+// Same strictness for Transfer-Encoding: with the padded line unread, the body is not declared
+// chunked, the chunk framing is not valid gzip payload, and the message passes through wholly
+// untouched — where the lenient read would dechunk, unpack, and rewrite it.
+func TestAPaddedTransferEncodingDoesNotTriggerDechunking(t *testing.T) {
+	packed := gzippedBytes(t, "hello")
+	var framed bytes.Buffer
+	framed.WriteString(strconv.FormatInt(int64(len(packed)), 16) + "\r\n")
+	framed.Write(packed)
+	framed.WriteString("\r\n0\r\n\r\n")
+	raw := append([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nTransfer-Encoding : chunked\r\n\r\n"), framed.Bytes()...)
+
+	o := NewOptions()
+	if err := o.Set(OptUnpackCompressedResponses, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := o.ApplyResponse(raw); !bytes.Equal(out, raw) {
+		t.Errorf("a padded Transfer-Encoding got the body dechunked and unpacked:\n%q", out)
 	}
 }

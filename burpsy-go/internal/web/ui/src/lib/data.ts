@@ -49,7 +49,12 @@ export const keys = {
  projects: ["projects"] as const,
  dashboard: ["dashboard"] as const,
  history: (q: string, limit: number, search?: HistorySearch) =>
-  ["history", q, limit, ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : [])] as const,
+  [
+   "history",
+   q,
+   limit,
+   ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : []),
+  ] as const,
  message: (id: number) => ["message", id] as const,
  exchange: (id: number) => ["exchange", id] as const,
  issues: ["issues"] as const,
@@ -99,7 +104,7 @@ export const keys = {
  * Which caches a server event invalidates. Keys are prefixes, so one entry
  * covers every parameterised variant of a resource.
  */
-const INVALIDATION: Record<string, string[][]> = {
+export const INVALIDATION: Record<string, string[][]> = {
  history: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  capture: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  // A finished hidden-input run files its findings and notifies issues and dashboard; both refresh
@@ -110,7 +115,11 @@ const INVALIDATION: Record<string, string[][]> = {
  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
  // entry the only event that can tell the console a sweep has results.
- dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"]],
+ // The server emits only this kind for a task starting or finishing (dash.Registry.Start records
+ // EventTaskStarted, which fires changeDashboard; a crawl notifies changeDashboard again when it
+ // finishes: events.go, server.go, api_crawl.go), and it is the one signal that the retained-run list
+ // moved. The Dashboard asks for a task's crawl run only when that list names it, so ["crawls"] follows.
+ dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"], ["crawls"]],
  task: [["dashboard"]],
  tasks: [["dashboard"]],
  ws: [["ws"], ["stats"], ["dashboard"]],
@@ -514,9 +523,7 @@ export function useOrganizerMutations() {
   moveItems: useMutation({
    mutationFn: ({ collection, itemIds, copy }: { collection: number | "inbox"; itemIds: number[]; copy?: boolean }) =>
     api<{ moved: number }>(
-     collection === "inbox"
-      ? "/api/tools/organizer/collections/inbox"
-      : `/api/tools/organizer/collections/${collection}/items`,
+     collection === "inbox" ? "/api/tools/organizer/collections/inbox" : `/api/tools/organizer/collections/${collection}/items`,
      json("PUT", { item_ids: itemIds, copy: copy === true }),
     ),
    onSuccess: done,
@@ -595,10 +602,7 @@ export function useInterceptControls() {
    * would make a caller setting one have to restate the other. */
   setInScopeOnly: useMutation({
    mutationFn: (inScopeOnly: boolean) =>
-    api<{ in_scope_only: boolean; scope_attached: boolean }>(
-     "/api/intercept/in-scope-only",
-     json("POST", { in_scope_only: inScopeOnly }),
-    ),
+    api<{ in_scope_only: boolean; scope_attached: boolean }>("/api/intercept/in-scope-only", json("POST", { in_scope_only: inScopeOnly })),
    onSuccess: done,
   }),
   forward: useMutation({
@@ -607,8 +611,7 @@ export function useInterceptControls() {
    onSuccess: done,
   }),
   drop: useMutation({
-   mutationFn: (id: number) =>
-    api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
+   mutationFn: (id: number) => api<unknown>(`/api/intercept/${id}/drop`, json("POST", { reason: "dropped by operator" })),
    onSuccess: done,
   }),
   /**
@@ -633,8 +636,7 @@ export function useInterceptControls() {
    onSuccess: done,
   }),
   dropAll: useMutation({
-   mutationFn: () =>
-    api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
+   mutationFn: () => api<{ dropped: number }>("/api/intercept/drop-all", json("POST", { reason: "dropped by operator" })),
    onSuccess: done,
   }),
  };

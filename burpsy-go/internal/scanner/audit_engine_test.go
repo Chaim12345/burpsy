@@ -547,6 +547,41 @@ func Test_findings_from_a_check_whose_probes_never_went_out_are_dropped_and_coun
 	}
 }
 
+func Test_a_unit_abandons_when_a_checks_every_probe_was_refused(t *testing.T) {
+	// The response-dependence family sends probes with no harness baseline (the captured response
+	// is the baseline), so against a dead target each check lands in the engine's
+	// attempted>0 && sent==0 branch: every probe it placed failed to go out. That branch recorded
+	// the failure on the breaker but threw the verdict away, so a unit whose checks all failed
+	// this way never abandoned - the streak climbed while the remaining checks dispatched into a
+	// target that was refusing everything, and unitFinished(false) then RESET the unit streak.
+	// The per-URL unit here is three checks: two refused failures must abandon the third.
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, "127.0.0.1", deadTarget(t), "/search", "<html>seed</html>")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{MaxConcurrency: 1, Timeout: 10 * time.Second, CheckResponseDependence: true})
+
+	cfg := DefaultAuditConfig()
+	// Item failure off: this test measures the unit breaker alone, and a failed item would earn a
+	// follow-up pass whose narrowed re-run muddies the per-pass counts being asserted.
+	cfg.ConsecutiveUnitFailuresToFailItem = 0
+	outcome, _ := scan.AuditWithin(context.Background(), id, cfg)
+
+	// Two per-URL checks ran and failed (backup file, user-agent), the third was abandoned; the
+	// per-host unit's two ASP checks both ran and failed too (its second failure abandoned the
+	// unit with nothing left to skip).
+	if outcome.SendFailures != 4 {
+		t.Errorf("send failures = %d, want 4: two per-URL checks ran, both per-host checks ran; the "+
+			"third per-URL check must have been abandoned, not run", outcome.SendFailures)
+	}
+	if outcome.UnitAbandoned != 1 {
+		t.Errorf("unit-abandoned = %d, want 1: the third per-URL check never started", outcome.UnitAbandoned)
+	}
+	if outcome.UnitsAbandoned != 2 {
+		t.Errorf("units abandoned = %d, want 2: both units crossed the two-failure threshold", outcome.UnitsAbandoned)
+	}
+}
+
 func Test_the_session_breaker_pauses_a_run_and_the_remaining_items_say_so(t *testing.T) {
 	store := core.NewTrafficStore()
 	port := deadTarget(t)
@@ -852,10 +887,12 @@ func Test_an_exchange_with_no_response_is_unauditable_rather_than_clean(t *testi
 
 func Test_the_audit_time_budget_comes_from_scan_config_rather_than_a_second_timeout(t *testing.T) {
 	scan := NewActiveScanner(core.NewTrafficStore(), zap.NewNop())
-	// NewActiveScanner's ScanConfig.Timeout is 30s, which used to be set by every caller and read by
-	// nobody. Two wall-clock knobs that could disagree is exactly what this reconciliation avoids.
-	if got := scan.AuditConfig().TimeBudget; got != 30*time.Second {
-		t.Errorf("time budget = %s, want ScanConfig.Timeout (30s)", got)
+	// NewActiveScanner's ScanConfig.Timeout is DefaultAuditBudget (120s), the one default every
+	// binary shares: the CLI sets it explicitly (cmd/burpsy/main.go WithScanTimeout) and the
+	// desktop inherits it here. Two wall-clock knobs that could disagree - or two defaults that
+	// could drift, the 30s/120s fork this killed - is exactly what this reconciliation avoids.
+	if got := scan.AuditConfig().TimeBudget; got != DefaultAuditBudget {
+		t.Errorf("time budget = %s, want the unified default %s", got, DefaultAuditBudget)
 	}
 	scan.WithConfig(&ScanConfig{MaxConcurrency: 1, Timeout: 7 * time.Second, CheckXss: true})
 	if got := scan.AuditConfig().TimeBudget; got != 7*time.Second {

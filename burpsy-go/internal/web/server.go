@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -95,7 +96,13 @@ type Server struct {
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
 	toolRunner bcheck.ToolRunner
-	findings   *core.FindingStore
+	// scannerCaps is the capability recipe the lazily built audit scanner is
+	// constructed from (internal/scanner/wiring.go) — the same set the
+	// process's explicit scanner was built from, so a server that builds its
+	// scanner on first audit and one handed a finished scanner by WithScanner
+	// can never disagree about which capability-gated checks exist.
+	scannerCaps scanner.CapabilityWiring
+	findings    *core.FindingStore
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
@@ -118,6 +125,8 @@ type Server struct {
 	loginRuns    *sessionLoginRuns
 	intercept    *intercept.Engine
 	persist      *persist.Store
+	// wsHook is the extension websocket seam; see ws_hook.go.
+	wsHook wsHookState
 	// seqSettings is Burp's sequencer.* analysis configuration (burpsy-react-ui-nm81), project-level:
 	// restored by WithPersist, so a project switch brings the incoming project's settings. A nil map
 	// means "never set" and reads as sequencer.DefaultSettings. Guarded by seqMu.
@@ -449,6 +458,17 @@ func (s *Server) WithExtensions(host *extension.Host) *Server {
 	return s
 }
 
+// WithScannerCapabilities sets the capability recipe the lazily built audit scanner
+// (Server.activeScanner) is constructed from. A server handed a finished scanner with
+// WithScanner never consults it; the recipe exists so the fallback wires the same
+// capability handles the process's own scanner got — ledgers, session coordinator,
+// JS-library and JWT checks, bundled corpus — instead of the scope/pace/gate-only
+// subset that used to leave every capability-gated check filing CapabilityMissing.
+func (s *Server) WithScannerCapabilities(caps scanner.CapabilityWiring) *Server {
+	s.scannerCaps = caps
+	return s
+}
+
 // WithScanner sets the active scanner used by the audit endpoint.
 //
 // The pool pacer is attached here rather than left to the caller, for the same reason
@@ -587,6 +607,25 @@ func (s *Server) WithDOMEngine(label string) *Server {
 func (s *Server) WithPersist(p *persist.Store) *Server {
 	s.persist = p
 	if p != nil {
+		// A failed mirror write used to be one Warn line and then silence: the process
+		// restarted into state that lagged what memory held, and nothing said so. The
+		// store now counts failures and marks the database (internal/persist/mirror_health.go);
+		// this hook puts each failure on the dashboard event log — the surface an operator
+		// actually watches — at the moment it happens.
+		p.SetWriteFailureHook(func(op string, err error) {
+			h := p.MirrorHealth()
+			s.events.Record("persist", dash.SeverityError, fmt.Sprintf(
+				"Durable mirror write failed (%s): %v. %d failure(s) this session; project state will diverge from this session on restart.",
+				op, err, h.Failures))
+		})
+		// ...and this announces the divergence the previous run recorded, on the side of the
+		// restart the loss actually surfaces on: the state about to be restored is the lagging one.
+		if prior := p.PriorSessionMirrorFailures(); prior > 0 {
+			detail := fmt.Sprintf(
+				"The previous session recorded %d durable-mirror write failure(s); the restored project state may lag what that session held.", prior)
+			s.logger.Warn("previous session's durable mirror lost writes", zap.Int64("failures", prior))
+			s.events.Record("persist", dash.SeverityError, detail)
+		}
 		if err := p.Restore(nil, nil, nil, s.matchReplace, s.sessionCoordinator, s.organizer, s.toolLog); err != nil {
 			s.logger.Warn("failed to restore web-owned state", zap.Error(err))
 		}
@@ -998,344 +1037,366 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 
 func (s *Server) setupRoutes() {
 	// Capture + stats
-	s.mux.HandleFunc("/api/history", s.handleHistory)
+	s.route("/api/history", s.handleHistory)
 	// Delete items / Clear (r6li), split from /api/history so the removal carries its own
 	// riskDestructive class and the read keeps riskRead (gf68).
-	s.mux.HandleFunc("/api/history/rows", s.handleHistoryRows)
+	s.route("/api/history/rows", s.handleHistoryRows)
 	// Import HAR (eyi1): bring traffic captured elsewhere into history without re-proxying it live.
-	s.mux.HandleFunc("/api/history/import/har", s.handleHistoryImportHar)
+	s.route("/api/history/import/har", s.handleHistoryImportHar)
 	// Custom extractor columns (burpsy-react-ui-28n8): the saved definitions, and their values for a
 	// page of rows.
-	s.mux.HandleFunc("/api/history/extractors", s.handleHistoryExtractors)
-	s.mux.HandleFunc("/api/history/extract", s.handleHistoryExtract)
-	s.mux.HandleFunc("/api/message/", s.handleMessage)
+	s.route("/api/history/extractors", s.handleHistoryExtractors)
+	s.route("/api/history/extract", s.handleHistoryExtract)
+	s.route("/api/message/{id}", s.handleMessage)
 	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
 	// store because the history rows the console holds carry no bytes to search. See api_search.go.
-	s.mux.HandleFunc("/api/search", s.handleSearch)
-	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
-	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
-	s.mux.HandleFunc("/api/stats", s.handleStats)
+	s.route("/api/search", s.handleSearch)
+	s.route("/api/exchange/", s.handleExchange)
+	s.route("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
+	s.route("/api/stats", s.handleStats)
 	// The operator's skill library (ulsy): the list, one rendered prompt, the per-project switch.
-	s.mux.HandleFunc("/api/skills", s.handleSkills)
-	s.mux.HandleFunc("/api/skills/", s.handleSkill)
-	s.mux.HandleFunc("/api/skills/disabled", s.handleSkillsDisabled)
+	s.route("/api/skills", s.handleSkills)
+	// A skill name never contains "/" (^[a-z0-9][a-z0-9_-]{0,63}$), so {name} is the whole remainder;
+	// the "{name}/" twin keeps the trailing-slash form the old subtree pattern served (burpsy-react-ui-fxxm).
+	s.route("/api/skills/{rest...}", s.handleSkill)
+	s.route("/api/skills/disabled", s.handleSkillsDisabled)
 	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
-	s.mux.HandleFunc("/api/datasets/", s.handleDatasets)
+	s.route("/api/datasets/{rest...}", s.handleDatasets)
 	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
-	s.mux.HandleFunc("/ca.crt", s.handleCACert)
+	s.route("/ca.crt", s.handleCACert)
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
-	s.mux.HandleFunc("/api/backup", s.handleBackup)
+	s.route("/api/backup", s.handleBackup)
 	// The automatic-backup setting — interval schedule and delete-on-clean-shutdown (jkvb). See
 	// api_backup_config.go.
-	s.mux.HandleFunc("/api/backup/config", s.handleBackupConfig)
-	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
-	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
-	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
-	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
+	s.route("/api/backup/config", s.handleBackupConfig)
+	s.route("/api/headers/uninteresting", s.handleUninterestingHeaders)
+	s.route("/api/proxy/ca", s.handleCAStatus)
+	s.route("/api/proxy/ca/import", s.handleCAImport)
+	s.route("/api/proxy/ca/regenerate", s.handleCARegenerate)
 	// Burp's "Open browser" (burpsy-react-ui-bufa): a Chromium pre-wired to a live listener and pinned
 	// to burpsy's CA, its settings, and Burp's "Clear all browser data". See api_browser.go.
-	s.mux.HandleFunc("/api/browser/launch", s.handleBrowserLaunch)
-	s.mux.HandleFunc("/api/browser/settings", s.handleBrowserSettings)
-	s.mux.HandleFunc("/api/browser/clear", s.handleBrowserClear)
+	s.route("/api/browser/launch", s.handleBrowserLaunch)
+	s.route("/api/browser/settings", s.handleBrowserSettings)
+	s.route("/api/browser/clear", s.handleBrowserClear)
 	// Export the CA certificate, private key or a PKCS#12 pair (burpsy-react-ui-j92x) so another tool
 	// can intercept with the same CA. Behind the confirmation gate: see api_ca_export.go.
-	s.mux.HandleFunc("/api/proxy/ca/export", s.handleCAExport)
-	s.mux.HandleFunc("/api/scope", s.handleScope)
+	s.route("/api/proxy/ca/export", s.handleCAExport)
+	s.route("/api/scope", s.handleScope)
 	// "Is this URL in scope?" — Burp's Scope.isInScope, with the rule that decided (z5z3).
-	s.mux.HandleFunc("/api/scope/check", s.handleScopeCheck)
-	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
-	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
-	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
-	s.mux.HandleFunc("/api/issues", s.handleIssues)
+	s.route("/api/scope/check", s.handleScopeCheck)
+	s.route("/api/scanner/config", s.handleScannerConfig)
+	s.route("/api/config/export", s.handleConfigExport)
+	s.route("/api/config/import", s.handleConfigImport)
+	s.route("/api/issues", s.handleIssues)
 	// Record an issue (burpsy-react-ui-4qqz): the operator's hand-recorded finding, attached to
 	// one exchange. ServeMux resolves the subtree /api/issues/{id} longest-prefix, so 'record'
 	// would be swallowed by the id path if it matched an id shape — it does not (it is not
 	// numeric), but registering it explicitly keeps handleIssueByID's numeric-only guard honest.
-	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
-	s.mux.HandleFunc("/api/issues/consolidation", s.handleIssueConsolidation)
-	s.mux.HandleFunc("/api/scanner/secrets", s.handleScannerSecrets)
-	s.mux.HandleFunc("/api/dominvader", s.handleDomInvader)
-	s.mux.HandleFunc("/api/dominvader/hit", s.handleDomInvaderHit)
-	s.mux.HandleFunc("/api/dominvader/hits", s.handleDomInvaderHits)
-	s.mux.HandleFunc("/api/protobuf/decode", s.handleProtobufDecode)
-	s.mux.HandleFunc("/api/protobuf/encode", s.handleProtobufEncode)
-	s.mux.HandleFunc("/api/authz/identities", s.handleAuthzIdentities)
-	s.mux.HandleFunc("/api/authz/test", s.handleAuthzTest)
+	s.route("/api/issues/record", s.handleIssueRecord)
+	s.route("/api/issues/consolidation", s.handleIssueConsolidation)
+	s.route("/api/scanner/secrets", s.handleScannerSecrets)
+	s.route("/api/dominvader", s.handleDomInvader)
+	s.route("/api/dominvader/hit", s.handleDomInvaderHit)
+	s.route("/api/dominvader/hits", s.handleDomInvaderHits)
+	s.route("/api/dominvader/scan", s.handleDomInvaderScan)
+	s.route("/api/protobuf/decode", s.handleProtobufDecode)
+	s.route("/api/protobuf/reflect-decode", s.handleProtobufReflectDecode)
+	s.route("/api/protobuf/encode", s.handleProtobufEncode)
+	s.route("/api/authz/identities", s.handleAuthzIdentities)
+	s.route("/api/authz/test", s.handleAuthzTest)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.
-	s.mux.HandleFunc("/api/issues/", s.handleIssueByID)
+	s.route("/api/issues/", s.handleIssueByID)
 	// The LLM second look (ei0v): the pass over gated findings, and its settings door. The
 	// /api/issues/triage exact pattern outranks the {id} subtree above it, so "triage" is
 	// never mistaken for an issue id.
-	s.mux.HandleFunc("/api/issues/triage", s.handleIssueTriageRun)
-	s.mux.HandleFunc("/api/settings/triage", s.handleTriageSettings)
-	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
+	s.route("/api/issues/triage", s.handleIssueTriageRun)
+	s.route("/api/settings/triage", s.handleTriageSettings)
+	s.route("/api/findings", s.handleFindings) // legacy alias for /api/issues
 	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one
 	// definition in full. ServeMux picks the longest match regardless of registration order.
-	s.mux.HandleFunc("/api/advisories", s.handleAdvisories)
-	s.mux.HandleFunc("/api/advisories/", s.handleAdvisoryDetail)
+	s.route("/api/advisories", s.handleAdvisories)
+	// The generated OpenAPI 3.1 document for everything registered here (pg5a).
+	s.route("/api/openapi.json", s.handleOpenAPI)
+	s.route("/api/advisories/", s.handleAdvisoryDetail)
 	// Engagement tools over the site map (burpsy-react-ui-1s07): Find comments, Find scripts
 	// and Find references, Burp's three site-map searches, computed over stored responses.
 	// One subtree pattern because the kind IS the path's last segment.
-	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
-	s.mux.HandleFunc("/api/engagement/clickbandit.js", s.handleClickbandit)
-	s.mux.HandleFunc("/api/target/analyze", s.handleTargetAnalyze)
+	s.route("/api/engagement/{kind...}", s.handleEngagement)
+	s.route("/api/engagement/clickbandit.js", s.handleClickbandit)
+	s.route("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
 	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
-	s.mux.HandleFunc("/api/exchange/in-browser/", s.handleExchangeInBrowserByID)
+	s.route("/api/exchange/in-browser/{id}", s.handleExchangeInBrowserByID)
 
 	// Tools
-	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
-	s.mux.HandleFunc("/api/repeater/ws-send", s.handleRepeaterWsSend)
-	s.mux.HandleFunc("/api/repeater/ws-attach", s.handleRepeaterWsAttach)
-	s.mux.HandleFunc("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
+	s.route("/api/repeater/graphql-query", s.handleRepeaterGraphQLQuery)
+	s.route("/api/repeater/graphql-validate", s.handleRepeaterGraphQLValidate)
+	s.route("/api/repeater/send", s.handleRepeaterSend)
+	s.route("/api/repeater/ws-send", s.handleRepeaterWsSend)
+	s.route("/api/repeater/ws-handshake-preview", s.handleRepeaterWsHandshakePreview)
+	s.route("/api/repeater/ws-attach", s.handleRepeaterWsAttach)
+	s.route("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
 	// The re-issue fetch is served outside /api on purpose: it is the URL the operator's
 	// browser opens, and a URL the operator types should not look like a console API route.
 	// It is registered last so it cannot shadow an /api path, and its handler spends a token
 	// before anything else, so nothing here is reachable without one (burpsy-react-ui-7rk0).
-	s.mux.HandleFunc("/reissue/", s.handleBrowserReissueFetch)
+	s.route("/reissue/{token...}", s.handleBrowserReissueFetch)
 	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
 	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a
 	// smuggling or desync test performable from Repeater at all.
-	s.mux.HandleFunc("/api/repeater/send-group", s.handleRepeaterSendGroup)
+	s.route("/api/repeater/send-group", s.handleRepeaterSendGroup)
 	// Repeater's "Save entire history" (pznm): a tab's history as one file, bytes exported by id.
-	s.mux.HandleFunc("/api/repeater/history-export", s.handleRepeaterHistoryExport)
+	s.route("/api/repeater/history-export", s.handleRepeaterHistoryExport)
 	// Save GraphQL queries to site map (7v1e): an introspection answer's operations, recorded unsent.
-	s.mux.HandleFunc("/api/graphql/sitemap", s.handleGraphQLSitemap)
+	s.route("/api/graphql/sitemap", s.handleGraphQLSitemap)
 	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
-	s.mux.HandleFunc("/api/protocols", s.handleProtocols)
+	s.route("/api/protocols", s.handleProtocols)
 	// The Project menu's two reads (burpsy-react-ui-je3y): which project this instance is —
 	// name, -db path, whether anything is durable at all — and the name's write. Burp has a
 	// whole Project container; burpsy's project IS the database file, so the readout names the
 	// file and the menu's other items hang off what it reports.
-	s.mux.HandleFunc("/api/project", s.handleProject)
-	s.mux.HandleFunc("/api/project/name", s.handleProjectName)
+	s.route("/api/project", s.handleProject)
+	s.route("/api/project/name", s.handleProjectName)
 	// In-console open/switch (burpsy-react-ui-dlw2): the front half je3y had to decline. The switch
 	// re-runs the one-time restore against the new file and re-points every sink — see
 	// api_project_open.go for why it is not a pointer swap.
-	s.mux.HandleFunc("/api/project/open", s.handleProjectOpen)
-	s.mux.HandleFunc("/api/projects", s.handleProjectList)
-	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
-	s.mux.HandleFunc("/api/http2/kettle", s.handleHTTP2Kettle)
-	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
-	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
+	s.route("/api/project/open", s.handleProjectOpen)
+	s.route("/api/projects", s.handleProjectList)
+	s.route("/api/http2/program", s.handleHTTP2Program)
+	s.route("/api/http2/kettle", s.handleHTTP2Kettle)
+	s.route("/api/intruder/points", s.handleIntruderPoints)
+	s.route("/api/intruder/run", s.handleIntruderRun)
 	// Reaching a *running* attack. Two patterns because they are two shapes: the exact path lists what
 	// is running, the prefix carries the per-attack action. Before these an attack could not be paused,
 	// resumed or stopped from anywhere — see api_intruder_control.go.
-	s.mux.HandleFunc("/api/intruder/attacks", s.handleIntruderAttacks)
-	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
-	s.mux.HandleFunc("/api/intruder/again", s.handleIntruderAgain)
-	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
-	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
+	s.route("/api/intruder/attacks", s.handleIntruderAttacks)
+	s.route("/api/intruder/attacks/{id}/{action...}", s.handleIntruderAttackAction)
+	s.route("/api/intruder/attacks/{id}", s.handleIntruderAttackNoAction)
+	s.route("/api/intruder/attacks/{$}", s.handleIntruderAttackNoAction)
+	s.route("/api/intruder/again", s.handleIntruderAgain)
+	s.route("/api/scanner/live", s.handleScannerLive)
+	s.route("/api/scanner/coverage", s.handleScannerCoverage)
 	// The Custom scan checks leaf (burpsy-react-ui-kdqj): the corpus as rows, and the per-row switch
 	// the audit engine reads.
-	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
-	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
+	s.route("/api/scanner/checks", s.handleCorpusChecks)
+	s.route("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
 	// Console authoring of custom scan checks (kbu1): Validate, Import, source (Export/Delete), Reload, Run test.
-	s.mux.HandleFunc("/api/scanner/checks/validate", s.handleCheckValidate)
-	s.mux.HandleFunc("/api/scanner/checks/import", s.handleCheckImport)
-	s.mux.HandleFunc("/api/scanner/checks/source", s.handleCheckSource)
-	s.mux.HandleFunc("/api/scanner/checks/reload", s.handleCheckReload)
-	s.mux.HandleFunc("/api/scanner/checks/test", s.handleCheckTest)
-	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
+	s.route("/api/scanner/checks/validate", s.handleCheckValidate)
+	s.route("/api/scanner/checks/import", s.handleCheckImport)
+	s.route("/api/scanner/checks/source", s.handleCheckSource)
+	s.route("/api/scanner/checks/reload", s.handleCheckReload)
+	s.route("/api/scanner/checks/test", s.handleCheckTest)
+	s.route("/api/scanner/configs", s.handleScannerConfigs)
 	// The catalogue the per-issue selection is chosen from, by name, with each type's detection
 	// methods and which of them burpsy runs (burpsy-react-ui-saq3.3.1).
-	s.mux.HandleFunc("/api/scanner/issue-types", s.handleScannerIssueTypes)
-	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
+	s.route("/api/scanner/issue-types", s.handleScannerIssueTypes)
+	s.route("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two
 	// operations on two shapes: the exact path lists the queue, the subtree acts on one item. Note the
 	// exact pattern above does *not* swallow these — a ServeMux pattern without a trailing slash
 	// matches that path and nothing else, so "/api/scanner/audit" and "/api/scanner/audit-items" are
 	// unrelated routes despite the shared prefix.
-	s.mux.HandleFunc("/api/scanner/audit-items", s.handleScannerAuditItems)
-	s.mux.HandleFunc("/api/scanner/audit-items/", s.handleScannerAuditItemAction)
+	s.route("/api/scanner/audit-items", s.handleScannerAuditItems)
+	s.route("/api/scanner/audit-items/", s.handleScannerAuditItemAction)
 	// Registered as a literal pattern as well as living under the /api/audit/ subtree: net/http's mux
 	// prefers the more specific pattern, so this wins over the subtree and does not have to be special
 	// cased inside handleAuditByPath — where a bare ParseUint failure on "selected" would answer 400
 	// "Invalid exchange id" for a request that names no id at all.
-	s.mux.HandleFunc("/api/audit/selected", s.handleAuditSelected)
-	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
-	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
+	s.route("/api/audit/selected", s.handleAuditSelected)
+	s.route("/api/audit/", s.handleAuditByPath)
+	s.route("/api/sequencer/analyse", s.handleSequencerAnalyse)
 	// Burp's Sequencer Analysis Settings — the ten sequencer.* keys (burpsy-react-ui-nm81).
-	s.mux.HandleFunc("/api/sequencer/settings", s.handleSequencerSettings)
+	s.route("/api/sequencer/settings", s.handleSequencerSettings)
 	// Two patterns, because they are two operations: the exact path starts a capture, the subtree
 	// reads one and stops one. Registered exact-first for readability only — ServeMux picks the
 	// longest matching pattern regardless of registration order.
-	s.mux.HandleFunc("/api/sequencer/capture", s.handleSequencerCaptureStart)
-	s.mux.HandleFunc("/api/sequencer/capture/", s.handleSequencerCapture)
+	s.route("/api/sequencer/capture", s.handleSequencerCaptureStart)
+	s.route("/api/sequencer/capture/{rest...}", s.handleSequencerCapture)
 
 	// Collaborator: the out-of-band interaction channel. Five routes rather than one because the
 	// index/detail split applies here too — the table is rows, and an interaction's raw bytes are
 	// fetched per row. `status` and `poll` are the same shape deliberately: the difference between them
 	// is only whether the operator asked for the read now, and a caller should not have to reconcile
 	// two views of one channel. See api_collaborator.go on why none of the GETs can register a channel.
-	s.mux.HandleFunc("/api/collaborator/interaction/", s.handleCollaboratorInteraction)
+	s.route("/api/collaborator/interaction/{id}", s.handleCollaboratorInteraction)
 	// The intruder payload upload (016): an operator's wordlist arrives as the body and lands
 	// in burpsy's upload directory; the response names the path the ordinary file payload
 	// source resolves. A POST because it stores state.
-	s.mux.HandleFunc("/api/intruder/payload-files", s.handleIntruderPayloadUpload)
+	s.route("/api/intruder/payload-files", s.handleIntruderPayloadUpload)
 	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
 	// uploaded — so Intruder's file source and content discovery both point once.
-	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
+	s.route("/api/wordlists", s.handleWordlists)
 	// Burp's "Run health check" (8e3n). Like /payload it may register the channel: an explicit click.
-	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealth)
-	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
-	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
-	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)
+	s.route("/api/collaborator/health", s.handleCollaboratorHealth)
+	s.route("/api/collaborator/interactions", s.handleCollaboratorInteractions)
+	s.route("/api/collaborator/payload", s.handleCollaboratorPayload)
+	s.route("/api/collaborator/poll", s.handleCollaboratorPoll)
 	// The one collaborator route that changes state: it installs a provider. Refuses once a channel
 	// has registered a domain — see handleCollaboratorServer.
-	s.mux.HandleFunc("/api/collaborator/server", s.handleCollaboratorServer)
-	s.mux.HandleFunc("/api/collaborator/status", s.handleCollaboratorStatus)
+	s.route("/api/collaborator/server", s.handleCollaboratorServer)
+	s.route("/api/collaborator/status", s.handleCollaboratorStatus)
 
 	// Session
-	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
-	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
-	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
+	s.route("/api/session/rules", s.handleSessionRules)
+	s.route("/api/session/rules/", s.handleSessionRuleDetail)
+	s.route("/api/session/cookies", s.handleSessionCookies)
 	// The session-handling tracer (burpsy-react-ui-n29): one subtree serving the entries and
 	// the enable toggle, the same one-door shape the jar's reads and writes hold.
-	s.mux.HandleFunc("/api/session/trace", s.handleSessionTrace)
-	s.mux.HandleFunc("/api/session/trace/enable", s.handleSessionTrace)
-	s.mux.HandleFunc("/api/session/login", s.handleSessionLogin)
+	s.route("/api/session/trace", s.handleSessionTrace)
+	s.route("/api/session/trace/enable", s.handleSessionTrace)
+	s.route("/api/session/login", s.handleSessionLogin)
 	// The macro recorder: turns selected Proxy-history rows into macro steps (burpsy-react-ui-escl).
 	// Bare POST, under /api/session/ but deliberately not under /api/session/rules/: it neither reads
 	// nor writes a rule, it converts messages, and parking it under the rules subtree would make it
 	// inherit the credential risk class it does not deserve.
-	s.mux.HandleFunc("/api/session/macro-steps", s.handleSessionMacroSteps)
+	s.route("/api/session/macro-steps", s.handleSessionMacroSteps)
 	// The browser-recovery prompt registry (burpsy-react-ui-dq1g): the exact pattern reads the
 	// pending list, the subtree resolves one. A task blocked on the prompt waits on the seam until
 	// the operator answers here — see session_prompts.go.
-	s.mux.HandleFunc("/api/session/prompts", s.handleSessionPrompts)
-	s.mux.HandleFunc("/api/session/prompts/", s.handleSessionPromptResolve)
+	s.route("/api/session/prompts", s.handleSessionPrompts)
+	s.route("/api/session/prompts/", s.handleSessionPromptResolve)
 
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
-	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
-	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
-	s.mux.HandleFunc("/api/network/server-certificates", s.handleServerCertificates)
-	s.mux.HandleFunc("/api/project/logging", s.handleFileLogging)
-	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
+	s.route("/api/network/auth", s.handleNetworkAuth)
+	s.route("/api/network/auth/failures", s.handleNetworkAuthFailures)
+	s.route("/api/network/server-certificates", s.handleServerCertificates)
+	s.route("/api/project/logging", s.handleFileLogging)
+	s.route("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)
-	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
-	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
-	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
-	s.mux.HandleFunc("/api/proxy/listener", s.handleProxyListener)
+	s.route("/api/intercept", s.handleIntercept)
+	s.route("/api/proxy/passthrough", s.handleTlsPassthrough)
+	s.route("/api/proxy/options", s.handleProxyOptions)
+	s.route("/api/proxy/listener", s.handleProxyListener)
 
 	// Network settings — resolution, timeouts, redirects, 100-continue, open-ended responses. Not
 	// under /api/proxy/: these bind the sender every request-originating surface sends through, so a
 	// name suggesting they were the proxy's would be wrong about who obeys them.
-	s.mux.HandleFunc("/api/network/settings", s.handleNetworkSettings)
+	s.route("/api/network/settings", s.handleNetworkSettings)
 
 	// Named resource pools and scheduled tasks: Burp's configPanelResourcePools and
 	// configPanelScheduledTasks. Two patterns each, for the reason the session-rule and audit-item
 	// routes have two: the exact path is the collection (list, create) and the subtree is one object
 	// by name (replace, delete). A name is operator prose and reaches the URL percent-encoded — see
 	// pathName.
-	s.mux.HandleFunc("/api/pools", s.handlePools)
-	s.mux.HandleFunc("/api/pools/", s.handlePoolDetail)
-	s.mux.HandleFunc("/api/schedules", s.handleSchedules)
-	s.mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
-	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
-	s.mux.HandleFunc("/api/intercept/in-scope-only", s.handleInterceptInScopeOnly)
+	s.route("/api/pools", s.handlePools)
+	s.route("/api/pools/", s.handlePoolDetail)
+	s.route("/api/schedules", s.handleSchedules)
+	s.route("/api/schedules/", s.handleScheduleDetail)
+	s.route("/api/intercept/enable", s.handleInterceptEnable)
+	s.route("/api/intercept/in-scope-only", s.handleInterceptInScopeOnly)
 
 	// Burp's two newline corrections for an EDITED interception (80tg). riskLocal: they rewrite the
 	// bytes the operator is about to send, and the whole point of the feature is that the operator
 	// chose to. The wire route above is the same shape, so this one is classified the same way.
-	s.mux.HandleFunc("/api/intercept/newline-correction", s.handleInterceptNewlineCorrection)
-	s.mux.HandleFunc("/api/scanner/passive-branch", s.handlePassiveBranch)
-	s.mux.HandleFunc("/api/intercept/forward-all", s.handleInterceptForwardAll)
-	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
-	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
+	s.route("/api/intercept/newline-correction", s.handleInterceptNewlineCorrection)
+	s.route("/api/scanner/passive-branch", s.handlePassiveBranch)
+	s.route("/api/intercept/forward-all", s.handleInterceptForwardAll)
+	s.route("/api/intercept/drop-all", s.handleInterceptDropAll)
+	s.route("/api/intercept/rules/{dir...}", s.handleInterceptRules)
 	// The held queue's annotate write: /api/intercept/annotate/{id}, its own exact-subtree
 	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
 	// /api/intercept/{id} resolution paths below.
-	s.mux.HandleFunc("/api/intercept/annotate/", s.handleInterceptAnnotate)
+	s.route("/api/intercept/annotate/{id}", s.handleInterceptAnnotate)
 	// The startup preference (burpsy-react-ui-7vy): what the intercept switch reads at server
 	// start. GET answers it; POST writes it. Its own route rather than a field on /enable for
 	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
 	// startup preference would let a caller set one and silently send the other.
-	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
-	s.mux.HandleFunc("/api/proxy/history-logging", s.handleProxyHistoryLogging)
-	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
+	s.route("/api/intercept/startup", s.handleInterceptStartup)
+	s.route("/api/proxy/history-logging", s.handleProxyHistoryLogging)
+	s.route("/api/intercept/{rest...}", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).
-	s.mux.HandleFunc("/api/network/proxy", s.handleNetworkProxy)
+	s.route("/api/network/proxy", s.handleNetworkProxy)
 
 	// Site map
-	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+	s.route("/api/sitemap", s.handleSitemap)
 	// Record a captured exchange into the map by id — Burp's add_to_sitemap (4bfp).
-	s.mux.HandleFunc("/api/sitemap/record", s.handleSitemapRecord)
-	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
-	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	s.route("/api/sitemap/record", s.handleSitemapRecord)
+	// The tasks family (fxxm batch 2): one pattern per action, so the manifest says what each
+	// route is and the mux owns every 405. The suite-wide pause/resume are literals beside the
+	// {id} patterns; ServeMux resolves a literal ahead of a wildcard, so POST /api/tasks/pause
+	// gates the suite and never parses "pause" as an id (api_tasks_cancel.go carries the
+	// suite-wide handlers; TestTasksSuiteWidePauseResumeAreLiterals pins the precedence).
+	s.route("/api/tasks/{id}", s.handleTaskByID)
+	s.route("/api/tasks/{id}/again", s.handleTaskAgain)
+	s.route("/api/tasks/{id}/cancel", s.handleTaskCancel)
+	s.route("/api/tasks/{id}/pause", s.handleTaskPause)
+	s.route("/api/tasks/{id}/resume", s.handleTaskResume)
+	s.route("/api/tasks/pause", s.handleTasksPauseAll)
+	s.route("/api/tasks/resume", s.handleTasksResumeAll)
+	s.route("/api/crawl", s.handleCrawl)
 	// Recorded login sequences (burpsy-react-ui-xhtk): the library, and Burp's "Replay".
 	// The live crawl view (burpsy-react-ui-1l3x): what the crawl is fetching now, its recent fetches,
 	// and a throttled frame from the render pass.
-	s.mux.HandleFunc("/api/crawl/live", s.handleCrawlLive)
-	s.mux.HandleFunc("/api/crawl/logins", s.handleRecordedLogins)
-	s.mux.HandleFunc("/api/crawl/logins/replay", s.handleRecordedLoginReplay)
+	s.route("/api/crawl/live", s.handleCrawlLive)
+	s.route("/api/crawl/logins", s.handleRecordedLogins)
+	s.route("/api/crawl/logins/replay", s.handleRecordedLoginReplay)
 	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is
 	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
 	// api_apiscan.go's package comment for why there is one read door and not two.
-	s.mux.HandleFunc("/api/apiscan", s.handleAPIScan)
+	s.route("/api/apiscan", s.handleAPIScan)
 	// Upload from URL (burpsy-react-ui-fu4l): fetch a definition, optionally authenticated, through the
 	// authorised sender; api_apiscan_fetch.go.
-	s.mux.HandleFunc("/api/apiscan/fetch", s.handleAPIScanFetch)
+	s.route("/api/apiscan/fetch", s.handleAPIScanFetch)
 	// Content discovery: Burp's "Discover content" engagement tool, delegated to ffuf. Registered
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.
-	s.mux.HandleFunc("/api/discovery", s.handleDiscovery)
+	s.route("/api/discovery", s.handleDiscovery)
 	// Hidden-input guessing: Burp's Param Miner "Guess params", built in (burpsy-react-ui-wlz8). The
 	// other half of the same question — discovery guesses paths, this guesses the inputs one path reads.
-	s.mux.HandleFunc("/api/hidden-inputs", s.handleHiddenInputs)
+	s.route("/api/hidden-inputs", s.handleHiddenInputs)
 
 	// The blind-XSS callback channel: the listener's state, and minting a correlation payload to plant.
 	// Two patterns because they are two operations, and the mint is a POST because it changes what the
 	// listener will answer for.
-	s.mux.HandleFunc("/api/blindxss", s.handleBlindXSS)
-	s.mux.HandleFunc("/api/blindxss/payload", s.handleBlindXSSPayload)
+	s.route("/api/blindxss", s.handleBlindXSS)
+	s.route("/api/blindxss/payload", s.handleBlindXSSPayload)
 
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.
-	s.mux.HandleFunc("/api/dashboard", s.handleDashboard)
+	s.route("/api/dashboard", s.handleDashboard)
 	// DELETE clears the event log the dashboard reads (Burp's "Clear event log"). Its own route, not
 	// a verb on /api/dashboard, so a DELETE names the one list it discards rather than the aggregate.
-	s.mux.HandleFunc("/api/dashboard/events", s.handleDashboardEvents)
+	s.route("/api/dashboard/events", s.handleDashboardEvents)
 
 	// Live change events: the stream that replaced the UI's polling, plus its own honest counters.
-	s.mux.HandleFunc("/api/events", s.handleEvents)
-	s.mux.HandleFunc("/api/events/stats", s.handleEventsStats)
+	s.route("/api/events", s.handleEvents)
+	s.route("/api/events/stats", s.handleEventsStats)
 
 	// Match & Replace + tool log + decoder/comparer/organizer
-	s.mux.HandleFunc("/api/tools/rules", s.handleMatchReplaceRules)
-	s.mux.HandleFunc("/api/tools/rules/test", s.handleMatchReplaceTest)
-	s.mux.HandleFunc("/api/tools/log", s.handleToolLog)
-	s.mux.HandleFunc("/api/tools/decode", s.handleToolsDecode)
-	s.mux.HandleFunc("/api/tools/encode", s.handleToolsEncode)
-	s.mux.HandleFunc("/api/tools/hash", s.handleToolsHash)
-	s.mux.HandleFunc("/api/tools/compare", s.handleToolsCompare)
+	s.route("/api/tools/rules", s.handleMatchReplaceRules)
+	s.route("/api/tools/rules/test", s.handleMatchReplaceTest)
+	s.route("/api/tools/log", s.handleToolLog)
+	s.route("/api/tools/decode", s.handleToolsDecode)
+	s.route("/api/tools/encode", s.handleToolsEncode)
+	s.route("/api/tools/hash", s.handleToolsHash)
+	s.route("/api/tools/compare", s.handleToolsCompare)
 	// Compare site maps (burpsy-react-ui-k3a7): the path-set diff between two runs. Registered
 	// beside the byte Comparer because it is the same engagement decision — "what changed between
 	// these two things I captured" — at site-map granularity.
-	s.mux.HandleFunc("/api/tools/compare-sitemaps", s.handleToolsCompareSitemaps)
+	s.route("/api/tools/compare-sitemaps", s.handleToolsCompareSitemaps)
 	// PATCH /api/tools/log/{id} — the log comment/highlight write path. Registered as a subtree
 	// because "/api/tools/log" above takes the exact match; without this line toolLogSetComment was
 	// defined, declared in the manifest and reachable by nothing (burpsy-react-ui-5da).
-	s.mux.HandleFunc("/api/tools/log/", s.toolLogSetComment)
-	s.mux.HandleFunc("/api/tools/organizer", s.handleOrganizer)
+	s.route("/api/tools/log/", s.toolLogSetComment)
+	s.route("/api/tools/organizer", s.handleOrganizer)
 	// Collections before the item subtree: ServeMux prefers the longer pattern, so /collections and
 	// /collections/{id}/... reach handleOrganizerCollections while /{id} still reaches the item
 	// handler. Registering only the item subtree is what made every collections call answer
 	// "Invalid item id" (burpsy-react-ui-dcr).
-	s.mux.HandleFunc("/api/tools/organizer/collections", s.handleOrganizerCollections)
-	s.mux.HandleFunc("/api/tools/organizer/collections/", s.handleOrganizerCollections)
-	s.mux.HandleFunc("/api/tools/organizer/", s.handleOrganizerItem)
+	s.route("/api/tools/organizer/collections", s.handleOrganizerCollections)
+	s.route("/api/tools/organizer/collections/{rest...}", s.handleOrganizerCollections)
+	s.route("/api/tools/organizer/{rest...}", s.handleOrganizerItem)
 
 	// WebSocket capture surface. The parenthetical here used to read "empty while the Go proxy has no
 	// WS relay", which stopped being true when internal/proxy/ws.go landed: handleWebSocketUpgrade
@@ -1345,22 +1406,22 @@ func (s *Server) setupRoutes() {
 	// misreading in the opposite direction from the honesty defects this phase is clearing.
 	//
 	// What is still partial is interception and edit-and-resend of frames (WS-02), which is Phase 6.
-	s.mux.HandleFunc("/api/ws/connections", s.handleWSConnections)
-	s.mux.HandleFunc("/api/ws/history", s.handleWSHistory)
-	s.mux.HandleFunc("/api/ws/message/", s.handleWSMessage)
+	s.route("/api/ws/connections", s.handleWSConnections)
+	s.route("/api/ws/history", s.handleWSHistory)
+	s.route("/api/ws/message/{id}", s.handleWSMessage)
 
 	// Extender: the plugin host. Six exact patterns rather than one subtree — see api_extensions.go for
 	// why, and for why there is no BApp Store route.
-	s.mux.HandleFunc("/api/extensions", s.handleExtensions)
-	s.mux.HandleFunc("/api/extensions/apis", s.handleExtensionAPIs)
-	s.mux.HandleFunc("/api/extensions/console", s.handleExtensionConsole)
-	s.mux.HandleFunc("/api/extensions/invoke", s.handleExtensionInvoke)
-	s.mux.HandleFunc("/api/extensions/load", s.handleExtensionLoad)
-	s.mux.HandleFunc("/api/extensions/order", s.handleExtensionOrder)
-	s.mux.HandleFunc("/api/extensions/unload", s.handleExtensionUnload)
+	s.route("/api/extensions", s.handleExtensions)
+	s.route("/api/extensions/apis", s.handleExtensionAPIs)
+	s.route("/api/extensions/console", s.handleExtensionConsole)
+	s.route("/api/extensions/invoke", s.handleExtensionInvoke)
+	s.route("/api/extensions/load", s.handleExtensionLoad)
+	s.route("/api/extensions/order", s.handleExtensionOrder)
+	s.route("/api/extensions/unload", s.handleExtensionUnload)
 
 	// Scanner report export: /api/report/{json|sarif|html}
-	s.mux.HandleFunc("/api/report/", s.handleReport)
+	s.route("/api/report/{rest...}", s.handleReport)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

@@ -122,8 +122,7 @@ export function usePluginEditorTabs(messageId: number | undefined): PluginTabs {
       ...current,
       [key]: {
        loading: false,
-       error: `could not read the message to hand ${invocation.plugin}: ${failure instanceof Error ? failure.message : "fetch failed"
-        }`,
+       error: `could not read the message to hand ${invocation.plugin}: ${failure instanceof Error ? failure.message : "fetch failed"}`,
       },
      }));
      return;
@@ -157,11 +156,7 @@ export function usePluginEditorTabs(messageId: number | undefined): PluginTabs {
  // The content the open tab shows. Cached text first, so reopening a tab is instant; then the
  // live state, which carries loading and error.
  const content =
-  openKey === null
-   ? undefined
-   : cacheRef.current.has(openKey)
-    ? { text: cacheRef.current.get(openKey), loading: false }
-    : states[openKey];
+  openKey === null ? undefined : cacheRef.current.has(openKey) ? { text: cacheRef.current.get(openKey), loading: false } : states[openKey];
 
  return { entries, openKey, open, close, content };
 }

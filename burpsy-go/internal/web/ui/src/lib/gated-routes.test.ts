@@ -8,7 +8,14 @@ import { join } from "node:path";
 import { api, CONFIRM_HEADER, confirmUrlFor, gatedPatternFor, manifestPatternFor } from "./api";
 import { ROUTE_GATED } from "./gated-routes";
 import { ROUTE_RISK } from "./route-risk";
-import { gatedTable, parseGatedRiskClasses, parseManifestRisks, renderGatedRoutesModule, renderRouteRiskModule, riskTable } from "./route-manifest";
+import {
+ gatedTable,
+ parseGatedRiskClasses,
+ parseManifestRisks,
+ renderGatedRoutesModule,
+ renderRouteRiskModule,
+ riskTable,
+} from "./route-manifest";
 
 const web = join(import.meta.dir, "..", "..", "..");
 const manifestGo = readFileSync(join(web, "route_manifest.go"), "utf8");
@@ -74,7 +81,11 @@ describe("api() mints for gated mutations only", () => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
    const url = String(input);
    log.calls.push({ url, method: init?.method ?? "GET", token: new Headers(init?.headers).get(CONFIRM_HEADER) });
-   if (url.endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
+   if (url.endsWith("/confirm"))
+    return new Response(
+     JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }),
+     { status: 200 },
+    );
    return new Response("{}", { status: 200 });
   }) as typeof fetch;
   return log;
@@ -137,5 +148,57 @@ describe("no mutating call bypasses the gated client", () => {
   // The positive control: the scan finds every allowlisted call, so an empty `unexpected` means the
   // scan worked rather than that it matched nothing (and a stale allowlist entry fails here).
   expect([...new Set(found)].sort()).toEqual(Object.keys(ALLOWED_RAW_FETCH).sort());
+ });
+});
+
+describe("manifestPatternFor reads the mux's wildcard spellings, as routeRiskFor does (PR 363 review)", () => {
+ // Without this the Sequencer's stop/pause/resume resolved to the gated exact route
+ // "/api/sequencer/capture", minted at /api/sequencer/capture/confirm, and the server (which
+ // resolves the same URL to the "{rest...}" key) answered 400, so the capture kept running.
+ test("a path under a {rest...} key resolves to that key, which is not gated", () => {
+  for (const action of ["stop", "pause", "resume"]) {
+   const path = `/api/sequencer/capture/${action}`;
+   expect(manifestPatternFor(path)).toBe("/api/sequencer/capture/{rest...}");
+   expect(gatedPatternFor(path)).toBeUndefined();
+  }
+ });
+ test("the exact route under it is still the gated one", () => {
+  expect(manifestPatternFor("/api/sequencer/capture")).toBe("/api/sequencer/capture");
+  expect(gatedPatternFor("/api/sequencer/capture")).toBe("/api/sequencer/capture");
+ });
+ test("{x...} is the remainder: empty and nested paths belong to it", () => {
+  const table = { "/api/x": true, "/api/x/{rest...}": false };
+  expect(manifestPatternFor("/api/x/", table)).toBe("/api/x/{rest...}");
+  expect(manifestPatternFor("/api/x/a/b/c", table)).toBe("/api/x/{rest...}");
+  expect(manifestPatternFor("/api/xy", table)).toBeUndefined();
+ });
+ test("{id} matches one non-empty segment, and the literal-richer key wins", () => {
+  const table = { "/api/tasks/{id}": false, "/api/tasks/{id}/cancel": false, "/api/tasks": true };
+  expect(manifestPatternFor("/api/tasks/7", table)).toBe("/api/tasks/{id}");
+  expect(manifestPatternFor("/api/tasks/7/cancel", table)).toBe("/api/tasks/{id}/cancel");
+  expect(manifestPatternFor("/api/tasks/7/other", table)).toBe("/api/tasks");
+  expect(manifestPatternFor("/api/tasks//cancel", table)).toBe("/api/tasks");
+ });
+ test("{$} anchors the one path with the trailing slash", () => {
+  const table = { "/api/a/attacks/{$}": false, "/api/a/attacks/{id}": false };
+  expect(manifestPatternFor("/api/a/attacks/", table)).toBe("/api/a/attacks/{$}");
+  expect(manifestPatternFor("/api/a/attacks/9", table)).toBe("/api/a/attacks/{id}");
+ });
+ test("a literal beats a wildcard even when the wildcard spelling is longer", () => {
+  const table = { "/api/skills/disabled": false, "/api/skills/{rest...}": true };
+  expect(manifestPatternFor("/api/skills/disabled", table)).toBe("/api/skills/disabled");
+  expect(manifestPatternFor("/api/skills/other", table)).toBe("/api/skills/{rest...}");
+ });
+ test("every wildcard key in the generated table resolves its own sample path to a key at least as specific", () => {
+  const literal = (p: string) => p.replace(/\{[^}]*\}/g, "").length;
+  for (const key of Object.keys(ROUTE_GATED).filter((k) => k.includes("{"))) {
+   const sample = key
+    .replace("{$}", "")
+    .replace(/\{[^}]*\.\.\.\}/, "a/b")
+    .replace(/\{[^}]*\}/g, "x1");
+   const got = manifestPatternFor(sample);
+   expect(got).toBeDefined();
+   expect(literal(got as string)).toBeGreaterThanOrEqual(literal(key));
+  }
  });
 });

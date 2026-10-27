@@ -54,6 +54,16 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	reqBody, _ := io.ReadAll(r.Body)
 	_ = r.Body.Close()
 
+	// The session seam (burpsy-react-ui-9llt), at header level because this leg holds a
+	// parsed request rather than raw bytes: the same decision every other leg takes through
+	// sessionCookieForRequest, so an expired session re-logs in on h2 traffic exactly as on
+	// h1. Runs before the render below, so the recorded bytes and the wire bytes are the
+	// post-gate bytes — the one invariant every other relay leg states. Nil coordinator is
+	// a no-op.
+	if cookie := s.sessionCookieForRequest(host, r.Method, path, port, true, r.Header.Get("Authorization") != ""); cookie != "" {
+		r.Header.Set("Cookie", cookie)
+	}
+
 	// Rendered now, indexed later. This used to index the request on its own and
 	// fill the response fields in afterwards, which was wrong twice over: the
 	// mutation happened outside the store's lock on a pointer the store had

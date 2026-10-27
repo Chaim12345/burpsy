@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { decodeProtobuf, encodeProtobuf, type ProtoField, type ProtoFrame } from "../lib/data.protobuf";
+import {
+ decodeProtobuf,
+ encodeProtobuf,
+ reflectDecodeProtobuf,
+ type ProtoDecodeResponse,
+ type ProtoField,
+ type ProtoFrame,
+ type ProtoReflectTarget,
+} from "../lib/data.protobuf";
 import { useApp } from "../lib/store";
-import { Badge, Button, Input, Select, Textarea } from "./primitives";
+import { Badge, Button, Checkbox, Input, Select, Textarea } from "./primitives";
 
 /**
  * The schemaless protobuf / gRPC field view (burpsy-react-ui-3x2g). An opaque binary body is decoded
@@ -40,12 +48,21 @@ export function ProtobufView({
  const chosen = useApp((state) => state.protoMessages[direction]) ?? "";
  const [messages, setMessages] = useState<string[]>([]);
  const [resolved, setResolved] = useState("");
+ // Set only by a reflection fetch: the names on screen are then the target's claims, not a schema the
+ // operator supplied. Any change of body, schema or message goes back to the local decode below.
+ const [reflected, setReflected] = useState<{ target: string; files: string[] } | null>(null);
+ const [decodeNonce, setDecodeNonce] = useState(0);
 
  useEffect(() => {
   let live = true;
   setError(null);
   setDirty(false);
-  const schema = protoSchema ? { proto: protoSchema.text, message: chosen || undefined, rpc_path: rpcPath, direction } : {};
+  setReflected(null);
+  const schema = protoSchema
+   ? protoSchema.files
+    ? { proto_entry: protoSchema.entry, proto_files: protoSchema.files, message: chosen || undefined, rpc_path: rpcPath, direction }
+    : { proto: protoSchema.text, message: chosen || undefined, rpc_path: rpcPath, direction }
+   : {};
   decodeProtobuf(bodyBase64, grpc, schema)
    .then((res) => {
     if (!live) return;
@@ -59,7 +76,7 @@ export function ProtobufView({
   return () => {
    live = false;
   };
- }, [bodyBase64, grpc, protoSchema, chosen, rpcPath, direction]);
+ }, [bodyBase64, grpc, protoSchema, chosen, rpcPath, direction, decodeNonce]);
 
  const patchFrame = (fi: number, fields: ProtoField[]) => {
   setFrames((cur) => (cur ? cur.map((f, i) => (i === fi ? { ...f, fields } : f)) : cur));
@@ -79,7 +96,26 @@ export function ProtobufView({
    .finally(() => setApplying(false));
  };
 
- const schemaBar = <SchemaBar direction={direction} messages={messages} resolved={resolved} rpcPath={rpcPath} />;
+ const schemaBar = (
+  <>
+   <SchemaBar direction={direction} messages={messages} resolved={resolved} rpcPath={rpcPath} />
+   <ReflectBar
+    bodyBase64={bodyBase64}
+    grpc={grpc}
+    rpcPath={rpcPath}
+    onResult={(res, target) => {
+     setFrames(res.frames);
+     setMessages(res.messages ?? []);
+     setResolved(res.message ?? "");
+     setError(null);
+     setDirty(false);
+     // Every answer from the reflect call is the target's claim, whether or not the server marked it.
+     setReflected({ target, files: res.schema_files ?? [] });
+    }}
+   />
+   {reflected ? <ReflectionProvenance reflected={reflected} onDiscard={() => setDecodeNonce((n) => n + 1)} /> : null}
+  </>
+ );
 
  if (error) {
   return (
@@ -95,13 +131,21 @@ export function ProtobufView({
   );
  }
  if (!frames) {
-  return <div className="cell-dim" style={{ padding: 12 }}>Decoding…</div>;
+  return (
+   <div className="cell-dim" style={{ padding: 12 }}>
+    Decoding…
+   </div>
+  );
  }
 
  return (
   <div className="stack" style={{ padding: 12, overflow: "auto" }}>
    {schemaBar}
-   {grpc ? <div className="cell-dim">gRPC body — {frames.length} frame{frames.length === 1 ? "" : "s"}.</div> : null}
+   {grpc ? (
+    <div className="cell-dim">
+     gRPC body — {frames.length} frame{frames.length === 1 ? "" : "s"}.
+    </div>
+   ) : null}
    {frames.map((frame, fi) => (
     <div key={fi} style={{ borderLeft: frames.length > 1 ? "2px solid var(--border)" : undefined, paddingLeft: frames.length > 1 ? 8 : 0 }}>
      {frames.length > 1 ? (
@@ -117,7 +161,7 @@ export function ProtobufView({
      ) : frame.text !== undefined ? (
       <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{frame.text}</pre>
      ) : (
-      <FieldTree fields={frame.fields ?? []} onChange={onApply ? (next) => patchFrame(fi, next) : undefined} />
+      <FieldTree fields={frame.fields ?? []} claimed={reflected !== null} onChange={onApply ? (next) => patchFrame(fi, next) : undefined} />
      )}
     </div>
    ))}
@@ -133,7 +177,16 @@ export function ProtobufView({
 }
 
 /** The recursive field editor. `onChange` absent means read-only (every input disabled). */
-function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fields: ProtoField[]) => void }): JSX.Element {
+function FieldTree({
+ fields,
+ onChange,
+ claimed,
+}: {
+ fields: ProtoField[];
+ onChange?: (fields: ProtoField[]) => void;
+ /** The names came from a target's reflection service, not from the operator's schema. */
+ claimed?: boolean;
+}): JSX.Element {
  const patch = (i: number, changes: Partial<ProtoField>) => {
   if (!onChange) return;
   onChange(fields.map((f, j) => (j === i ? { ...f, ...changes } : f)));
@@ -146,7 +199,17 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
       <td style={{ verticalAlign: "top", whiteSpace: "nowrap", padding: "2px 8px 2px 0" }}>
        {field.name ? (
         <>
-         <code title={`field ${field.number}`}>{field.name}</code>{" "}
+         {claimed ? (
+          <code
+           data-name-source="reflection"
+           title={`field ${field.number} - named by the target's reflection service, not by your schema`}
+           style={{ borderBottom: "1px dashed currentColor", fontStyle: "italic" }}
+          >
+           {field.name}
+          </code>
+         ) : (
+          <code title={`field ${field.number}`}>{field.name}</code>
+         )}{" "}
          <span className="cell-dim">
           {field.type} · #{field.number}
          </span>
@@ -159,7 +222,7 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
       </td>
       <td style={{ width: "100%", padding: "2px 0" }}>
        {field.len_kind === "message" ? (
-        <FieldTree fields={field.message ?? []} onChange={onChange ? (next) => patch(i, { message: next }) : undefined} />
+        <FieldTree fields={field.message ?? []} claimed={claimed} onChange={onChange ? (next) => patch(i, { message: next }) : undefined} />
        ) : (
         <FieldValue field={field} disabled={!onChange} onChange={(changes) => patch(i, changes)} />
        )}
@@ -171,7 +234,15 @@ function FieldTree({ fields, onChange }: { fields: ProtoField[]; onChange?: (fie
  );
 }
 
-function FieldValue({ field, disabled, onChange }: { field: ProtoField; disabled: boolean; onChange: (changes: Partial<ProtoField>) => void }): JSX.Element {
+function FieldValue({
+ field,
+ disabled,
+ onChange,
+}: {
+ field: ProtoField;
+ disabled: boolean;
+ onChange: (changes: Partial<ProtoField>) => void;
+}): JSX.Element {
  const label = field.name ? `${field.name} (field ${field.number})` : `field ${field.number}`;
  if (field.wire_type === 0) {
   return (
@@ -188,16 +259,40 @@ function FieldValue({ field, disabled, onChange }: { field: ProtoField; disabled
   );
  }
  if (field.wire_type === 1) {
-  return <Input aria-label={`${label} i64`} value={field.i64 ?? ""} disabled={disabled} onChange={(e) => onChange({ i64: e.target.value })} />;
+  return (
+   <Input aria-label={`${label} i64`} value={field.i64 ?? ""} disabled={disabled} onChange={(e) => onChange({ i64: e.target.value })} />
+  );
  }
  if (field.wire_type === 5) {
-  return <Input aria-label={`${label} i32`} value={String(field.i32 ?? 0)} disabled={disabled} onChange={(e) => onChange({ i32: Number(e.target.value) || 0 })} />;
+  return (
+   <Input
+    aria-label={`${label} i32`}
+    value={String(field.i32 ?? 0)}
+    disabled={disabled}
+    onChange={(e) => onChange({ i32: Number(e.target.value) || 0 })}
+   />
+  );
  }
  if (field.len_kind === "string") {
-  return <Input aria-label={`${label} string`} value={field.string ?? ""} disabled={disabled} onChange={(e) => onChange({ string: e.target.value })} />;
+  return (
+   <Input
+    aria-label={`${label} string`}
+    value={field.string ?? ""}
+    disabled={disabled}
+    onChange={(e) => onChange({ string: e.target.value })}
+   />
+  );
  }
  if (field.len_kind === "bytes") {
-  return <Input aria-label={`${label} bytes (hex)`} value={field.bytes_hex ?? ""} disabled={disabled} onChange={(e) => onChange({ bytes_hex: e.target.value })} placeholder="hex" />;
+  return (
+   <Input
+    aria-label={`${label} bytes (hex)`}
+    value={field.bytes_hex ?? ""}
+    disabled={disabled}
+    onChange={(e) => onChange({ bytes_hex: e.target.value })}
+    placeholder="hex"
+   />
+  );
  }
  return <span className="cell-dim">—</span>;
 }
@@ -237,25 +332,67 @@ function SchemaBar({
  const setProtoSchema = useApp((state) => state.setProtoSchema);
  const chosen = useApp((state) => state.protoMessages[direction]) ?? "";
  const setProtoMessage = useApp((state) => state.setProtoMessage);
+ const setProtoSchemaEntry = useApp((state) => state.setProtoSchemaEntry);
  const [pasting, setPasting] = useState(false);
  const [draft, setDraft] = useState("");
  const fileRef = useRef<HTMLInputElement>(null);
+ // Pick batches resolve asynchronously; a batch a newer pick has superseded must not land.
+ const pickGen = useRef(0);
 
+ // One file is the single-file schema form; several are the rsu2 file SET, whose imports resolve
+ // across the set. The entry point defaults to the first file and is re-pickable below.
  const fileInput = (
   <input
    ref={fileRef}
    type="file"
    accept=".proto,text/plain"
+   multiple
    className="sr-only"
    aria-hidden="true"
    tabIndex={-1}
    onChange={(event) => {
-    const file = event.target.files?.[0];
+    const picked = [...(event.target.files ?? [])];
     event.target.value = "";
-    if (!file) return;
-    void file.text().then((text) => {
-     setProtoSchema({ name: file.name, text });
-     toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
+    if (picked.length === 0) return;
+    const first = picked[0];
+    if (!first) return;
+    const gen = ++pickGen.current;
+    if (picked.length === 1) {
+     const file = first;
+     void file.text().then((text) => {
+      if (gen !== pickGen.current) return;
+      setProtoSchema({ name: file.name, text });
+      toast.success(`Loaded ${file.name} — it names protobuf fields in every editor`);
+     });
+     return;
+    }
+    void Promise.all(picked.map(async (f) => ({ name: f.name, text: await f.text() }))).then((list) => {
+     if (gen !== pickGen.current) return;
+     // The picker supplies basenames only, so the map key - the import path the backend
+     // resolves - cannot tell two same-named files apart. Identical content is the same file
+     // picked twice; different content under one name cannot both load, and keeping either
+     // silently would compile the wrong set, so the drop is said out loud.
+     const files: Record<string, string> = {};
+     const dropped: string[] = [];
+     for (const { name, text } of list) {
+      if (name in files) {
+       if (files[name] !== text) dropped.push(name);
+       continue;
+      }
+      files[name] = text;
+     }
+     const head = list[0];
+     if (!head) return;
+     const entry = files[head.name] !== undefined ? head.name : (Object.keys(files)[0] ?? "");
+     const count = Object.keys(files).length;
+     setProtoSchema({ name: `${count} .proto files`, text: files[entry] ?? "", files, entry });
+     if (dropped.length > 0) {
+      toast.warning(
+       `Loaded ${count} of ${list.length} .proto files - dropped ${dropped.join(", ")}: same name, different content, and the picker cannot tell same-named files apart`,
+      );
+     } else {
+      toast.success(`Loaded ${count} .proto files — imports between them resolve`);
+     }
     });
    }}
   />
@@ -264,7 +401,13 @@ function SchemaBar({
  if (pasting) {
   return (
    <div className="stack">
-    <Textarea aria-label=".proto source" rows={8} value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={'syntax = "proto3";\npackage acme.v1;\nmessage User { int32 user_id = 1; string name = 2; }'} />
+    <Textarea
+     aria-label=".proto source"
+     rows={8}
+     value={draft}
+     onChange={(e) => setDraft(e.target.value)}
+     placeholder={'syntax = "proto3";\npackage acme.v1;\nmessage User { int32 user_id = 1; string name = 2; }'}
+    />
     <div style={{ display: "flex", gap: 8 }}>
      <Button
       size="small"
@@ -291,12 +434,23 @@ function SchemaBar({
    {protoSchema ? (
     <>
      <span className="cell-dim">Schema:</span> <code>{protoSchema.name}</code>
-     <Select
-      aria-label={`Message type for the ${direction}`}
-      value={chosen}
-      onChange={(e) => setProtoMessage(direction, e.target.value)}
-     >
-      <option value="">{resolved ? `Automatic (${resolved})` : rpcPath ? "Automatic — no rpc matches this call" : "Automatic — choose a message"}</option>
+     {protoSchema.files ? (
+      <Select
+       aria-label="Entry point of the .proto file set"
+       value={protoSchema.entry ?? ""}
+       onChange={(e) => setProtoSchemaEntry(e.target.value)}
+      >
+       {Object.keys(protoSchema.files).map((path) => (
+        <option key={path} value={path}>
+         entry: {path}
+        </option>
+       ))}
+      </Select>
+     ) : null}
+     <Select aria-label={`Message type for the ${direction}`} value={chosen} onChange={(e) => setProtoMessage(direction, e.target.value)}>
+      <option value="">
+       {resolved ? `Automatic (${resolved})` : rpcPath ? "Automatic — no rpc matches this call" : "Automatic — choose a message"}
+      </option>
       {messages.map((m) => (
        <option key={m} value={m}>
         {m}
@@ -314,13 +468,139 @@ function SchemaBar({
     <>
      <span className="cell-dim">No schema — fields are shown by number and wire type.</span>
      <Button size="small" variant="outline" onClick={() => fileRef.current?.click()}>
-      Load .proto
+      Load .proto file(s)
      </Button>
      <Button size="small" variant="outline" onClick={() => setPasting(true)}>
       Paste .proto
      </Button>
     </>
    )}
+  </div>
+ );
+}
+
+/**
+ * Reflection (burpsy-react-ui-mup0, API 47id): ask the TARGET for its own schema when no .proto is to
+ * hand. Never automatic: the operator names the target and the service, and the button says it sends
+ * a request. The target is never guessed. The service is prefilled from a gRPC call path because that
+ * is the operator's own traffic naming it.
+ */
+function ReflectBar({
+ bodyBase64,
+ grpc,
+ rpcPath,
+ onResult,
+}: {
+ bodyBase64: string;
+ grpc: boolean;
+ rpcPath?: string;
+ onResult: (res: ProtoDecodeResponse, target: string) => void;
+}): JSX.Element {
+ const [open, setOpen] = useState(false);
+ const [target, setTarget] = useState("");
+ const [service, setService] = useState(() => serviceOf(rpcPath));
+ const [tls, setTls] = useState(true);
+ const [busy, setBusy] = useState(false);
+ const [failure, setFailure] = useState<string | null>(null);
+ // Which fetch is current. A reflect answer decodes the body it was sent with, so it is dropped when
+ // the body (or the gRPC flag) changed while it was in flight, or when a newer fetch started, rather
+ // than overwriting the new body's frames with the old body's decode (PR 363 review). A body change
+ // also clears the busy and failure state of the fetch it cancelled.
+ const generation = useRef(0);
+ useEffect(() => {
+  generation.current += 1;
+  setBusy(false);
+  setFailure(null);
+  return () => {
+   generation.current += 1;
+  };
+ }, [bodyBase64, grpc]);
+
+ if (!open) {
+  return (
+   <div>
+    <Button size="small" variant="outline" onClick={() => setOpen(true)}>
+     Fetch schema by reflection
+    </Button>
+   </div>
+  );
+ }
+
+ const go = () => {
+  const reflect: ProtoReflectTarget = { target: target.trim(), service: service.trim(), tls };
+  const mine = ++generation.current;
+  const current = () => generation.current === mine;
+  setBusy(true);
+  setFailure(null);
+  reflectDecodeProtobuf(bodyBase64, grpc, reflect)
+   .then((res) => {
+    if (current()) onResult(res, reflect.target);
+   })
+   .catch((err) => {
+    if (current()) setFailure(err instanceof Error ? err.message : String(err));
+   })
+   .finally(() => {
+    if (current()) setBusy(false);
+   });
+ };
+
+ return (
+  <div className="stack" role="group" aria-label="Fetch schema by reflection">
+   <div className="cell-dim">
+    Fetching sends one request to the target you name, which must be in scope, and asks it for the schema of one service. No session
+    credentials are sent. What it answers with is the target's claim.
+   </div>
+   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+    <Input aria-label="Reflection target (host:port)" placeholder="host:port" value={target} onChange={(e) => setTarget(e.target.value)} />
+    <Input aria-label="gRPC service" placeholder="pkg.Service" value={service} onChange={(e) => setService(e.target.value)} />
+    <Checkbox label="Use TLS" checked={tls} onCheckedChange={(on) => setTls(on === true)} />
+    <Button size="small" onClick={go} disabled={busy || target.trim() === "" || service.trim() === ""}>
+     {busy ? "Fetching…" : "Fetch and decode"}
+    </Button>
+    <Button size="small" variant="outline" onClick={() => setOpen(false)}>
+     Close
+    </Button>
+   </div>
+   {failure ? <div className="notice notice-warn">{failure}</div> : null}
+  </div>
+ );
+}
+
+/** "/pkg.Service/Method" -> "pkg.Service"; "" when the path is not a gRPC call path. */
+function serviceOf(rpcPath?: string): string {
+ const m = /^\/([^/]+)\/[^/]+$/.exec(rpcPath ?? "");
+ return m?.[1] ?? "";
+}
+
+/** What reads differently about reflected names: who claimed them, and the files they came from. */
+function ReflectionProvenance({
+ reflected,
+ onDiscard,
+}: {
+ reflected: { target: string; files: string[] };
+ onDiscard: () => void;
+}): JSX.Element {
+ return (
+  <div className="notice notice-warn" role="note" aria-label="Schema provenance">
+   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+    <Badge tone="warn">target-claimed names</Badge>
+    <span>
+     These field names were served by <code>{reflected.target}</code> over gRPC reflection. This is the target's schema, not your schema.
+     The target controls them: treat them as untrusted text.
+    </span>
+    <Button size="small" variant="outline" onClick={onDiscard}>
+     Discard reflected names
+    </Button>
+   </div>
+   {reflected.files.length > 0 ? (
+    <ul aria-label="Files the target served" style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+     {reflected.files.map((file) => (
+      <li key={file}>
+       <code>{file}</code>
+      </li>
+     ))}
+    </ul>
+   ) : null}
   </div>
  );
 }

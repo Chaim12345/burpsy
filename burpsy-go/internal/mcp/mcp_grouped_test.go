@@ -344,7 +344,7 @@ func TestEachGroupedSchemaOffersExactlyItsOperations(t *testing.T) {
 		}
 		subtree := false
 		for _, o := range tl.Annotations.Operations {
-			if strings.HasSuffix(o, "/") {
+			if isSubtreePattern(o) {
 				subtree = true
 			}
 		}
@@ -362,4 +362,92 @@ func toAny(ss []string) []any {
 		out[i] = s
 	}
 	return out
+}
+
+// fxxm batch 7/8: the old trailing-slash op spelling still names the remainder-keyed operation,
+// whatever the remainder is called.
+func TestLegacyOpSpellingNamesTheRemainderKeyedOperation(t *testing.T) {
+	ops := []op{{name: "GET /api/datasets/{rest...}"}, {name: "PUT /api/intercept/rules/{dir...}"}, {name: "GET /api/history"}}
+	for name, want := range map[string]string{
+		"GET /api/datasets/":        "GET /api/datasets/{rest...}",
+		"PUT /api/intercept/rules/": "PUT /api/intercept/rules/{dir...}",
+	} {
+		if got, ok := legacyOp(ops, name); !ok || got.name != want {
+			t.Errorf("legacyOp(%q) = %q, %v; want %q", name, got.name, ok, want)
+		}
+	}
+	for _, name := range []string{"GET /api/history", "GET /api/history/", "POST /api/datasets/"} {
+		if got, ok := legacyOp(ops, name); ok {
+			t.Errorf("legacyOp(%q) matched %q", name, got.name)
+		}
+	}
+}
+
+// PR363 review (tools.go:662, :859): the documented spellings keep working for routes rekeyed to {param}
+// patterns, and the id shortcut never leaves a literal placeholder in the path it sends.
+func resolveFor(t *testing.T, name string, args callArgs) (resolvedCall, error) {
+	t.Helper()
+	s, err := New(Options{BaseURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl, ok := s.byName[name]
+	if !ok {
+		t.Fatalf("no tool %q", name)
+	}
+	return s.resolveCall(tl, args)
+}
+
+func TestOldTrailingSlashSpellingReachesParamKeyedRoutes(t *testing.T) {
+	rc, err := resolveFor(t, "history", callArgs{Op: "GET /api/message/", ID: "12"})
+	if err != nil {
+		t.Fatalf("the documented docs/MCP.md example is refused: %v", err)
+	}
+	if rc.path != "/api/message/12" || rc.method != "GET" {
+		t.Fatalf("resolved %s %s", rc.method, rc.path)
+	}
+	ops := []op{{name: "POST /api/intruder/attacks/{$}"}, {name: "POST /api/intruder/attacks/{id}/{action...}"}, {name: "GET /api/message/{id}"}, {name: "GET /api/history"}}
+	if got, ok := legacyOp(ops, "POST /api/intruder/attacks/"); !ok || got.name != "POST /api/intruder/attacks/{id}/{action...}" {
+		t.Errorf("legacyOp for the attacks subtree = %q, %v", got.name, ok)
+	}
+	for _, name := range []string{"GET /api/history/", "GET /api/mess/", "GET /api/message/12/"} {
+		if got, ok := legacyOp(ops, name); ok {
+			t.Errorf("legacyOp(%q) matched %q", name, got.name)
+		}
+	}
+}
+
+func TestIntruderControlIDShortcutBuildsARealPath(t *testing.T) {
+	for _, op := range []string{"POST /api/intruder/attacks/{id}/{action...}", "POST /api/intruder/attacks/"} {
+		rc, err := resolveFor(t, "intruder_control", callArgs{Op: op, ID: "7/pause"})
+		if err != nil {
+			t.Fatalf("op %q id 7/pause: %v", op, err)
+		}
+		if rc.path != "/api/intruder/attacks/7/pause" || strings.Contains(rc.path, "{") {
+			t.Fatalf("op %q sent %q, want /api/intruder/attacks/7/pause", op, rc.path)
+		}
+	}
+}
+
+func TestIntruderControlDoesNotOfferAnUnreachableIDOp(t *testing.T) {
+	s, err := New(Options{BaseURL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range s.byName["intruder_control"].ops {
+		if o.name == "POST /api/intruder/attacks/{id}" {
+			t.Fatalf("op %q is advertised but /api/intruder/attacks/7 resolves to the {id}/{action...} route", o.name)
+		}
+	}
+}
+
+func TestAmbiguousLegacySpellingIsRefusedNotGuessed(t *testing.T) {
+	ops := []op{{name: "POST /api/tasks/{id}/cancel"}, {name: "POST /api/tasks/{id}/pause"}}
+	if got, ok := legacyOp(ops, "POST /api/tasks/"); ok {
+		t.Fatalf("legacyOp guessed %q among several candidates", got.name)
+	}
+	_, err := resolveFor(t, "tasks", callArgs{Op: "POST /api/tasks/", ID: "5/pause"})
+	if err == nil || !strings.Contains(err.Error(), "is not an operation") {
+		t.Fatalf("err = %v, want the not-an-operation refusal that lists the real ops", err)
+	}
 }

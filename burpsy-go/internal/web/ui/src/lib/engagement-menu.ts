@@ -32,29 +32,29 @@ export type EngagementSearchKind = "comments" | "scripts" | "references";
  * between "this host" and "this branch".
  */
 export interface EngagementSeed {
-  host: string;
-  /** The node's path, or the exchange's path. "" means the whole host. */
-  path: string;
-  /**
-   * The origin's port and whether it was reached over TLS.
-   *
-   * Both are carried rather than assumed because the rows that hand a target to another page hand
-   * it an *origin*, and guessing one is how a content-discovery sweep gets pointed somewhere the
-   * operator never captured. Site-map nodes carry both (`sitemapNodeView`), so there is nothing to
-   * guess; they stay optional only for callers that genuinely have neither, and `seedUrl` then
-   * falls back to https with no port — a guess, which is why every caller in this repo passes them.
-   */
-  port?: number;
-  tls?: boolean;
+ host: string;
+ /** The node's path, or the exchange's path. "" means the whole host. */
+ path: string;
+ /**
+  * The origin's port and whether it was reached over TLS.
+  *
+  * Both are carried rather than assumed because the rows that hand a target to another page hand
+  * it an *origin*, and guessing one is how a content-discovery sweep gets pointed somewhere the
+  * operator never captured. Site-map nodes carry both (`sitemapNodeView`), so there is nothing to
+  * guess; they stay optional only for callers that genuinely have neither, and `seedUrl` then
+  * falls back to https with no port — a guess, which is why every caller in this repo passes them.
+  */
+ port?: number;
+ tls?: boolean;
 }
 
 /** A search as the endpoint takes it: GET /api/engagement/{kind}?q=&host=. */
 export interface EngagementSearch {
-  kind: EngagementSearchKind;
-  /** The literal the server looks for. Empty for comments and scripts, which take no term. */
-  q: string;
-  /** Restricts which stored responses are read. Empty means every captured host. */
-  host: string;
+ kind: EngagementSearchKind;
+ /** The literal the server looks for. Empty for comments and scripts, which take no term. */
+ q: string;
+ /** Restricts which stored responses are read. Empty means every captured host. */
+ host: string;
 }
 
 /**
@@ -74,7 +74,7 @@ export interface EngagementSearch {
  * references to that host" (tools/search.html).
  */
 export function referenceTerm(seed: EngagementSeed): string {
-  return seed.path === "" ? seed.host : seed.path;
+ return seed.path === "" ? seed.host : seed.path;
 }
 
 /**
@@ -88,8 +88,8 @@ export function referenceTerm(seed: EngagementSeed): string {
  *  - Find comments and Find scripts are scoped to the selection, so they carry the host.
  */
 export function engagementSearchFor(kind: EngagementSearchKind, seed: EngagementSeed): EngagementSearch {
-  if (kind === "references") return { kind, q: referenceTerm(seed), host: "" };
-  return { kind, q: "", host: seed.host };
+ if (kind === "references") return { kind, q: referenceTerm(seed), host: "" };
+ return { kind, q: "", host: seed.host };
 }
 
 /**
@@ -103,21 +103,21 @@ export function engagementSearchFor(kind: EngagementSearchKind, seed: Engagement
  * hits in theirs.
  */
 function scopeNote(seed: EngagementSeed): string {
-  return seed.path === ""
-    ? `Searches the captured responses from ${seed.host}.`
-    : `Searches the captured responses from ${seed.host} — burpsy scopes this search by host, not by branch, so results may come from outside ${seed.path}.`;
+ return seed.path === ""
+  ? `Searches the captured responses from ${seed.host}.`
+  : `Searches the captured responses from ${seed.host} — burpsy scopes this search by host, not by branch, so results may come from outside ${seed.path}.`;
 }
 
 /** What the page has to be able to do for the group's live rows. */
 export interface EngagementHandlers {
-  /** Show the seeded search and run it. */
-  runSearch: (search: EngagementSearch) => void;
-  /** Open Content discovery with this URL as the sweep target. */
-  discoverContent: (target: string) => void;
-  /** Open Settings › Scheduled tasks, carrying this URL as far as burpsy can take it. */
-  scheduleTask: (target: string) => void;
-  /** Show the Target analyzer for this host or branch. */
-  analyzeTarget: (seed: EngagementSeed) => void;
+ /** Show the seeded search and run it. */
+ runSearch: (search: EngagementSearch) => void;
+ /** Open Content discovery with this URL as the sweep target. */
+ discoverContent: (target: string) => void;
+ /** Open Settings › Scheduled tasks, carrying this URL as far as burpsy can take it. */
+ scheduleTask: (target: string) => void;
+ /** Show the Target analyzer for this host or branch. */
+ analyzeTarget: (seed: EngagementSeed) => void;
 }
 
 /**
@@ -132,11 +132,11 @@ export interface EngagementHandlers {
  * Callers holding a real exchange still pass its `exchangeUrl` through `url`, which wins outright.
  */
 export function seedUrl(seed: EngagementSeed, url?: string): string {
-  if (url) return url;
-  const scheme = seed.tls === false ? "http" : "https";
-  const defaultPort = scheme === "https" ? 443 : 80;
-  const authority = seed.port === undefined || seed.port === defaultPort ? seed.host : `${seed.host}:${seed.port}`;
-  return `${scheme}://${authority}${seed.path}`;
+ if (url) return url;
+ const scheme = seed.tls === false ? "http" : "https";
+ const defaultPort = scheme === "https" ? 443 : 80;
+ const authority = seed.port === undefined || seed.port === defaultPort ? seed.host : `${seed.host}:${seed.port}`;
+ return `${scheme}://${authority}${seed.path}`;
 }
 
 /**
@@ -146,85 +146,85 @@ export function seedUrl(seed: EngagementSeed, url?: string): string {
  * an existing menu with one `extra` entry.
  */
 export function engagementToolsGroup(seed: EngagementSeed, handlers: EngagementHandlers, url?: string): MenuGroup {
-  const target = seedUrl(seed, url);
-  const note = scopeNote(seed);
-  const term = referenceTerm(seed);
+ const target = seedUrl(seed, url);
+ const note = scopeNote(seed);
+ const term = referenceTerm(seed);
 
-  const actions: MenuAction[] = [
-    {
-      id: "find-references",
-      label: "Find references",
-      icon: FileSearch2,
-      hint: `Responses anywhere in the capture whose href/src/action attributes mention ${term}. Searched as text, so a relative link to this item counts.`,
-      onSelect: () => handlers.runSearch(engagementSearchFor("references", seed)),
-    },
-    {
-      id: "find-comments",
-      label: "Find comments",
-      icon: FileSearch2,
-      hint: `HTML comments in the captured responses. ${note}`,
-      onSelect: () => handlers.runSearch(engagementSearchFor("comments", seed)),
-    },
-    {
-      id: "find-scripts",
-      label: "Find scripts",
-      icon: FileCode2,
-      hint: `Script sources referenced by the captured responses. ${note}`,
-      onSelect: () => handlers.runSearch(engagementSearchFor("scripts", seed)),
-    },
-    {
-      id: "discover-content",
-      label: "Discover content",
-      icon: Radar,
-      hint: `Opens Content discovery with ${target} as the sweep target. A wordlist is still required, and the target is scope-checked before the sweep starts.`,
-      onSelect: () => handlers.discoverContent(target),
-    },
-    {
-      id: "schedule-task",
-      label: "Schedule task",
-      icon: CalendarClock,
-      // Enabled, and honest about how far the seeding goes. burpsy's schedules really can run a
-      // crawl against this URL (api_schedules.go registers a "crawl" kind taking a crawl request),
-      // but the form that creates one lives in the Settings page and does not read a seed, so this
-      // row opens that section and puts the URL on the clipboard to paste in. That is a real
-      // action with a named limit, which is why it is not greyed: greying it would claim burpsy
-      // cannot schedule work against this URL, and it can.
-      hint: `Opens Settings › Scheduled tasks and copies ${target} to the clipboard. burpsy's schedule form is not seeded from the site map, so the URL has to be pasted into the new schedule's crawl seeds.`,
-      onSelect: () => handlers.scheduleTask(target),
-    },
-    {
-      id: "target-analyzer",
-      label: "Target analyzer",
-      icon: Gauge,
-      // Burp's Target analyzer (burpsy-react-ui-dnvi), over what the site map holds for this node.
-      hint: `Counts the dynamic and static URLs, parameters and unique parameter names captured under ${seed.path === "" ? seed.host : `${seed.host}${seed.path}`}, with a saved HTML report.`,
-      onSelect: () => handlers.analyzeTarget(seed),
-    },
-  ];
+ const actions: MenuAction[] = [
+  {
+   id: "find-references",
+   label: "Find references",
+   icon: FileSearch2,
+   hint: `Responses anywhere in the capture whose href/src/action attributes mention ${term}. Searched as text, so a relative link to this item counts.`,
+   onSelect: () => handlers.runSearch(engagementSearchFor("references", seed)),
+  },
+  {
+   id: "find-comments",
+   label: "Find comments",
+   icon: FileSearch2,
+   hint: `HTML comments in the captured responses. ${note}`,
+   onSelect: () => handlers.runSearch(engagementSearchFor("comments", seed)),
+  },
+  {
+   id: "find-scripts",
+   label: "Find scripts",
+   icon: FileCode2,
+   hint: `Script sources referenced by the captured responses. ${note}`,
+   onSelect: () => handlers.runSearch(engagementSearchFor("scripts", seed)),
+  },
+  {
+   id: "discover-content",
+   label: "Discover content",
+   icon: Radar,
+   hint: `Opens Content discovery with ${target} as the sweep target. A wordlist is still required, and the target is scope-checked before the sweep starts.`,
+   onSelect: () => handlers.discoverContent(target),
+  },
+  {
+   id: "schedule-task",
+   label: "Schedule task",
+   icon: CalendarClock,
+   // Enabled, and honest about how far the seeding goes. burpsy's schedules really can run a
+   // crawl against this URL (api_schedules.go registers a "crawl" kind taking a crawl request),
+   // but the form that creates one lives in the Settings page and does not read a seed, so this
+   // row opens that section and puts the URL on the clipboard to paste in. That is a real
+   // action with a named limit, which is why it is not greyed: greying it would claim burpsy
+   // cannot schedule work against this URL, and it can.
+   hint: `Opens Settings › Scheduled tasks and copies ${target} to the clipboard. burpsy's schedule form is not seeded from the site map, so the URL has to be pasted into the new schedule's crawl seeds.`,
+   onSelect: () => handlers.scheduleTask(target),
+  },
+  {
+   id: "target-analyzer",
+   label: "Target analyzer",
+   icon: Gauge,
+   // Burp's Target analyzer (burpsy-react-ui-dnvi), over what the site map holds for this node.
+   hint: `Counts the dynamic and static URLs, parameters and unique parameter names captured under ${seed.path === "" ? seed.host : `${seed.host}${seed.path}`}, with a saved HTML report.`,
+   onSelect: () => handlers.analyzeTarget(seed),
+  },
+ ];
 
-  // Absent, not greyed, and each for its own reason:
-  //
-  //   Manual simulator — Burp generates synthetic traffic resembling a manual test. burpsy has no
-  //     traffic generator of that shape and one is not wanted here: it is request volume aimed at a
-  //     target for its own sake, which is the class of feature this console does not build. A greyed
-  //     row would advertise it as pending.
-  //
-  //   Generate CSRF PoC — burpsy already has it, and it is already on this menu: lib/actions.ts
-  //     carries it flat in the "engage" group beside "Record an issue". Repeating it inside the
-  //     submenu would put two rows with one label on one menu. Moving the existing row in here is a
-  //     one-line change in actions.ts, which this slice does not own (see the report).
+ // Absent, not greyed, and each for its own reason:
+ //
+ //   Manual simulator — Burp generates synthetic traffic resembling a manual test. burpsy has no
+ //     traffic generator of that shape and one is not wanted here: it is request volume aimed at a
+ //     target for its own sake, which is the class of feature this console does not build. A greyed
+ //     row would advertise it as pending.
+ //
+ //   Generate CSRF PoC — burpsy already has it, and it is already on this menu: lib/actions.ts
+ //     carries it flat in the "engage" group beside "Record an issue". Repeating it inside the
+ //     submenu would put two rows with one label on one menu. Moving the existing row in here is a
+ //     one-line change in actions.ts, which this slice does not own (see the report).
 
-  return {
-    id: "engagement-tools",
-    actions: [
-      {
-        id: "engagement",
-        label: "Engagement tools",
-        icon: Radar,
-        hint: "Burp's engagement tools, seeded from this row.",
-        submenu: [{ id: "engagement-items", title: "Engagement tools", actions }],
-        onSelect: () => undefined,
-      },
-    ],
-  };
+ return {
+  id: "engagement-tools",
+  actions: [
+   {
+    id: "engagement",
+    label: "Engagement tools",
+    icon: Radar,
+    hint: "Burp's engagement tools, seeded from this row.",
+    submenu: [{ id: "engagement-items", title: "Engagement tools", actions }],
+    onSelect: () => undefined,
+   },
+  ],
+ };
 }

@@ -44,7 +44,11 @@ var idorUsers = map[int]idorUser{
 	3: {3, "carol", "carol@example.test", 870},
 }
 
-var idorSessions = map[string]int{"s-alice-4c1e9b": 1}
+var idorSessions = map[string]int{"s-alice-4c1e9b": 1, "s-bob-9f2c7a": 2}
+
+// IDORSecondSessionCookie is bob's session cookie (user 2): the second configured identity a
+// two-identity authorization check replays under.
+const IDORSecondSessionCookie = "sid=s-bob-9f2c7a"
 
 type idorOrder struct {
 	ID      int      `json:"id"`
@@ -63,6 +67,30 @@ var idorOrders = map[int]idorOrder{
 var idorBearer = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT"},
 	map[string]any{"sub": "1", "name": "alice"})
 
+// idorJuiceBearer is alice's Juice Shop-shaped bearer token: the payload signs the whole user row,
+// so the session user id sits at the nested claim data.id, and the top level carries only the
+// basket id and the timestamps. A scanner that reads only top-level claims learns nothing about
+// the session from this token.
+var idorJuiceBearer = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT"},
+	map[string]any{
+		"data": map[string]any{"id": 1, "email": "alice@example.test", "role": "customer"},
+		"bid":  1001, "iat": 1761000000, "exp": 1761021600,
+	})
+
+// idorBaskets are the basket rows /rest/basket serves, Juice Shop-shaped: the owner's id rides in
+// UserId, and the response wraps the object in {"status": ..., "data": ...}.
+type idorBasket struct {
+	ID       int      `json:"id"`
+	UserID   int      `json:"UserId"`
+	Products []string `json:"Products"`
+}
+
+var idorBaskets = map[int]idorBasket{
+	1000: {1000, 3, []string{"carrot"}},
+	1001: {1001, 1, []string{"apple", "banana"}},
+	1002: {1002, 2, []string{"melon"}},
+}
+
 func idorEndpoints() []Endpoint {
 	const row = "Insecure direct object reference"
 	cookie := map[string]string{"Cookie": IDORSessionCookie}
@@ -74,6 +102,11 @@ func idorEndpoints() []Endpoint {
 			RequestHeaders: map[string]string{"Authorization": "Bearer " + idorBearer},
 			Note: "returns any order by the id in the path to any bearer; the order's ownerId names its owner, " +
 				"and the bearer JWT's sub names the session user, so the binding is demonstrable"},
+		{Path: "/rest/basket/1001", Row: row,
+			RequestHeaders: map[string]string{"Authorization": "Bearer " + idorJuiceBearer},
+			Note: "Juice Shop-shaped: any basket by the id in the path to any bearer; the basket's UserId names " +
+				"its owner and the JWT names the session user only at the nested claim data.id, so the binding " +
+				"is demonstrable only by reading claims recursively"},
 		{Path: "/idor/account", Row: row,
 			RequestHeaders: map[string]string{"Cookie": IDORSessionCookie + "; acct_id=1"},
 			Note:           "reads the account to show from the client-held acct_id cookie instead of the session"},
@@ -137,6 +170,34 @@ func idorBearerUser(r *http.Request) int {
 	return n
 }
 
+// idorJuiceBearerUser is the session's user id from a Juice Shop-shaped bearer token (the user id
+// at the nested claim data.id), or 0. The signature check is the same fixture HMAC idorBearerUser
+// applies.
+func idorJuiceBearerUser(r *http.Request) int {
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return 0
+	}
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return 0
+	}
+	got, err := base64.RawURLEncoding.DecodeString(parts[2])
+	mac := hmac.New(sha256.New, jwSecret)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	if err != nil || !hmac.Equal(got, mac.Sum(nil)) {
+		return 0
+	}
+	var claims map[string]any
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || json.Unmarshal(raw, &claims) != nil {
+		return 0
+	}
+	data, _ := claims["data"].(map[string]any)
+	id, _ := data["id"].(float64)
+	return int(id)
+}
+
 func idorID(r *http.Request) (int, bool) {
 	n, err := strconv.Atoi(r.URL.Query().Get("id"))
 	return n, err == nil
@@ -168,6 +229,20 @@ func registerIDOR(mux *http.ServeMux) {
 			return
 		}
 		idorJSON(w, http.StatusOK, map[string]any{"order": o})
+	})
+	mux.HandleFunc("/rest/basket/", func(w http.ResponseWriter, r *http.Request) {
+		if idorJuiceBearerUser(r) == 0 {
+			idorJSON(w, http.StatusUnauthorized, map[string]string{"error": "bearer token required"})
+			return
+		}
+		id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/rest/basket/"))
+		b, ok := idorBaskets[id]
+		if err != nil || !ok {
+			idorJSON(w, http.StatusNotFound, map[string]string{"error": "no such basket"})
+			return
+		}
+		// No ownership check - the vulnerability: any valid token reads any basket.
+		idorJSON(w, http.StatusOK, map[string]any{"status": "success", "data": b})
 	})
 	mux.HandleFunc("/idor/account", func(w http.ResponseWriter, r *http.Request) {
 		if idorSession(r) == 0 {

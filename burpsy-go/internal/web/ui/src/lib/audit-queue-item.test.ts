@@ -53,9 +53,7 @@ describe("an item's progress", () => {
 describe("an item's timing", () => {
  test("is the queue time alone when the row has not moved since", () => {
   const ms = Date.UTC(2026, 8, 26, 10, 0, 0);
-  expect(itemTiming({ seq: 1, queued_unix_ms: ms, updated_unix_ms: ms } as never)).toBe(
-   new Date(ms).toLocaleTimeString(),
-  );
+  expect(itemTiming({ seq: 1, queued_unix_ms: ms, updated_unix_ms: ms } as never)).toBe(new Date(ms).toLocaleTimeString());
  });
 
  test("is a range when the row moved after it was queued", () => {

@@ -36,6 +36,11 @@ export interface ProtoDecodeResponse {
   *  schema has several and none was chosen or implied by the gRPC call path). */
  messages?: string[];
  message?: string;
+ /** "reflection" when a TARGET supplied the schema over the network: adversary-controllable input, never
+  *  to read as an operator's own .proto (47id). */
+ schema_source?: string;
+ /** The files the target served, when schema_source is "reflection". */
+ schema_files?: string[];
 }
 
 /** What names the fields (burpsy-react-ui-3pco). All optional: without `proto` the decode is the
@@ -45,6 +50,10 @@ export interface ProtoSchemaOptions {
  message?: string;
  rpc_path?: string;
  direction?: "request" | "response";
+ /** The multi-file form (burpsy-react-ui-rsu2): entry point plus every file of its import graph.
+  *  Mutually exclusive with `proto`; imports resolve across the set. */
+ proto_entry?: string;
+ proto_files?: Record<string, string>;
 }
 
 export function decodeProtobuf(bodyBase64: string, grpc: boolean, schema: ProtoSchemaOptions = {}): Promise<ProtoDecodeResponse> {
@@ -53,4 +62,16 @@ export function decodeProtobuf(bodyBase64: string, grpc: boolean, schema: ProtoS
 
 export function encodeProtobuf(grpc: boolean, frames: ProtoFrame[]): Promise<{ body_base64: string }> {
  return api<{ body_base64: string }>("/api/protobuf/encode", json("POST", { grpc, frames }));
+}
+
+/** The reflection opt-in (47id): the operator names the target and the service. POST /api/protobuf/reflect-decode
+ *  is riskEgress: it dials the target once, clearing the engagement scope first, and carries no session credentials. */
+export interface ProtoReflectTarget {
+ target: string;
+ service: string;
+ tls: boolean;
+}
+
+export function reflectDecodeProtobuf(bodyBase64: string, grpc: boolean, reflect: ProtoReflectTarget): Promise<ProtoDecodeResponse> {
+ return api<ProtoDecodeResponse>("/api/protobuf/reflect-decode", json("POST", { body_base64: bodyBase64, grpc, reflect }));
 }

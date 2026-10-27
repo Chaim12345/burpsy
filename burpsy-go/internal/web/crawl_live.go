@@ -254,10 +254,6 @@ func (l *crawlLive) view(taskID uint64, state string) crawlLiveView {
 }
 
 func (s *Server) handleCrawlLive(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	id, err := strconv.ParseUint(r.URL.Query().Get("task"), 10, 64)
 	if err != nil {
 		http.Error(w, "task must be a whole number", http.StatusBadRequest)

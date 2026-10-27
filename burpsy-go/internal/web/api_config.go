@@ -150,10 +150,6 @@ type configUninterestingHeaders struct {
 }
 
 func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// ?level=user|project narrows the bundle to one half of the configuration
 	// (burpsy-react-ui-wfiw). Absent means both, which is what every existing caller sends.
 	level, narrowed, levelErr := parseConfigLevel(r)
@@ -211,15 +207,15 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 			Response: s.uninteresting.headers(true),
 		}
 	}
+	// NOT writeJSON: on a bundle, null is the load-bearing "section absent, do not touch this
+	// surface" signal the importer gates on (handleConfigImport), where [] would mean "present
+	// but empty - wipe it". The nil-slice normaliser must never touch this response
+	// (burpsy-react-ui-j0s2 names the exception).
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(bundle)
 }
 
 func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	// ?level=user|project narrows which sections of the bundle are APPLIED (burpsy-react-ui-wfiw),
 	// so restoring your own preferences cannot overwrite an engagement's scope and handing someone
 	// an engagement cannot overwrite their proxy settings. Absent means both, which is what every

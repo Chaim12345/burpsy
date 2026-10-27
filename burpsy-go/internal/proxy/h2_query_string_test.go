@@ -50,6 +50,9 @@ func TestH2ExchangeRecordsTheQueryString(t *testing.T) {
 			ForceAttemptHTTP2: true,
 		},
 	}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 	resp, err := client.Get(fmt.Sprintf("https://%s:%d%s", originHost, originPort, target))
 	if err != nil {
 		t.Fatalf("request through proxy: %v", err)

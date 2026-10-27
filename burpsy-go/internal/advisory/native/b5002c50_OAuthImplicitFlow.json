@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687440,
+  "name": "OAuth implicit flow",
+  "description": "<p>The authorization server still honours the OAuth 2.0 implicit flow: a response_type=token (or id_token) request is answered with the access token in the redirect fragment. The token then sits in browser history, can leak through referrer headers and client-side scripts, and travels with no sender binding. The finding was proven from the captured exchange: the authorize request was answered 302 with a Location fragment carrying #access_token=.</p>\n<p>This row is burpsy's own: Burp's catalogue has no OAuth row; PortSwigger documents OAuth attacks as an Academy topic tested by hand.</p>",
+  "remediation": "<p>Disable the implicit and hybrid grants on the authorization server. Use the authorization code flow with PKCE for every client type, including single-page applications and native apps.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: OAuth authentication",
+      "url": "https://portswigger.net/web-security/oauth"
+    },
+    {
+      "title": "OAuth 2.0 Security Best Current Practice (RFC 9700)",
+      "url": "https://www.rfc-editor.org/rfc/rfc9700.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-522: Insufficiently Protected Credentials",
+      "url": "https://cwe.mitre.org/data/definitions/522.html"
+    }
+  ]
+}

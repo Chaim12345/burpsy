@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"math"
 	"net/http"
@@ -443,10 +444,6 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 }
 
 func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterSendReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -681,10 +678,6 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 	// decoder, failed on an empty body and answered "Invalid request body" — a complaint about the
 	// payload for what is really a wrong-method call. Phase 1's move to Go 1.22 `"POST /api/..."`
 	// patterns makes the whole class unrepresentable; until then it is spelled out.
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req intruderPointsReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1119,10 +1112,6 @@ func intruderSessionCookieView(jarHeader string, exempt map[string]bool) intrude
 // renders. Anything else gets the full RunView. Both shapes come off the same engine, so the
 // legacy array is a projection of the report.
 func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req intruderRunReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -1229,7 +1218,21 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	if rules == nil {
 		rules = &[]intruder.RuleSpec{}
 	}
-	chain, err := intruder.NewChain(*rules)
+	// Plugin processing rules (0qwh) compile through a bridge to the extension host, and
+	// every plugin reference is validated before a payload exists: an unknown plugin or a
+	// generator registration addressed as a processor is a 400 here, not N drops mid-attack.
+	var procBridge intruder.ProcessorBridge
+	for _, spec := range *rules {
+		if spec.Rule != "plugin" {
+			continue
+		}
+		if err := s.checkPluginPayloadRef(extension.KindPayloadProcessor, spec.Plugin); err != nil {
+			http.Error(w, "payload rule: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		procBridge = hostProcessorBridge{ctx: r.Context(), host: s.extensionHost()}
+	}
+	chain, err := intruder.NewChainWith(*rules, procBridge)
 	if err != nil {
 		http.Error(w, "payload rule: "+err.Error(), http.StatusBadRequest)
 		return
@@ -1371,6 +1374,43 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			// each position at its own rate.
 			copyFrom[i] = target
 			resolved = append(resolved, copied)
+			continue
+		}
+		if src.Type == "plugin" {
+			// Plugin generator (0qwh): materialize at launch, one host call per position up
+			// to the cap, then hand Resolve an ordinary list - the Collaborator pattern. The
+			// stream's own outcome replaces the list's accounting: done makes Total exact, a
+			// cap-cut stream is Truncated with Total a floor.
+			if src.Plugin == nil {
+				http.Error(w, fmt.Sprintf("payload set %d (plugin): missing configuration", i), http.StatusBadRequest)
+				return
+			}
+			if err := s.checkPluginPayloadRef(extension.KindPayloadGenerator, &intruder.PluginRuleRef{
+				Plugin: src.Plugin.Plugin, Registration: src.Plugin.Registration,
+			}); err != nil {
+				http.Error(w, fmt.Sprintf("payload set %d (plugin): %s", i, err), http.StatusBadRequest)
+				return
+			}
+			items, done, err := s.materializePluginPayloads(r.Context(), src.Plugin, payloadCap)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("payload set %d (plugin): %s", i, err), http.StatusBadRequest)
+				return
+			}
+			ps, err := (&intruder.PayloadSource{Type: "list", List: &intruder.ListSource{Items: items}}).Resolve(payloadCap)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("payload set %d (plugin): %s", i, err), http.StatusBadRequest)
+				return
+			}
+			ps.Kind = "plugin"
+			if !done {
+				ps.Truncated = true
+				ps.TotalExact = false
+			}
+			chain.Run(ps)
+			if req.URLEncode != nil {
+				intruder.URLEncodeSet(ps, *req.URLEncode)
+			}
+			resolved = append(resolved, *ps)
 			continue
 		}
 		ps, err := src.Resolve(payloadCap)
@@ -1731,6 +1771,58 @@ func derefManual(spans *[]intruder.ManualSpan) []intruder.ManualSpan {
 
 // intruderSources collapses the three payload request shapes into one PayloadSource list and
 // enforces the per-mode set count.
+// hostProcessorBridge adapts the extension host to intruder's ProcessorBridge. The plugin is
+// an untrusted principal answering bytes only; the payloads it returns enter the same engine,
+// chain accounting, sender and scope path as any built-in kind.
+type hostProcessorBridge struct {
+	ctx  context.Context
+	host *extension.Host
+}
+
+func (b hostProcessorBridge) ProcessPayload(plugin, registration string, payload, base []byte) ([]byte, bool, error) {
+	return b.host.ProcessPayload(b.ctx, plugin, registration, payload, base)
+}
+
+// checkPluginPayloadRef refuses a payload source or rule whose plugin is not loaded or whose
+// registration is the other payload kind, at config time rather than after payloads exist.
+// ref may be nil or half-filled; both are config errors.
+func (s *Server) checkPluginPayloadRef(want extension.Kind, ref *intruder.PluginRuleRef) error {
+	if ref == nil || ref.Plugin == "" || ref.Registration == "" {
+		return fmt.Errorf("a plugin payload %s needs a plugin name and a registration ID", want)
+	}
+	kind, err := s.extensionHost().RegistrationKind(ref.Plugin, ref.Registration)
+	if err != nil {
+		return err
+	}
+	if kind != want {
+		return fmt.Errorf("%q registration %q is %q, not %q", ref.Plugin, ref.Registration, kind, want)
+	}
+	return nil
+}
+
+// materializePluginPayloads pulls a plugin generator's stream at launch: one host call per
+// position, capped like every payload kind, applying the same per-item length bound Resolve
+// would. done is true when the plugin ended the stream before the cap cut it.
+func (s *Server) materializePluginPayloads(ctx context.Context, src *intruder.PluginSource, cap int) (items []string, done bool, err error) {
+	host := s.extensionHost()
+	prealloc := cap
+	if prealloc > 64 {
+		prealloc = 64
+	}
+	items = make([]string, 0, prealloc)
+	for pos := 0; pos < cap; pos++ {
+		payload, d, err := host.GeneratePayload(ctx, src.Plugin, src.Registration, pos)
+		if err != nil {
+			return nil, false, fmt.Errorf("position %d: %w", pos, err)
+		}
+		if d {
+			return items, true, nil
+		}
+		items = append(items, string(payload))
+	}
+	return items, false, nil
+}
+
 func intruderSources(sources *[]intruder.PayloadSource, sets *[][]string, payloads *[]string, kind intruder.AttackKind, positions int) ([]intruder.PayloadSource, error) {
 	var out []intruder.PayloadSource
 	switch {
@@ -2057,10 +2149,6 @@ func parseEncoding(name string) (sequencer.Encoding, error) {
 // record. The response is the full SequencerReport (internal/web/ui/src/
 // sequencer.ts), not the legacy aggregate shape this endpoint used to return.
 func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sequencerAnalyseReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)

@@ -26,24 +26,16 @@ describe("parseScopePaste", () => {
  test("a default port is dropped rather than written into the rule", () => {
   // A rule with no port arm covers 80 and 443 already. Keeping ":80" would narrow it to
   // that port, which is not what the operator pasted and not what Burp builds.
-  expect(parseScopePaste("http://example.com:80/x").rules).toEqual([
-   { pattern: "example.com", path: "/x", protocol: "http" },
-  ]);
-  expect(parseScopePaste("https://example.com:443/x").rules).toEqual([
-   { pattern: "example.com", path: "/x", protocol: "https" },
-  ]);
+  expect(parseScopePaste("http://example.com:80/x").rules).toEqual([{ pattern: "example.com", path: "/x", protocol: "http" }]);
+  expect(parseScopePaste("https://example.com:443/x").rules).toEqual([{ pattern: "example.com", path: "/x", protocol: "https" }]);
  });
 
  test("a URL's host is lowercased and its path normalised, because that is what is matched", () => {
-  expect(parseScopePaste("https://EXAMPLE.com/a/b/../c").rules).toEqual([
-   { pattern: "example.com", path: "/a/c", protocol: "https" },
-  ]);
+  expect(parseScopePaste("https://EXAMPLE.com/a/b/../c").rules).toEqual([{ pattern: "example.com", path: "/a/c", protocol: "https" }]);
  });
 
  test("a query is not mistaken for a path arm", () => {
-  expect(parseScopePaste("https://example.com/search?q=x").rules).toEqual([
-   { pattern: "example.com", path: "/search", protocol: "https" },
-  ]);
+  expect(parseScopePaste("https://example.com/search?q=x").rules).toEqual([{ pattern: "example.com", path: "/search", protocol: "https" }]);
  });
 
  test("a bare host pattern is accepted, with or without a port and with a wildcard", () => {

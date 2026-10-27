@@ -16,9 +16,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
-// maxAuthFailures bounds the hosts recorded; the least recently seen goes first.
+// maxAuthFailures bounds the hosts recorded, per cache; the least recently seen goes first
+// (the LRU caches on Credentials carry the bound - burpsy-react-ui-z5l6).
 const maxAuthFailures = 32
 
 // Failure reasons.
@@ -103,8 +106,14 @@ func (c *Credentials) PromptOnFailure() bool {
 func (c *Credentials) Failures() []AuthFailure {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]AuthFailure, 0, len(c.failures))
-	for _, f := range c.failures {
+	if c.failures == nil {
+		return []AuthFailure{}
+	}
+	// Values walks the cache oldest-first without touching recency: reading the panel must not
+	// change which failure eviction picks next.
+	values := c.failures.Values()
+	out := make([]AuthFailure, 0, len(values))
+	for _, f := range values {
 		out = append(out, *f)
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].LastSeen.After(out[b].LastSeen) })
@@ -115,11 +124,10 @@ func (c *Credentials) Failures() []AuthFailure {
 func (c *Credentials) DismissFailure(host string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.failures[strings.ToLower(host)]; !ok {
+	if c.failures == nil {
 		return false
 	}
-	delete(c.failures, strings.ToLower(host))
-	return true
+	return c.failures.Remove(strings.ToLower(host))
 }
 
 // recordFailureLocked notes one failed challenge. Called with c.mu held for writing.
@@ -134,9 +142,11 @@ func (c *Credentials) recordFailureLocked(host, wwwAuthenticate, reason string) 
 	now := time.Now()
 	key := strings.ToLower(host)
 	if c.failures == nil {
-		c.failures = map[string]*AuthFailure{}
+		// The bound is a positive constant, the only shape lru.New can refuse.
+		c.failures, _ = lru.New[string, *AuthFailure](maxAuthFailures)
 	}
-	if f, ok := c.failures[key]; ok {
+	// Get touches: a host that fails again is recently seen, so it is not the next eviction.
+	if f, ok := c.failures.Get(key); ok {
 		f.Count++
 		f.LastSeen = now
 		f.Scheme, f.Reason = scheme, reason
@@ -145,24 +155,18 @@ func (c *Credentials) recordFailureLocked(host, wwwAuthenticate, reason string) 
 		}
 		return
 	}
-	if len(c.failures) >= maxAuthFailures {
-		var oldest string
-		for k, f := range c.failures {
-			if oldest == "" || f.LastSeen.Before(c.failures[oldest].LastSeen) {
-				oldest = k
-			}
-		}
-		delete(c.failures, oldest)
-	}
-	c.failures[key] = &AuthFailure{Host: host, Scheme: scheme, Realm: challengeRealm(wwwAuthenticate),
-		Reason: reason, Count: 1, FirstSeen: now, LastSeen: now}
+	c.failures.Add(key, &AuthFailure{Host: host, Scheme: scheme, Realm: challengeRealm(wwwAuthenticate),
+		Reason: reason, Count: 1, FirstSeen: now, LastSeen: now})
 }
 
 // clearFailuresMatchingLocked forgets the failures a rule's host pattern now covers.
 func (c *Credentials) clearFailuresMatchingLocked(pattern string) {
-	for key, f := range c.failures {
-		if matchHost(pattern, f.Host) {
-			delete(c.failures, key)
+	if c.failures == nil {
+		return
+	}
+	for _, key := range c.failures.Keys() {
+		if f, ok := c.failures.Peek(key); ok && matchHost(pattern, f.Host) {
+			c.failures.Remove(key)
 		}
 	}
 }
@@ -188,8 +192,12 @@ type AuthWarning struct {
 func (c *Credentials) Warnings() []AuthWarning {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]AuthWarning, 0, len(c.warnings))
-	for _, w := range c.warnings {
+	if c.warnings == nil {
+		return []AuthWarning{}
+	}
+	values := c.warnings.Values()
+	out := make([]AuthWarning, 0, len(values))
+	for _, w := range values {
 		out = append(out, *w)
 	}
 	sort.SliceStable(out, func(a, b int) bool { return out[a].LastSeen.After(out[b].LastSeen) })
@@ -202,23 +210,14 @@ func (c *Credentials) recordWarningLocked(host, scheme, wire, warning string) {
 	now := time.Now()
 	key := strings.ToLower(host)
 	if c.warnings == nil {
-		c.warnings = map[string]*AuthWarning{}
+		c.warnings, _ = lru.New[string, *AuthWarning](maxAuthFailures)
 	}
-	if w, ok := c.warnings[key]; ok {
+	if w, ok := c.warnings.Get(key); ok {
 		w.Count++
 		w.LastSeen = now
 		w.Scheme, w.Wire, w.Warning = scheme, wire, warning
 		return
 	}
-	if len(c.warnings) >= maxAuthFailures {
-		var oldest string
-		for k, w := range c.warnings {
-			if oldest == "" || w.LastSeen.Before(c.warnings[oldest].LastSeen) {
-				oldest = k
-			}
-		}
-		delete(c.warnings, oldest)
-	}
-	c.warnings[key] = &AuthWarning{Host: host, Scheme: scheme, Wire: wire, Warning: warning,
-		Count: 1, FirstSeen: now, LastSeen: now}
+	c.warnings.Add(key, &AuthWarning{Host: host, Scheme: scheme, Wire: wire, Warning: warning,
+		Count: 1, FirstSeen: now, LastSeen: now})
 }

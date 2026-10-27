@@ -122,3 +122,15 @@ func (ContextPacer) Pace(ctx context.Context) (func(), error) {
 	}
 	return l.Pace(ctx)
 }
+
+// PaceN is the group half of the same contract: one atomic reservation for a synchronized
+// race group running under this context's pool (burpsy-react-ui-0vzb.8). Satisfying
+// sender.GroupPacer here is what lets a group behind a named pool go out together; a pool
+// that cannot admit the group declines it, and no pool at all is unpaced, exactly as Pace.
+func (ContextPacer) PaceN(ctx context.Context, n int) (func(), error) {
+	l, ok := LimiterFrom(ctx)
+	if !ok {
+		return noopRelease, nil
+	}
+	return l.PaceN(ctx, n)
+}

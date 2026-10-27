@@ -71,6 +71,10 @@ type ScanCompletion struct {
 	// NotSelected counts resolved stored findings dropped because ScanConfig.OnlyRows does not list
 	// their row (only_rows.go).
 	NotSelected int
+	// DeferredBudgetSpent reports the deferred phase hit its own wall-clock bound
+	// (AuditConfig.DeferredTimeBudget) before it finished asking. Outstanding claims below are
+	// the accounting of WHAT went unanswered; this flag is WHY, when the why is the bound.
+	DeferredBudgetSpent bool
 }
 
 // FinishScan settles the deferred half of a scan: look again, then ask every claim once more.
@@ -89,6 +93,17 @@ func (s *ActiveScanner) FinishScan(ctx context.Context, cfg AuditConfig) ([]*Fin
 	var c ScanCompletion
 	if s == nil {
 		return nil, c
+	}
+	// W3: the deferred phase gets its own wall clock. Before this it rode only the task
+	// context, so a scan's real ceiling was its audit budget plus an unbounded tail.
+	deferredBudget := cfg.DeferredTimeBudget
+	if deferredBudget == 0 {
+		deferredBudget = DefaultDeferredBudget
+	}
+	if deferredBudget > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, deferredBudget)
+		defer cancel()
 	}
 	snd, err := s.runSenderFor(cfg)
 	if err != nil {
@@ -123,6 +138,9 @@ func (s *ActiveScanner) FinishScan(ctx context.Context, cfg AuditConfig) ([]*Fin
 	findings, c.NotSelected = newRowSelection(s.ConfigSnapshot().OnlyRows).filterFindings(findings)
 	c.Outstanding = s.Pending().Outstanding()
 	c.Pending = s.Pending().Summarise()
+	if deferredBudget > 0 {
+		c.DeferredBudgetSpent = ctx.Err() == context.DeadlineExceeded
+	}
 	return findings, c
 }
 

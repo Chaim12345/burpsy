@@ -47,10 +47,6 @@ type sessionMacroStepsReq struct {
 // `skipped` naming each row dropped and why. The UI is responsible for showing the second list; the
 // endpoint does not pretend a partial result is a whole one.
 func (s *Server) handleSessionMacroSteps(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.store == nil {
 		http.Error(w, "The exchange store is not wired, so no history row can be read", http.StatusServiceUnavailable)
 		return

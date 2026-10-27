@@ -1,6 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useInterceptNewlineCorrection, useSetInterceptNewlineCorrection, type InterceptNewlineCorrection } from "../lib/data.tools";import { useHotkeys } from "react-hotkeys-hook";
-import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, MessageSquare, Pencil, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
+import { useInterceptNewlineCorrection, useSetInterceptNewlineCorrection, type InterceptNewlineCorrection } from "../lib/data.tools";
+import { useHotkeys } from "react-hotkeys-hook";
+import {
+ ArrowDown,
+ ArrowUp,
+ Columns3,
+ Combine,
+ ArrowRightLeft,
+ FileCode2,
+ FileOutput,
+ Globe,
+ Link2,
+ MessageSquare,
+ Pencil,
+ Plus,
+ Repeat2,
+ Send,
+ ShieldCheck,
+ Terminal,
+ Trash2,
+ X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { describeLaunch, openUrlInBrowser, useLaunchBrowser } from "../lib/data.browser";
 import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
@@ -17,13 +37,7 @@ import {
  useSaveInterceptRules,
  type InterceptDirection,
 } from "../lib/data.attack";
-import {
- describeTarget,
- sameTarget,
- targetFromDraft,
- targetOf,
- type InterceptTarget,
-} from "../lib/intercept-target";
+import { describeTarget, sameTarget, targetFromDraft, targetOf, type InterceptTarget } from "../lib/intercept-target";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
 import { highlightName } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
@@ -111,17 +125,9 @@ const CATEGORIES: { value: InterceptRuleSpec["category"]; label: string }[] = [
  * deliberately NOT the same strings as `InterceptDirection`, which is the plural rule-endpoint
  * suffix; conflating the two yields a filter that always matches nothing.
  */
-type HeldDirectionFilter =
- | "all"
- | "request"
- | "response"
- | "websocket_to_server"
- | "websocket_to_client";
+type HeldDirectionFilter = "all" | "request" | "response" | "websocket_to_server" | "websocket_to_client";
 
-const DIRECTIONS: Record<
- InterceptDirection,
- { title: string; noun: string; defaultField: InterceptRuleSpec["field"] }
-> = {
+const DIRECTIONS: Record<InterceptDirection, { title: string; noun: string; defaultField: InterceptRuleSpec["field"] }> = {
  requests: { title: "Request", noun: "request", defaultField: "host" },
  responses: { title: "Response", noun: "response", defaultField: "status_code" },
  websocket_to_server: {
@@ -240,11 +246,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
  if (error) return <ErrorNotice error={error} onRetry={() => void refetch()} />;
  if (!data && isFetching) return <Card>Loading…</Card>;
  if (data && !data.wired) {
-  return (
-   <div className="notice notice-warn">
-    {title} interception rules are not wired up.
-   </div>
-  );
+  return <div className="notice notice-warn">{title} interception rules are not wired up.</div>;
  }
 
  return (
@@ -261,13 +263,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
      />
      <span className="field-hint">{describeRules(active, rules, noun)}</span>
      <span style={{ flex: 1 }} />
-     <Button
-      variant="outline"
-      size="small"
-      onClick={() =>
-       update((list) => [...list, defaultRule(direction)])
-      }
-     >
+     <Button variant="outline" size="small" onClick={() => update((list) => [...list, defaultRule(direction)])}>
       <Plus size={13} />
       Add rule
      </Button>
@@ -310,9 +306,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
           <td>
            <Checkbox
             checked={rule.enabled}
-            onCheckedChange={(checked) =>
-             update((list) => list.map((r, i) => (i === index ? { ...r, enabled: checked } : r)))
-            }
+            onCheckedChange={(checked) => update((list) => list.map((r, i) => (i === index ? { ...r, enabled: checked } : r)))}
             label="On"
            />
           </td>
@@ -327,11 +321,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
              // can produce a refused rule is a UI that hands the operator a 400 with no clue why.
              update((list) =>
               list.map((r, i) =>
-               i === index
-                ? memberLabelOf(field) === undefined
-                  ? { ...r, field, member: undefined }
-                  : { ...r, field }
-                : r,
+               i === index ? (memberLabelOf(field) === undefined ? { ...r, field, member: undefined } : { ...r, field }) : r,
               ),
              );
             }}
@@ -367,18 +357,14 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
              value={rule.member ?? ""}
              placeholder={memberLabelOf(rule.field)}
              style={{ marginBottom: 4 }}
-             onChange={(event) =>
-              update((list) => list.map((r, i) => (i === index ? { ...r, member: event.target.value } : r)))
-             }
+             onChange={(event) => update((list) => list.map((r, i) => (i === index ? { ...r, member: event.target.value } : r)))}
             />
            ) : null}
            <Input
             aria-label={`Match pattern for rule ${index + 1}`}
             value={rule.string_match}
             placeholder="pattern to match"
-            onChange={(event) =>
-             update((list) => list.map((r, i) => (i === index ? { ...r, string_match: event.target.value } : r)))
-            }
+            onChange={(event) => update((list) => list.map((r, i) => (i === index ? { ...r, string_match: event.target.value } : r)))}
            />
           </td>
           <td>
@@ -408,16 +394,12 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
              index === 0
               ? "The first rule has nothing above it to combine with, so this choice is ignored"
               : rule.op === "and"
-              ? "Hold only when this rule AND every rule above it match"
-              : "Hold when this rule matches, whatever the rules above decided"
+                ? "Hold only when this rule AND every rule above it match"
+                : "Hold when this rule matches, whatever the rules above decided"
             }
             disabled={index === 0}
             value={rule.op ?? "or"}
-            onChange={(event) =>
-             update((list) =>
-              list.map((r, i) => (i === index ? { ...r, op: event.target.value as "and" | "or" } : r)),
-             )
-            }
+            onChange={(event) => update((list) => list.map((r, i) => (i === index ? { ...r, op: event.target.value as "and" | "or" } : r)))}
            >
             <option value="or">OR</option>
             <option value="and">AND</option>
@@ -429,9 +411,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
             title="Do intercept holds a match; Don't intercept lets it through"
             value={rule.action ?? "hold"}
             onChange={(event) =>
-             update((list) =>
-              list.map((r, i) => (i === index ? { ...r, action: event.target.value as InterceptRuleSpec["action"] } : r)),
-             )
+             update((list) => list.map((r, i) => (i === index ? { ...r, action: event.target.value as InterceptRuleSpec["action"] } : r)))
             }
            >
             <option value="hold">Do intercept</option>
@@ -443,19 +423,12 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
             aria-label={`Comment for rule ${index + 1}`}
             value={rule.comment}
             placeholder="label"
-            onChange={(event) =>
-             update((list) => list.map((r, i) => (i === index ? { ...r, comment: event.target.value } : r)))
-            }
+            onChange={(event) => update((list) => list.map((r, i) => (i === index ? { ...r, comment: event.target.value } : r)))}
            />
           </td>
           <td>
            <div className="chip-row">
-            <IconButton
-             label={`Move rule ${index + 1} up`}
-             size="small"
-             disabled={index === 0}
-             onClick={() => move(index, -1)}
-            >
+            <IconButton label={`Move rule ${index + 1} up`} size="small" disabled={index === 0} onClick={() => move(index, -1)}>
              <ArrowUp size={13} />
             </IconButton>
             <IconButton
@@ -469,11 +442,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
            </div>
           </td>
           <td>
-           <IconButton
-            label={`Remove rule ${index + 1}`}
-            size="small"
-            onClick={() => update((list) => list.filter((_, i) => i !== index))}
-           >
+           <IconButton label={`Remove rule ${index + 1}`} size="small" onClick={() => update((list) => list.filter((_, i) => i !== index))}>
             <Trash2 size={13} />
            </IconButton>
           </td>
@@ -523,27 +492,14 @@ function TargetEditor({
      label="Host"
      hint="burpsy dials this name. The bytes are sent as they are, so a virtual host that routes on the Host header needs that header edited in the request above."
     >
-     {(id) => (
-      <Input id={id} value={host} autoFocus onChange={(event) => setHost(event.target.value)} />
-     )}
+     {(id) => <Input id={id} value={host} autoFocus onChange={(event) => setHost(event.target.value)} />}
     </Field>
     <Field label="Port" hint="1 to 65535.">
-     {(id) => (
-      <Input
-       id={id}
-       value={port}
-       inputMode="numeric"
-       onChange={(event) => setPort(event.target.value)}
-      />
-     )}
+     {(id) => <Input id={id} value={port} inputMode="numeric" onChange={(event) => setPort(event.target.value)} />}
     </Field>
     <Field label="Scheme" hint="Whether burpsy wraps this one connection in TLS.">
      {(id) => (
-      <Select
-       id={id}
-       value={tls ? "https" : "http"}
-       onChange={(event) => setTls(event.target.value === "https")}
-      >
+      <Select id={id} value={tls ? "https" : "http"} onChange={(event) => setTls(event.target.value === "https")}>
        <option value="http">http</option>
        <option value="https">https</option>
       </Select>
@@ -556,16 +512,12 @@ function TargetEditor({
    {/* "Nothing changed" is worth saying rather than leaving as a silence: the operator may have
        opened this to check where the message is already going, and a Save button that looks
        identical either way would leave them unsure whether a retarget is now in force. */}
-   {unchanged ? (
-    <div className="notice">
-     This is where the client already sent it — nothing will change.
-    </div>
-   ) : null}
+   {unchanged ? <div className="notice">This is where the client already sent it — nothing will change.</div> : null}
 
    <div className="notice">
-    Retargeting a request that is a WebSocket upgrade is refused: the client&apos;s frames keep
-    arriving on the connection it opened, so the handshake would be answered from one origin while
-    the frames went to another. burpsy answers the client with a 502 explaining that instead.
+    Retargeting a request that is a WebSocket upgrade is refused: the client&apos;s frames keep arriving on the connection it opened, so the
+    handshake would be answered from one origin while the frames went to another. burpsy answers the client with a 502 explaining that
+    instead.
    </div>
 
    <div className="page-actions">
@@ -702,10 +654,10 @@ export function InterceptPage(): JSX.Element {
  };
 
  /**
- * Forward one held message by id, with its body, the Content-Length decision and — when the operator
- * has pointed it somewhere else — its destination all passed in.
- *
- * Taking all of them explicitly is the point. The previous shape closed over `selected` and `raw`,
+  * Forward one held message by id, with its body, the Content-Length decision and — when the operator
+  * has pointed it somewhere else — its destination all passed in.
+  *
+  * Taking all of them explicitly is the point. The previous shape closed over `selected` and `raw`,
   * which was fine for the toolbar — it only ever acts on the selection — and wrong for anything
   * that acts on a row the operator pointed at instead. A caller that set the selection and then
   * invoked a closure captured at the previous render would forward the PREVIOUS message, with the
@@ -726,13 +678,7 @@ export function InterceptPage(): JSX.Element {
   if (held && body === held.raw) return {};
   return { raw: body };
  };
- const forwardMessage = (
-  id: number,
-  body: string,
-  fixCL: boolean,
-  holdResponse = false,
-  target?: InterceptTarget,
- ) => {
+ const forwardMessage = (id: number, body: string, fixCL: boolean, holdResponse = false, target?: InterceptTarget) => {
   forwardHeld.mutate(
    { id, ...forwardPayload(id, body), fixContentLength: fixCL, holdResponse, target },
    {
@@ -765,12 +711,7 @@ export function InterceptPage(): JSX.Element {
   * First-match-wins evaluation means the new rule belongs at the TOP: appended at the end it
   * would sit behind broader hold rules and never fire, silently doing nothing.
   */
- const addPassRule = (
-  dir: "requests" | "responses",
-  field: InterceptRuleSpec["field"],
-  match: string,
-  comment: string,
- ) => {
+ const addPassRule = (dir: "requests" | "responses", field: InterceptRuleSpec["field"], match: string, comment: string) => {
   const current = dir === "requests" ? reqRules.data : resRules.data;
   if (!current) {
    toast.error("Rule list has not loaded yet");
@@ -820,7 +761,6 @@ export function InterceptPage(): JSX.Element {
    },
   );
  };
-
 
  /**
   * burpsy-react-ui-s5g7: forward/drop the checkbox subset, one resolved message at a time.
@@ -976,36 +916,35 @@ export function InterceptPage(): JSX.Element {
     actions: [
      ...(row.direction === "request"
       ? [
-       {
-        id: "dont-intercept-host",
-        label: `Don't intercept requests to ${row.host}`,
-        onSelect: () => addPassRule("requests", "host", row.host, `from held #${row.id}`),
-       },
-       ...(extensionOf(row.path)
-        ? [
          {
-          id: "dont-intercept-ext",
-          label: `Don't intercept requests for .${extensionOf(row.path)} files`,
-          onSelect: () =>
-           addPassRule("requests", "extension", extensionOf(row.path), `from held #${row.id}`),
+          id: "dont-intercept-host",
+          label: `Don't intercept requests to ${row.host}`,
+          onSelect: () => addPassRule("requests", "host", row.host, `from held #${row.id}`),
+         },
+         ...(extensionOf(row.path)
+          ? [
+             {
+              id: "dont-intercept-ext",
+              label: `Don't intercept requests for .${extensionOf(row.path)} files`,
+              onSelect: () => addPassRule("requests", "extension", extensionOf(row.path), `from held #${row.id}`),
+             },
+            ]
+          : []),
+         {
+          id: "intercept-response",
+          label: "Do intercept the response to this request",
+          onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true, targetFor(row)),
          },
         ]
-        : []),
-       {
-        id: "intercept-response",
-        label: "Do intercept the response to this request",
-        onSelect: () => forwardMessage(row.id, row.raw, fixContentLength, true, targetFor(row)),
-       },
-      ]
       : row.direction === "response"
-       ? [
-        {
-         id: "dont-intercept-host",
-         label: `Don't intercept responses from ${row.host}`,
-         onSelect: () => addPassRule("responses", "host", row.host, `from held #${row.id}`),
-        },
-       ]
-       : []),
+        ? [
+           {
+            id: "dont-intercept-host",
+            label: `Don't intercept responses from ${row.host}`,
+            onSelect: () => addPassRule("responses", "host", row.host, `from held #${row.id}`),
+           },
+          ]
+        : []),
     ],
    },
    {
@@ -1033,8 +972,7 @@ export function InterceptPage(): JSX.Element {
       id: "to-file",
       label: "Copy request to file",
       icon: FileCode2,
-      onSelect: () =>
-       downloadText(`held-${row.id}-${row.method}.txt`.replace(/[^a-z0-9.\-]+/gi, "_"), row.raw),
+      onSelect: () => downloadText(`held-${row.id}-${row.method}.txt`.replace(/[^a-z0-9.\-]+/gi, "_"), row.raw),
      },
     ],
    },
@@ -1048,9 +986,7 @@ export function InterceptPage(): JSX.Element {
       onSelect: () => {
        void api<unknown>("/api/scope", json("POST", { action: "include", pattern: row.host }))
         .then(() => toast.success(`${row.host} added to scope`))
-        .catch((error: unknown) =>
-         toast.error(`Could not scope ${row.host}: ${error instanceof Error ? error.message : String(error)}`),
-        );
+        .catch((error: unknown) => toast.error(`Could not scope ${row.host}: ${error instanceof Error ? error.message : String(error)}`));
       },
      },
      {
@@ -1113,9 +1049,7 @@ export function InterceptPage(): JSX.Element {
     if (forwarded === expected) {
      toast.success(`Forwarded ${forwarded} held message${forwarded === 1 ? "" : "s"}`);
     } else {
-     toast.success(
-      `Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
-     );
+     toast.success(`Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`);
     }
    },
    onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
@@ -1147,9 +1081,7 @@ export function InterceptPage(): JSX.Element {
       <Checkbox
        checked={selectedIds.includes(id)}
        onCheckedChange={(checked) => {
-        setSelectedIds((current) =>
-         checked ? (current.includes(id) ? current : [...current, id]) : current.filter((v) => v !== id),
-        );
+        setSelectedIds((current) => (checked ? (current.includes(id) ? current : [...current, id]) : current.filter((v) => v !== id)));
        }}
        label={`Select held #${id} for bulk forward or drop`}
       />
@@ -1171,7 +1103,12 @@ export function InterceptPage(): JSX.Element {
     accessorFn: (row) => `${row.host}:${row.port}${row.tls ? " (tls)" : ""}`,
     cell: (info) => <span title={info.getValue<string>()}>{info.getValue<string>()}</span>,
    },
-   { accessorKey: "path", header: "Path", size: 260, cell: (info) => <code title={info.getValue<string>()}>{info.getValue<string>()}</code> },
+   {
+    accessorKey: "path",
+    header: "Path",
+    size: 260,
+    cell: (info) => <code title={info.getValue<string>()}>{info.getValue<string>()}</code>,
+   },
    {
     // Which browser or device sent the held message (3bkn), Burp's sourceIpAddress().
     id: "client_ip",
@@ -1192,8 +1129,18 @@ export function InterceptPage(): JSX.Element {
      return value === null ? <span className="cell-dim">—</span> : <Badge>{value}</Badge>;
     },
    },
-   { accessorKey: "held_ms", header: "Held", size: 80, cell: (info) => <span className="cell-num">{formatDuration(info.getValue<number>())}</span> },
-   { accessorKey: "len", header: "Len", size: 76, cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span> },
+   {
+    accessorKey: "held_ms",
+    header: "Held",
+    size: 80,
+    cell: (info) => <span className="cell-num">{formatDuration(info.getValue<number>())}</span>,
+   },
+   {
+    accessorKey: "len",
+    header: "Len",
+    size: 76,
+    cell: (info) => <span className="cell-num">{formatBytes(info.getValue<number>())}</span>,
+   },
   ],
   [selectedIds],
  );
@@ -1252,9 +1199,7 @@ export function InterceptPage(): JSX.Element {
               it, and an operator handed unlabelled binary bytes will edit them as text and forward a
               structurally valid frame with a corrupted body. Warn tone on binary because that is
               the case where the editor below is the wrong tool. */}
-     {selected.opcode ? (
-      <Badge tone={selected.opcode === "text" ? "info" : "warn"}>{selected.opcode}</Badge>
-     ) : null}
+     {selected.opcode ? <Badge tone={selected.opcode === "text" ? "info" : "warn"}>{selected.opcode}</Badge> : null}
      <Badge tone={selected.direction === "request" ? "info" : "good"}>{selected.direction}</Badge>
      <IconButton
       label={inspector ? "Hide Inspector" : "Show Inspector"}
@@ -1285,13 +1230,7 @@ export function InterceptPage(): JSX.Element {
               edit made here is in the bytes that reach the client or the upstream, not a
               second draft that has to be copied across. This is the surface where that
               matters most: the message is held open and nothing else can change it. */}
-     {inspector ? (
-      <Inspector
-       raw={raw}
-       label={`Inspector · held ${selected.direction}`}
-       onChange={editRaw}
-      />
-     ) : null}
+     {inspector ? <Inspector raw={raw} label={`Inspector · held ${selected.direction}`} onChange={editRaw} /> : null}
     </div>
     {/* The operator's annotation (burpsy-react-ui-5q8u): comment + highlight, saved while
             the message is still held, riding into HTTP history when the hold forwards into a
@@ -1325,18 +1264,16 @@ export function InterceptPage(): JSX.Element {
       variant="outline"
       size="small"
       onClick={saveAnnotation}
-      disabled={annotateHeld.isPending || (commentDraft === (selected.comment ?? "") && highlightDraft === highlightName(selected.highlight))}
+      disabled={
+       annotateHeld.isPending || (commentDraft === (selected.comment ?? "") && highlightDraft === highlightName(selected.highlight))
+      }
      >
       <MessageSquare size={13} />
       Save annotation
      </Button>
     </Toolbar>
     <Toolbar style={{ borderTop: "1px solid var(--line)" }}>
-     <Checkbox
-      checked={fixContentLength}
-      onCheckedChange={setFixContentLength}
-      label="Fix Content-Length when forwarding"
-     />
+     <Checkbox checked={fixContentLength} onCheckedChange={setFixContentLength} label="Fix Content-Length when forwarding" />
      {/* Burp's two newline corrections for an EDITED interception (80tg). Two switches rather than
          one because they are two different defects with two different symptoms: the missing blank
          line is a framing error the target reads as a header name, and the trailing newline in a form
@@ -1423,7 +1360,6 @@ export function InterceptPage(): JSX.Element {
      </Button>
     </Toolbar>
 
-
     {/* Burp's "Edit target" editor. A dialog rather than an editable authority in the header bar:
         the header is a display, and making it hold a three-part destination would leave a Forward
         one keystroke away from a half-typed host. Nothing is sent until Forward, so the
@@ -1459,61 +1395,56 @@ export function InterceptPage(): JSX.Element {
        its toolbar button is: Drop all is a queue-wide action, and the catalogue chord and palette
        entry (2czi) must reach the same confirmation with nothing selected. Inside the pane it was
        not mounted then, so the palette's Drop all set state no dialog read. */}
-    <Modal
-     open={confirmDropAll}
-     onOpenChange={(open) => {
-      if (!open) setConfirmDropAll(false);
-     }}
-     title={`Drop all ${held.length} held messages?`}
-     description="Each client sees its request fail. Dropped traffic is not recoverable, and this discards messages you have not looked at."
-    >
-     <div className="page-actions">
-      <Button variant="outline" onClick={() => setConfirmDropAll(false)}>
-       Keep them held
-      </Button>
-      <Button
-       variant="danger"
-       disabled={controls.dropAll.isPending}
-       onClick={() => {
-        // `expected` is read before the call so the two numbers can be compared. The route
-        // answers what it actually dropped, and a message resolved elsewhere between the
-        // last poll and this request is not counted — so a smaller number is not an error,
-        // it is the queue having moved. Saying so is how the operator learns that rather
-        // than concluding the button half-worked.
-        const expected = held.length;
-        controls.dropAll.mutate(undefined, {
-         onSuccess: (result) => {
-          setConfirmDropAll(false);
-          setSelectedId(null);
-          const dropped = result.dropped;
-          if (dropped === expected) {
-           toast.success(`Dropped ${dropped} held message${dropped === 1 ? "" : "s"}`);
-          } else {
-           toast.success(
-            `Dropped ${dropped} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
-           );
-          }
-         },
-         onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
-        });
-       }}
-      >
-       <Trash2 size={13} />
-       {controls.dropAll.isPending ? "Dropping…" : `Drop all ${held.length}`}
-      </Button>
-     </div>
-    </Modal>
+   <Modal
+    open={confirmDropAll}
+    onOpenChange={(open) => {
+     if (!open) setConfirmDropAll(false);
+    }}
+    title={`Drop all ${held.length} held messages?`}
+    description="Each client sees its request fail. Dropped traffic is not recoverable, and this discards messages you have not looked at."
+   >
+    <div className="page-actions">
+     <Button variant="outline" onClick={() => setConfirmDropAll(false)}>
+      Keep them held
+     </Button>
+     <Button
+      variant="danger"
+      disabled={controls.dropAll.isPending}
+      onClick={() => {
+       // `expected` is read before the call so the two numbers can be compared. The route
+       // answers what it actually dropped, and a message resolved elsewhere between the
+       // last poll and this request is not counted — so a smaller number is not an error,
+       // it is the queue having moved. Saying so is how the operator learns that rather
+       // than concluding the button half-worked.
+       const expected = held.length;
+       controls.dropAll.mutate(undefined, {
+        onSuccess: (result) => {
+         setConfirmDropAll(false);
+         setSelectedId(null);
+         const dropped = result.dropped;
+         if (dropped === expected) {
+          toast.success(`Dropped ${dropped} held message${dropped === 1 ? "" : "s"}`);
+         } else {
+          toast.success(`Dropped ${dropped} of the ${expected} shown — the rest resolved elsewhere before this request arrived`);
+         }
+        },
+        onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+       });
+      }}
+     >
+      <Trash2 size={13} />
+      {controls.dropAll.isPending ? "Dropping…" : `Drop all ${held.length}`}
+     </Button>
+    </div>
+   </Modal>
    <div>
     <PageHeader
      title="Intercept"
+     settingsSection="proxy"
      actions={
       <>
        <Badge tone={data?.wired ? "good" : "warn"}>{data?.wired ? "wired" : "not wired"}</Badge>
-       <Switch
-        checked={data?.enabled ?? false}
-        onCheckedChange={toggle}
-        label="Intercept is on"
-       />
+       <Switch checked={data?.enabled ?? false} onCheckedChange={toggle} label="Intercept is on" />
        <Button
         variant="outline"
         size="small"
@@ -1538,8 +1469,8 @@ export function InterceptPage(): JSX.Element {
         history row has already been moved. burpsy-react-ui-y0l2. */}
        {data?.enabled ? (
         <span className="field-hint">
-         Intercept is on — intercepted traffic is carried as HTTP/1.1, including clients that offered HTTP/2. Held rows
-         from a downgraded client say so.
+         Intercept is on — intercepted traffic is carried as HTTP/1.1, including clients that offered HTTP/2. Held rows from a downgraded
+         client say so.
         </span>
        ) : (
         <span className="field-hint">Intercept is off</span>
@@ -1548,16 +1479,16 @@ export function InterceptPage(): JSX.Element {
      }
     />
     {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
-    {data && !data.wired ? (
-     <div className="notice notice-warn">{data.hint ?? "interception is not wired up"}</div>
-    ) : null}
+    {data && !data.wired ? <div className="notice notice-warn">{data.hint ?? "interception is not wired up"}</div> : null}
     <div className="metric-grid compact" style={{ marginTop: 10 }}>
      <Metric accent label="Pending" value={data?.pending ?? 0} />
      <Metric label="Mode" value={data?.enabled ? "Holding" : "Passing"} />
      <Metric label="Transport" value={data?.wired ? "Connected" : "Unavailable"} />
      <Metric label="Queue depth" value={heldAll.length} />
      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <label htmlFor="direction-filter" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>Show:</label>
+      <label htmlFor="direction-filter" style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+       Show:
+      </label>
       <Select
        id="direction-filter"
        aria-label="Filter by direction"
@@ -1586,9 +1517,7 @@ export function InterceptPage(): JSX.Element {
     <TabsContent value="queue" style={{ display: "grid", minHeight: 0 }}>
      {selectedIds.length > 0 ? (
       <Toolbar aria-label="Bulk actions for the checked messages">
-       <span className="cell-dim">
-        {selectedIds.length} checked
-       </span>
+       <span className="cell-dim">{selectedIds.length} checked</span>
        <Button size="small" onClick={() => void forwardSelected()} disabled={forwardHeld.isPending}>
         <Send size={13} />
         Forward checked
@@ -1640,19 +1569,16 @@ export function InterceptPage(): JSX.Element {
               guessable from the controls and each one changes what the queue will contain. See
               wsHoldable in internal/proxy/ws.go. */}
      <div className="notice" style={{ marginTop: 10 }}>
-      <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong,
-      close) are always relayed: holding a ping stalls the peer&apos;s keepalive and holding a
-      close leaves a socket that cannot be ended. Compressed frames are relayed untouched too, and
-      they only occur if you have turned off <code>Sec-WebSocket-Extensions</code> stripping in
-      proxy options. They are now <em>decoded for WebSocket history</em> where the handshake
-      agreed <code>no_context_takeover</code>, so you can read them — but they are still not
-      offered for editing, because re-compressing one message of a shared compression stream
-      would corrupt every later message on that connection, not just the edited one.
+      <strong>What WebSocket interception does not hold.</strong> Control frames (ping, pong, close) are always relayed: holding a ping
+      stalls the peer&apos;s keepalive and holding a close leaves a socket that cannot be ended. Compressed frames are relayed untouched
+      too, and they only occur if you have turned off <code>Sec-WebSocket-Extensions</code> stripping in proxy options. They are now{" "}
+      <em>decoded for WebSocket history</em> where the handshake agreed <code>no_context_takeover</code>, so you can read them — but they
+      are still not offered for editing, because re-compressing one message of a shared compression stream would corrupt every later message
+      on that connection, not just the edited one.
       <br />
-      Fragmented messages <em>are</em> reassembled and offered whole, so nothing is relayed until
-      the final fragment arrives. Forwarding without editing relays the original frames exactly
-      as they came; an edit is sent as one unfragmented frame. A message larger than 1&nbsp;MiB is
-      relayed unheld rather than buffered without bound.
+      Fragmented messages <em>are</em> reassembled and offered whole, so nothing is relayed until the final fragment arrives. Forwarding
+      without editing relays the original frames exactly as they came; an edit is sent as one unfragmented frame. A message larger than
+      1&nbsp;MiB is relayed unheld rather than buffered without bound.
      </div>
     </TabsContent>
    </Tabs>

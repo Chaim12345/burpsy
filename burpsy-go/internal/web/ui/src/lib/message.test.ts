@@ -68,14 +68,9 @@ const FORM = [
 
 const GET = ["GET /a HTTP/1.1", "Host: shop.example", "Accept: */*", "", ""].join("\r\n");
 
-const RESPONSE = [
- "HTTP/1.1 404 Not Found",
- "Content-Type: text/html",
- "Set-Cookie: a=1; Path=/",
- "Content-Length: 4",
- "",
- "gone",
-].join("\r\n");
+const RESPONSE = ["HTTP/1.1 404 Not Found", "Content-Type: text/html", "Set-Cookie: a=1; Path=/", "Content-Length: 4", "", "gone"].join(
+ "\r\n",
+);
 
 describe("reading is unchanged by the span rewrite", () => {
  test("CRLF, LF and separator-less messages parse the same as before", () => {
@@ -152,9 +147,7 @@ describe("headers", () => {
  });
 
  test("an added header lands at the end of the head with the message's own line ending", () => {
-  expect(addHeader(FORM, "X-Trace", "1")).toBe(
-   FORM.replace("Content-Length: 26\r\n\r\n", "Content-Length: 26\r\nX-Trace: 1\r\n\r\n"),
-  );
+  expect(addHeader(FORM, "X-Trace", "1")).toBe(FORM.replace("Content-Length: 26\r\n\r\n", "Content-Length: 26\r\nX-Trace: 1\r\n\r\n"));
   const lf = "GET / HTTP/1.1\nHost: h\n\nbody";
   expect(addHeader(lf, "X", "1")).toBe("GET / HTTP/1.1\nHost: h\nX: 1\n\nbody");
  });
@@ -377,10 +370,7 @@ describe("body parameters — JSON", () => {
  test("adding a member appends, and Content-Length follows", () => {
   const next = addBodyParam(json, "role", "admin");
   expect(parseMessage(next).body).toContain('"tags": ["a"], "role": "admin"');
-  expect(parseMessage(next).headers).toContainEqual([
-   "Content-Length",
-   String(new TextEncoder().encode(parseMessage(next).body).length),
-  ]);
+  expect(parseMessage(next).headers).toContainEqual(["Content-Length", String(new TextEncoder().encode(parseMessage(next).body).length)]);
  });
 
  test("an empty object gets its first member", () => {
@@ -525,12 +515,7 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   // Minified HTML — the common shape an operator meets on the wire. Every
   // newline in the Pretty view is one prettyMarkup inserted, so the write-back
   // can restore the exact original body.
-  const HTML = [
-   "HTTP/1.1 200 OK",
-   "Content-Type: text/html",
-   "",
-   "<html><body><p>hi</p><br><a href=\"/x\">y</a></body></html>",
-  ].join("\r\n");
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", '<html><body><p>hi</p><br><a href="/x">y</a></body></html>'].join("\r\n");
   const pretty = prettyMessage(HTML);
   expect(pretty).not.toBe(HTML);
   expect(compactMessage(pretty)).toBe(HTML);
@@ -541,12 +526,7 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   // lines, and that indentation is unrecoverable — the write-back leaves the
   // node's own newlines and words exactly as the Pretty view showed rather than
   // eating them with the tag breaks.
-  const HTML = [
-   "HTTP/1.1 200 OK",
-   "Content-Type: text/html",
-   "",
-   "<html><body>hello\nworld</body></html>",
-  ].join("\r\n");
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html><body>hello\nworld</body></html>"].join("\r\n");
   const pretty = prettyMessage(HTML);
   const compacted = compactMessage(pretty);
   // Tag breaks collapsed back to the minified framing…
@@ -554,6 +534,26 @@ describe("compactMessage — the Pretty write-back (burpsy-react-ui-dmf)", () =>
   // …and re-prettifying the write-back is a fixed point, so editing in Pretty
   // never drifts further with each view switch.
   expect(prettyMessage(compacted)).toBe(pretty);
+ });
+
+ test("Pretty markup under a CRLF head breaks with CRLF, so the editor shows it as lines", () => {
+  // The editor splits a CRLF message on CRLF only (lib/editor-eol.ts): bare LF breaks would leave the
+  // whole pretty body on one line. The text node's own LF is the server's byte and stays LF.
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html><body><p>hi\nthere</p></body></html>"].join("\r\n");
+  const pretty = prettyMessage(HTML);
+  const body = parseMessage(pretty).body;
+  expect(body.split("\r\n").length).toBe(5);
+  expect(body).toContain("hi\n");
+  expect(body).not.toContain("hi\r\n");
+  expect(parseMessage(compactMessage(pretty)).body).toBe(parseMessage(compactMessage(prettyMessage(HTML.replace(/\r\n/g, "\n")))).body);
+ });
+
+ test("Pretty markup that already breaks between tags with CRLF still shows as lines, text-node CRLF kept", () => {
+  const HTML = ["HTTP/1.1 200 OK", "Content-Type: text/html", "", "<html>", "<head>", "<title>x</title>", "</head>", "<p>a\r\nb</p></html>"].join("\r\n");
+  const body = parseMessage(prettyMessage(HTML)).body;
+  expect(body.split("\r\n").length).toBeGreaterThanOrEqual(6);
+  expect(body).toContain("<title>x</title>");
+  expect(body).toMatch(/a\r\n\s*b/);
  });
 
  test("a body with nothing formattable passes through untouched", () => {
@@ -578,7 +578,6 @@ describe("hexDumpBytes", () => {
   expect(lines[0]).toBe("00000000  c9 e8 e8 20 63 61 66 65  20 92 93                 |... cafe ..|");
  });
 });
-
 
 describe("moveItem — Inspector reorder (burpsy-react-ui-ybmd)", () => {
  test("a header moves one place and every other byte stays put, mixed line endings included", () => {
@@ -624,5 +623,26 @@ describe("moveItem — Inspector reorder (burpsy-react-ui-ybmd)", () => {
  test("JSON members swap as whole members", () => {
   const raw = 'POST / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"a": 1, "b": "two"}';
   expect(moveItem(raw, "body", 1, -1)).toBe('POST / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"b": "two", "a": 1}');
+ });
+});
+
+describe("Pretty keeps one line separator under a CRLF head (PR 363 review)", () => {
+ const MIXED = 'POST /api HTTP/1.1\r\nHost: h\r\nContent-Type: application/json\r\n\r\n{"a":1,"b":[1,2]}';
+ test("the pretty body uses the head's CRLF, so the editor shows it as lines", () => {
+  const pretty = prettyMessage(MIXED);
+  expect(pretty).not.toBe(MIXED);
+  expect(pretty.replace(/\r\n/g, "")).not.toContain("\n");
+  expect(pretty.split("\r\n").length).toBeGreaterThan(5);
+ });
+ test("it still compacts back to the original bytes", () => {
+  expect(compactMessage(prettyMessage(MIXED))).toBe(MIXED);
+ });
+ test("markup keeps LF so text nodes round-trip (known limit: a CRLF head shows it on one line)", () => {
+  const xml = "POST /x HTTP/1.1\r\nContent-Type: text/xml\r\n\r\n<a><b>1</b></a>";
+  expect(compactMessage(prettyMessage(xml))).toBe(xml);
+ });
+ test("an all-LF message stays LF", () => {
+  const lf = 'POST /api HTTP/1.1\nContent-Type: application/json\n\n{"a":1}';
+  expect(prettyMessage(lf)).not.toContain("\r");
  });
 });

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -364,6 +365,7 @@ func TestStripChunkedMetadataKeepsAChunkedStreamReadable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a strict client could not parse the forwarded response: %v", err)
 			}
+			defer func() { _ = resp.Body.Close() }()
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatalf("a strict client could not read the forwarded body — the framing and the body disagreed: %v", err)
@@ -568,4 +570,107 @@ func startPlainProxy(t *testing.T, store *core.TrafficStore, scope *core.Scope) 
 func httptestServer(t *testing.T, h http.Handler) *http.Server {
 	t.Helper()
 	return &http.Server{Handler: h}
+}
+
+// An upstream that declares a Content-Length and then closes short of it has still
+// answered: OWASP Juice Shop's /ftp/ listing declares 11334 bytes and sends 11275
+// (serve-index mis-frames its own page), so a strict buffered read fails and the old
+// path dropped the whole exchange — the client got an empty reply to a request the
+// origin answered, and history got no row at all. The salvage instead strips the
+// now-false Content-Length, forwards the partial body close-delimited (safe: this
+// leg ends the connection with the response), and records the exchange with a note
+// saying exactly what was lost.
+func TestATruncatedContentLengthResponseIsSalvagedNotDropped(t *testing.T) {
+	body := "<!DOCTYPE html><html><body>partial listing</body></html>"
+	declared := len(body) + 59
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				for {
+					line, err := br.ReadString('\n')
+					if err != nil || line == "\r\n" {
+						break
+					}
+				}
+				fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\n\r\n", declared)
+				if _, err := c.Write([]byte(body)); err != nil {
+					t.Logf("origin body write: %v", err)
+					return
+				}
+				// Close short of the declaration: that is the defect under test.
+			}(conn)
+		}
+	}()
+	origin := ln.Addr().String()
+
+	store := core.NewTrafficStore()
+	_, proxyAddr := startPlainProxy(t, store, testScope())
+
+	conn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /ftp/ HTTP/1.1\r\nHost: %s\r\n\r\n", origin)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	_, _ = got.ReadFrom(conn) // ends when the proxy closes the salvaged response
+	received := got.String()
+
+	if !strings.Contains(received, "HTTP/1.1 200") {
+		t.Fatalf("the client received no status line for a request the origin answered: %q", received)
+	}
+	if !strings.Contains(received, body) {
+		t.Errorf("the partial body the origin sent never reached the client: %q", received)
+	}
+	if strings.Contains(received, "Content-Length:") {
+		t.Errorf("the salvaged response still declares a Content-Length it does not satisfy: %q", received)
+	}
+
+	// Wait for the record: the exchange is written when the salvaged response completes.
+	deadline := time.Now().Add(5 * time.Second)
+	var found *core.Exchange
+	for time.Now().Before(deadline) {
+		for _, ex := range store.Exchanges() {
+			if ex != nil && strings.Contains(ex.Path, "/ftp/") {
+				found = ex
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if found == nil {
+		t.Fatal("no exchange was recorded for the truncated response: the client got bytes and history got nothing")
+	}
+	if found.Notes == nil || !strings.Contains(*found.Notes, "short of its declared Content-Length") {
+		t.Errorf("the recorded exchange does not say the body was truncated; notes = %v", found.Notes)
+	}
+}
+
+// burpsy-react-ui-6858 fix round: the event-stream check reads Content-Type with the strict
+// shape the retired headerValue used.
+func Test_headIsEventStream_ignores_a_padded_content_type(t *testing.T) {
+	if headIsEventStream([]byte("HTTP/1.1 200 OK\r\nContent-Type : text/event-stream\r\n")) {
+		t.Error("a Content-Type padded before its colon was read as an event stream")
+	}
+	if !headIsEventStream([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n")) {
+		t.Error("a plain Content-Type stopped reading as an event stream")
+	}
 }

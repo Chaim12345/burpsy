@@ -1,16 +1,65 @@
-import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import {
+ EditorView,
+ Decoration,
+ ViewPlugin,
+ WidgetType,
+ hoverTooltip,
+ highlightSpecialChars,
+ type DecorationSet,
+ type ViewUpdate,
+} from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
-import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
-import { normalizeEol, realText, realTextOf, reconcile, selectionText, selectionTransformSpec } from "../lib/editor-eol";
-import CodeMirror from "@uiw/react-codemirror";
+import { EditorState, Prec, RangeSetBuilder, Transaction, type Extension } from "@codemirror/state";
+import {
+ documentText,
+ hasMixedLineEndings,
+ lineSeparatorFor,
+ pasteLineBreaks,
+ selectionText,
+ selectionTransformSpec,
+} from "../lib/editor-eol";
+import CodeMirror, { ExternalChange } from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
+import {
+ ClipboardPaste,
+ Copy,
+ Download,
+ MoreHorizontal,
+ Pilcrow,
+ Radar,
+ RadioTower,
+ Search,
+ WrapText,
+ Percent,
+ EyeOff,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
 import {
- breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
- type BodyToken, type TokenClass
+ bodyOf,
+ compactMessage,
+ contentTypeOf,
+ hexDumpBytes,
+ hideHeadersIn,
+ isResponse,
+ parseMessage,
+ prettyMessage,
+ withContentLength,
+ requestTargetPath,
+ cookieHeaderTokens,
+} from "../lib/message";
+import {
+ breakGlyphs,
+ bodyTokens,
+ byteOffsetToCharIndex,
+ charIndexToByteOffset,
+ decodeHoverToken,
+ detectGraphQL,
+ docPosToValuePos,
+ findJwts,
+ paramsOf,
+ type BodyToken,
+ type TokenClass,
 } from "../lib/message-views";
 import { pairSpans } from "../lib/message";
 import {
@@ -44,6 +93,7 @@ import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { extraEditorTabs } from "../lib/editor-extra-tabs";
+import { inlineDiffExtension } from "../lib/inline-diff";
 import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
 import { INTROSPECTION_QUERY, LEGACY_INTROSPECTION_QUERY, setGraphQLQuery } from "../lib/graphql-introspection";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
@@ -99,11 +149,7 @@ const TOKEN_DECORATIONS: Record<TokenClass, Decoration> = {
  * grows no popup that restates itself. Bounded to the body region: hovering a header is not
  * a decode, and the tooltip exists only where the colouring does.
  */
-function hoverDecodeTooltip(
- messageIsResponse: boolean,
- boundary: () => number,
- queryRange: () => { from: number; to: number } | null,
-) {
+function hoverDecodeTooltip(messageIsResponse: boolean, boundary: () => number, queryRange: () => { from: number; to: number } | null) {
  return hoverTooltip((view, pos) => {
   // The body region, or the request line's query: both are decode targets. A header value is
   // neither — Burp decodes parameters and HTML entities, not header bytes — so the gate is a
@@ -122,12 +168,13 @@ function hoverDecodeTooltip(
   const decoded = decodeHoverToken(line.text, token.from - line.from, token.to - line.from, messageIsResponse, contentType);
   if (!decoded) return null;
   return {
-   pos: token.from, create: () => {
+   pos: token.from,
+   create: () => {
     const dom = document.createElement("div");
     dom.className = "cm-hover-decode";
     dom.textContent = decoded;
     return { dom };
-   }
+   },
   };
  });
 }
@@ -359,30 +406,32 @@ class EOLMarker extends WidgetType {
  }
 }
 
-function buildEOLMarkers(view: EditorView, raw: string): DecorationSet {
+function buildEOLMarkers(view: EditorView): DecorationSet {
  const builder = new RangeSetBuilder<Decoration>();
  const doc = view.state.doc;
- const glyphs = breakGlyphs(raw);
+ // Every line of this document ends in the message's separator (EditorState.lineSeparator, set in
+ // markedExtensions), so naming it names every break; a break of another kind inside a line is a
+ // character, drawn by nonPrintingGlyphs.
+ const glyph = breakGlyphs(view.state.lineBreak)[0];
  for (let lineNo = 1; lineNo <= doc.lines; lineNo += 1) {
   const line = doc.line(lineNo);
   // The final line has no break after it (a document ending in a break grows an empty
   // final line instead), so there is nothing to name there.
   if (line.to >= doc.length) break;
-  const glyph = glyphs[lineNo - 1];
   if (glyph) builder.add(line.to, line.to, Decoration.widget({ widget: new EOLMarker(glyph), side: 1 }));
  }
  return builder.finish();
 }
 
-function nonPrintingEOLPlugin(rawRef: { current: string }) {
+function nonPrintingEOLPlugin() {
  return ViewPlugin.fromClass(
   class {
    decorations: DecorationSet;
    constructor(view: EditorView) {
-    this.decorations = buildEOLMarkers(view, rawRef.current);
+    this.decorations = buildEOLMarkers(view);
    }
    update(update: ViewUpdate) {
-    if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view, rawRef.current);
+    if (update.docChanged || update.viewportChanged) this.decorations = buildEOLMarkers(update.view);
    }
   },
   { decorations: (plugin) => plugin.decorations },
@@ -393,37 +442,40 @@ function nonPrintingEOLPlugin(rawRef: { current: string }) {
  * Colours come from CSS custom properties so a single stylesheet drives both
  * themes; CodeMirror's generated rules resolve them at paint time.
  */
-const editorTheme = EditorView.theme({
- "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
- // The editor font family (burpsy-react-ui-mqrn): --editor-font-family when the operator picked a
- // family, else the stylesheet's --font-mono. The content and the gutter read the same property so
- // the line numbers and the bytes stay in one face.
- ".cm-content": { fontFamily: "var(--editor-font-family, var(--font-mono))", padding: "8px 0", caretColor: "var(--accent)" },
- ".cm-gutters": {
-  backgroundColor: "var(--editor-gutter-bg)",
-  color: "var(--editor-gutter-fg)",
-  border: "0",
-  borderRight: "1px solid var(--editor-line)",
-  fontFamily: "var(--editor-font-family, var(--font-mono))",
-  fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
+const editorTheme = EditorView.theme(
+ {
+  "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
+  // The editor font family (burpsy-react-ui-mqrn): --editor-font-family when the operator picked a
+  // family, else the stylesheet's --font-mono. The content and the gutter read the same property so
+  // the line numbers and the bytes stay in one face.
+  ".cm-content": { fontFamily: "var(--editor-font-family, var(--font-mono))", padding: "8px 0", caretColor: "var(--accent)" },
+  ".cm-gutters": {
+   backgroundColor: "var(--editor-gutter-bg)",
+   color: "var(--editor-gutter-fg)",
+   border: "0",
+   borderRight: "1px solid var(--editor-line)",
+   fontFamily: "var(--editor-font-family, var(--font-mono))",
+   fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
+  },
+  ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
+   backgroundColor: "var(--editor-selection)",
+  },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
+  ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
+  ".cm-http-header-name": { color: "var(--editor-header-name)" },
+  ".cm-http-header-value": { color: "var(--editor-header-value)" },
+  ".cm-http-body": { color: "var(--editor-body)" },
+  ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
+  ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
+  ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
+  ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
+  ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
  },
- ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
- ".cm-activeLineGutter": { backgroundColor: "var(--editor-active-line)", color: "var(--editor-fg)" },
- ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, .cm-content ::selection": {
-  backgroundColor: "var(--editor-selection)",
- },
- ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
- ".cm-http-start": { color: "var(--editor-start)", fontWeight: "700" },
- ".cm-http-header-name": { color: "var(--editor-header-name)" },
- ".cm-http-header-value": { color: "var(--editor-header-value)" },
- ".cm-http-body": { color: "var(--editor-body)" },
- ".cm-panels": { backgroundColor: "var(--editor-gutter-bg)", color: "var(--editor-fg)", borderColor: "var(--editor-line)" },
- ".cm-searchMatch": { backgroundColor: "var(--editor-match)", outline: "1px solid var(--editor-match-border)" },
- ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: "var(--editor-match-selected)" },
- ".cm-selectionMatch": { backgroundColor: "var(--editor-match)" },
- ".cm-scroller": { overflow: "auto", lineHeight: "1.55" },
- ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 10px" },
-}, { dark: false });
+ { dark: false },
+);
 
 /**
  * Burp's editor hotkeys, applied to the selection. Bound at high precedence so
@@ -472,9 +524,15 @@ function deleteLine(view: EditorView): boolean {
  const last = state.doc.lineAt(sel.to);
  let from = first.from;
  let to = last.to;
- if (to < state.doc.length) to += 1; // take the line break after
+ if (to < state.doc.length)
+  to += 1; // take the line break after
  else if (from > 0) from -= 1; // last line: take the break before instead
- view.dispatch({ changes: { from, to }, selection: { anchor: Math.min(from, state.doc.length - (to - from)) }, scrollIntoView: true, userEvent: "delete.line" });
+ view.dispatch({
+  changes: { from, to },
+  selection: { anchor: Math.min(from, state.doc.length - (to - from)) },
+  scrollIntoView: true,
+  userEvent: "delete.line",
+ });
  return true;
 }
 
@@ -505,8 +563,8 @@ const burpEditorKeys = Prec.high(
    if (event.altKey && !event.shiftKey && event.code === "KeyC") {
     event.preventDefault();
     const sel = view.state.selection.main;
-    // Real text, CR bytes included (burpsy-react-ui-eslt): the document alone has every CRLF as "\n".
-    const text = sel.empty ? prettyMessage(realTextOf(view.state) ?? view.state.doc.toString()) : selectionText(view.state);
+    // The message's own text, CR bytes included (burpsy-react-ui-elam).
+    const text = sel.empty ? prettyMessage(documentText(view.state)) : selectionText(view.state);
     void copyToClipboard(text).then(() => toast.success(sel.empty ? "Copied the message, prettified" : "Copied the selection"));
     return true;
    }
@@ -636,6 +694,7 @@ export function HttpEditor({
  menuGroups,
  payloadMarks,
  changeMarks,
+ compareWith,
  saveGraphQLToSiteMap,
  auditSelection,
  onBodyBytesChange,
@@ -688,6 +747,13 @@ export function HttpEditor({
   * the wrong thing there.
   */
  changeMarks?: ChangeMark[];
+ /**
+  * The previous response, to lay over this one as an inline diff (burpsy-react-ui-6ibj,
+  * lib/inline-diff.ts). Raw view only, where the document is the message itself; Pretty and the
+  * charset override show a different text, so a diff there would name the wrong lines. Replaces
+  * `changeMarks` while set: the two highlight the same changes in different ways.
+  */
+ compareWith?: string;
  /**
   * Burp's GraphQL > "Save GraphQL queries to site map" (7v1e). Given by a surface that knows the
   * exchange behind the message (Repeater); `enabled` says whether that exchange's response is an
@@ -780,7 +846,9 @@ export function HttpEditor({
  // The search spec this editor last auto-scrolled for. Outside the useMemo because the
  // listener closes over it; per-editor, so two editors do not fight over one marker.
  const lastSearchSpecRef = useRef("");
- const rawTextRef = useRef("");
+ // The text this editor last handed to onChange, and the separator its state was built with.
+ const emittedRef = useRef<string | null>(null);
+ const separatorRef = useRef<"\r\n" | "\r" | "\n">("\n");
  // onRawSelection's inputs, refreshed every render (below, once `active` exists) so the selection
  // listener inside the memoised extensions reads the current callback, view and text.
  const rawSelectionRef = useRef<{
@@ -805,7 +873,7 @@ export function HttpEditor({
     // replace is what "paste the file into this message" means when the message is a draft.
     onChange?.(text);
    };
-   reader.onerror = () => { };
+   reader.onerror = () => {};
   },
   [onChange],
  );
@@ -844,9 +912,6 @@ export function HttpEditor({
     },
    ),
    burpEditorKeys,
-   // The message's real text beside CodeMirror's CR-less document, for every read and write that
-   // must keep its line endings (lib/editor-eol.ts, burpsy-react-ui-eslt).
-   realText.of(rawTextRef),
    EditorView.contentAttributes.of({ "aria-label": label }),
    // Keeps the codec menu entries honest about whether they have anything to act on.
    EditorView.updateListener.of((update) => {
@@ -897,7 +962,7 @@ export function HttpEditor({
    }),
   ];
   if (wrap) base.push(EditorView.lineWrapping);
-  if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
+  if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin());
   // URL-encode as you type (burpsy-react-ui-js1). A transaction filter, added only when the
   // persisted toggle is on: it rewrites the user's typed insert through the same
   // urlEncodeKeyChars the ctrl+U chord uses, so the operator sees %26 land under their cursor
@@ -907,8 +972,7 @@ export function HttpEditor({
    base.push(urlEncodeAsYouTypeExtension());
   }
   return base;
- },
-  [wrap, showNonPrinting, label, urlEncodeAsYouType]);
+ }, [wrap, showNonPrinting, label, urlEncodeAsYouType]);
 
  const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
  const response = useMemo(() => isResponse(value), [value]);
@@ -986,13 +1050,13 @@ export function HttpEditor({
   charsetMode === "utf-8"
    ? "utf-8"
    : charsetMode === "raw-bytes"
-    ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
-    // maps every one of the 256 byte values to its own code point with no loss and no
-    // substitution, which is what "one glyph per byte" actually requires.
-    "iso-8859-1"
-    : charsetMode === "auto"
-     ? headerCharset || "utf-8"
-     : customCharset.trim().toLowerCase();
+     ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
+       // maps every one of the 256 byte values to its own code point with no loss and no
+       // substitution, which is what "one glyph per byte" actually requires.
+       "iso-8859-1"
+     : charsetMode === "auto"
+       ? headerCharset || "utf-8"
+       : customCharset.trim().toLowerCase();
 
  const charsetError =
   charsetMode === "custom" && customCharset.trim() !== "" && !supportsCharset(charsetLabel)
@@ -1105,18 +1169,13 @@ export function HttpEditor({
  const available: MessageView[] = !views
   ? []
   : charsetActive
-   ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
-   // them unchanged while the operator has deliberately asked to view the body under a different
-   // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
-   // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
-   // the same `value`, so they sit this out too.
-   (["raw", "hex"] as MessageView[])
-   : ([
-    ...(canPretty ? ["pretty"] : []),
-    "raw",
-    "hex",
-    ...orderedOptional,
-   ] as MessageView[]);
+    ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
+      // them unchanged while the operator has deliberately asked to view the body under a different
+      // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
+      // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
+      // the same `value`, so they sit this out too.
+      (["raw", "hex"] as MessageView[])
+    : ([...(canPretty ? ["pretty"] : []), "raw", "hex", ...orderedOptional] as MessageView[]);
 
  // Resolve the active view. The "raw" initial state means "the operator has not
  // chosen yet", and for an unchosen editor a formattable body opens on Pretty —
@@ -1131,11 +1190,7 @@ export function HttpEditor({
   pickedRef.current = true;
   setView(candidate);
  }, []);
- const active: MessageView = available.includes(view)
-  ? view
-  : !pickedRef.current && canPretty
-   ? "pretty"
-   : "raw";
+ const active: MessageView = available.includes(view) ? view : !pickedRef.current && canPretty ? "pretty" : "raw";
  // Raw is the one view the charset override actually changes — Hex always shows the true bytes
  // (the override never reaches this variable when active is "hex"), and Pretty/Render/GraphQL/
  // JWT/Params are simply not offered while charsetActive (see `available` above).
@@ -1143,14 +1198,17 @@ export function HttpEditor({
  // button is not offered at all (see the toolbar) and `hiding` stays false either way.
  const hiding = active === "pretty" && hideList.length > 0 && (hidePicked ?? hideHeadersByDefault);
  const shown =
-  active === "pretty" && hiding ? hideHeadersIn(prettied, hideList) : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
- // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
- // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
- // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
- // whole extension set on every keystroke. This must stay outside that useMemo: its factory
- // runs on mount, before this line exists, which is a first-render TDZ crash.
- rawTextRef.current = shown;
- const shownDoc = useMemo(() => normalizeEol(shown), [shown]);
+  active === "pretty" && hiding
+   ? hideHeadersIn(prettied, hideList)
+   : active === "raw" && charsetActive
+     ? (charsetOverride ?? value)
+     : value;
+ // The line separator CodeMirror splits this message on (lib/editor-eol.ts, burpsy-react-ui-elam).
+ // It is fixed when the state is built, so it is re-derived only when the text changed under the
+ // editor (a new message, a tab switch) and never from the operator's own typing: pasting a CRLF
+ // into an LF message must not rebuild the editor and drop the caret and the undo history.
+ if (shown !== emittedRef.current) separatorRef.current = lineSeparatorFor(shown);
+ const separator = separatorRef.current;
  // Raw edits are the bytes; a Pretty edit is the operator editing the readable form, written back
  // through compactMessage so the wire keeps the body compacted exactly as it was
  // (burpsy-react-ui-dmf) — the same deal Burp offers ("In this tab, you can access all the same
@@ -1164,18 +1222,14 @@ export function HttpEditor({
  // turned a CRLF request into an LF one on any edit at all (burpsy-react-ui-eslt). The
  // transactions are replayed onto the real text instead (lib/editor-eol.ts reconcile); only when
  // that text no longer matches the document does the document's string stand in, as it always did.
- const writeDoc = charsetActive
-  ? undefined
-  : active === "pretty" && editable
-   ? "pretty"
-   : active === "raw"
-    ? "raw"
-    : undefined;
+ const writeDoc = charsetActive ? undefined : active === "pretty" && editable ? "pretty" : active === "raw" ? "raw" : undefined;
  const cmOnChange = useMemo(() => {
   if (!writeDoc || !onChange) return undefined;
-  return (doc: string, update: ViewUpdate) => {
-   const next = reconcile(rawTextRef.current, update.transactions) ?? doc;
-   rawTextRef.current = next;
+  return (_doc: string, update: ViewUpdate) => {
+   // sliceDoc joins lines with the state's separator, so the message comes back byte for byte;
+   // the `doc` string the wrapper passes joins with "\n" whatever the separator is.
+   const next = documentText(update.state);
+   emittedRef.current = next;
    onChange(writeDoc === "pretty" ? compactMessage(next) : next);
   };
  }, [writeDoc, onChange]);
@@ -1188,11 +1242,16 @@ export function HttpEditor({
  // The change marks join the extensions only on the unconverted Raw text, where `value` and the
  // document are the same characters (CRLF aside, which changeDecorations maps).
  const markedExtensions = useMemo(() => {
-  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return extensions;
-  const docLength = value.length - (value.match(/\r\n/g)?.length ?? 0);
-  return [...extensions, changeDecorations(value, docLength, changeMarks)];
- }, [extensions, changeMarks, active, charsetActive, value]);
- const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
+  const withSeparator = [...extensions, EditorState.lineSeparator.of(separator), pasteLineBreaks];
+  if (compareWith != null && active === "raw" && !charsetActive) return [...withSeparator, inlineDiffExtension(compareWith, separator)];
+  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return withSeparator;
+  const docLength = value.length - (separator === "\r\n" ? (value.match(/\r\n/g)?.length ?? 0) : 0);
+  return [...withSeparator, changeDecorations(value, docLength, changeMarks)];
+ }, [extensions, changeMarks, compareWith, active, charsetActive, value, separator]);
+ const hexDumpText = useMemo(
+  () => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""),
+  [active, bodyBytes, value],
+ );
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
  // the button the operator just pressed.
@@ -1202,16 +1261,28 @@ export function HttpEditor({
     ? hideHeadersIn(prettied, hideList)
     : prettied
    : active === "hex"
-    ? hexDumpText
-    : active === "raw" && charsetActive
-     ? (charsetOverride ?? value)
-     : value;
+     ? hexDumpText
+     : active === "raw" && charsetActive
+       ? (charsetOverride ?? value)
+       : value;
 
  // A Hex selection handed to the Raw view. The byte range is mapped to a character
  // range on the way, because the two views index the same message differently.
  const cmViewRef = useRef<EditorView | null>(null);
  const [cmEpoch, setCmEpoch] = useState(0);
  const [reveal, setReveal] = useState<{ from: number; to: number } | null>(null);
+ // Keeps the document equal to `shown`. Compared as the message's own text (documentText), so a
+ // CRLF message is not "different" on every render, and written with ExternalChange so the
+ // wrapper does not echo it back through onChange; kept out of undo history, which is the
+ // operator's edits only.
+ useEffect(() => {
+  const cm = cmViewRef.current;
+  if (!cm || documentText(cm.state) === shown) return;
+  cm.dispatch({
+   changes: { from: 0, to: cm.state.doc.length, insert: shown },
+   annotations: [ExternalChange.of(true), Transaction.addToHistory.of(false)],
+  });
+ }, [shown, cmEpoch]);
  useEffect(() => {
   if (!reveal || active !== "raw") return;
   const cm = cmViewRef.current;
@@ -1274,22 +1345,24 @@ export function HttpEditor({
    toast.error("Open the Raw or Pretty view to insert a payload");
    return;
   }
-  mint.mutate({ count: 1 }, {
-   onSuccess: (payload) => {
-    const view = cmViewRef.current;
-    if (!view) return;
-    const sel = view.state.selection.main;
-    view.dispatch({
-     changes: { from: sel.from, to: sel.to, insert: payload.address },
-     selection: { anchor: sel.from + payload.address.length },
-     scrollIntoView: true,
-    });
-    view.focus();
-    toast.success(`Inserted Collaborator payload ${payload.address}`);
+  mint.mutate(
+   { count: 1 },
+   {
+    onSuccess: (payload) => {
+     const view = cmViewRef.current;
+     if (!view) return;
+     const sel = view.state.selection.main;
+     view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: payload.address },
+      selection: { anchor: sel.from + payload.address.length },
+      scrollIntoView: true,
+     });
+     view.focus();
+     toast.success(`Inserted Collaborator payload ${payload.address}`);
+    },
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
    },
-   onError: (failure: unknown) =>
-    toast.error(failure instanceof Error ? failure.message : "Minting a Collaborator payload failed"),
-  });
+  );
  }, [mint]);
 
  const selectionGroups = useMemo<MenuGroup[]>(() => {
@@ -1351,8 +1424,8 @@ export function HttpEditor({
           id: "save-to-sitemap",
           label: saveGraphQLToSiteMap
            ? saveGraphQLToSiteMap.enabled
-             ? "Save GraphQL queries to site map"
-             : "Save GraphQL queries to site map (send an introspection query first)"
+            ? "Save GraphQL queries to site map"
+            : "Save GraphQL queries to site map (send an introspection query first)"
            : "Save GraphQL queries to site map (not available here — use Repeater)",
           disabled: !saveGraphQLToSiteMap?.enabled,
           onSelect: () => saveGraphQLToSiteMap?.run(),
@@ -1446,9 +1519,7 @@ export function HttpEditor({
    {
     id: "construct-string",
     title: "Construct string",
-    actions: (
-     Object.entries(CONSTRUCT_DIALECTS) as [ConstructDialect, string][]
-    ).map(([dialect, label]) =>
+    actions: (Object.entries(CONSTRUCT_DIALECTS) as [ConstructDialect, string][]).map(([dialect, label]) =>
      codec(`construct-${dialect}`, label, "", (input: string) => constructString(input, dialect)),
     ),
    },
@@ -1471,12 +1542,24 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value, views, onChange, saveGraphQLToSiteMap]);
+ }, [
+  active,
+  editable,
+  hasSelection,
+  charsetActive,
+  runTransform,
+  showTransform,
+  insertCollaboratorPayload,
+  mint.isPending,
+  payloadMarks,
+  auditSelection,
+  value,
+  views,
+  onChange,
+  saveGraphQLToSiteMap,
+ ]);
 
- const allGroups = useMemo<MenuGroup[]>(
-  () => [...(menuGroups ?? []), ...selectionGroups],
-  [menuGroups, selectionGroups],
- );
+ const allGroups = useMemo<MenuGroup[]>(() => [...(menuGroups ?? []), ...selectionGroups], [menuGroups, selectionGroups]);
 
  // Burp's EDITOR_TOGGLE_* actions and Insert Collaborator payload (2czi), for whichever message
  // editor the operator used last: an editor takes the commands when focus enters it and holds them
@@ -1515,9 +1598,7 @@ export function HttpEditor({
   if (topEditor === editorToken.current) return;
   for (const off of commandRegistrations.current) off();
   topEditor = editorToken.current;
-  commandRegistrations.current = Object.keys(editorCommands.current).map((id) =>
-   registerCommand(id, () => editorCommands.current[id]?.()),
-  );
+  commandRegistrations.current = Object.keys(editorCommands.current).map((id) => registerCommand(id, () => editorCommands.current[id]?.()));
  }, []);
  useEffect(
   () => () => {
@@ -1590,12 +1671,7 @@ export function HttpEditor({
         // means two sets of merged handlers on the same element. app.tsx's menu bar uses
         // a bare button as its trigger for the same reason. `title` carries the hover
         // text the Tooltip would have.
-        <button
-         type="button"
-         className="icon-button icon-button-sm"
-         aria-label={`Actions for ${label}`}
-         title={`Actions for ${label}`}
-        >
+        <button type="button" className="icon-button icon-button-sm" aria-label={`Actions for ${label}`} title={`Actions for ${label}`}>
          <MoreHorizontal size={13} />
         </button>
        }
@@ -1636,16 +1712,44 @@ export function HttpEditor({
       // screen. A details/summary rather than a Radix popover: the strip is already dense
       // with portaled triggers, and a native disclosure cannot z-fight them.
       <details className="editor-tabs-settings">
-       <summary className="icon-button icon-button-sm" aria-label="Message editor tabs settings" title="Show, hide and reorder this editor's tabs">
+       <summary
+        className="icon-button icon-button-sm"
+        aria-label="Message editor tabs settings"
+        title="Show, hide and reorder this editor's tabs"
+       >
         <SlidersHorizontal size={13} />
        </summary>
        <div className="editor-tabs-settings-panel" role="group" aria-label="Optional tabs">
         <p className="field-hint">Pretty and Raw are always shown — Raw is the bytes themselves.</p>
-        {(["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]).map((tab) => {
+        {(
+         [
+          "render",
+          "graphql",
+          "jwt",
+          "params",
+          "protobuf",
+          "headers",
+          "queryparams",
+          "bodyparams",
+          "cookies",
+          "attributes",
+         ] as OptionalEditorTab[]
+        ).map((tab) => {
          const hidden = editorTabs.hidden.includes(tab);
          const order = editorTabs.order.length
           ? editorTabs.order
-          : (["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+          : ([
+             "render",
+             "graphql",
+             "jwt",
+             "params",
+             "protobuf",
+             "headers",
+             "queryparams",
+             "bodyparams",
+             "cookies",
+             "attributes",
+            ] as OptionalEditorTab[]);
          const at = order.indexOf(tab);
          return (
           <div key={tab} className="editor-tabs-settings-row">
@@ -1654,13 +1758,11 @@ export function HttpEditor({
              type="checkbox"
              checked={!hidden}
              onChange={(event) => {
-              const next = event.target.checked
-               ? editorTabs.hidden.filter((t) => t !== tab)
-               : [...editorTabs.hidden, tab];
+              const next = event.target.checked ? editorTabs.hidden.filter((t) => t !== tab) : [...editorTabs.hidden, tab];
               setEditorTabs({ ...editorTabs, hidden: next });
              }}
-            />
-            {" "}{VIEW_LABELS[tab]}
+            />{" "}
+            {VIEW_LABELS[tab]}
            </label>
            <span className="editor-tabs-settings-move">
             <IconButton
@@ -1769,6 +1871,14 @@ export function HttpEditor({
           controls keep the browser's menu, and the Render view keeps it too — that iframe is
           sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
+   {active === "raw" && !charsetActive && hasMixedLineEndings(shown) ? (
+    <div className="notice" role="note" aria-label="Mixed line endings">
+     <span>
+      Mixed line endings: this message has CRLF and bare LF breaks. Lines of the other kind show joined on one line here. The bytes are
+      unchanged and are sent exactly as they are.
+     </span>
+    </div>
+   ) : null}
    <ContextMenu groups={active === "render" ? [] : allGroups} docTopic="message-editor">
     <div className="editor-body" style={{ height }}>
      {pluginTabs.openKey !== null && pluginTabs.content ? (
@@ -1799,12 +1909,7 @@ export function HttpEditor({
      ) : active === "render" ? (
       // No scripts, no same-origin, no forms: a captured response is attacker
       // controlled and must never run inside the console's own origin.
-      <iframe
-       className="render-frame"
-       title={`${label} rendered`}
-       sandbox=""
-       srcDoc={bodyOf(value)}
-      />
+      <iframe className="render-frame" title={`${label} rendered`} sandbox="" srcDoc={bodyOf(value)} />
      ) : active === "hex" ? (
       <HexEditor
        value={shown}
@@ -1814,25 +1919,29 @@ export function HttpEditor({
        onRevealInRaw={
         views
          ? (selection) => {
-          // Hex indexes bytes; Raw indexes UTF-16 code units over the same
-          // message. The reveal maps the selected byte range to the character
-          // range Raw will scroll to, which is what byteOffsetToCharIndex
-          // exists for — without it a selection past a multibyte character
-          // lands one or more characters off.
-          // Then to CodeMirror's document, which holds one "\n" per CRLF: dispatching the
-          // string index as-is selected one character further right per preceding line
-          // (burpsy-react-ui-ngao).
-          setReveal({
-           from: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.from)),
-           to: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.to)),
-          });
-          pick("raw");
-         }
+            // Hex indexes bytes; Raw indexes UTF-16 code units over the same
+            // message. The reveal maps the selected byte range to the character
+            // range Raw will scroll to, which is what byteOffsetToCharIndex
+            // exists for — without it a selection past a multibyte character
+            // lands one or more characters off.
+            // Then to CodeMirror's document, which holds one "\n" per CRLF: dispatching the
+            // string index as-is selected one character further right per preceding line
+            // (burpsy-react-ui-ngao).
+            setReveal({
+             from: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.from)),
+             to: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.to)),
+            });
+            pick("raw");
+           }
          : undefined
        }
       />
      ) : active === "graphql" && graphql ? (
-      <GraphQLView document={graphql} />
+      <GraphQLView
+       document={graphql}
+       raw={value}
+       onChange={editable && !isResponse(value) ? onChange : undefined}
+      />
      ) : active === "jwt" && jwt ? (
       <JwtView report={jwt} />
      ) : active === "params" && params ? (
@@ -1874,10 +1983,11 @@ export function HttpEditor({
       <AttributesTab raw={value} />
      ) : (
       <CodeMirror
-       // The CR-less form CodeMirror builds its document from anyway. Handing it the CRLF text made
-       // its value sync see a mismatch on every render; with the real text now kept through edits
-       // (cmOnChange) that would replace the whole document, and the caret with it, after each keystroke.
-       value={shownDoc}
+       // The separator is baked into the state, so a different one means a new editor.
+       key={JSON.stringify(separator)}
+       // No `value`: the wrapper compares it with doc.toString(), which joins lines with "\n" whatever
+       // the separator, so a CRLF message would look changed on every render. The document is synced
+       // from `shown` by the effect above, comparing real text (documentText) instead.
        onChange={cmOnChange}
        editable={editable && !charsetActive && !hiding && (active === "raw" || active === "pretty")}
        readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}
@@ -1954,16 +2064,15 @@ export function HttpEditor({
     <div className="editor-note">{charsetError} — showing the platform default instead.</div>
    ) : hiding ? (
     <div className="editor-note">
-     The eye is on: {hideList.length} header name{hideList.length === 1 ? "" : "s"} listed under Settings › Message
-     editor {hideList.length === 1 ? "is" : "are"} hidden here in Pretty. The message itself is unchanged — Raw and
-     everything sent still carry them — but editing is off while they are hidden, because an edit here would be
-     written back against a head missing those lines. Press the eye again to edit.
+     The eye is on: {hideList.length} header name{hideList.length === 1 ? "" : "s"} listed under Settings › Message editor{" "}
+     {hideList.length === 1 ? "is" : "are"} hidden here in Pretty. The message itself is unchanged — Raw and everything sent still carry
+     them — but editing is off while they are hidden, because an edit here would be written back against a head missing those lines. Press
+     the eye again to edit.
     </div>
    ) : charsetActive ? (
     <div className="editor-note">
-     Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the
-     Pretty/Render/GraphQL/JWT/Params views are off while a character set override is active — switch back
-     to "Platform default" to use them again.
+     Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the Pretty/Render/GraphQL/JWT/Params
+     views are off while a character set override is active — switch back to "Platform default" to use them again.
     </div>
    ) : null}
   </div>

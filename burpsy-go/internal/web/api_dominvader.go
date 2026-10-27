@@ -1,10 +1,17 @@
 package web
 
 import (
+	"context"
+	"fmt"
+	"github.com/burpsy-go/burpsy/internal/core"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/dominvader"
 )
@@ -72,9 +79,10 @@ func (s *Server) materialiseDomAuditor() (dir, bypass string, err error) {
 }
 
 type domInvaderView struct {
-	Canary  string            `json:"canary"`
-	Enabled bool              `json:"enabled"`
-	Hits    []*dominvader.Hit `json:"hits"`
+	Pollution dominvader.PollutionConfig `json:"pollution"`
+	Canary    string                     `json:"canary"`
+	Enabled   bool                       `json:"enabled"`
+	Hits      []*dominvader.Hit          `json:"hits"`
 	// ReportURL is where the extension reports, shown so the operator can see the loopback endpoint
 	// the auditor uses. Empty on a server that is not serving.
 	ReportURL string `json:"report_url"`
@@ -90,6 +98,7 @@ func (s *Server) domInvaderView() domInvaderView {
 	}
 	return domInvaderView{
 		Canary:     s.domInvader.Canary(),
+		Pollution:  s.domInvader.Pollution(),
 		Enabled:    s.domInvader.Enabled(),
 		Hits:       hits,
 		ReportURL:  s.domInvaderReportURL(),
@@ -99,8 +108,9 @@ func (s *Server) domInvaderView() domInvaderView {
 
 // domInvaderReq is the request body handleDomInvader decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
 type domInvaderReq struct {
-	Canary  *string `json:"canary"`
-	Enabled *bool   `json:"enabled"`
+	Pollution *dominvader.PollutionConfig `json:"pollution"`
+	Canary    *string                     `json:"canary"`
+	Enabled   *bool                       `json:"enabled"`
 }
 
 // handleDomInvader serves GET/PUT /api/dominvader. riskLocal: it reads and writes burpsy's own
@@ -115,11 +125,43 @@ func (s *Server) handleDomInvader(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `the body must be {"canary"?:"...","enabled"?:bool}`, http.StatusBadRequest)
 			return
 		}
+		if body.Pollution != nil {
+			if err := body.Pollution.Validate(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if body.Pollution.Enabled {
+				u, _ := url.Parse(body.Pollution.Target)
+				port := uint64(80)
+				if u.Scheme == "https" {
+					port = 443
+				}
+				if u.Port() != "" {
+					var err error
+					port, err = strconv.ParseUint(u.Port(), 10, 16)
+					if err != nil || port == 0 {
+						http.Error(w, "invalid target port", http.StatusBadRequest)
+						return
+					}
+				}
+				path := u.EscapedPath()
+				if path == "" {
+					path = "/"
+				}
+				if s.scope == nil || (s.scope.Empty() && !s.scope.AllowAll()) || !s.scope.Contains(u.Hostname(), uint16(port), path, u.Scheme == "https") {
+					http.Error(w, "pollution target is outside current scope; configure matching scope rules or explicitly enable AllowAll", http.StatusForbidden)
+					return
+				}
+			}
+		}
 		if body.Canary != nil {
 			if err := s.domInvader.SetCanary(*body.Canary); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+		}
+		if body.Pollution != nil {
+			_ = s.domInvader.SetPollution(*body.Pollution)
 		}
 		if body.Enabled != nil {
 			s.domInvader.SetEnabled(*body.Enabled)
@@ -136,10 +178,6 @@ func (s *Server) handleDomInvader(w http.ResponseWriter, r *http.Request) {
 // browser reaches directly, and gating it behind a mint the extension cannot perform would only
 // silence the auditor.
 func (s *Server) handleDomInvaderHit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var h dominvader.Hit
 	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
 		http.Error(w, "the body must be one hit object", http.StatusBadRequest)
@@ -155,10 +193,71 @@ func (s *Server) handleDomInvaderHit(w http.ResponseWriter, r *http.Request) {
 
 // handleDomInvaderHits serves DELETE /api/dominvader/hits — clear the list. riskLocal.
 func (s *Server) handleDomInvaderHits(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	s.domInvader.Clear()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// domPollutionGate checks the live engagement scope on EVERY URL, including
+// redirects. The dedicated probe context is not the operator proxy, which only
+// uses scope for recording. Same-origin is an additional restriction, not scope.
+type domPollutionGate struct {
+	scope  *core.Scope
+	origin *url.URL
+}
+
+func (g domPollutionGate) AllowURL(u *url.URL) error {
+	if u.Scheme != g.origin.Scheme || !strings.EqualFold(u.Host, g.origin.Host) {
+		return fmt.Errorf("probe request is outside the selected origin")
+	}
+	if g.scope == nil || (g.scope.Empty() && !g.scope.AllowAll()) || !g.scope.Contains(u.Hostname(), defaultPort(u), u.EscapedPath(), u.Scheme == "https") {
+		return fmt.Errorf("probe request is outside current engagement scope")
+	}
+	return nil
+}
+func (g domPollutionGate) AllowAuthority(host string, port uint16, tls bool) error {
+	if !strings.EqualFold(host, g.origin.Hostname()) || port != defaultPort(g.origin) || tls != (g.origin.Scheme == "https") {
+		return fmt.Errorf("probe tunnel is outside the selected origin")
+	}
+	if g.scope == nil || !g.scope.MayContainHost(host, port, tls) {
+		return fmt.Errorf("probe tunnel is outside current engagement scope")
+	}
+	return nil
+}
+
+// handleDomInvaderScan starts only the finite operator-selected probe plan.
+func (s *Server) handleDomInvaderScan(w http.ResponseWriter, r *http.Request) {
+	p := s.domInvader.Pollution()
+	if !s.domInvader.Enabled() || !p.Enabled {
+		http.Error(w, "turn on the DOM auditor and opt into a pollution plan first", http.StatusConflict)
+		return
+	}
+	if err := p.Validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	u, _ := url.Parse(p.Target)
+	gate := domPollutionGate{s.scope, u}
+	if err := gate.AllowURL(u); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	if s.wiredScanner() == nil || !s.wiredScanner().DOMCapabilityConfigured() {
+		http.Error(w, "no DOM browser is configured", http.StatusServiceUnavailable)
+		return
+	}
+	b, err := s.wiredScanner().BrowserForRender(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	out, err := dominvader.Scan(ctx, b, p, gate)
+	if err != nil {
+		out.Errors = append(out.Errors, err.Error())
+	}
+	for _, h := range out.Hits {
+		s.domInvader.Add(h)
+	}
+	writeJSON(w, http.StatusOK, out)
 }

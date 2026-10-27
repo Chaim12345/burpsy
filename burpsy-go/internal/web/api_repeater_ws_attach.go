@@ -30,6 +30,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -60,10 +62,6 @@ type repeaterWsAttachResp struct {
 
 // handleRepeaterWsAttach writes one frame into a live proxied WebSocket.
 func (s *Server) handleRepeaterWsAttach(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterWsAttachReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -164,4 +162,151 @@ func (s *Server) prepareWsClone(req repeaterWsSendReq, opcode core.WsOpcode) (ws
 	}
 	return wsSendPlan{host: ex.Host, port: ex.Port, tls: ex.TLS, path: path, handshake: handshake,
 		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
+}
+
+// prepareWsEditedHandshake plans a send whose negotiation request the operator edited
+// (burpsy-react-ui-ws3e). The edited head is refreshed through wsclient.CloneHandshake - the same
+// wire invariants a clone gets - so what dials is legal HTTP and a legal upgrade, and what the
+// operator wrote is otherwise exactly what the target reads. The authority never comes from the
+// edited bytes: Socket names a captured connection's target, Target names one outright, and the
+// Host line stays the operator's to change under test. The gate sees the bytes that will go on
+// the wire, refreshed included, because those are the bytes being authorised.
+func (s *Server) prepareWsEditedHandshake(req repeaterWsSendReq, opcode core.WsOpcode) (wsSendPlan, int, error) {
+	if strings.TrimSpace(*req.Handshake) == "" {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("handshake is present but empty: an " +
+			"edited negotiation request must carry the request to dial. To send the captured or " +
+			"synthetic head instead, clear the edit so the field is absent, not empty")
+	}
+	if req.Clone {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("clone replays the captured handshake " +
+			"and handshake replaces it - one send cannot take its negotiation request from two places")
+	}
+	if req.Message != 0 {
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("handshake replaces the negotiation " +
+			"request; message names a frame to resend - give one")
+	}
+	var host string
+	var port uint16
+	var tls bool
+	switch {
+	case req.Socket != nil && req.Target != "":
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("socket and target both name the " +
+			"authority to dial - give one")
+	case req.Socket != nil:
+		id := core.ExchangeID(*req.Socket)
+		ex, err := s.store.GetExchange(id)
+		if err != nil {
+			return wsSendPlan{}, http.StatusNotFound, fmt.Errorf("no WebSocket #%d: %v", id, err)
+		}
+		host, port, tls = ex.Host, ex.Port, ex.TLS
+	case req.Target != "":
+		wsTarget, wsTLS, wsErr := wsSchemeTarget(req.Target)
+		if wsErr != nil {
+			return wsSendPlan{}, http.StatusBadRequest, wsErr
+		}
+		h, p, t, terr := targetParts(wsTarget)
+		if terr != nil {
+			return wsSendPlan{}, http.StatusBadRequest, terr
+		}
+		if wsTLS {
+			t = true
+		}
+		host, port, tls = h, p, t
+	default:
+		return wsSendPlan{}, http.StatusBadRequest, errors.New("an edited handshake still needs the " +
+			"authority to dial: a socket whose target to use, or an explicit target")
+	}
+	handshake, err := wsclient.CloneHandshake([]byte(*req.Handshake))
+	if err != nil {
+		return wsSendPlan{}, http.StatusUnprocessableEntity, fmt.Errorf("the edited handshake cannot go on the wire: %v", err)
+	}
+	if !s.scope.MayContainHost(host, port, tls) {
+		return wsSendPlan{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "", tls))
+	}
+	if aerr := s.scope.AuthoriseRaw(host, port, tls, handshake); aerr != nil {
+		return wsSendPlan{}, http.StatusForbidden, fmt.Errorf("refused: %v", aerr)
+	}
+	// History records the path the wire carried, which the operator may have edited - read it off
+	// the refreshed head, not off the connection the dial authority came from.
+	path := "/"
+	if line, _, ok := strings.Cut(string(handshake), "\r\n"); ok {
+		if parts := strings.SplitN(line, " ", 3); len(parts) == 3 && parts[1] != "" {
+			path = parts[1]
+		}
+	}
+	return wsSendPlan{host: host, port: port, tls: tls, path: path, handshake: handshake,
+		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
+}
+
+// repeaterWsHandshakePreviewResp is the reply of GET /api/repeater/ws-handshake-preview.
+type repeaterWsHandshakePreviewResp struct {
+	// Handshake is the exact head a send would dial with right now - clone-refreshed for a
+	// socket, synthetic for a target - so the negotiation-request editor opens on what WILL be
+	// sent, not on a client-side reconstruction that could drift from it.
+	Handshake string `json:"handshake"`
+	// Source is "clone" (a captured connection's head, refreshed) or "new" (the synthetic head).
+	Source string `json:"source"`
+}
+
+// handleRepeaterWsHandshakePreview serves GET /api/repeater/ws-handshake-preview (burpsy-react-ui-ws3e).
+// It dials nothing and reveals nothing the operator cannot already read in WebSockets history - a
+// captured handshake, or the synthetic one a new connection would send - so it is a read, and the
+// send it prepares for carries its own two scope gates.
+func (s *Server) handleRepeaterWsHandshakePreview(w http.ResponseWriter, r *http.Request) {
+	socketRaw := r.URL.Query().Get("socket")
+	target := r.URL.Query().Get("target")
+	if (socketRaw == "") == (target == "") {
+		http.Error(w, "give socket (a captured connection to preview the clone of) or target "+
+			"(to preview a new connection's head), not both and not neither", http.StatusBadRequest)
+		return
+	}
+	if socketRaw != "" {
+		id64, err := strconv.ParseUint(socketRaw, 10, 63)
+		if err != nil {
+			http.Error(w, "socket must be a WebSocket ID", http.StatusBadRequest)
+			return
+		}
+		ex, err := s.store.GetExchange(core.ExchangeID(id64))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("no WebSocket #%d: %v", id64, err), http.StatusNotFound)
+			return
+		}
+		msg, err := s.store.Get(core.MsgOrZero(ex.Request))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("WebSocket #%d's handshake request could not be read: %v", id64, err),
+				http.StatusNotFound)
+			return
+		}
+		handshake, err := wsclient.CloneHandshake(msg.Raw())
+		if err != nil {
+			http.Error(w, fmt.Sprintf("WebSocket #%d's handshake cannot be replayed: %v", id64, err),
+				http.StatusUnprocessableEntity)
+			return
+		}
+		writeJSON(w, http.StatusOK, repeaterWsHandshakePreviewResp{Handshake: string(handshake), Source: "clone"})
+		return
+	}
+	wsTarget, wsTLS, err := wsSchemeTarget(target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	host, port, tls, err := targetParts(wsTarget)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if wsTLS {
+		tls = true
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = "/"
+	}
+	handshake, err := wsclient.HandshakeRequest(host, port, tls, path, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, repeaterWsHandshakePreviewResp{Handshake: string(handshake), Source: "new"})
 }

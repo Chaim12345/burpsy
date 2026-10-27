@@ -463,10 +463,6 @@ const maxCaptureThreads = 32
 
 // handleSequencerCaptureStart serves POST /api/sequencer/capture, beginning a real capture.
 func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req sequencerCaptureReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -896,7 +892,7 @@ func (c *sequencerCapture) breakdown() dash.Breakdown {
 
 // handleSequencerCapture serves GET /api/sequencer/capture/{id} and POST /api/sequencer/capture/stop.
 func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/sequencer/capture/"), "/")
+	path := strings.TrimSuffix(r.PathValue("rest"), "/")
 	// The guard is per-sub-path because the two sub-paths are different kinds of operation, and one
 	// guard for both would have to be the looser of the two. Stopping a capture changes state, so it
 	// is POST; reading a token list does not, so it is GET. Unguarded, `GET .../stop` answered

@@ -18,28 +18,28 @@
 
 /** One op as /api/tools/compare returns it. Offsets are bytes into the UTF-8 of a and b. */
 export interface CompareOp {
-  kind: "equal" | "replace" | "insert" | "delete";
-  a_offset: number;
-  a_len: number;
-  b_offset: number;
-  b_len: number;
-  uninteresting?: boolean;
+ kind: "equal" | "replace" | "insert" | "delete";
+ a_offset: number;
+ a_len: number;
+ b_offset: number;
+ b_len: number;
+ uninteresting?: boolean;
 }
 
 /** A change to paint on the NEW response, in UTF-16 positions of the message string. */
 export interface ChangeMark {
-  from: number;
-  to: number;
-  /** "changed" spans text that differs or is new; "deleted" is a point where old text was removed. */
-  kind: "changed" | "deleted";
+ from: number;
+ to: number;
+ /** "changed" spans text that differs or is new; "deleted" is a point where old text was removed. */
+ kind: "changed" | "deleted";
 }
 
 /** The UTF-8 byte length of one UTF-16 code unit position's code point, and how many units it uses. */
 function codePointAt(text: string, index: number): { bytes: number; units: number } {
-  const code = text.codePointAt(index) ?? 0;
-  const units = code > 0xffff ? 2 : 1;
-  const bytes = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
-  return { bytes, units };
+ const code = text.codePointAt(index) ?? 0;
+ const units = code > 0xffff ? 2 : 1;
+ const bytes = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+ return { bytes, units };
 }
 
 /**
@@ -48,27 +48,27 @@ function codePointAt(text: string, index: number): { bytes: number; units: numbe
  * never cut through the middle of a code point; an offset past the end maps to text.length.
  */
 export function byteOffsetsToUtf16(text: string, offsets: number[]): number[] {
-  const order = offsets.map((offset, at) => ({ offset, at })).sort((x, y) => x.offset - y.offset);
-  const out = new Array<number>(offsets.length);
-  let unit = 0;
-  let byte = 0;
-  for (const { offset, at } of order) {
-    while (unit < text.length) {
-      const next = codePointAt(text, unit);
-      if (byte + next.bytes > offset) break;
-      byte += next.bytes;
-      unit += next.units;
-    }
-    out[at] = unit;
+ const order = offsets.map((offset, at) => ({ offset, at })).sort((x, y) => x.offset - y.offset);
+ const out = new Array<number>(offsets.length);
+ let unit = 0;
+ let byte = 0;
+ for (const { offset, at } of order) {
+  while (unit < text.length) {
+   const next = codePointAt(text, unit);
+   if (byte + next.bytes > offset) break;
+   byte += next.bytes;
+   unit += next.units;
   }
-  return out;
+  out[at] = unit;
+ }
+ return out;
 }
 
 /** Map a position in the message string to CodeMirror's document, which counts CRLF as one. */
 export function valuePosToDocPos(value: string, pos: number): number {
-  let crlf = 0;
-  for (let at = value.indexOf("\r\n"); at >= 0 && at + 1 < pos; at = value.indexOf("\r\n", at + 2)) crlf++;
-  return pos - crlf;
+ let crlf = 0;
+ for (let at = value.indexOf("\r\n"); at >= 0 && at + 1 < pos; at = value.indexOf("\r\n", at + 2)) crlf++;
+ return pos - crlf;
 }
 
 /**
@@ -77,26 +77,26 @@ export function valuePosToDocPos(value: string, pos: number): number {
  * Comparer's discounted headers) are left unpainted and counted, so the badge can say so.
  */
 export function changeMarksFor(b: string, ops: CompareOp[]): { marks: ChangeMark[]; discounted: number } {
-  const wanted = ops.filter((op) => op.kind !== "equal");
-  const offsets: number[] = [];
-  for (const op of wanted) offsets.push(op.b_offset, op.b_offset + op.b_len);
-  const units = byteOffsetsToUtf16(b, offsets);
-  const marks: ChangeMark[] = [];
-  let discounted = 0;
-  wanted.forEach((op, index) => {
-    if (op.uninteresting) {
-      discounted++;
-      return;
-    }
-    const from = units[index * 2]!;
-    const to = units[index * 2 + 1]!;
-    if (op.kind === "delete" || to <= from) {
-      marks.push({ from, to: from, kind: "deleted" });
-    } else {
-      marks.push({ from, to, kind: "changed" });
-    }
-  });
-  return { marks, discounted };
+ const wanted = ops.filter((op) => op.kind !== "equal");
+ const offsets: number[] = [];
+ for (const op of wanted) offsets.push(op.b_offset, op.b_offset + op.b_len);
+ const units = byteOffsetsToUtf16(b, offsets);
+ const marks: ChangeMark[] = [];
+ let discounted = 0;
+ wanted.forEach((op, index) => {
+  if (op.uninteresting) {
+   discounted++;
+   return;
+  }
+  const from = units[index * 2]!;
+  const to = units[index * 2 + 1]!;
+  if (op.kind === "delete" || to <= from) {
+   marks.push({ from, to: from, kind: "deleted" });
+  } else {
+   marks.push({ from, to, kind: "changed" });
+  }
+ });
+ return { marks, discounted };
 }
 
 /**

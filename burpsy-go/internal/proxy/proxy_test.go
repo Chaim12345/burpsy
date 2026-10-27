@@ -68,6 +68,9 @@ func TestPlainHTTPInterceptionAndPassiveScan(t *testing.T) {
 	client := &http.Client{Transport: &http.Transport{
 		Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: proxyAddr}),
 	}}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 	resp, err := client.Get(fmt.Sprintf("http://%s:%d/", thost, tport))
 	if err != nil {
 		t.Fatalf("request through proxy: %v", err)
@@ -178,6 +181,9 @@ func TestTLSInterceptionMITM(t *testing.T) {
 		Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: proxyAddr}),
 		TLSClientConfig: &tls.Config{RootCAs: pool},
 	}}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 	resp, err := client.Get(fmt.Sprintf("https://%s:%d/", thost, tport))
 	if err != nil {
 		t.Fatalf("https through MITM proxy: %v", err)
@@ -287,6 +293,9 @@ func TestConnectPassthroughBlind(t *testing.T) {
 		Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: proxyAddr}),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // passthrough: client sees the origin's real cert
 	}}
+	// u5jf: close idle transport connections at test end so persist-conn
+	// and relay goroutines cannot outlive the test.
+	t.Cleanup(client.CloseIdleConnections)
 	resp, err := client.Get(fmt.Sprintf("https://%s:%s/", thost, tportStr))
 	if err != nil {
 		t.Fatalf("https through passthrough: %v", err)

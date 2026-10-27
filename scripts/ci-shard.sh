@@ -17,6 +17,9 @@
 #   scanner-rest-0/1  internal/scanner: the other scanner tests, split by measured time
 #   rest              every package except internal/scanner and internal/web
 #   race-web-0/1      internal/web under -race, its tests split in two by index
+#   race-core         internal/proxy, internal/dash and internal/pool under -race, always (bead burpsy-react-ui-8pki:
+#                     the race gate widens one package at a time; add a package here only after it
+#                     has been run clean under -race, and watch this shard's time)
 #
 # There is no plain (non-race) internal/web shard. Until 2026-10-13 a `web` shard ran exactly the
 # tests race-web-0/1 run, only without -race. The race run executes the same tests (internal/web has
@@ -48,12 +51,12 @@
 #                     every package whose tests import one, transitively. A shard whose package is
 #                     not selected runs nothing and says so; rest runs only the selected packages it
 #                     owns. Unset: everything (pushes to master, nightly, Buildkite, local repro).
-#   CI_SHARD_RACE=1   Run every shard under -race (the nightly race matrix). race-web-* always is.
+#   CI_SHARD_RACE=1   Run every shard under -race (the nightly race matrix). race-web-* and race-core always are.
 #   CI_SHARD_GO_TEST_FLAGS  Extra `go test` flags, word-split. go.yml passes -vet=off: its lint job
 #                     runs the full `go vet ./...`, a superset of the vet subset go test re-runs.
 set -euo pipefail
 
-shards=(scanner-budget scanner-detect scanner-rest-0 scanner-rest-1 rest race-web-0 race-web-1)
+shards=(scanner-budget scanner-detect scanner-rest-0 scanner-rest-1 rest race-web-0 race-web-1 race-core)
 usage="usage: ci-shard.sh SHARD | plan SHARD | all | verify   (shards: ${shards[*]})"
 
 verb=run
@@ -70,12 +73,28 @@ cd "$repo/burpsy-go"
 mod=$(go list -m)
 scanner="$mod/internal/scanner"
 web="$mod/internal/web"
+# The packages the race-core shard owns, one per line; every other shard leaves them alone.
+core="$mod/internal/proxy
+$mod/internal/dash
+$mod/internal/pool"
 budget=TestAnAuditSendsProbesAndStaysWithinARequestBudget
 detect=TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
 
 race=()
 timeout=(-timeout 1700s)
+# The scanner suite is wait-bound, not CPU-bound (W11 measurement on backlog-b9: three probe
+# tests at 77-91% idle wall time; the same 10 DOM audits ran in 15.6s at -parallel 8 vs 40.9s at
+# -parallel 1 with unchanged CPU). -parallel defaults to GOMAXPROCS (4 on CI), which throttles a
+# suite that is mostly waiting. 12, not 16: one conservative step, measured, then climb on
+# evidence. Subtests that must stay serial (the stored non-DOM rows of the budget test) never
+# call t.Parallel, so their ordering is unchanged at any -parallel. Flake-watch: timing-sensitive
+# checks (timing SQLi, rate-limit) - a contention flake reverts this.
+parallel=(-parallel 12)
 if [ "${CI_SHARD_RACE:-}" = 1 ]; then
+  # Scanner under -race at raised parallelism is unmeasured (the race evidence covered
+  # internal/web, internal/proxy, internal/dash and internal/pool only), so race-mode shards
+  # keep the default -parallel. Integrator guard for evmi; robust to future workflow edits.
+  parallel=()
   race=(-race)
   # Race-instrumented code runs several times slower; the nightly job's timeout-minutes is the
   # real bound.
@@ -153,7 +172,7 @@ scanner_bin() {
       }'
 }
 
-rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" || true; }
+rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" || true; }
 
 if [ "$verb" = verify ]; then
   # Recompute every shard's selection and compare the union with the module's tests. Compiles the
@@ -176,13 +195,13 @@ if [ "$verb" = verify ]; then
   got=$({ index_names "$web" 2 0; index_names "$web" 2 1; } | sort)
   compare internal/web "$all" "$got"
   every=$(go list ./... | sort)
-  covered=$({ echo "$scanner"; echo "$web"; rest_pkgs; } | sort)
+  covered=$({ echo "$scanner"; echo "$web"; echo "$core"; rest_pkgs; } | sort)
   if [ "$every" != "$covered" ]; then
     echo "ci-shard verify: package coverage differs from go list ./...:" >&2
     diff <(echo "$every") <(echo "$covered") >&2 || true
     rc=1
   else
-    echo "ci-shard verify: $(wc -l <<<"$every") packages: internal/scanner, internal/web and $(rest_pkgs | wc -l) in rest, each in exactly one shard"
+    echo "ci-shard verify: $(wc -l <<<"$every") packages: internal/scanner, internal/web, race-core and $(rest_pkgs | wc -l) in rest, each in exactly one shard"
   fi
   exit $rc
 fi
@@ -195,6 +214,7 @@ esac
 case "$shard" in
   scanner-*) own=$scanner ;;
   race-web-*) own=$web ;;
+  race-core) own=$core ;;
   rest) own="" ;;
 esac
 
@@ -203,11 +223,11 @@ reason=""
 if [ -n "${CI_AFFECTED_BASE:-}" ]; then
   affected=$("$repo/scripts/affected-go-tests.sh" "$CI_AFFECTED_BASE") || { echo "ci-shard: affected-go-tests.sh failed" >&2; exit 1; }
   if [ -z "$own" ]; then
-    selected=$(grep -vxF -e "$scanner" -e "$web" <<<"$affected" || true)
-    reason="no package outside internal/scanner and internal/web is affected by $CI_AFFECTED_BASE...HEAD"
+    selected=$(grep -vxF -e "$scanner" -e "$web" -e "$mod/internal/proxy" -e "$mod/internal/dash" -e "$mod/internal/pool" <<<"$affected" || true)
+    reason="no package outside internal/scanner, internal/web, internal/proxy, internal/dash and internal/pool is affected by $CI_AFFECTED_BASE...HEAD"
   else
     selected=$(grep -xF "$own" <<<"$affected" || true)
-    reason="${own#"$mod"/} is not affected by $CI_AFFECTED_BASE...HEAD (neither changed nor importing a changed package)"
+    reason="$(tr '\n' ' ' <<<"${own//"$mod"\//}")is not affected by $CI_AFFECTED_BASE...HEAD (neither changed nor importing a changed package)"
   fi
 else
   if [ -z "$own" ]; then selected=$(rest_pkgs); else selected=$own; fi
@@ -240,7 +260,7 @@ gotest() { go test -count=1 "${race[@]}" "${extra[@]}" "$@"; }  # not exec: the 
 case "$shard" in
   scanner-budget)
     require_test "$budget"
-    gotest "${timeout[@]}" -run "^${budget}\$" "$scanner"
+    gotest "${timeout[@]}" "${parallel[@]}" -run "^${budget}\$" "$scanner"
     ;;
   scanner-detect|scanner-rest-0|scanner-rest-1)
     require_test "$budget"
@@ -249,9 +269,16 @@ case "$shard" in
     names=$(scanner_bin "$bin") || exit 1
     [ -n "$names" ] || { echo "ci-shard: $shard selected no tests" >&2; exit 1; }
     echo "ci-shard: $shard runs $(wc -l <<<"$names") of internal/scanner's tests${race[*]:+ under -race}"
-    gotest "${timeout[@]}" -run "^($(paste -sd'|' - <<<"$names"))\$" "$scanner"
+    gotest "${timeout[@]}" "${parallel[@]}" -run "^($(paste -sd'|' - <<<"$names"))\$" "$scanner"
     ;;
   rest)
+    # shellcheck disable=SC2086 # one package path per word, by design
+    gotest "${timeout[@]}" $selected
+    ;;
+  race-core)
+    race=(-race)
+    if [ "${CI_SHARD_RACE:-}" != 1 ]; then timeout=(-timeout 900s); fi
+    echo "ci-shard: race-core runs ${selected//"$mod"\//} under -race" | tr '\n' ' '; echo
     # shellcheck disable=SC2086 # one package path per word, by design
     gotest "${timeout[@]}" $selected
     ;;

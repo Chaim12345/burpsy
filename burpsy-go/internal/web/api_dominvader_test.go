@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"github.com/burpsy-go/burpsy/internal/core"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,5 +64,70 @@ func TestDomInvaderSetReportAndRead(t *testing.T) {
 	}
 	if g := get(t, s, "/api/dominvader"); !strings.Contains(g.Body.String(), `"hits":[]`) {
 		t.Errorf("hits not cleared: %s", g.Body.String())
+	}
+}
+
+// c67v: opting into probes requires an explicit technique and a bounded property
+// vocabulary. A rejected combined update must not partly enable instrumentation.
+func TestDomAuditorRefusesInvalidPollutionControlsBeforeChangingState(t *testing.T) {
+	for _, pollution := range []map[string]any{
+		{"enabled": true},
+		{"enabled": true, "query": true, "properties": []string{"__proto__"}},
+		{"enabled": true, "query": true, "properties": []string{"a.b"}},
+	} {
+		s := newTestServer()
+		rec := putJSON(t, s, "/api/dominvader", map[string]any{"enabled": true, "canary": "changed", "pollution": pollution})
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("invalid pollution config accepted: %d %s", rec.Code, rec.Body.String())
+		}
+		if s.domInvader.Enabled() || s.domInvader.Canary() == "changed" {
+			t.Fatal("refused update partly changed the auditor")
+		}
+	}
+}
+
+func TestDomAuditorPollutionPlanDefaultsOffAndRefusesAnOutOfScopeTarget(t *testing.T) {
+	s := newTestServer()
+	s.scope = core.NewScope()
+	s.scope.AddInclude("allowed.example")
+	if rec := get(t, s, "/api/dominvader"); !strings.Contains(rec.Body.String(), `"pollution":{"enabled":false`) {
+		t.Fatalf("pollution must default off: %s", rec.Body.String())
+	}
+	rec := putJSON(t, s, "/api/dominvader", map[string]any{"enabled": true, "pollution": map[string]any{"enabled": true, "query": true, "target": "https://unrelated.example/a", "properties": []string{"transport_url"}}})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope plan: %d %s", rec.Code, rec.Body.String())
+	}
+	if s.domInvader.Enabled() {
+		t.Fatal("scope refusal partly enabled auditor")
+	}
+}
+
+func TestDomAuditorPollutionRefusesUnconfiguredScopeAndAcceptsAnExplicitScope(t *testing.T) {
+	s := newTestServer()
+	body := map[string]any{"pollution": map[string]any{"enabled": true, "query": true, "hash": true, "json": true, "nested": true, "target": "https://allowed.example/a", "properties": []string{"transport_url", "html"}}}
+	if rec := putJSON(t, s, "/api/dominvader", body); rec.Code != http.StatusForbidden {
+		t.Fatalf("empty scope must not enable probes: %d %s", rec.Code, rec.Body.String())
+	}
+	s.scope.AddInclude("allowed.example")
+	if rec := putJSON(t, s, "/api/dominvader", body); rec.Code != http.StatusOK {
+		t.Fatalf("explicit scope refused: %d %s", rec.Code, rec.Body.String())
+	}
+	if !s.domInvader.Config("http://localhost/hit").Pollution.Enabled {
+		t.Fatal("accepted plan never reached browser configuration")
+	}
+	// A malformed combined request does not change an existing plan.
+	if rec := putJSON(t, s, "/api/dominvader", map[string]any{"canary": " ", "pollution": map[string]any{"enabled": false}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid canary accepted: %d", rec.Code)
+	}
+	if !s.domInvader.Pollution().Enabled {
+		t.Fatal("invalid canary partly disabled probes")
+	}
+}
+
+func TestDomAuditorScanRouteRefusesAnOffPlan(t *testing.T) {
+	s := newTestServer()
+	rec := postJSON(t, s, "/api/dominvader/scan", map[string]any{})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("off scan must refuse before browser allocation: %d %s", rec.Code, rec.Body.String())
 	}
 }

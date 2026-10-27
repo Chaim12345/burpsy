@@ -98,10 +98,6 @@ type browserLaunchReq struct {
 // handleBrowserLaunch serves POST /api/browser/launch {url?}. riskEgress: the browser it opens loads
 // the URL through the proxy, which is traffic to a target.
 func (s *Server) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req browserLaunchReq
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 	if len(strings.TrimSpace(string(body))) > 0 {
@@ -195,10 +191,6 @@ func (s *Server) handleBrowserSettings(w http.ResponseWriter, r *http.Request) {
 // handleBrowserClear serves POST /api/browser/clear — Burp's "Clear all browser data". riskDestructive:
 // it deletes the profile's cookies, logins and history, which nothing can bring back.
 func (s *Server) handleBrowserClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	dir, err := s.browserLauncher().ClearData()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)

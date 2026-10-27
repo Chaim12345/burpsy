@@ -14,11 +14,6 @@ import (
 func (s *Server) handleFileLogging(w http.ResponseWriter, r *http.Request) {
 	// Verb dispatch first, as every settings route here does: a wrong verb is 405 whatever the server
 	// carries.
-	if r.Method != http.MethodGet && r.Method != http.MethodPut {
-		w.Header().Set("Allow", "GET, PUT")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
 		if s.fileLog == nil {

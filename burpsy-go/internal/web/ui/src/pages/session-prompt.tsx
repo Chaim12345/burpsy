@@ -88,14 +88,12 @@ export function SessionPromptLayer(): JSX.Element | null {
   >
    <div className="stack">
     <p>
-     <Globe size={14} /> Log in to the application in your browser — the one whose traffic
-     burpsy proxies — then confirm below. The suspended task resumes and the request goes out
-     with the session your browser established.
+     <Globe size={14} /> Log in to the application in your browser — the one whose traffic burpsy proxies — then confirm below. The
+     suspended task resumes and the request goes out with the session your browser established.
     </p>
     <p className="field-hint">
-     The task has been waiting {relativeTime(new Date(prompt.created_at).getTime())}. If you
-     cannot recover the session, decline: the request is not sent, and the rule's trace says
-     the prompt was declined rather than reporting a session that was never established.
+     The task has been waiting {relativeTime(new Date(prompt.created_at).getTime())}. If you cannot recover the session, decline: the
+     request is not sent, and the rule's trace says the prompt was declined rather than reporting a session that was never established.
     </p>
     {error ? <p className="field-hint">{error}</p> : null}
     <div className="inline-add">

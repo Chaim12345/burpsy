@@ -63,7 +63,7 @@ that reflects into HTML on Tomcat or Spring.
 | j1mk.33 (P1) | Active-scan sender ignores `tls.verify=false`; blocks Benchmark v1.2. |
 | j1mk.34 (P1) | Command/code-injection checks fire on unrelated endpoints (30 FPs). |
 | j1mk.35 (P2) | Path traversal 0/12: only the plain `../etc/passwd` probe. |
-| j1mk.36 (P2) | Error SQLi L3–4, open redirect L6–7 missed. |
+| j1mk.36 (P2) | Error SQLi L3–4 fixed; open redirect: L6 verified fixed 2026-10-25 (origin-prefix userinfo payload, dac5bc2e); L7: no cross-origin redirect demonstrated under WHATWG parsing - the value lands after origin+'/' and stays a same-origin path in the tested parser; not a detection gap. |
 | j1mk.37 (P2) | Default config leaves command, LDAP, XPath, path, XXE and redirect checks off. |
 | j1mk.38 (P2) | Move the harness into `scripts/bench/` and run VulnerableApp nightly as a tracked baseline. |
 

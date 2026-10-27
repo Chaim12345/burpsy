@@ -293,8 +293,9 @@ type datasetView struct {
 	SortOrder  string       `json:"sort_order"`
 	Pattern    string       `json:"pattern,omitempty"`
 	Rows       []datasetRow `json:"rows"`
-	// Facets is null unless facets were asked for.
-	Facets []datasetFacet `json:"facets"`
+	// Facets is null unless facets were asked for - a pointer, so the nil-slice normaliser
+	// (burpsy-react-ui-j0s2) cannot turn the deliberate null into an empty list.
+	Facets *[]datasetFacet `json:"facets"`
 	// Status is set for a long-poll only: complete (min_rows reached) or timeout.
 	Status   string `json:"status,omitempty"`
 	WaitedMs int64  `json:"waited_ms,omitempty"`
@@ -525,7 +526,8 @@ func (s *Server) buildDataset(src datasetSource, name, arg string, dq datasetQue
 	}
 	view.Returned = len(view.Rows)
 	if dq.wantFace {
-		view.Facets = facetsOf(matched, dq.facets)
+		facets := facetsOf(matched, dq.facets)
+		view.Facets = &facets
 	}
 	return view, nil
 }
@@ -594,12 +596,7 @@ type datasetSourceInfo struct {
 }
 
 func (s *Server) handleDatasets(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/datasets/"), "/")
+	rest := strings.Trim(r.PathValue("rest"), "/")
 	if rest == "" {
 		listing := datasetListing{Sources: make([]datasetSourceInfo, 0, len(datasetSources))}
 		for _, src := range datasetSources {

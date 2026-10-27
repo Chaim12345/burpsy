@@ -1,0 +1,50 @@
+# golangci-lint v2 configuration for the CI gate (bead burpsy-react-ui-ctdl). Used through
+#   golangci-lint run --config scripts/ci/golangci.yml   (scripts/ci-lint.sh does this).
+#
+# A small bug-finding set, not a style policy. The gate reports NEW issues only: scripts/ci-lint.sh
+# passes --new-from-merge-base (pull requests) or --new-from-rev (pushes), so the findings that
+# already exist in the tree do not fail it, and each touched line has to be clean. The existing
+# findings are a backlog to burn down, not a gate to clear first.
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - staticcheck
+    - errcheck
+    - gosec
+    - bodyclose
+    - ineffassign
+    - misspell
+  settings:
+    errcheck:
+      # Close/flush on things whose error cannot be acted on, and writes to in-memory buffers.
+      exclude-functions:
+        - (*bytes.Buffer).Write
+        - (*bytes.Buffer).WriteString
+        - (*bytes.Buffer).WriteByte
+        - (*bytes.Buffer).WriteRune
+        - (*strings.Builder).Write
+        - (*strings.Builder).WriteString
+        - (*strings.Builder).WriteByte
+        - (*strings.Builder).WriteRune
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # burpsy is a security scanner: it makes outbound requests to operator-chosen URLs, runs
+      # operator-chosen external tools and reads operator-chosen files by design. These gosec rules
+      # describe the product, not a defect. Everything else in gosec stays on.
+      - linters: [gosec]
+        text: "G(107|204|304|306|301|302|303|305|401|501|505|601)"
+      # Tests build fixtures with loose permissions and weak randomness on purpose.
+      - path: _test\.go
+        linters: [gosec]

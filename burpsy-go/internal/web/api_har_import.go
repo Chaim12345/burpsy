@@ -120,10 +120,6 @@ func (r *harImportResult) note(entry int, err error) {
 // to burpsy's own history and sends nothing to any target — the imported requests are not replayed,
 // only recorded, so an unattended caller importing a file is not launching traffic.
 func (s *Server) handleHistoryImportHar(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHARImportBytes))
 	if err != nil {
 		http.Error(w, "the HAR upload could not be read or exceeded the size limit", http.StatusBadRequest)

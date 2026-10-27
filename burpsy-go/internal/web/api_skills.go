@@ -4,7 +4,7 @@ package web
 //
 //	GET /api/skills            the library: every skill, whether it is available and disabled, and
 //	                           every manifest that was refused, with why
-//	GET /api/skills/{name}     one skill with its prompt rendered from ?argument=value
+//	GET /api/skills/{rest...}  one skill with its prompt rendered from ?argument=value
 //	PUT /api/skills/disabled   {"disabled":[names]} — which skills this PROJECT turns off
 //
 // The directory is named by the operator at start (-skills DIR); no route takes a path. The disabled
@@ -75,11 +75,6 @@ func viewOf(sk skills.Skill, disabled map[string]bool) skillView {
 }
 
 func (s *Server) handleSkills(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	names, persisted, derr := s.disabledSkills()
 	view := skillsView{Skills: []skillView{}, Refused: []skills.LoadError{}, Disabled: names, Persisted: persisted}
 	if derr != nil {
@@ -109,12 +104,9 @@ type skillPromptView struct {
 }
 
 func (s *Server) handleSkill(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	name := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/skills/"), "/")
+	// {rest...} is the old subtree remainder, so the bare collection slash, a trailing slash and
+	// a nested path keep the name (and the "No skill named ..." body) the TrimPrefix form gave.
+	name := strings.Trim(r.PathValue("rest"), "/")
 	sk, ok := s.skills.Get(name)
 	if !ok {
 		http.Error(w, "No skill named "+name+" is loaded", http.StatusNotFound)
@@ -154,11 +146,6 @@ type skillsDisabledReq struct {
 }
 
 func (s *Server) handleSkillsDisabled(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		w.Header().Set("Allow", http.MethodPut)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req skillsDisabledReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON {\"disabled\": [names]}", http.StatusBadRequest)

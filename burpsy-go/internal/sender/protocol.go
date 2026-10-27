@@ -62,7 +62,6 @@
 package sender
 
 import (
-	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -72,6 +71,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	"github.com/burpsy-go/burpsy/internal/core"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ProtocolSupport is what this tool knows about one authority's ALPN.
@@ -135,6 +135,13 @@ const (
 	// not write. When the request IS carriable and the target declines h2 at ALPN, the send goes
 	// out as HTTP/1.1 and is reported as a downgrade like every other "h2 did not happen".
 	ProtocolPreferenceForceH2
+	// ProtocolPreferenceHTTP3 pins the send to HTTP/3 over QUIC (burpsy-react-ui-0hgx). It is
+	// never chosen by Auto — h3 needs a UDP round trip that nothing has negotiated for this
+	// target, so the caller asks for it explicitly. The pin is strict: a plaintext target, a
+	// request h3 has nowhere to put, or an endpoint that does not answer QUIC is an error naming
+	// the cause, never a silent downgrade to h1/h2 — silently changing the carrier under an
+	// explicit protocol choice would report as tested over h3 something that never went near it.
+	ProtocolPreferenceHTTP3
 )
 
 // DowngradeReason names why a send went out as HTTP/1.1 rather than HTTP/2.
@@ -434,6 +441,11 @@ type SendOutcome struct {
 	// (SendOptions.H2Sessions, adkx) — so it was NOT the first request on its connection. False for
 	// every fresh dial, which without H2Sessions is every send.
 	ConnectionReused bool
+	// Note is an operator-facing line about a transport accommodation that is not a
+	// downgrade: a Connection header the sender added to a request that had none, a
+	// response body cut at the cap. Empty when the send needed no such word (PR #363
+	// review: an accommodation the record does not mention is one nobody can audit).
+	Note string
 }
 
 // Downgraded reports whether this send went out as HTTP/1.1.
@@ -669,7 +681,7 @@ type h2Plan struct {
 // header section, request line, then fields left to right — so two requests that break the same rule
 // first are reported the same way, and a report is reproducible.
 func planH2(raw []byte) (h2Plan, *Downgrade) {
-	head, body, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	head, body, ok := httputil.CutHead(raw)
 	if !ok {
 		return h2Plan{}, &Downgrade{Reason: DowngradeHeadersNotTerminated}
 	}

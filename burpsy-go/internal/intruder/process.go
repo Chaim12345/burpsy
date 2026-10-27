@@ -68,6 +68,26 @@ type RuleSpec struct {
 	// Form is the normalization form for normalize: nfc, nfd, nfkc, nfkd, fullwidth or homoglyph
 	// (burpsy-react-ui-d617).
 	Form string `json:"form"`
+	// Plugin names a plugin-provided processor for the "plugin" rule (burpsy-react-ui-0qwh):
+	// the plugin's name and its payload-processor registration ID. Compiling it needs a
+	// ProcessorBridge (NewChainWith); with none, construction refuses, the same edge the
+	// unknown-rule refusal sits on.
+	Plugin *PluginRuleRef `json:"plugin"`
+}
+
+// PluginRuleRef addresses one payload-processor registration on one loaded plugin.
+type PluginRuleRef struct {
+	Plugin       string `json:"plugin"`
+	Registration string `json:"registration"`
+}
+
+// ProcessorBridge lets the composition layer (which owns the plugin host) answer a plugin
+// processing rule without internal/intruder importing internal/extension. out replaces the
+// payload; skip drops it. The contract on error is the chain's own: the payload is Dropped
+// with the error named, never silently kept — an operator who asked for a signed payload and
+// got the unsigned original would be attacking with requests they did not write.
+type ProcessorBridge interface {
+	ProcessPayload(plugin, registration string, payload, base []byte) (out []byte, skip bool, err error)
 }
 
 // RuleErrorKind distinguishes the ways a rule can refuse to build.
@@ -154,6 +174,9 @@ type step struct {
 	layerName string
 	pattern   string
 	normForm  NormForm
+	plugin    string
+	regID     string
+	bridge    ProcessorBridge
 }
 
 type stepKind int
@@ -169,6 +192,7 @@ const (
 	stepHash
 	stepSkipIfMatches
 	stepNormalize
+	stepPlugin
 )
 
 // Chain is an ordered chain of processing rules, ready to run.
@@ -180,6 +204,14 @@ type Chain struct {
 // layer and algorithm name resolved here; nothing reaches the per-payload loop uncompiled, and
 // an unparseable pattern is one error at the edge rather than N identical drops.
 func NewChain(specs []RuleSpec) (*Chain, error) {
+	return NewChainWith(specs, nil)
+}
+
+// NewChainWith compiles the chain with a bridge for "plugin" rules. A nil bridge compiles
+// every built-in rule exactly as NewChain always has and refuses a "plugin" rule at
+// construction: a processor the engine cannot reach is a config error, not N dropped
+// payloads the operator has to count.
+func NewChainWith(specs []RuleSpec, bridge ProcessorBridge) (*Chain, error) {
 	steps := make([]step, 0, len(specs))
 	for _, s := range specs {
 		switch s.Rule {
@@ -225,6 +257,14 @@ func NewChain(specs []RuleSpec) (*Chain, error) {
 				return nil, normFormError(s.Form)
 			}
 			steps = append(steps, step{kind: stepNormalize, normForm: f})
+		case "plugin":
+			if s.Plugin == nil || s.Plugin.Plugin == "" || s.Plugin.Registration == "" {
+				return nil, fmt.Errorf("plugin rule needs a plugin name and a registration ID")
+			}
+			if bridge == nil {
+				return nil, fmt.Errorf("plugin rule %q/%q has no processor bridge to reach it", s.Plugin.Plugin, s.Plugin.Registration)
+			}
+			steps = append(steps, step{kind: stepPlugin, plugin: s.Plugin.Plugin, regID: s.Plugin.Registration, bridge: bridge})
 		default:
 			// The Rust tagged enum refuses this at deserialisation; the Go struct cannot,
 			// so the refusal lives here, at construction, where an operator typo is one
@@ -308,6 +348,16 @@ func (c *Chain) Apply(payload []byte) Processed {
 		case stepSkipIfMatches:
 			if st.re.Match(cur) {
 				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d: skipped, matches %s", i, st.pattern)}
+			}
+		case stepPlugin:
+			out, skip, err := st.bridge.ProcessPayload(st.plugin, st.regID, cur, payload)
+			switch {
+			case err != nil:
+				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d (plugin %s): %s", i, st.plugin, err)}
+			case skip:
+				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d (plugin %s): skipped", i, st.plugin)}
+			default:
+				cur = out
 			}
 		}
 		if len(cur) > MaxItemLen {

@@ -4,7 +4,7 @@ import { Kbd } from "./primitives";
 
 /** The DOM id a panel renders under, so the contents row can scroll to it. */
 export function panelAnchor(id: string): string {
-  return `reference-${id}`;
+ return `reference-${id}`;
 }
 
 /**
@@ -21,52 +21,52 @@ export function panelAnchor(id: string): string {
  * table would imply.
  */
 export function ReferencePanelView({
-  panel,
-  /** The modal caller supplies its own dialog title, so it turns this off. */
-  showHeading = true,
+ panel,
+ /** The modal caller supplies its own dialog title, so it turns this off. */
+ showHeading = true,
 }: {
-  panel: ReferencePanel;
-  showHeading?: boolean;
+ panel: ReferencePanel;
+ showHeading?: boolean;
 }): JSX.Element {
-  return (
-    // tabIndex -1 so a documentation link (lib/docs.ts) can move focus here; not in the tab order.
-    <section className="reference-panel" id={panelAnchor(panel.id)} tabIndex={-1} aria-label={panel.title}>
-      {showHeading ? <SectionHeading title={panel.title} detail={panel.summary} /> : null}
+ return (
+  // tabIndex -1 so a documentation link (lib/docs.ts) can move focus here; not in the tab order.
+  <section className="reference-panel" id={panelAnchor(panel.id)} tabIndex={-1} aria-label={panel.title}>
+   {showHeading ? <SectionHeading title={panel.title} detail={panel.summary} /> : null}
 
-      {(panel.blocks ?? []).map((block) => (
-        <div className="reference-block" key={block.label}>
-          <div className="reference-block-label">{block.label}</div>
-          <pre>{block.body}</pre>
-        </div>
-      ))}
+   {(panel.blocks ?? []).map((block) => (
+    <div className="reference-block" key={block.label}>
+     <div className="reference-block-label">{block.label}</div>
+     <pre>{block.body}</pre>
+    </div>
+   ))}
 
-      <dl className="reference-rows">
-        {panel.rows.map((row) => (
-          <div key={row.key ?? row.term}>
-            <dt>
-              {row.keys ? (
-                <span className="reference-keys">
-                  {row.keys.map((key, index) => (
-                    <span key={key}>
-                      {index > 0 ? "+" : null}
-                      <Kbd>{key}</Kbd>
-                    </span>
-                  ))}
-                </span>
-              ) : (
-                row.term
-              )}
-            </dt>
-            <dd>
-              {row.detail}
-              {row.note ? <small className="reference-note">{row.note}</small> : null}
-            </dd>
-          </div>
-        ))}
-      </dl>
+   <dl className="reference-rows">
+    {panel.rows.map((row) => (
+     <div key={row.key ?? row.term}>
+      <dt>
+       {row.keys ? (
+        <span className="reference-keys">
+         {row.keys.map((key, index) => (
+          <span key={key}>
+           {index > 0 ? "+" : null}
+           <Kbd>{key}</Kbd>
+          </span>
+         ))}
+        </span>
+       ) : (
+        row.term
+       )}
+      </dt>
+      <dd>
+       {row.detail}
+       {row.note ? <small className="reference-note">{row.note}</small> : null}
+      </dd>
+     </div>
+    ))}
+   </dl>
 
-      {/* Named so a reader can check the page against the tree rather than trusting it. */}
-      <p className="reference-source">{panel.source}</p>
-    </section>
-  );
+   {/* Named so a reader can check the page against the tree rather than trusting it. */}
+   <p className="reference-source">{panel.source}</p>
+  </section>
+ );
 }

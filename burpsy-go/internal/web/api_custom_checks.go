@@ -91,11 +91,6 @@ func readCheckBody(w http.ResponseWriter, r *http.Request, into any) bool {
 // handleCheckValidate serves POST /api/scanner/checks/validate {source}: Burp's Validate. Always 200
 // with {valid, …} — an invalid draft is the answer, not a bad request.
 func (s *Server) handleCheckValidate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "a check is validated with POST", http.StatusMethodNotAllowed)
-		return
-	}
 	var body checkValidateReq
 	if !readCheckBody(w, r, &body) {
 		return
@@ -142,11 +137,6 @@ func (s *Server) syncCorpus() error {
 
 // handleCheckImport serves POST /api/scanner/checks/import {source, replace}: Burp's Import and Save.
 func (s *Server) handleCheckImport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "a check is imported with POST", http.StatusMethodNotAllowed)
-		return
-	}
 	var body checkImportReq
 	if !readCheckBody(w, r, &body) {
 		return
@@ -175,11 +165,6 @@ func (s *Server) handleCheckImport(w http.ResponseWriter, r *http.Request) {
 // handleCheckSource serves GET and DELETE /api/scanner/checks/source?name=: a check's source for
 // Export and the editor, and Delete for a console check.
 func (s *Server) handleCheckSource(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
-		w.Header().Set("Allow", "GET, DELETE")
-		http.Error(w, "a check's source is read with GET and deleted with DELETE", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.passiveScanner == nil {
 		http.Error(w, "this server has no scanner", http.StatusServiceUnavailable)
 		return
@@ -220,11 +205,6 @@ func (s *Server) handleCheckSource(w http.ResponseWriter, r *http.Request) {
 
 // handleCheckReload serves POST /api/scanner/checks/reload: re-read the --bchecks directory.
 func (s *Server) handleCheckReload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "the directory is reloaded with POST", http.StatusMethodNotAllowed)
-		return
-	}
 	if s.passiveScanner == nil {
 		http.Error(w, "this server has no scanner", http.StatusServiceUnavailable)
 		return
@@ -275,11 +255,6 @@ type checkTestResult struct {
 // handleCheckTest serves POST /api/scanner/checks/test {source, exchange_ids}: Burp's "Run test" —
 // the draft runs against chosen messages exactly as the scanner would run it, and nothing is filed.
 func (s *Server) handleCheckTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "a check is tested with POST", http.StatusMethodNotAllowed)
-		return
-	}
 	var body checkTestReq
 	if !readCheckBody(w, r, &body) {
 		return

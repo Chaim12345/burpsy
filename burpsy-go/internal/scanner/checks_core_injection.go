@@ -200,6 +200,11 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
 // captured body matches outside a shell diagnostic, reported with the engine it names.
 func sqlmapOfflineSignature(body string) (string, bool) {
 	label, _, ok := sqlmapErrorInBody(body)
+	if !ok {
+		// burpsy's ORM/driver bank (v0ei.9) is the same offline read when neither Burp's nor
+		// sqlmap's bank matches: an ORM-relayed error in the captured page.
+		label, ok = ormErrorInBody(body)
+	}
 	return label, ok
 }
 

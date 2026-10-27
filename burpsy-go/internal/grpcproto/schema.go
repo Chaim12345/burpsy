@@ -1,21 +1,22 @@
 package grpcproto
 
-// Name and type resolution from a .proto (burpsy-react-ui-3pco).
+// Name and type resolution from a .proto (burpsy-react-ui-3pco, descriptors since 0rrb).
 //
 // The schemaless walk in grpcproto.go shows `#1 varint 150`; given the message's .proto it can show
-// `user_id (int32) 150`. This file is the schema half: a small .proto parser — enough of proto2/proto3
-// to name the fields of messages, including nested messages, oneofs, maps and enums — and Annotate,
-// which labels a decoded field tree with it.
+// `user_id (int32) 150`. This file is the schema half: the Schema model Annotate labels a decoded
+// field tree with. ParseProto itself lives in descriptor_schema.go and is protocompile since 0rrb:
+// imports resolve against the well-known types (an unresolved import is a hard fail naming its
+// import string - rsu2, the multi-file upload bead, is the planned way to bring the rest of an
+// import graph), groups read, and type references are the linked answer protoc would give.
 //
 // # What is deliberately not here
 //
 //   - gRPC server reflection. It needs a client that connects to the target and asks, which is an
 //     egress surface with its own scoping decision; a pasted .proto is what an operator holding the
-//     API's definition (or a captured copy of it) already has. Reflection is a separate bead.
-//   - imports. An `import` is skipped, so a field whose type lives in another file keeps its declared
-//     type name and the schemaless guess for its contents — named, not expanded.
-//   - extensions and proto2 groups. A group field is refused rather than half-read. Services ARE read,
-//     but only for their rpc signatures: a gRPC call's path (/pkg.Service/Method) then names the
+//     API's definition (or a captured copy of it) already has. Reflection is a separate bead (47id).
+//   - recursion into messages declared outside the parsed file. An imported type keeps its declared
+//     type name and the schemaless guess for its contents - named, not expanded.
+//   - services beyond their rpc signatures: a gRPC call's path (/pkg.Service/Method) names the
 //     request and response message types, so the operator does not have to pick them.
 //
 // # Annotation never changes the bytes
@@ -28,10 +29,16 @@ package grpcproto
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // scalarTypes are the proto scalar type names; anything else a field names is a message or enum.
@@ -73,6 +80,10 @@ type Schema struct {
 	order []string // message full names in source order
 	// rpcs maps a gRPC call path, "/pkg.Service/Method", to its request and response message names.
 	rpcs map[string]rpcDesc
+	// descs carries the protoreflect descriptor behind each message, for the
+	// dynamicpb validation oracle (0rrb 2b): descriptors own presentation and
+	// conformance, protowire owns the bytes.
+	descs map[string]protoreflect.MessageDescriptor
 }
 
 // rpcDesc is one service method's signature, by resolved message full name. A side whose type is not
@@ -147,525 +158,6 @@ func (s *Schema) DefaultMessage() string {
 	return top
 }
 
-// ---- tokenizer ------------------------------------------------------------------------------------
-
-type protoTok struct {
-	kind byte // 'i' ident, 'n' number, 's' string, 'p' punctuation, 0 end
-	text string
-}
-
-// tokenize splits .proto source into identifiers (dotted names stay one token), numbers, strings and
-// single-character punctuation, dropping // and /* */ comments.
-func tokenize(src string) ([]protoTok, error) {
-	var toks []protoTok
-	i := 0
-	for i < len(src) {
-		c := src[i]
-		switch {
-		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
-			i++
-		case c == '/' && i+1 < len(src) && src[i+1] == '/':
-			for i < len(src) && src[i] != '\n' {
-				i++
-			}
-		case c == '/' && i+1 < len(src) && src[i+1] == '*':
-			end := strings.Index(src[i+2:], "*/")
-			if end < 0 {
-				return nil, fmt.Errorf("proto: unterminated /* comment")
-			}
-			i += 2 + end + 2
-		case c == '"' || c == '\'':
-			j := i + 1
-			for j < len(src) && src[j] != c {
-				if src[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			if j >= len(src) {
-				return nil, fmt.Errorf("proto: unterminated string literal")
-			}
-			toks = append(toks, protoTok{'s', src[i+1 : j]})
-			i = j + 1
-		case isIdentStart(c) || (c == '.' && i+1 < len(src) && isIdentStart(src[i+1])):
-			j := i + 1
-			for j < len(src) && (isIdentStart(src[j]) || (src[j] >= '0' && src[j] <= '9') || src[j] == '.') {
-				j++
-			}
-			toks = append(toks, protoTok{'i', src[i:j]})
-			i = j
-		case c >= '0' && c <= '9':
-			j := i + 1
-			for j < len(src) && (isIdentStart(src[j]) || (src[j] >= '0' && src[j] <= '9') || src[j] == '.') {
-				j++
-			}
-			toks = append(toks, protoTok{'n', src[i:j]})
-			i = j
-		default:
-			toks = append(toks, protoTok{'p', string(c)})
-			i++
-		}
-	}
-	return toks, nil
-}
-
-func isIdentStart(c byte) bool {
-	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-// ---- parser ---------------------------------------------------------------------------------------
-
-type protoParser struct {
-	toks   []protoTok
-	pos    int
-	schema *Schema
-	// fields holds each message's declared fields before type resolution, which has to wait until
-	// every message and enum is known (a field may name a type declared later in the file).
-	pending []*pendingMsg
-	rpcs    []pendingRPC
-}
-
-// pendingRPC is an rpc signature before its type names are resolved.
-type pendingRPC struct {
-	path    string
-	in, out string
-}
-
-type pendingMsg struct {
-	desc   *messageDesc
-	fields []pendingField
-}
-
-type pendingField struct {
-	number int
-	desc   *fieldDesc
-	// mapKey/mapVal are set for a map<K,V> field.
-	mapKey, mapVal string
-}
-
-func (p *protoParser) peek() protoTok {
-	if p.pos >= len(p.toks) {
-		return protoTok{}
-	}
-	return p.toks[p.pos]
-}
-
-func (p *protoParser) next() protoTok {
-	t := p.peek()
-	if p.pos < len(p.toks) {
-		p.pos++
-	}
-	return t
-}
-
-func (p *protoParser) expect(kind byte, text string) error {
-	t := p.next()
-	if t.kind != kind || (text != "" && t.text != text) {
-		want := text
-		if want == "" {
-			want = string(kind)
-		}
-		return fmt.Errorf("proto: expected %q, found %q", want, t.text)
-	}
-	return nil
-}
-
-// skipStatement advances past the next ';' at brace/bracket depth zero — an option's value may itself
-// be a {...} aggregate containing semicolons-free braces.
-func (p *protoParser) skipStatement() {
-	depth := 0
-	for p.pos < len(p.toks) {
-		t := p.next()
-		if t.kind != 'p' {
-			continue
-		}
-		switch t.text {
-		case "{", "[":
-			depth++
-		case "}", "]":
-			depth--
-		case ";":
-			if depth <= 0 {
-				return
-			}
-		}
-	}
-}
-
-// skipBlock advances past a balanced { ... } whose opening brace is the next token (or is found
-// before any other statement end), for services and extend blocks this parser does not read.
-func (p *protoParser) skipBlock() {
-	for p.pos < len(p.toks) && p.peek().text != "{" {
-		p.pos++
-	}
-	depth := 0
-	for p.pos < len(p.toks) {
-		t := p.next()
-		if t.kind == 'p' && t.text == "{" {
-			depth++
-		}
-		if t.kind == 'p' && t.text == "}" {
-			depth--
-			if depth == 0 {
-				return
-			}
-		}
-	}
-}
-
-// ParseProto parses .proto source into a Schema. It reads proto2 and proto3 message and enum
-// declarations and refuses what it cannot read faithfully (a group field), rather than returning a
-// schema that silently names the wrong fields.
-func ParseProto(src string) (*Schema, error) {
-	toks, err := tokenize(src)
-	if err != nil {
-		return nil, err
-	}
-	p := &protoParser{toks: toks, schema: &Schema{msgs: map[string]*messageDesc{}, enums: map[string]*enumDesc{}, rpcs: map[string]rpcDesc{}}}
-	for p.pos < len(p.toks) {
-		t := p.peek()
-		switch {
-		case t.kind == 'p' && t.text == ";":
-			p.next()
-		case t.kind == 'i' && t.text == "syntax", t.kind == 'i' && t.text == "import", t.kind == 'i' && t.text == "option":
-			p.skipStatement()
-		case t.kind == 'i' && t.text == "package":
-			p.next()
-			name := p.next()
-			if name.kind != 'i' {
-				return nil, fmt.Errorf("proto: package needs a name")
-			}
-			p.schema.pkg = name.text
-			p.skipStatement()
-		case t.kind == 'i' && t.text == "message":
-			p.next()
-			if err := p.parseMessage(p.schema.pkg); err != nil {
-				return nil, err
-			}
-		case t.kind == 'i' && t.text == "enum":
-			p.next()
-			if err := p.parseEnum(p.schema.pkg); err != nil {
-				return nil, err
-			}
-		case t.kind == 'i' && t.text == "service":
-			p.next()
-			if err := p.parseService(); err != nil {
-				return nil, err
-			}
-		case t.kind == 'i' && t.text == "extend":
-			p.next()
-			p.skipBlock()
-		default:
-			return nil, fmt.Errorf("proto: unexpected %q at the top level", t.text)
-		}
-	}
-	if len(p.schema.order) == 0 {
-		return nil, fmt.Errorf("proto: no message declared")
-	}
-	p.resolve()
-	return p.schema, nil
-}
-
-// parseService reads `service Name { rpc M (Req) returns (Resp); ... }`, keeping each rpc's signature
-// under its gRPC call path. Streaming markers are accepted and ignored: a stream carries the same
-// message type per frame, which is what the decoder needs. Options and rpc bodies are skipped.
-func (p *protoParser) parseService() error {
-	nameTok := p.next()
-	if nameTok.kind != 'i' {
-		return fmt.Errorf("proto: service needs a name")
-	}
-	if err := p.expect('p', "{"); err != nil {
-		return err
-	}
-	service := qualify(p.schema.pkg, nameTok.text)
-	for {
-		t := p.next()
-		switch {
-		case t.kind == 0:
-			return fmt.Errorf("proto: service %s is not closed", nameTok.text)
-		case t.kind == 'p' && t.text == "}":
-			return nil
-		case t.kind == 'p' && t.text == ";":
-		case t.kind == 'i' && t.text == "rpc":
-			method := p.next()
-			in, err := p.rpcType()
-			if err != nil {
-				return fmt.Errorf("proto: rpc %s: %w", method.text, err)
-			}
-			if r := p.next(); r.text != "returns" {
-				return fmt.Errorf("proto: rpc %s: expected returns, found %q", method.text, r.text)
-			}
-			out, err := p.rpcType()
-			if err != nil {
-				return fmt.Errorf("proto: rpc %s: %w", method.text, err)
-			}
-			p.rpcs = append(p.rpcs, pendingRPC{path: "/" + service + "/" + method.text, in: in, out: out})
-			// Either `;` or an options body `{ option ...; }`.
-			if p.peek().kind == 'p' && p.peek().text == "{" {
-				p.skipBlock()
-			} else if p.peek().kind == 'p' && p.peek().text == ";" {
-				p.next()
-			}
-		default:
-			p.skipStatement() // option, or anything else this parser does not read
-		}
-	}
-}
-
-// rpcType reads `( [stream] Type )`.
-func (p *protoParser) rpcType() (string, error) {
-	if err := p.expect('p', "("); err != nil {
-		return "", err
-	}
-	t := p.next()
-	if t.kind == 'i' && t.text == "stream" {
-		t = p.next()
-	}
-	if t.kind != 'i' {
-		return "", fmt.Errorf("expected a message type, found %q", t.text)
-	}
-	if err := p.expect('p', ")"); err != nil {
-		return "", err
-	}
-	return t.text, nil
-}
-
-func qualify(scope, name string) string {
-	if scope == "" {
-		return name
-	}
-	return scope + "." + name
-}
-
-func (p *protoParser) parseEnum(scope string) error {
-	nameTok := p.next()
-	if nameTok.kind != 'i' {
-		return fmt.Errorf("proto: enum needs a name")
-	}
-	if err := p.expect('p', "{"); err != nil {
-		return err
-	}
-	enum := &enumDesc{full: qualify(scope, nameTok.text), values: map[int64]string{}}
-	for {
-		t := p.next()
-		switch {
-		case t.kind == 0:
-			return fmt.Errorf("proto: enum %s is not closed", nameTok.text)
-		case t.kind == 'p' && t.text == "}":
-			p.schema.enums[enum.full] = enum
-			return nil
-		case t.kind == 'i' && (t.text == "option" || t.text == "reserved"):
-			p.skipStatement()
-		case t.kind == 'i':
-			if err := p.expect('p', "="); err != nil {
-				return err
-			}
-			sign := int64(1)
-			if p.peek().kind == 'p' && p.peek().text == "-" {
-				p.next()
-				sign = -1
-			}
-			num := p.next()
-			v, err := strconv.ParseInt(num.text, 0, 64)
-			if err != nil {
-				return fmt.Errorf("proto: enum value %s = %q is not an integer", t.text, num.text)
-			}
-			if _, dup := enum.values[sign*v]; !dup { // an alias keeps the first name
-				enum.values[sign*v] = t.text
-			}
-			p.skipStatement()
-		}
-	}
-}
-
-func (p *protoParser) parseMessage(scope string) error {
-	nameTok := p.next()
-	if nameTok.kind != 'i' {
-		return fmt.Errorf("proto: message needs a name")
-	}
-	if err := p.expect('p', "{"); err != nil {
-		return err
-	}
-	desc := &messageDesc{full: qualify(scope, nameTok.text), fields: map[int]*fieldDesc{}}
-	pm := &pendingMsg{desc: desc}
-	p.schema.msgs[desc.full] = desc
-	p.schema.order = append(p.schema.order, desc.full)
-	p.pending = append(p.pending, pm)
-
-	for {
-		t := p.peek()
-		switch {
-		case t.kind == 0:
-			return fmt.Errorf("proto: message %s is not closed", nameTok.text)
-		case t.kind == 'p' && t.text == "}":
-			p.next()
-			return nil
-		case t.kind == 'p' && t.text == ";":
-			p.next()
-		case t.kind == 'i' && t.text == "message":
-			p.next()
-			if err := p.parseMessage(desc.full); err != nil {
-				return err
-			}
-		case t.kind == 'i' && t.text == "enum":
-			p.next()
-			if err := p.parseEnum(desc.full); err != nil {
-				return err
-			}
-		case t.kind == 'i' && (t.text == "option" || t.text == "reserved" || t.text == "extensions"):
-			p.skipStatement()
-		case t.kind == 'i' && t.text == "extend":
-			p.next()
-			p.skipBlock()
-		case t.kind == 'i' && t.text == "oneof":
-			p.next()
-			p.next() // the oneof's name; its members are ordinary fields of the message
-			if err := p.expect('p', "{"); err != nil {
-				return err
-			}
-			for p.peek().kind != 0 && !(p.peek().kind == 'p' && p.peek().text == "}") {
-				if p.peek().kind == 'i' && p.peek().text == "option" {
-					p.skipStatement()
-					continue
-				}
-				if err := p.parseField(pm, false); err != nil {
-					return err
-				}
-			}
-			p.next() // }
-		default:
-			if err := p.parseField(pm, true); err != nil {
-				return err
-			}
-		}
-	}
-}
-
-// parseField reads one `[label] type name = N [options];` (or a map field), appending it to pm.
-// labels is false inside a oneof, where none is allowed.
-func (p *protoParser) parseField(pm *pendingMsg, labels bool) error {
-	repeated := false
-	if t := p.peek(); labels && t.kind == 'i' && (t.text == "repeated" || t.text == "optional" || t.text == "required") {
-		repeated = t.text == "repeated"
-		p.next()
-	}
-	typ := p.next()
-	if typ.kind != 'i' {
-		return fmt.Errorf("proto: expected a field type, found %q", typ.text)
-	}
-	if typ.text == "group" {
-		return fmt.Errorf("proto: group fields are not supported")
-	}
-	pf := pendingField{desc: &fieldDesc{repeated: repeated}}
-	if typ.text == "map" && p.peek().kind == 'p' && p.peek().text == "<" {
-		p.next()
-		key, comma, valTok := p.next(), p.next(), p.next()
-		if key.kind != 'i' || comma.kind != 'p' || comma.text != "," || valTok.kind != 'i' {
-			return fmt.Errorf("proto: malformed map field")
-		}
-		if err := p.expect('p', ">"); err != nil {
-			return err
-		}
-		pf.mapKey, pf.mapVal = key.text, valTok.text
-		pf.desc.isMap = true
-		pf.desc.repeated = true
-		pf.desc.typeName = "map<" + key.text + "," + valTok.text + ">"
-	} else {
-		pf.desc.typeName = typ.text
-	}
-	nameTok := p.next()
-	if nameTok.kind != 'i' {
-		return fmt.Errorf("proto: expected a field name after %q, found %q", typ.text, nameTok.text)
-	}
-	pf.desc.name = nameTok.text
-	if err := p.expect('p', "="); err != nil {
-		return err
-	}
-	num := p.next()
-	n, err := strconv.Atoi(num.text)
-	if err != nil || n <= 0 {
-		return fmt.Errorf("proto: field %s has the invalid number %q", nameTok.text, num.text)
-	}
-	pf.number = n
-	p.skipStatement()
-	pm.fields = append(pm.fields, pf)
-	return nil
-}
-
-// resolve links every field's type to a message or enum declared in the schema, and builds the
-// synthetic entry message of each map field. Run after the whole file is read, because a field may
-// name a type declared below it.
-func (p *protoParser) resolve() {
-	for _, pm := range p.pending {
-		for _, pf := range pm.fields {
-			fd := pf.desc
-			if fd.isMap {
-				entry := &messageDesc{full: pm.desc.full + "." + fd.name + "Entry", fields: map[int]*fieldDesc{
-					1: {name: "key", typeName: pf.mapKey},
-					2: {name: "value", typeName: pf.mapVal},
-				}}
-				p.link(entry.fields[2], pm.desc.full)
-				fd.msg = entry
-			} else {
-				p.link(fd, pm.desc.full)
-			}
-			pm.desc.fields[pf.number] = fd
-		}
-	}
-	// An rpc type resolves exactly as a field type does, from the package scope outward.
-	for _, r := range p.rpcs {
-		p.schema.rpcs[r.path] = rpcDesc{in: p.resolveMessageName(r.in), out: p.resolveMessageName(r.out)}
-	}
-}
-
-// resolveMessageName is link() for an rpc signature: the full name of the message typeName refers to
-// from the package scope, or "" when this file does not declare it.
-func (p *protoParser) resolveMessageName(typeName string) string {
-	fd := &fieldDesc{typeName: typeName}
-	p.link(fd, p.schema.pkg)
-	if fd.msg == nil {
-		return ""
-	}
-	return fd.msg.full
-}
-
-// link resolves fd.typeName against the scope it was declared in, innermost scope outward, the way
-// protoc does (an absolute name starts with a dot).
-func (p *protoParser) link(fd *fieldDesc, scope string) {
-	if scalarTypes[fd.typeName] {
-		return
-	}
-	if strings.HasPrefix(fd.typeName, ".") {
-		p.bind(fd, strings.TrimPrefix(fd.typeName, "."))
-		return
-	}
-	for {
-		if p.bind(fd, qualify(scope, fd.typeName)) {
-			return
-		}
-		if scope == "" {
-			return
-		}
-		if i := strings.LastIndex(scope, "."); i >= 0 {
-			scope = scope[:i]
-		} else {
-			scope = ""
-		}
-	}
-}
-
-func (p *protoParser) bind(fd *fieldDesc, full string) bool {
-	if m, ok := p.schema.msgs[full]; ok {
-		fd.msg = m
-		return true
-	}
-	if e, ok := p.schema.enums[full]; ok {
-		fd.enum = e
-		return true
-	}
-	return false
-}
-
 // ---- annotation -----------------------------------------------------------------------------------
 
 // Annotate labels fields with the names and declared types of the message called root in the schema,
@@ -684,6 +176,37 @@ func (s *Schema) Annotate(fields []Field, root string) ([]Field, error) {
 	return annotate(fields, md), nil
 }
 
+// Validate is the dynamicpb oracle (0rrb 2b, integrator ruling (a)+(b)): it reads
+// raw as the message called root and refuses what the declared schema cannot
+// hold and the raw protowire walk skims past - invalid UTF-8 in a declared
+// string, a missing proto2 required field. It writes nothing and presents
+// nothing: the field tree still comes from the byte-exact protowire walk. A
+// body that fails here is not the message the schema declares (or the schema is
+// stale); the caller reports the mismatch honestly rather than presenting a
+// skimmed tree as conforming.
+//
+// A wire type that does not match the declaration is deliberately NOT refused:
+// protobuf's unmarshal carries it as an unknown field by spec, so a body from a
+// newer schema version still validates. Pinned in validate_test.go.
+func (s *Schema) Validate(root string, raw []byte) error {
+	md, hits := s.lookup(root)
+	if md == nil {
+		if len(hits) > 1 {
+			sort.Strings(hits)
+			return fmt.Errorf("message %q is ambiguous: %s", root, strings.Join(hits, ", "))
+		}
+		return fmt.Errorf("no message named %q in the schema", root)
+	}
+	desc := s.descs[md.full]
+	if desc == nil {
+		return fmt.Errorf("no descriptor for %q", md.full)
+	}
+	if err := proto.Unmarshal(raw, dynamicpb.NewMessage(desc)); err != nil {
+		return fmt.Errorf("%s: %w", md.full, err)
+	}
+	return nil
+}
+
 func annotate(fields []Field, md *messageDesc) []Field {
 	out := make([]Field, len(fields))
 	for i, f := range fields {
@@ -698,6 +221,7 @@ func annotate(fields []Field, md *messageDesc) []Field {
 		case f.WireType == wireVarint && fd.enum != nil:
 			if v, err := strconv.ParseUint(f.Varint, 10, 64); err == nil {
 				// The wire carries an enum as a (possibly negative) int32 widened to 64 bits.
+				//nolint:gosec // G115: intentional exact inverse of the canonical encoding - encoders write a negative enum as its int32 number sign-extended to 64 bits (protobuf.dev "Signed Integers"; protobuf-go appendEnumValue), so int64(v) recovers exactly a declared number and nothing else. Over-long or undeclared values match no name and the raw decimal stands. Pinned in schema_test.go.
 				if name, ok := fd.enum.values[int64(v)]; ok {
 					f.EnumName = name
 				}
@@ -740,6 +264,14 @@ func lenBytes(f Field) []byte {
 func reclassify(f Field, fd *fieldDesc) Field {
 	payload := lenBytes(f)
 	switch {
+	case fd.repeated && fd.msg == nil && packedKind(fd) != "":
+		// A proto3 repeated numeric scalar rides packed: one length-delimited
+		// field holding the values back to back. The values are read into
+		// Packed as presentation; the field's own bytes are untouched, so the
+		// tree encodes to exactly what it was.
+		if values, ok := decodePacked(payload, fd); ok {
+			f.Packed = values
+		}
 	case fd.msg != nil:
 		if sub, n, err := decodeMessage(payload); err == nil && n == len(payload) {
 			f.LenKind, f.String, f.BytesHex = LenMessage, "", ""
@@ -755,4 +287,71 @@ func reclassify(f Field, fd *fieldDesc) Field {
 		f.BytesHex = hex.EncodeToString(payload)
 	}
 	return f
+}
+
+// packedKind classifies a declared repeated field's element for packed reading:
+// "varint", "fixed32", "fixed64", or "" for a kind that never packs (string,
+// bytes, message).
+func packedKind(fd *fieldDesc) string {
+	if fd.enum != nil {
+		return "varint"
+	}
+	switch fd.typeName {
+	case "int32", "int64", "uint32", "uint64", "sint32", "sint64", "bool":
+		return "varint"
+	case "fixed32", "sfixed32", "float":
+		return "fixed32"
+	case "fixed64", "sfixed64", "double":
+		return "fixed64"
+	}
+	return ""
+}
+
+// decodePacked reads a packed payload into the element values as decimal (or
+// enum-named, or float) strings. It returns false on any truncation: a partial
+// element means the payload is not what the schema declares, and the schemaless
+// guess stands - the same honesty rule reclassify's other branches follow.
+func decodePacked(payload []byte, fd *fieldDesc) ([]string, bool) {
+	var values []string
+	format := func(v uint64) string {
+		switch {
+		case fd.enum != nil:
+			//nolint:gosec // G115: same intentional inverse-of-sign-extension as the scalar enum path in annotate - only an exact declared number names, anything else stands as decimal. Pinned in packed_test.go.
+			if name, ok := fd.enum.values[int64(v)]; ok {
+				return name
+			}
+			return strconv.FormatUint(v, 10)
+		case fd.typeName == "sint32" || fd.typeName == "sint64":
+			return strconv.FormatInt(protowire.DecodeZigZag(v), 10)
+		case fd.typeName == "bool":
+			return strconv.FormatBool(protowire.DecodeBool(v))
+		case fd.typeName == "float":
+			//nolint:gosec // G115: lossless round trip - packedKind maps float to the "fixed32" path, whose protowire.ConsumeFixed32 zero-extends a uint32 into v, so uint32(v) drops no bits. Pinned in packed_test.go.
+			return strconv.FormatFloat(float64(math.Float32frombits(uint32(v))), 'g', -1, 32)
+		case fd.typeName == "double":
+			return strconv.FormatFloat(math.Float64frombits(v), 'g', -1, 64)
+		default:
+			return strconv.FormatUint(v, 10)
+		}
+	}
+	for len(payload) > 0 {
+		var v uint64
+		var n int
+		switch packedKind(fd) {
+		case "varint":
+			v, n = protowire.ConsumeVarint(payload)
+		case "fixed32":
+			var u32 uint32
+			u32, n = protowire.ConsumeFixed32(payload)
+			v = uint64(u32)
+		case "fixed64":
+			v, n = protowire.ConsumeFixed64(payload)
+		}
+		if n < 0 {
+			return nil, false
+		}
+		values = append(values, format(v))
+		payload = payload[n:]
+	}
+	return values, true
 }

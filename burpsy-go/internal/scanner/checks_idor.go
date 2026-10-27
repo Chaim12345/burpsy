@@ -101,15 +101,26 @@ func brokenAccessControlOrIDOR(bac CheckRunner) CheckRunner {
 		if idorEnabled(cc.Config) {
 			idorF, idorErr = checkIDOR(ctx, cc)
 		}
-		switch {
-		case len(idorF) > 0:
-			return append(bacF, idorF...), nil
-		case bacErr != nil:
-			return bacF, bacErr
-		case idorErr != nil:
-			return nil, idorErr
+		var bflaF []*Finding
+		var bflaErr error
+		if bflaIdentity(cc.Config) != nil {
+			bflaF, bflaErr = checkBFLA(ctx, cc)
 		}
-		return bacF, nil
+		var maF []*Finding
+		var maErr error
+		if maEnabled(cc.Config) {
+			maF, maErr = checkMassAssignment(ctx, cc)
+		}
+		out := append(append(append(bacF, idorF...), bflaF...), maF...)
+		if len(out) > 0 {
+			return out, nil
+		}
+		for _, err := range []error{bacErr, idorErr, bflaErr, maErr} {
+			if err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
 	}
 }
 
@@ -135,8 +146,165 @@ func checkIDOR(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("idor: %w", err)
 	}
-	p := &idorProber{cc: cc, h: h, raw: raw, sessionIDs: idorSessionIDs(raw)}
+	p := &idorProber{cc: cc, h: h, raw: raw, sessionIDs: idorSessionIDs(raw), sec: idorSecondIdentity(cc.Config)}
 	return p.run(ctx)
+}
+
+// idorSecondIdentity returns the configured second identity when the two-identity switch admitted
+// it, else nil.
+func idorSecondIdentity(c *ScanConfig) *SecondIdentity {
+	if c == nil || !c.CheckIDORTwoIdentity {
+		return nil
+	}
+	sec := &c.SecondIdentity
+	if sec.CookieHeader == "" && sec.AuthorizationHeader == "" && (sec.APIKeyHeader == "" || sec.APIKeyValue == "") {
+		return nil
+	}
+	return sec
+}
+
+// idorReidentity rewrites raw's credential headers to identity B's: cookies are replaced BY NAME so
+// a non-credential cookie riding the same header (an object reference, a raised role) survives, and
+// Authorization and the configured API-key header are replaced whole. covered is false when the
+// request authenticates over a channel B cannot fill - a Cookie header sharing no cookie name with
+// B's set, or an Authorization header B has no counterpart for - because then the replay is still
+// identity A and would prove nothing. Any other credential header (idorCredentialHeader) B has no
+// value for leaves the request uncovered for the same reason.
+func idorReidentity(raw string, sec *SecondIdentity) (string, bool) {
+	head, body, hasBody := strings.Cut(raw, "\r\n\r\n")
+	lines := strings.Split(head, "\r\n")
+	bCookies := map[string]string{}
+	for _, c := range strings.Split(sec.CookieHeader, ";") {
+		if n, v, ok := strings.Cut(strings.TrimSpace(c), "="); ok {
+			bCookies[n] = strings.TrimSpace(v)
+		}
+	}
+	out := []string{lines[0]}
+	covered := true
+	for _, line := range lines[1:] {
+		name, value, ok := strings.Cut(line, ":")
+		n, v := strings.TrimSpace(name), strings.TrimSpace(value)
+		switch {
+		case ok && strings.EqualFold(n, "cookie"):
+			var pairs []string
+			replaced := false
+			seen := map[string]bool{}
+			replacedNames := 0
+			for _, c := range strings.Split(v, ";") {
+				c = strings.TrimSpace(c)
+				cn, _, _ := strings.Cut(c, "=")
+				if bv, isB := bCookies[cn]; isB {
+					pairs = append(pairs, cn+"="+bv)
+					replaced = true
+					if !seen[cn] {
+						seen[cn] = true
+						replacedNames++
+					}
+				} else {
+					pairs = append(pairs, c)
+				}
+			}
+			if !replaced || replacedNames < len(bCookies) {
+				// A's cookies ride unchanged, or B's set names a cookie A's request does not carry
+				// (A's session goes by another name): whatever session the header carries is still A's.
+				covered = false
+				out = append(out, line)
+				continue
+			}
+			out = append(out, "Cookie: "+strings.Join(pairs, "; "))
+		case ok && strings.EqualFold(n, "authorization"):
+			if sec.AuthorizationHeader == "" {
+				covered = false
+				out = append(out, line)
+				continue
+			}
+			out = append(out, "Authorization: "+sec.AuthorizationHeader)
+		case ok && sec.APIKeyHeader != "" && strings.EqualFold(n, sec.APIKeyHeader):
+			out = append(out, n+": "+sec.APIKeyValue)
+		case ok && idorCredentialHeader.MatchString(n) && v != "":
+			covered = false // a credential B has no counterpart for: the replay is still A's
+			out = append(out, line)
+		default:
+			out = append(out, line)
+		}
+	}
+	res := strings.Join(out, "\r\n") + "\r\n\r\n"
+	if hasBody {
+		res += body
+	}
+	return res, covered
+}
+
+// crossRead asks whether identity B is served identity A's object: the original request - A's own
+// reference - replayed under B's credentials. A match on A's baseline shape with no stable-leaf
+// difference is A's object in B's hands; the echo trap (an endpoint that serves the SESSION's own
+// record whatever the id) answers with B's record instead, which differs and concludes nothing.
+// Controls: the same request with every credential stripped must not be served the object, and the
+// cross-read repeated must be stable.
+func (p *idorProber) crossRead(ctx context.Context, b *idorBase, c idorCandidate) (*Finding, error) {
+	braw, covered := idorReidentity(b.raw, p.sec)
+	if !covered {
+		return nil, nil
+	}
+	br, err := p.send(ctx, braw)
+	if err != nil {
+		return nil, err
+	}
+	if !b.isObject(br) || len(b.diff(b.shape, idorShapeOf(br.Body))) > 0 {
+		return nil, nil
+	}
+	keep := map[string]bool{}
+	if c.point.Kind == bcheck.IpCookie {
+		keep[c.point.Name] = true
+	}
+	nr, err := p.send(ctx, idorAnonymous(b.raw, keep))
+	if err != nil {
+		return nil, err
+	}
+	if b.isObject(nr) {
+		return nil, nil // served without credentials: public data
+	}
+	again, err := p.send(ctx, braw)
+	if err != nil {
+		return nil, err
+	}
+	if !b.isObject(again) || len(b.diff(idorShapeOf(br.Body), idorShapeOf(again.Body))) > 0 {
+		return nil, nil
+	}
+	return p.crossFinding(b, c, br, nr), nil
+}
+
+func (p *idorProber) crossFinding(b *idorBase, c idorCandidate, br, nr ProbeResponse) *Finding {
+	where := fmt.Sprintf("%s %q", idorKindLabel(c.point.Kind), c.point.Name)
+	if c.point.Kind == bcheck.IpURLPathFilename || c.point.Kind == bcheck.IpURLPathFolder {
+		where = fmt.Sprintf("path segment %q", c.value)
+	}
+	detail := fmt.Sprintf("The request as captured holds the object reference in %s and returns the "+
+		"captured identity's object. Replayed under a second configured identity - another account on "+
+		"the same application - it returned HTTP %d with the SAME object, unchanged: the second "+
+		"identity can read the first identity's object, so object-level authorization is not enforced. "+
+		"Controls: the same request with every credential removed returned HTTP %d without the object, "+
+		"and the cross-read repeated returned the same object again.", where, br.Status, nr.Status)
+	// B being served A's object proves the object needs a login, not that it is A's: a shared,
+	// login-only record answers every account the same way. Firm needs ownership evidence - an
+	// owner field naming the session's own user id - and is tentative without it.
+	confidence := "tentative"
+	if path, session, ok := idorOwnedBySession(p.sessionIDs, b.shape); ok {
+		confidence = "firm"
+		detail += fmt.Sprintf(" The object's %s is %q, the captured session's own user id (from its JWT), "+
+			"so the object belongs to the first identity.", path, session)
+	} else {
+		detail += " Nothing in the response ties the object to the first identity, so this may be a " +
+			"record every signed-in account is meant to read: confirm the object is private before " +
+			"reporting it."
+	}
+	f := buildHeaderFinding(p.cc, idorIssue, "high", confidence,
+		fmt.Sprintf("second identity replay -> HTTP %d, %s", br.Status, excerpt(br.Body, 0, 160)), detail)
+	f.Param = c.point.Name
+	f.Solution = "Authorize every object access on the server against the authenticated identity: look the " +
+		"object up within the current user's own scope, or check ownership before returning it. Never " +
+		"decide authorization from a client-held id or role."
+	return f
 }
 
 // idorProber holds one exchange's run.
@@ -145,6 +313,7 @@ type idorProber struct {
 	h          *ProbeHarness
 	raw        string
 	sessionIDs map[string]bool
+	sec        *SecondIdentity
 	sends      int
 }
 
@@ -219,7 +388,24 @@ func (p *idorProber) run(ctx context.Context) ([]*Finding, error) {
 	}
 	roles := idorRoleVariants(p.h.Points())
 	var failures []string
+	var fallback *Finding
 	for _, c := range cands {
+		if p.sec != nil {
+			cf, err := p.crossRead(ctx, orig, c)
+			if err != nil {
+				failures = append(failures, err.Error())
+				if errors.Is(err, errIDORBudget) {
+					break
+				}
+				continue
+			}
+			if cf != nil && cf.Confidence == "firm" {
+				return []*Finding{cf}, nil
+			}
+			if cf != nil && fallback == nil {
+				fallback = cf // tentative: the one-account probe may still prove more
+			}
+		}
 		f, refused, err := p.probe(ctx, orig, c, "")
 		if err != nil {
 			failures = append(failures, err.Error())
@@ -258,6 +444,9 @@ func (p *idorProber) run(ctx context.Context) ([]*Finding, error) {
 				return []*Finding{f}, nil
 			}
 		}
+	}
+	if fallback != nil {
+		return []*Finding{fallback}, nil
 	}
 	if len(failures) > 0 {
 		return nil, fmt.Errorf("idor: %s", strings.Join(failures, "; "))
@@ -683,7 +872,20 @@ func idorCookieNamesChanged(a, b string) []string {
 	return out
 }
 
-// idorSessionIDs are the user ids the request's JWTs name for the session.
+// idorSessionClaims are the claim names a JWT names the session user by, wherever in the payload
+// they appear.
+var idorSessionClaims = map[string]bool{
+	"sub": true, "uid": true, "user_id": true, "userId": true, "userid": true, "id": true,
+}
+
+// idorSessionIDs are the user ids the request's JWTs name for the session. The claims are read
+// recursively, not only at the top level: a real token does not always carry its subject as a
+// top-level claim. Juice Shop, for one, signs the whole user row - the payload is
+// {data: {id: ...}, bid: ...} - so a top-level-only read finds nothing and a demonstrable owner
+// binding scores Tentative where Firm was provable. The response-side rule stays the proof: a
+// value here only promotes a finding when the original object's owner field equals it and the
+// swapped object's does not, so a wider lookup table cannot manufacture a binding, only miss one
+// less often.
 func idorSessionIDs(raw string) map[string]bool {
 	out := map[string]bool{}
 	for _, cand := range jwtCandidatesIn(raw) {
@@ -691,18 +893,36 @@ func idorSessionIDs(raw string) map[string]bool {
 		if t.ParseError != "" || t.Payload == nil {
 			continue
 		}
-		for _, claim := range []string{"sub", "uid", "user_id", "userId", "userid", "id"} {
-			switch v := t.Payload[claim].(type) {
-			case string:
-				if v != "" {
-					out[v] = true
-				}
-			case float64:
-				out[strconv.FormatFloat(v, 'f', -1, 64)] = true
-			}
-		}
+		idorCollectSessionClaims(t.Payload, out)
 	}
 	return out
+}
+
+// idorCollectSessionClaims folds every idorSessionClaims value in a decoded payload fragment into
+// out, descending into nested objects and arrays. Values are strings rendered as themselves and
+// numbers in their shortest form, the same two renderings idorShape's JSON leaves use, so a claim
+// and a response field compare equal when they name the same id.
+func idorCollectSessionClaims(v any, out map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if idorSessionClaims[k] {
+				switch c := e.(type) {
+				case string:
+					if c != "" {
+						out[c] = true
+					}
+				case float64:
+					out[strconv.FormatFloat(c, 'f', -1, 64)] = true
+				}
+			}
+			idorCollectSessionClaims(e, out)
+		}
+	case []any:
+		for _, e := range x {
+			idorCollectSessionClaims(e, out)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,21 +1251,77 @@ func idorSameBody(a, b ProbeResponse) bool {
 // idorBindingPath names the owner field that shows the identity binding.
 type idorBindingPath struct{ path, session string }
 
+// idorOwnedBySession finds an owner-like JSON field (idorOwnerKey) whose value is one of the
+// session's own user ids: evidence that the object belongs to the captured identity.
+func idorOwnedBySession(session map[string]bool, a *idorShape) (string, string, bool) {
+	if len(session) == 0 || a == nil || a.kind != "json" {
+		return "", "", false
+	}
+	for _, k := range idorSortedLeafKeys(a) {
+		if v := a.leaves[k]; session[v] && idorOwnerKey(k) {
+			return strings.TrimPrefix(k, "$."), v, true
+		}
+	}
+	return "", "", false
+}
+
+// idorOwnerKey reports whether a leaf path names an object's owner: owner, sub or uid; a person's
+// id (user_id, ownerId, customer_no); or a bare id/pk/uuid under a parent that names a person
+// (user.id, owner.id). Neither the object's OWN primary key ($.id, order.id) nor another object's
+// id (product_id) is ownership: a record whose id happens to equal the session's user id belongs to
+// nobody in particular.
+func idorOwnerKey(path string) bool {
+	last := path[strings.LastIndexAny(path, ".]")+1:]
+	switch strings.ToLower(last) {
+	case "owner", "sub", "uid":
+		return true
+	case "id", "_id", "pk", "uuid":
+		rest := strings.TrimSuffix(path, "."+last)
+		parent := strings.ToLower(rest[strings.LastIndexAny(rest, ".]")+1:])
+		return idorPersonNames[parent]
+	}
+	person, id := false, false
+	for _, w := range idorWords(last) {
+		person = person || idorPersonNames[w]
+		id = id || w == "id" || w == "uuid" || w == "guid" || w == "no" || w == "number"
+	}
+	if !id {
+		// userid, ownerid: one word, a person noun with the id glued on.
+		l := strings.ToLower(last)
+		for n := range idorPersonNames {
+			if l == n+"id" || l == n+"_id" {
+				return true
+			}
+		}
+	}
+	return person && id
+}
+
+// idorPersonNames are parent keys whose id is a person's.
+var idorPersonNames = map[string]bool{
+	"user": true, "owner": true, "account": true, "author": true, "customer": true, "member": true,
+	"creator": true, "createdby": true, "created_by": true,
+}
+
+// idorSortedLeafKeys returns a shape's leaf paths in order, so a search over them is deterministic.
+func idorSortedLeafKeys(a *idorShape) []string {
+	keys := make([]string, 0, len(a.leaves))
+	for k := range a.leaves {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // idorOwnerBinding finds an id-named JSON field equal to the session's user id in the original and
 // naming someone else in the swapped object.
 func idorOwnerBinding(session map[string]bool, a, s *idorShape) (idorBindingPath, string, bool) {
 	if len(session) == 0 || a == nil || s == nil || a.kind != "json" {
 		return idorBindingPath{}, "", false
 	}
-	keys := make([]string, 0, len(a.leaves))
-	for k := range a.leaves {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range idorSortedLeafKeys(a) {
 		v := a.leaves[k]
-		last := k[strings.LastIndexAny(k, ".]")+1:]
-		if !session[v] || !(idorIDName(last) || strings.EqualFold(last, "owner") || strings.EqualFold(last, "sub")) {
+		if !session[v] || !idorOwnerKey(k) {
 			continue
 		}
 		if w, ok := s.leaves[k]; ok && w != "" && w != "null" && !session[w] {

@@ -1,20 +1,20 @@
 import {
-  BookOpen,
-  Braces,
-  ChartNoAxesCombined,
-  Combine,
-  RadioTower,
-  Crosshair,
-  FileClock,
-  Gauge,
-  NotebookTabs,
-  Plug,
-  Radar,
-  Repeat2,
-  Settings,
-  ShieldCheck,
-  Split,
-  type LucideIcon,
+ BookOpen,
+ Braces,
+ ChartNoAxesCombined,
+ Combine,
+ RadioTower,
+ Crosshair,
+ FileClock,
+ Gauge,
+ NotebookTabs,
+ Plug,
+ Radar,
+ Repeat2,
+ Settings,
+ ShieldCheck,
+ Split,
+ type LucideIcon,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { IssueDefinitionsPage } from "./pages/advisories";
@@ -49,19 +49,19 @@ import { DetailWindowPage } from "./pages/detailwindow";
 
 /** One routable view. `id` is the URL hash and the routing key. */
 export interface NavLeaf {
-  id: string;
-  label: string;
-  description: string;
-  page: ComponentType;
-  /**
-   * A routable leaf that is not a destination an operator chooses from the sub-tab row.
-   *
-   * The detached exchange window (wvcl) is the case: it has to be a ROUTE for the window to land
-   * on, but listing it beside HTTP history would offer "go to another detached window", which is
-   * not a navigation anyone wants. Routable and listed are separate questions, and this is the
-   * second one.
-   */
-  hidden?: boolean;
+ id: string;
+ label: string;
+ description: string;
+ page: ComponentType;
+ /**
+  * A routable leaf that is not a destination an operator chooses from the sub-tab row.
+  *
+  * The detached exchange window (wvcl) is the case: it has to be a ROUTE for the window to land
+  * on, but listing it beside HTTP history would offer "go to another detached window", which is
+  * not a navigation anyone wants. Routable and listed are separate questions, and this is the
+  * second one.
+  */
+ hidden?: boolean;
 }
 
 /**
@@ -71,272 +71,271 @@ export interface NavLeaf {
  * top level.
  */
 export interface NavTool {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-  /** Bound as alt+<key>. */
-  hotkey?: string;
-  leaves: NavLeaf[];
+ id: string;
+ label: string;
+ icon: LucideIcon;
+ /** Bound as alt+<key>. */
+ hotkey?: string;
+ leaves: NavLeaf[];
 }
 
 export const TOOLS: NavTool[] = [
-  {
+ {
+  id: "dashboard",
+  label: "Dashboard",
+  icon: Gauge,
+  hotkey: "1",
+  leaves: [
+   {
     id: "dashboard",
     label: "Dashboard",
-    icon: Gauge,
-    hotkey: "1",
-    leaves: [
-      {
-        id: "dashboard",
-        label: "Dashboard",
-        description: "Coverage, running work, and recent activity",
-        page: DashboardPage,
-      },
-    ],
-  },
-  {
-    id: "target",
-    label: "Target",
-    icon: Radar,
-    hotkey: "2",
-    leaves: [
-      { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
-      { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
-      {
-        // burpsy-react-ui-1yd: Burp has a SCANNER tool; naming this page after its output ("Issues")
-        // while burying the launch controls in a modal made scanning unfindable. The Scanner leaf
-        // gathers the launch controls and the check switches; the Issues leaf stays the results view.
-        id: "scannerlaunch",
-        label: "Scanner",
-        description: "Launch an audit and choose what it runs",
-        page: ScannerLaunchPage,
-      },
-      { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
-      { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
-      {
-        id: "advisories",
-        label: "Issue definitions",
-        // Reads as the companion to Issues, and sits next to it: Issues is what was found, this is
-        // what can be described. Burp keeps the same pair under Target for the same reason.
-        description: "Every issue class the catalogue describes, found or not",
-        page: IssueDefinitionsPage,
-      },
-      {
-        id: "contentdiscovery",
-        // Burp reaches "Discover content" from a site-map right-click, so it belongs beside the
-        // site map rather than on the DISCOVER tab, which is a different feature that happens to
-        // share the word — see pages/contentdiscovery.tsx and pages/discover.tsx.
-        label: "Content discovery",
-        description: "Sweep a path space with ffuf, and what the scope check dropped",
-        page: ContentDiscoveryPage,
-      },
-      {
-        id: "dominvader",
-        label: "DOM auditor",
-        description: "Watch a canary through a page's sources and sinks while you browse",
-        page: DomInvaderPage,
-      },
-      {
-        id: "authz",
-        label: "Access control",
-        description: "Re-send a request as each identity and see whether access control held (BOLA/IDOR)",
-        page: AuthzPage,
-      },
-    ],
-  },
-  {
-    id: "proxy",
-    label: "Proxy",
-    icon: Split,
-    hotkey: "3",
-    leaves: [
-      { id: "intercept", label: "Intercept", description: "Hold, edit, and release traffic in flight", page: InterceptPage },
-      { id: "history", label: "HTTP history", description: "Every captured request and response", page: HistoryPage },
-      // Burp's detached detail (wvcl). Registered as a LEAF rather than a window type because this
-      // app is one mount driven by a hash: a window opened at #history?exchange=7 needs a route that
-      // renders one item, and a leaf is how a route exists. It carries no tab — the shell hides a
-      // leaf that is not its tool's sub-tab, so the window shows a page and not a second tab strip.
-      {
-        id: "exchange-detail",
-        label: "Exchange detail",
-        description: "One captured exchange on its own, for a window of its own",
-        page: DetailWindowPage,
-        hidden: true,
-      },
-      { id: "wshistory", label: "WebSockets history", description: "Upgrade connections and frame payloads", page: WebSocketPage },
-      {
-        id: "matchreplace",
-        label: "Match & Replace",
-        description: "Reviewable traffic transformations",
-        page: MatchReplacePage,
-      },
-      {
-        id: "proxysettings",
-        label: "Proxy settings",
-        description: "Response modification rules and their outcome counters",
-        page: ProxySettingsPage,
-      },
-    ],
-  },
-  {
+    description: "Coverage, running work, and recent activity",
+    page: DashboardPage,
+   },
+  ],
+ },
+ {
+  id: "target",
+  label: "Target",
+  icon: Radar,
+  hotkey: "2",
+  leaves: [
+   { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
+   { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
+   {
+    // burpsy-react-ui-1yd: Burp has a SCANNER tool; naming this page after its output ("Issues")
+    // while burying the launch controls in a modal made scanning unfindable. The Scanner leaf
+    // gathers the launch controls and the check switches; the Issues leaf stays the results view.
+    id: "scannerlaunch",
+    label: "Scanner",
+    description: "Launch an audit and choose what it runs",
+    page: ScannerLaunchPage,
+   },
+   { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
+   {
+    id: "auditqueue",
+    label: "Audit queue",
+    description: "What the active audit did with each exchange, and why any were skipped",
+    page: AuditQueuePage,
+   },
+   {
+    id: "advisories",
+    label: "Issue definitions",
+    // Reads as the companion to Issues, and sits next to it: Issues is what was found, this is
+    // what can be described. Burp keeps the same pair under Target for the same reason.
+    description: "Every issue class the catalogue describes, found or not",
+    page: IssueDefinitionsPage,
+   },
+   {
+    id: "contentdiscovery",
+    // Burp reaches "Discover content" from a site-map right-click, so it belongs beside the
+    // site map rather than on the DISCOVER tab, which is a different feature that happens to
+    // share the word — see pages/contentdiscovery.tsx and pages/discover.tsx.
+    label: "Content discovery",
+    description: "Sweep a path space with ffuf, and what the scope check dropped",
+    page: ContentDiscoveryPage,
+   },
+   {
+    id: "dominvader",
+    label: "DOM auditor",
+    description: "Watch a canary through a page's sources and sinks while you browse",
+    page: DomInvaderPage,
+   },
+   {
+    id: "authz",
+    label: "Access control",
+    description: "Re-send a request as each identity and see whether access control held (BOLA/IDOR)",
+    page: AuthzPage,
+   },
+  ],
+ },
+ {
+  id: "proxy",
+  label: "Proxy",
+  icon: Split,
+  hotkey: "3",
+  leaves: [
+   { id: "intercept", label: "Intercept", description: "Hold, edit, and release traffic in flight", page: InterceptPage },
+   { id: "history", label: "HTTP history", description: "Every captured request and response", page: HistoryPage },
+   // Burp's detached detail (wvcl). Registered as a LEAF rather than a window type because this
+   // app is one mount driven by a hash: a window opened at #history?exchange=7 needs a route that
+   // renders one item, and a leaf is how a route exists. It carries no tab — the shell hides a
+   // leaf that is not its tool's sub-tab, so the window shows a page and not a second tab strip.
+   {
+    id: "exchange-detail",
+    label: "Exchange detail",
+    description: "One captured exchange on its own, for a window of its own",
+    page: DetailWindowPage,
+    hidden: true,
+   },
+   { id: "wshistory", label: "WebSockets history", description: "Upgrade connections and frame payloads", page: WebSocketPage },
+   {
+    id: "matchreplace",
+    label: "Match & Replace",
+    description: "Reviewable traffic transformations",
+    page: MatchReplacePage,
+   },
+   {
+    id: "proxysettings",
+    label: "Proxy settings",
+    description: "Response modification rules and their outcome counters",
+    page: ProxySettingsPage,
+   },
+  ],
+ },
+ {
+  id: "intruder",
+  label: "Intruder",
+  icon: Crosshair,
+  hotkey: "4",
+  leaves: [
+   {
     id: "intruder",
     label: "Intruder",
-    icon: Crosshair,
-    hotkey: "4",
-    leaves: [
-      {
-        id: "intruder",
-        label: "Intruder",
-        description: "Payload-driven attacks with bounded accounting",
-        page: IntruderPage,
-      },
-    ],
-  },
-  {
-    id: "repeater",
-    label: "Repeater",
-    icon: Repeat2,
-    hotkey: "5",
-    leaves: [{ id: "repeater", label: "Repeater", description: "Craft and resend requests", page: RepeaterPage }],
-  },
-  {
+    description: "Payload-driven attacks with bounded accounting",
+    page: IntruderPage,
+   },
+  ],
+ },
+ {
+  id: "repeater",
+  label: "Repeater",
+  icon: Repeat2,
+  hotkey: "5",
+  leaves: [{ id: "repeater", label: "Repeater", description: "Craft and resend requests", page: RepeaterPage }],
+ },
+ {
+  id: "collaborator",
+  label: "Collaborator",
+  icon: RadioTower,
+  leaves: [
+   {
     id: "collaborator",
     label: "Collaborator",
-    icon: RadioTower,
-    leaves: [
-      {
-        id: "collaborator",
-        label: "Collaborator",
-        description: "Out-of-band interactions and blind-XSS callbacks",
-        page: CollaboratorPage,
-      },
-    ],
-  },
-  {
-    id: "sequencer",
-    label: "Sequencer",
-    icon: ChartNoAxesCombined,
-    hotkey: "6",
-    leaves: [
-      { id: "sequencer", label: "Sequencer", description: "Token randomness analysis", page: SequencerPage },
-    ],
-  },
-  {
-    id: "decoder",
-    label: "Decoder",
-    icon: Braces,
-    hotkey: "7",
-    leaves: [{ id: "decoder", label: "Decoder", description: "Transform and hash data", page: DecoderPage }],
-  },
-  {
-    id: "comparer",
-    label: "Comparer",
-    icon: Combine,
-    hotkey: "8",
-    leaves: [{ id: "comparer", label: "Comparer", description: "Byte-level differences", page: ComparerPage }],
-  },
-  {
-    id: "logger",
-    label: "Logger",
-    icon: FileClock,
-    hotkey: "9",
-    leaves: [{ id: "logger", label: "Logger", description: "Requests burpsy itself sent", page: LoggerPage }],
-  },
-  {
-    id: "organizer",
-    label: "Organizer",
-    icon: NotebookTabs,
-    hotkey: "0",
-    leaves: [
-      { id: "organizer", label: "Organizer", description: "Curated investigation notes", page: OrganizerPage },
-    ],
-  },
-  {
-    id: "session",
-    label: "Session",
-    icon: ShieldCheck,
-    leaves: [
-      { id: "session", label: "Session", description: "Login macros and recovery behaviour", page: SessionPage },
-    ],
-  },
-  {
-    // Burp 2026.7.3 calls this tab Extensions (verified against the live AX tree: Installed,
-    // BApp Store, APIs, Custom scan checks, Bambda library). The BApp Store is a hosted catalogue
-    // this tool has no counterpart for - see pages/extensions.tsx for why a tab listing nothing
-    // would be worse than no tab at all. The tool id stays "extender": it is the URL hash.
-    id: "extender",
-    label: "Extensions",
-    icon: Plug,
-    leaves: [
-      {
-        id: "extensions",
-        label: "Installed",
-        description: "Local JSON-RPC plugins, their consoles and what they registered",
-        page: ExtensionsPage,
-      },
-      {
-        id: "extenderoptions",
-        label: "Options",
-        description: "How a plugin is admitted, and the bounds it runs under",
-        page: ExtenderOptionsPage,
-      },
-      {
-        id: "extenderapis",
-        label: "APIs",
-        description: "The JSON-RPC contract a plugin is written against",
-        page: ExtenderApisPage,
-      },
-      {
-        id: "scannerchecks",
-        label: "Custom scan checks",
-        description: "The loaded BCheck corpus: what compiled, what ran, and a per-row switch",
-        page: ScannerChecksPage,
-      },
-    ],
-  },
-  {
-    // Burp's DISCOVER constant, the tab that used to be called Learn, sits second
-    // to last — right before Settings — and so does this. What it holds is not
-    // Burp's link farm: see pages/discover.tsx for why an in-app reference is the
-    // honest analogue and a list of outbound links is not.
+    description: "Out-of-band interactions and blind-XSS callbacks",
+    page: CollaboratorPage,
+   },
+  ],
+ },
+ {
+  id: "sequencer",
+  label: "Sequencer",
+  icon: ChartNoAxesCombined,
+  hotkey: "6",
+  leaves: [{ id: "sequencer", label: "Sequencer", description: "Token randomness analysis", page: SequencerPage }],
+ },
+ {
+  id: "decoder",
+  label: "Decoder",
+  icon: Braces,
+  hotkey: "7",
+  leaves: [{ id: "decoder", label: "Decoder", description: "Transform and hash data", page: DecoderPage }],
+ },
+ {
+  id: "comparer",
+  label: "Comparer",
+  icon: Combine,
+  hotkey: "8",
+  leaves: [{ id: "comparer", label: "Comparer", description: "Byte-level differences", page: ComparerPage }],
+ },
+ {
+  id: "logger",
+  label: "Logger",
+  icon: FileClock,
+  hotkey: "9",
+  leaves: [{ id: "logger", label: "Logger", description: "Requests burpsy itself sent", page: LoggerPage }],
+ },
+ {
+  id: "organizer",
+  label: "Organizer",
+  icon: NotebookTabs,
+  hotkey: "0",
+  leaves: [{ id: "organizer", label: "Organizer", description: "Curated investigation notes", page: OrganizerPage }],
+ },
+ {
+  id: "session",
+  label: "Session",
+  icon: ShieldCheck,
+  leaves: [{ id: "session", label: "Session", description: "Login macros and recovery behaviour", page: SessionPage }],
+ },
+ {
+  // Burp 2026.7.3 calls this tab Extensions (verified against the live AX tree: Installed,
+  // BApp Store, APIs, Custom scan checks, Bambda library). The BApp Store is a hosted catalogue
+  // this tool has no counterpart for - see pages/extensions.tsx for why a tab listing nothing
+  // would be worse than no tab at all. The tool id stays "extender": it is the URL hash.
+  id: "extender",
+  label: "Extensions",
+  icon: Plug,
+  leaves: [
+   {
+    id: "extensions",
+    label: "Installed",
+    description: "Local JSON-RPC plugins, their consoles and what they registered",
+    page: ExtensionsPage,
+   },
+   {
+    id: "extenderoptions",
+    label: "Options",
+    description: "How a plugin is admitted, and the bounds it runs under",
+    page: ExtenderOptionsPage,
+   },
+   {
+    id: "extenderapis",
+    label: "APIs",
+    description: "The JSON-RPC contract a plugin is written against",
+    page: ExtenderApisPage,
+   },
+   {
+    id: "scannerchecks",
+    label: "Custom scan checks",
+    description: "The loaded BCheck corpus: what compiled, what ran, and a per-row switch",
+    page: ScannerChecksPage,
+   },
+  ],
+ },
+ {
+  // Burp's DISCOVER constant, the tab that used to be called Learn, sits second
+  // to last — right before Settings — and so does this. What it holds is not
+  // Burp's link farm: see pages/discover.tsx for why an in-app reference is the
+  // honest analogue and a list of outbound links is not.
+  id: "discover",
+  label: "Discover",
+  icon: BookOpen,
+  leaves: [
+   {
     id: "discover",
     label: "Discover",
-    icon: BookOpen,
-    leaves: [
-      {
-        id: "discover",
-        label: "Discover",
-        description: "Query grammar, BCheck syntax, hotkeys, and the deliberate gaps",
-        page: DiscoverPage,
-      },
-    ],
-  },
-  {
+    description: "Query grammar, BCheck syntax, hotkeys, and the deliberate gaps",
+    page: DiscoverPage,
+   },
+  ],
+ },
+ {
+  id: "settings",
+  label: "Settings",
+  icon: Settings,
+  leaves: [
+   {
     id: "settings",
     label: "Settings",
-    icon: Settings,
-    leaves: [
-      {
-        id: "settings",
-        label: "Settings",
-        description: "Protocols, appearance, certificates, and diagnostics",
-        page: SettingsPage,
-      },
-    ],
-  },
+    description: "Protocols, appearance, certificates, and diagnostics",
+    page: SettingsPage,
+   },
+  ],
+ },
 ];
 
 export const NAV_LEAVES: NavLeaf[] = TOOLS.flatMap((tool) => tool.leaves);
 
 export function findLeaf(id: string): NavLeaf {
-  return NAV_LEAVES.find((leaf) => leaf.id === id) ?? NAV_LEAVES[0]!;
+ return NAV_LEAVES.find((leaf) => leaf.id === id) ?? NAV_LEAVES[0]!;
 }
 
 export function toolOf(leafId: string): NavTool {
-  return TOOLS.find((tool) => tool.leaves.some((leaf) => leaf.id === leafId)) ?? TOOLS[0]!;
+ return TOOLS.find((tool) => tool.leaves.some((leaf) => leaf.id === leafId)) ?? TOOLS[0]!;
 }
 
 /** Where a tool tab navigates: its first leaf. */
 export function entryLeaf(tool: NavTool): string {
-  return tool.leaves[0]?.id ?? "dashboard";
+ return tool.leaves[0]?.id ?? "dashboard";
 }

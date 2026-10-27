@@ -171,14 +171,16 @@ def configure_scanner(web, ms, profile):
         sys.stderr.write(f"warning: could not set the scanner profile: {e}\n")
 
 
-def confirm(web, method, path, body):
-    """POST the call description to /api/audit/confirm and return the token.
+def confirm(web, method, path, body, confirm_route="/api/audit/confirm"):
+    """POST the call description to the route's confirm endpoint and return the token.
 
-    The audit route is gated (route-risk: attack), so an unconfirmed POST is a 428. The token is
-    bound to the exact (method, path, body) triple, which is why it is fetched per call rather
-    than once."""
+    The gated routes (route-risk: attack) answer an unconfirmed POST with 428. The token is bound
+    to the exact (method, path, body) triple, which is why it is fetched per call rather than
+    once. Each gated route family has its own confirm endpoint (/api/audit/confirm,
+    /api/crawl/confirm, /api/hidden-inputs/confirm); the default is the audit's, the first one
+    this harness used."""
     payload = {"method": method, "url": path, "body": json.dumps(body, separators=(",", ":"))}
-    ans = http_json("POST", f"{web}/api/audit/confirm", payload)
+    ans = http_json("POST", f"{web}{confirm_route}", payload)
     return ans["token"]
 
 
@@ -198,7 +200,20 @@ FAMILY_BODIES = {
 }
 
 
-def proxied_through(proxy, url, method="GET", body=None, content_type=None):
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the seed exchange is the audit input, and following a 3xx can
+    only hurt. An open-redirect endpoint answers the seed with a Location built FROM the seed's
+    own parameter (VulnerableApp LEVEL_6 prefixes the request origin, yielding a Location like
+    "http://<host>:<port>https://example.org/" that no client can open); urllib's default
+    redirect-follow turned that answer into a transport error and the case scored untestable
+    even though the proxy had captured the seed (burpsy-react-ui-j1mk.36). A surfaced 3xx is an
+    HTTPError, which proxied_through already treats as the target's answer."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def proxied_through(proxy, url, method="GET", body=None, content_type=None, headers=None):
     """Send url through burpsy's own proxy so the exchange is captured.
 
     urllib with an http proxy set sends the absolute-form request the proxy expects; an https
@@ -208,7 +223,8 @@ def proxied_through(proxy, url, method="GET", body=None, content_type=None):
     vulnerability is IN the body (FAMILY_BODIES), in which case the scanner needs a body point to
     rewrite and an empty one leaves it nothing to test."""
     opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+        _NoRedirect,
     )
     if method == "POST":
         data = body.encode() if body else b""
@@ -217,6 +233,8 @@ def proxied_through(proxy, url, method="GET", body=None, content_type=None):
     req = urllib.request.Request(url, data=data, method=method)
     if content_type:
         req.add_header("Content-Type", content_type)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with opener.open(req, timeout=60) as resp:
             resp.read()

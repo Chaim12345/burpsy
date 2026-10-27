@@ -59,8 +59,8 @@ var groupedTools = []groupSpec{
 		name: "history", group: groupRequests,
 		short: "Reads captured proxy traffic: the history list, one exchange, a stored message, a suite-wide search, counters, the Target analyzer, and a Repeater tab's history as one export.",
 		ops: []string{
-			"GET /api/history", "GET /api/message/", "GET /api/search", "GET /api/stats",
-			"GET /api/engagement/", "GET /api/exchange/in-browser/", "GET /api/target/analyze",
+			"GET /api/history", "GET /api/message/{id}", "GET /api/search", "GET /api/stats",
+			"GET /api/engagement/{kind...}", "GET /api/exchange/in-browser/{id}", "GET /api/target/analyze",
 			"POST /api/repeater/history-export",
 		},
 	},
@@ -93,9 +93,18 @@ var groupedTools = []groupSpec{
 		},
 	},
 	{
+		// Its own tool, not an op of `send`: the send ops are riskEgress and these are riskRead
+		// (text surgery on the operator's own draft), and one tool never spans two classes.
+		name: "repeater-graphql", group: groupRequests,
+		short: "Parses a GraphQL document with the pinned gqlparser, and rewrites one operation's query inside a Repeater draft's carrier (JSON body or URL parameter).",
+		ops: []string{
+			"POST /api/repeater/graphql-query", "POST /api/repeater/graphql-validate",
+		},
+	},
+	{
 		name: "websockets", group: groupRequests,
 		short: "Reads captured WebSocket connections, their message history, and one message.",
-		ops:   []string{"GET /api/ws/connections", "GET /api/ws/history", "GET /api/ws/message/"},
+		ops:   []string{"GET /api/ws/connections", "GET /api/ws/history", "GET /api/ws/message/{id}"},
 	},
 	{
 		name: "intercept", group: groupRequests,
@@ -106,10 +115,10 @@ var groupedTools = []groupSpec{
 		name: "intercept_control", group: groupRequests,
 		short: "Forwards, drops, edits or annotates held messages, and sets the intercept switch and its rules.",
 		ops: []string{
-			"POST /api/intercept/", "POST /api/intercept/annotate/", "POST /api/intercept/drop-all",
+			"POST /api/intercept/{rest...}", "POST /api/intercept/annotate/{id}", "POST /api/intercept/drop-all",
 			"POST /api/intercept/enable", "POST /api/intercept/forward-all", "POST /api/intercept/in-scope-only",
 			"GET /api/intercept/newline-correction", "PUT /api/intercept/newline-correction",
-			"GET /api/intercept/rules/", "PUT /api/intercept/rules/",
+			"GET /api/intercept/rules/{dir...}", "PUT /api/intercept/rules/{dir...}",
 			"GET /api/intercept/startup", "POST /api/intercept/startup",
 		},
 	},
@@ -141,7 +150,7 @@ var groupedTools = []groupSpec{
 		name: "issues", group: groupIssues,
 		short: "Reads scanner issues, the issue-definition catalogue, the selectable issue types and their detection methods, report exports and coverage.",
 		ops: []string{
-			"GET /api/issues", "GET /api/advisories", "GET /api/advisories/", "GET /api/report/",
+			"GET /api/issues", "GET /api/advisories", "GET /api/advisories/", "GET /api/report/{rest...}",
 			"GET /api/scanner/coverage", "GET /api/scanner/issue-types",
 		},
 	},
@@ -195,12 +204,14 @@ var groupedTools = []groupSpec{
 	{
 		name: "tasks", group: groupScanning,
 		short: "Reads one task (and an async audit's finished result), cancels, re-runs or removes it, and pauses or resumes every task.",
-		ops:   []string{"GET /api/tasks/", "POST /api/tasks/", "DELETE /api/tasks/"},
+		ops: []string{"GET /api/tasks/{id}", "DELETE /api/tasks/{id}", "POST /api/tasks/{id}/cancel",
+			"POST /api/tasks/{id}/again", "POST /api/tasks/{id}/pause", "POST /api/tasks/{id}/resume",
+			"POST /api/tasks/pause", "POST /api/tasks/resume"},
 	},
 	{
 		name: "datasets", group: groupDatasets,
 		short: "Searches, filters, sorts, pages and summarises any list — history, issues, site map, logger, WebSockets, an attack's requests.",
-		ops:   []string{"GET /api/datasets/"},
+		ops:   []string{"GET /api/datasets/{rest...}"},
 	},
 	{
 		name: "dashboard", group: groupDatasets,
@@ -354,7 +365,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "intruder_control", group: groupFuzzing,
 		short: "Pauses, resumes or stops an attack, and uploads a payload file.",
-		ops:   []string{"POST /api/intruder/attacks/", "POST /api/intruder/payload-files"},
+		ops:   []string{"POST /api/intruder/attacks/{id}/{action...}", "POST /api/intruder/attacks/{$}", "POST /api/intruder/payload-files"},
 	},
 	{
 		name: "authz", group: groupFuzzing,
@@ -369,7 +380,7 @@ var groupedTools = []groupSpec{
 	{
 		name: "sequencer", group: groupFuzzing,
 		short: "Analyses token randomness and reads a live capture's samples.",
-		ops:   []string{"POST /api/sequencer/analyse", "GET /api/sequencer/capture/", "POST /api/sequencer/capture/"},
+		ops:   []string{"POST /api/sequencer/analyse", "GET /api/sequencer/capture/{rest...}", "POST /api/sequencer/capture/{rest...}"},
 	},
 	{
 		name: "sequencer_capture", group: groupFuzzing,
@@ -388,7 +399,7 @@ var groupedTools = []groupSpec{
 		short: "Polls for and reads out-of-band interactions, and reports the channel's status.",
 		ops: []string{
 			"POST /api/collaborator/poll", "GET /api/collaborator/status",
-			"GET /api/collaborator/interactions", "GET /api/collaborator/interaction/",
+			"GET /api/collaborator/interactions", "GET /api/collaborator/interaction/{id}",
 		},
 	},
 	{
@@ -428,6 +439,13 @@ var groupedTools = []groupSpec{
 		ops:   []string{"POST /api/protobuf/decode", "POST /api/protobuf/encode"},
 	},
 	{
+		// Its own tool: reflect-decode is riskEgress (it fetches the descriptor source), so it
+		// cannot share the local-write protobuf tool - one tool, one risk class.
+		name: "protobuf_reflect", group: groupUtilities,
+		short: "Decodes a protobuf message by reflecting on a descriptor source it fetches.",
+		ops:   []string{"POST /api/protobuf/reflect-decode"},
+	},
+	{
 		name: "match_replace", group: groupUtilities,
 		short: "Reads or sets the match/replace rules applied to proxied traffic.",
 		ops:   []string{"GET /api/tools/rules", "PUT /api/tools/rules"},
@@ -447,9 +465,9 @@ var groupedTools = []groupSpec{
 		short: "Reads and edits the Organizer: saved items, their notes and status, and collections.",
 		ops: []string{
 			"GET /api/tools/organizer", "POST /api/tools/organizer",
-			"POST /api/tools/organizer/", "PUT /api/tools/organizer/", "DELETE /api/tools/organizer/",
+			"POST /api/tools/organizer/{rest...}", "PUT /api/tools/organizer/{rest...}", "DELETE /api/tools/organizer/{rest...}",
 			"POST /api/tools/organizer/collections",
-			"PUT /api/tools/organizer/collections/", "POST /api/tools/organizer/collections/", "DELETE /api/tools/organizer/collections/",
+			"PUT /api/tools/organizer/collections/{rest...}", "POST /api/tools/organizer/collections/{rest...}", "DELETE /api/tools/organizer/collections/{rest...}",
 		},
 	},
 
@@ -478,18 +496,26 @@ var groupedTools = []groupSpec{
 //
 // The route surface (-surface routes) still lists all of them, for debugging.
 var notExposed = map[string]string{
+	"POST /api/intruder/attacks/{id}": "the no-action 404 shape of the control route; an agent's /api/intruder/attacks/7 resolves to " +
+		"the {id}/{action...} route (the gate's own longest-prefix rule), so this key could never be the one a call reaches",
 	"GET /":       "the console's own index.html and SPA catch-all — an asset, not an operation",
 	"GET /ca.crt": "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
 	"GET /api/engagement/clickbandit.js": "the Clickbandit script served as text/javascript for the operator to paste into a " +
 		"browser's developer console — an asset that runs in a browser, not an operation",
-	"GET /reissue/": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
+	"GET /reissue/{token...}": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
 	"GET /api/events": "the SSE change stream: it never ends, so it cannot be one tool result. The transport " +
 		"itself is the stream's agent-side consumer",
-	"GET /api/exchanges/":     "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
-	"GET /api/findings":       "legacy alias of /api/issues (issues' GET); a second spelling of one read",
-	"POST /api/scanner/audit": "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
-	"GET /api/skills":         "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
-	"GET /api/skills/":        "served as MCP prompts: prompts/get renders a skill through it",
+	"GET /api/exchanges/":       "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
+	"GET /api/findings":         "legacy alias of /api/issues (issues' GET); a second spelling of one read",
+	"POST /api/scanner/audit":   "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
+	"GET /api/skills":           "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
+	"GET /api/skills/{rest...}": "served as MCP prompts: prompts/get renders a skill through it",
 	"PUT /api/skills/disabled": "the operator's per-project switch, set in the console's Settings; an agent sees its effect " +
 		"as the skills prompts/list no longer offers",
+	"GET /api/openapi.json": "the API's self-description for codegen and tooling (the typed console client's source); " +
+		"agents consume the API through the grouped MCP tools, not the raw document",
+	"POST /api/dominvader/scan": "operator-driven DOM pollution audit from the console while the auditor is young; " +
+		"egress-bearing probe execution stays operator-triggered - revisit agent exposure with the wkrc broad-coverage work",
+	"GET /api/repeater/ws-handshake-preview": "the console's live preview while the operator edits a WS handshake; " +
+		"a read-only render of state the operator already owns, with no agent edit-preview loop to serve",
 }

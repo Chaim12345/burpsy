@@ -13,37 +13,37 @@
 import { useApp } from "./store";
 
 export type DocTopic =
-  | "tables"
-  | "proxy-history"
-  | "websockets"
-  | "site-map"
-  | "scope"
-  | "intercept"
-  | "logger"
-  | "organizer"
-  | "issues"
-  | "intruder"
-  | "repeater"
-  | "message-editor";
+ | "tables"
+ | "proxy-history"
+ | "websockets"
+ | "site-map"
+ | "scope"
+ | "intercept"
+ | "logger"
+ | "organizer"
+ | "issues"
+ | "intruder"
+ | "repeater"
+ | "message-editor";
 
 /** The tool name the entry reads as ("Proxy history documentation") and the panel it opens. */
 export const DOC_TOPICS: Record<DocTopic, { title: string; panelId: string }> = {
-  tables: { title: "Tables", panelId: "tool-tables" },
-  "proxy-history": { title: "Proxy history", panelId: "tool-proxy-history" },
-  websockets: { title: "WebSockets history", panelId: "tool-websockets" },
-  "site-map": { title: "Site map", panelId: "tool-site-map" },
-  scope: { title: "Scope", panelId: "tool-scope" },
-  intercept: { title: "Intercept", panelId: "tool-intercept" },
-  logger: { title: "Logger", panelId: "tool-logger" },
-  organizer: { title: "Organizer", panelId: "tool-organizer" },
-  issues: { title: "Issues", panelId: "tool-issues" },
-  intruder: { title: "Intruder", panelId: "tool-intruder" },
-  repeater: { title: "Repeater", panelId: "tool-repeater" },
-  "message-editor": { title: "Message editor", panelId: "tool-message-editor" },
+ tables: { title: "Tables", panelId: "tool-tables" },
+ "proxy-history": { title: "Proxy history", panelId: "tool-proxy-history" },
+ websockets: { title: "WebSockets history", panelId: "tool-websockets" },
+ "site-map": { title: "Site map", panelId: "tool-site-map" },
+ scope: { title: "Scope", panelId: "tool-scope" },
+ intercept: { title: "Intercept", panelId: "tool-intercept" },
+ logger: { title: "Logger", panelId: "tool-logger" },
+ organizer: { title: "Organizer", panelId: "tool-organizer" },
+ issues: { title: "Issues", panelId: "tool-issues" },
+ intruder: { title: "Intruder", panelId: "tool-intruder" },
+ repeater: { title: "Repeater", panelId: "tool-repeater" },
+ "message-editor": { title: "Message editor", panelId: "tool-message-editor" },
 };
 
 export function docEntryLabel(topic: DocTopic): string {
-  return `${DOC_TOPICS[topic].title} documentation`;
+ return `${DOC_TOPICS[topic].title} documentation`;
 }
 
 // The panel Discover should scroll to when it next renders. A module value with a listener set
@@ -53,23 +53,23 @@ const listeners = new Set<() => void>();
 
 /** Open Discover at a topic's panel. */
 export function openDocs(topic: DocTopic): void {
-  pending = DOC_TOPICS[topic].panelId;
-  for (const listener of listeners) listener();
-  useApp.getState().setRoute("discover");
+ pending = DOC_TOPICS[topic].panelId;
+ for (const listener of listeners) listener();
+ useApp.getState().setRoute("discover");
 }
 
 /** The panel waiting to be shown, if any. Discover reads it, scrolls, and clears it. */
 export function pendingDocPanel(): string | null {
-  return pending;
+ return pending;
 }
 
 export function clearPendingDocPanel(): void {
-  pending = null;
+ pending = null;
 }
 
 export function subscribeDocs(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+ listeners.add(listener);
+ return () => {
+  listeners.delete(listener);
+ };
 }

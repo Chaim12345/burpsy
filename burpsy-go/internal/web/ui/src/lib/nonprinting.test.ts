@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { breakGlyphs } from "./message-views";
-
-const SRC = join(import.meta.dir, "..");
 
 // Burp's \n toggle (burpsy-react-ui-1e4) has two halves, and each is pinned where it can
 // actually fail loudly:
@@ -23,56 +19,34 @@ const SRC = join(import.meta.dir, "..");
 //    that drives it.
 
 describe("breakGlyphs", () => {
-  test("a CRLF message names every break as CRLF", () => {
-    const message = "POST /login HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 0\r\n";
-    expect(breakGlyphs(message)).toEqual(["␍␊", "␍␊", "␍␊"]);
-  });
+ test("a CRLF message names every break as CRLF", () => {
+  const message = "POST /login HTTP/1.1\r\nHost: shop.test\r\nContent-Length: 0\r\n";
+  expect(breakGlyphs(message)).toEqual(["␍␊", "␍␊", "␍␊"]);
+ });
 
-  test("an LF-only message names every break as LF", () => {
-    expect(breakGlyphs("a\nb\nc")).toEqual(["␊", "␊"]);
-  });
+ test("an LF-only message names every break as LF", () => {
+  expect(breakGlyphs("a\nb\nc")).toEqual(["␊", "␊"]);
+ });
 
-  test("a bare-CR message names every break as CR", () => {
-    expect(breakGlyphs("a\rb\rc")).toEqual(["␍", "␍"]);
-  });
+ test("a bare-CR message names every break as CR", () => {
+  expect(breakGlyphs("a\rb\rc")).toEqual(["␍", "␍"]);
+ });
 
-  test("a message mixing CRLF and bare LF is named distinctly, in order", () => {
-    // The smuggling probe: header injection via a lone LF between CRLF lines. The glyphs
-    // must disagree where the bytes disagree - one list entry per break, never collapsed.
-    expect(breakGlyphs("x\r\ny\nz\r\n")).toEqual(["␍␊", "␊", "␍␊"]);
-  });
+ test("a message mixing CRLF and bare LF is named distinctly, in order", () => {
+  // The smuggling probe: header injection via a lone LF between CRLF lines. The glyphs
+  // must disagree where the bytes disagree - one list entry per break, never collapsed.
+  expect(breakGlyphs("x\r\ny\nz\r\n")).toEqual(["␍␊", "␊", "␍␊"]);
+ });
 
-  test("a message with no breaks names nothing", () => {
-    expect(breakGlyphs("GET / HTTP/1.1")).toEqual([]);
-    expect(breakGlyphs("")).toEqual([]);
-  });
+ test("a message with no breaks names nothing", () => {
+  expect(breakGlyphs("GET / HTTP/1.1")).toEqual([]);
+  expect(breakGlyphs("")).toEqual([]);
+ });
 
-  test("CRLF is matched as one break, not a CR plus an LF", () => {
-    expect(breakGlyphs("a\r\nb")).toHaveLength(1);
-  });
+ test("CRLF is matched as one break, not a CR plus an LF", () => {
+  expect(breakGlyphs("a\r\nb")).toHaveLength(1);
+ });
 });
 
-describe("the non-printing toggle is wired into the editor", () => {
-  const editor = readFileSync(join(SRC, "ui", "editor.tsx"), "utf8");
-
-  test("the toggle state exists and starts off", () => {
-    expect(editor).toMatch(/const \[showNonPrinting, setShowNonPrinting\] = useState\(false\)/);
-  });
-
-  test("both halves are installed together, only while toggled on", () => {
-    // Glyphs without EOL markers would render ␀ for a NUL byte but leave every CRLF looking
-    // like an LF - the toggle on and still wrong about the byte that matters most.
-    expect(editor).toMatch(/if \(showNonPrinting\) base\.push\(nonPrintingGlyphs, nonPrintingEOLPlugin\(rawTextRef\)\)/);
-  });
-
-  test("the toolbar button is a pressed-state toggle on the text views", () => {
-    expect(editor).toMatch(/aria-pressed=\{showNonPrinting\}/);
-  });
-
-  test("the EOL markers read the raw text, not the CodeMirror document", () => {
-    // The regression this guards: refactoring buildEOLMarkers to read view.state.doc would
-    // still pass every render, and certify LF on CRLF messages from then on.
-    expect(editor).toMatch(/rawTextRef\.current = shown/);
-    expect(editor).toMatch(/const glyphs = breakGlyphs\(raw\)/);
-  });
-});
+// The toggle itself (off by default, glyphs and EOL markers together, EOL marker names the document's own
+// break, pressed state) is pinned by rendering the editor: ui/editor-strip.test.tsx (vln1).

@@ -191,10 +191,7 @@ func pruneBackups(dir string, retention int) (pruned, kept int, warning string) 
 // POST and not GET even though it reads the database: it writes a file and may delete others, which
 // is not something a GET may do.
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Verb-checked by the mux: registered as "POST /api/backup" (burpsy-react-ui-vnlh).
 	var params backupParams
 	if r.Body != nil {
 		// An empty body is a valid request meaning "defaults", so a decode failure is only an error

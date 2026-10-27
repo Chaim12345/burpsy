@@ -321,7 +321,8 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// re-audits on (6n4d) — computed here for the same reason Mime is: this is the one
 		// place the raw bytes are in hand, and a consumer that had to read them back would
 		// re-pay the store for bytes it already paid for once.
-		RequestFP: core.RequestFingerprint(x.Request),
+		RequestFP:      core.RequestFingerprint(x.Request),
+		RequestShapeFP: core.RequestShapeFingerprint(x.Request),
 		// Same seam and same reason as RequestFP: the request bytes are here, so the count history
 		// filters on is decided here rather than by a consumer reading them back. This is what makes
 		// the "Parameterized requests" filter mean what Burp's does (burpsy-react-ui-7py5) — before it,

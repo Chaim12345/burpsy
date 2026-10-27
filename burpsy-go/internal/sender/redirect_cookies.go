@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // This file is the cookie replay a followed redirect chain needs, and the option that turns it off.
@@ -174,10 +176,8 @@ func insertHeaderBeforeTerminator(rendered []byte, header string) []byte {
 		eol = "\n"
 	}
 	insertAt := -1
-	if i := strings.Index(string(rendered), "\r\n\r\n"); i >= 0 {
-		insertAt = i
-	} else if i := strings.Index(string(rendered), "\n\n"); i >= 0 {
-		insertAt = i
+	if head, _, _, ok := httputil.SplitHeadBody([]byte(rendered)); ok {
+		insertAt = len(head)
 	}
 	if insertAt < 0 {
 		return rendered

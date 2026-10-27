@@ -246,6 +246,7 @@ type Protocol int
 const (
 	ProtocolHTTP1 Protocol = iota
 	ProtocolHTTP2
+	ProtocolHTTP3
 )
 
 func (p Protocol) VersionToken() string {
@@ -254,6 +255,8 @@ func (p Protocol) VersionToken() string {
 		return "HTTP/1.1"
 	case ProtocolHTTP2:
 		return "HTTP/2"
+	case ProtocolHTTP3:
+		return "HTTP/3"
 	default:
 		return "HTTP/1.1"
 	}
@@ -459,6 +462,12 @@ type Exchange struct {
 	// semantics changed and the checks run again. Zero means "not computed" — an exchange
 	// minted without the capture seam has no fingerprint and keys the way it always did.
 	RequestFP uint64
+	// RequestShapeFP fingerprints this exchange's NORMALIZED request shape (FNV-1a over the
+	// request with known-volatile regions masked), computed at the same capture seam by
+	// RequestShapeFingerprint (burpsy-go W4). The audit ledger's URL-keyed scopes key on it
+	// ahead of RequestFP, so a re-capture that differs only in a rotated cookie or CSRF token
+	// collapses to the dispatch unit it already was instead of minting a new one.
+	RequestShapeFP uint64
 	// RequestParams is how many parameters this exchange's request carries, in Burp's sense: the
 	// query string's, plus a form body's when there is one (burpsy-react-ui-7py5). Computed once at
 	// capture by RequestParameterCount, at the same seam as RequestFP and for the same reason — a

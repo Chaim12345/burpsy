@@ -50,7 +50,7 @@ func main() {
 	interceptTLS := flag.Bool("intercept-tls", false, "enable TLS interception")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
-	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
+	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files from DIR, added to the bundled corpus, and scan with them")
 	// Allowlist for the bcheck `run tool` statement: name=path pairs, comma-separated. A check
 	// that invokes a tool not named here is refused — the same gate as the egress chokepoint.
 	// Tool execution is operator policy because it runs arbitrary external binaries.
@@ -530,6 +530,22 @@ func main() {
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).
+		// Extension proxy handlers see every message this listener relays (burpsy-react-ui-wiwh).
+		// The adapter composes the two kinds in Burp's order for proxied traffic - HTTP handlers
+		// first, proxy handlers second on whatever the HTTP kind produced - and keeps
+		// internal/proxy free of the extension package, the same rule as the sender adapter below.
+		WithTrafficHook(trafficHookFunc(func(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult {
+			httpRes := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindHTTPHandler, Phase: phase, Raw: raw})
+			proxyRes := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindProxyHandler, Phase: phase, Raw: httpRes.Raw})
+			return proxy.TrafficHookResult{
+				Raw:       proxyRes.Raw,
+				Changed:   httpRes.Changed || proxyRes.Changed,
+				Dropped:   proxyRes.Dropped,
+				Intercept: proxyRes.Intercept,
+				Applied:   append(httpRes.Applied, proxyRes.Applied...),
+				Failures:  len(httpRes.Failures) + len(proxyRes.Failures),
+			}
+		})).
 		// The shared cookie jar, fed by traffic through this listener — Burp's "by default, the
 		// cookie jar is updated based on traffic from the Proxy". The same coordinator the web
 		// server and the scanner hold, so a session an operator establishes in their browser is the
@@ -599,6 +615,14 @@ func main() {
 	senderConfig.ServerCerts = serverCertStore
 	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
+	// Extension HTTP traffic handlers see every tool send at the authorised chokepoint (the
+	// sender re-scope-checks any replacement - a hook can never widen scope or move hosts).
+	// The adapter keeps internal/sender free of the extension package.
+	httpSender.WithHTTPHook(sender.HTTPHookFunc(func(ctx context.Context, phase string, raw []byte) sender.HTTPHookResult {
+		res := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindHTTPHandler, Phase: phase, Raw: raw})
+		return sender.HTTPHookResult{Raw: res.Raw, Changed: res.Changed, Applied: res.Applied, Failures: len(res.Failures)}
+	}))
+
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
 	// as the scan-config restore below: what the operator set through the API in a previous run is a
 	// later decision than this process's compiled-in defaults. A refusal is logged and the defaults
@@ -634,6 +658,9 @@ func main() {
 				// split-horizon override works in Repeater and not in the browser they browse
 				// through the proxy with (burpsy-react-ui-o1eu).
 				proxyNetwork.Set(applied.Resolution, applied.Continue)
+				// The h3 Alt-Svc switch restored on the same pass (kidb): a restart must honour
+				// the operator's off, or the leg rides again while the console says it cannot.
+				proxyNetwork.SetHTTP3AltSvc(applied.RideHTTP3AltSvc())
 				// The TLS policy is restored on the same pass and for the same reason: a verification
 				// setting that only reached the sender would leave every intercepted connection
 				// verifying while the operator believed they had turned it off for a self-signed lab
@@ -658,36 +685,47 @@ func main() {
 		}
 	}
 
-	// Hoisted out of the builder chain below because the DOM engine is conditional: -dom names one,
-	// and without it every DOM-based check reports a missing capability — which is what this binary
-	// did unconditionally until the flag existed. The provider is lazy, so an audit whose check set
-	// contains no DOM check never starts a browser.
-	bundledChecks, berr := bundledCorpus(*bchecksDir, logger)
+	bundledChecks, berr := bundledCorpus(logger)
 	if berr != nil {
 		log.Fatal(berr)
+	}
+	// One construction recipe for every binary — internal/scanner/wiring.go. The desktop shell
+	// and the web server's lazy fallback build from the same CapabilityWiring shape, so a
+	// capability-gated check files CapabilityMissing only when the process genuinely has no
+	// handle to give, never because one call site wired fewer than another.
+	caps := scanner.CapabilityWiring{
+		SessionCoordinator: sessionCoord,
+		ToolRunner:         toolRunner,
+		OOBProvider:        oobProvider,
+		CorpusChecks:       passiveScanner.ActiveChecks(),
+		// The compiled-in PortSwigger corpus when no -bchecks directory was given:
+		// attaching it switches check_corpus on (WithBundledCorpus).
+		BundledCorpus: bundledChecks,
+	}
+	// W2: an explicit -scan-config wins outright; without one the budget resolves through
+	// ScanConfig.Timeout (see below), so the recipe carries no AuditConfig on that path.
+	if *scanConfig != "" {
+		caps.AuditConfig = &auditConfig
+	}
+	// The DOM engine is conditional: -dom names one, and without it every DOM-based check
+	// reports a missing capability — which is what this binary did unconditionally until the
+	// flag existed. The provider is lazy, so an audit whose check set contains no DOM check
+	// never starts a browser.
+	if domOpts != nil {
+		caps.BrowserProvider = scanner.NewLazyBrowserProvider(*domOpts)
 	}
 	activeScanner := scanner.NewActiveScanner(store, logger).
 		WithSender(httpSender).
 		WithScope(scope).
-		WithCorpusChecks(passiveScanner.ActiveChecks()).
-		// The compiled-in PortSwigger corpus when no -bchecks directory was given: available
-		// under check_corpus, which this does not turn on.
-		WithBundledCorpus(bundledChecks).
-		WithToolRunner(toolRunner).
-		WithOOBProvider(oobProvider).
-		// The capability handles this binary used to leave unwired: without the ledger the 10
-		// stored/second-order checks refuse; without the coordinator, access-control and CSRF
-		// refuse; without the JS/JWT checks those families refuse despite data compiled into the
-		// binary. Each constructs unconditionally — the ledgers are in-memory and bounded, the JS
-		// corpus is vendored and parsed once per process, the JWT wordlist is the compiled-in list.
-		WithStoredLedger(scanner.NewStoredLedger()).
-		WithProvenanceLedger(scanner.NewProvenanceLedger()).
-		WithSessionCoordinator(sessionCoord).
-		WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
-		WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())).
-		WithAuditConfig(auditConfig)
-	if domOpts != nil {
-		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
+		WithCapabilities(caps)
+	// W2: -scan-config is an explicit operator choice and wins outright (WithAuditConfig, via
+	// the recipe above). Without it the budget resolves through ScanConfig.Timeout - the same
+	// path the desktop takes - so restoreProjectScanState's per-project override drives this
+	// binary's audits too, instead of mutating a field nothing read. The CLI's own default is
+	// preserved by naming DefaultAuditBudget as the ScanConfig timeout (the old effective
+	// value), so the only behavior that changes is the persisted override coming alive.
+	if *scanConfig == "" {
+		activeScanner = activeScanner.WithScanTimeout(scanner.DefaultAuditBudget)
 	}
 	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
 	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
@@ -715,6 +753,14 @@ func main() {
 	// every active-audit probe, and a settings panel that covered the proxy listener but not these
 	// would be the same half-covered defect from the other side.
 	webServer := web.NewServer(store, scope).
+		// Extension websocket handlers see the Repeater's ws sends (burpsy-react-ui-wiwh
+		// slice 3): "created" carries the authorised handshake, "message" the frame. The
+		// adapter keeps internal/web free of the extension package, the same rule as the
+		// sender and proxy adapters.
+		WithWsHook(wsHookFunc(func(ctx context.Context, phase string, raw []byte) web.WsHookResult {
+			res := pluginHost.Hook(ctx, extension.HookCall{Kind: extension.KindWebSocketHandler, Phase: phase, Raw: raw})
+			return web.WsHookResult{Raw: res.Raw, Changed: res.Changed, Dropped: res.Dropped, Applied: res.Applied, Failures: len(res.Failures)}
+		})).
 		// First in the chain, so everything downstream — including WithPersist's restore and
 		// its save sink — is wired to the log the proxy is already recording into.
 		WithToolLog(toolLog).
@@ -733,6 +779,9 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		// The same recipe, handed to the lazy fallback so a scanner built on first audit
+		// wires the same handles this one did (internal/web/api_scanner_audit.go).
+		WithScannerCapabilities(caps).
 		WithCollaboratorStateDir(*collaboratorStateDir).
 		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
 		// because it is the scanner the web server audits with — so the channel the Collaborator tab
@@ -772,6 +821,7 @@ func main() {
 		// The Extender's plugin host. Attached rather than built by the web server because which
 		// executables may run is operator policy, exactly like -tools.
 		WithExtensions(pluginHost).
+
 		// So /ca.crt can serve it. Read here rather than in the web server because this is where the
 		// CA directory is known. An unreadable file is a warning, not fatal: interception still works
 		// for a client that already trusts the CA, and the operator gets told why the download is
@@ -801,6 +851,15 @@ func main() {
 		WithFileLog(fileLogger)
 	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
 	// site-map items. Installed into the slot the proxy was built with, which is safe while it serves.
+	// Extension host services (burpsy-react-ui-wiwh slice 6): event.raise lands on the dashboard,
+	// http.send leaves through the SCOPED sender (the egress fence a plugin never bypasses),
+	// storage persists beside the project, traffic.query reads the same store history serves.
+	// ai.prompt stays unwired until an operator-configured AI endpoint exists - CodeNotWired is
+	// the honest answer, and xpuh closes when W4's agent.LLM lane lands one. Injected now and not
+	// at NewHost because the services are built from this server, which did not exist then; every
+	// plugin load happens after this line.
+	pluginHost.SetServices(webServer.ExtensionServices())
+
 	pageObserver.Set(webServer.ObserveProxiedPage)
 	// The skill library (burpsy-react-ui-ulsy). An unreadable directory refuses to start: the operator
 	// named it, and a console that came up without it would serve an empty library as though it were
@@ -1073,6 +1132,22 @@ func startBlindXSS(ctx context.Context, bind, baseURL string, logger *zap.Logger
 // and this is the one place a shell must not appear — the executable is run directly so that an
 // argument containing shell metacharacters is data. A plugin that needs an interpreter should be an
 // executable script with a shebang, which is what every language runtime already supports.
+// trafficHookFunc adapts a plain function to proxy.TrafficHook, the way
+// sender.HTTPHookFunc does for the sender's seam.
+type trafficHookFunc func(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult
+
+func (f trafficHookFunc) HookTraffic(ctx context.Context, phase string, raw []byte) proxy.TrafficHookResult {
+	return f(ctx, phase, raw)
+}
+
+// wsHookFunc adapts a plain function to web.WsHook, the way trafficHookFunc does
+// for the proxy's seam.
+type wsHookFunc func(ctx context.Context, phase string, raw []byte) web.WsHookResult
+
+func (f wsHookFunc) HookWs(ctx context.Context, phase string, raw []byte) web.WsHookResult {
+	return f(ctx, phase, raw)
+}
+
 func pluginSpecs(allowlist map[string]string) map[string]extension.PluginSpec {
 	if len(allowlist) == 0 {
 		return nil

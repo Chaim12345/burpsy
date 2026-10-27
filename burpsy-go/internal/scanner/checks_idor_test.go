@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,6 +65,10 @@ func TestIDORFindsAnotherUsersObject(t *testing.T) {
 		{"/idor/profile?id=1", "tentative", `query parameter "id" from "1" to "2"`},
 		// A bearer JWT naming sub=1 and an order whose ownerId is 1: the binding is shown.
 		{"/idor/orders/1001", "firm", `ownerId`},
+		// Juice Shop's shape: the token signs the whole user row, so the session user is the
+		// NESTED claim data.id, and the basket's owner rides in UserId. Only a recursive claim
+		// read shows the binding.
+		{"/rest/basket/1001", "firm", `data.UserId`},
 		// The id lives in a cookie.
 		{"/idor/account", "tentative", `cookie "acct_id"`},
 		// Refused as captured; the client-held role cookie raised to admin opens it.
@@ -82,6 +88,42 @@ func TestIDORFindsAnotherUsersObject(t *testing.T) {
 				t.Errorf("description does not say %q: %s", c.mustSay, f.Description)
 			}
 		})
+	}
+}
+
+// idorTestJWT mints an unsigned-shape JWT for claim-extraction tests: real base64url segments, a
+// placeholder signature - idorSessionIDs reads the payload, it does not verify.
+func idorTestJWT(claims map[string]any) string {
+	payload, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte("sig"))
+}
+
+// The session-user claims are read recursively because real tokens nest them: Juice Shop signs
+// {data: {id: ...}, bid: ...}, and a top-level-only read scores its demonstrable binding
+// Tentative. Pinned at the unit level as well as end to end above, so the next regression says
+// which layer lost the nested claim.
+func TestIDORSessionIDsReadsNestedClaims(t *testing.T) {
+	raw := "GET /rest/basket/1001 HTTP/1.1\r\nHost: app.test\r\nAuthorization: Bearer " +
+		idorTestJWT(map[string]any{
+			"data": map[string]any{"id": 6, "email": "a@b.c", "role": "customer"},
+			"bid":  1001,
+			"sub":  "top-level-wins-too",
+			"deep": map[string]any{"list": []any{map[string]any{"userId": "42"}}},
+			"iat":  1, "exp": 2,
+		}) + "\r\n\r\n"
+	got := idorSessionIDs(raw)
+	for _, want := range []string{"6", "42", "top-level-wins-too"} {
+		if !got[want] {
+			t.Errorf("session ids = %v, missing %q", got, want)
+		}
+	}
+	// Not every nested value is a user id: only the id-named claims count.
+	for _, not := range []string{"a@b.c", "customer", "1001", "1", "2"} {
+		if got[not] {
+			t.Errorf("session ids = %v, must not contain %q", got, not)
+		}
 	}
 }
 

@@ -1,214 +1,229 @@
 /**
- * burpsy-react-ui-eslt: editable editors keep the message's own line endings — through unrelated
- * edits, Convert selection, the copy-selection hotkey and the palette's codecs. Run with
+ * burpsy-react-ui-elam (root cause of ngao, eslt, oob3): the editor keeps a message's own line
+ * endings by giving CodeMirror `EditorState.lineSeparator`, not by shadowing the text. Run with
  * `bun run test:lib`.
  *
- * The editor's CodeMirror document is built here exactly as ui/editor.tsx builds it: from the
- * CR-less text, with the real text beside it on the `realText` facet. Transactions are made with
- * `state.update`, which is what `view.dispatch` does before handing the ViewUpdate (and its
- * transactions) to the onChange the editor installs.
+ * States are built here exactly as ui/editor.tsx builds them: the message goes in verbatim and
+ * `lineSeparatorFor(message)` is the separator. `state.sliceDoc(0)` is what the editor's onChange
+ * writes back.
  */
 import { describe, expect, test } from "bun:test";
-import { EditorSelection, EditorState, type Transaction, type TransactionSpec } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
-import {
-  applyDocChanges,
-  lineEndingAt,
-  normalizeEol,
-  realText,
-  realTextOf,
-  reconcile,
-  selectionText,
-  selectionTransformSpec,
-  type RealTextRef,
-} from "./editor-eol";
+import { EditorSelection, EditorState, type TransactionSpec } from "@codemirror/state";
+import { history, undo, undoDepth } from "@codemirror/commands";
+import { EditorView } from "@codemirror/view";
+import { documentText, hasMixedLineEndings, lineSeparatorFor, pasteLineBreaks, selectionText, selectionTransformSpec } from "./editor-eol";
 import { selectedText, transformSelectionIn } from "./palette-selection";
 import { base64Decode, base64Encode, urlEncodeAllChars } from "./transforms";
 
-const REQUEST = "POST /login HTTP/1.1\r\nHost: target.example\r\nContent-Type: application/json\r\n\r\n{\n  \"user\": \"a\"\n}";
+const REQUEST = 'POST /login HTTP/1.1\r\nHost: target.example\r\nContent-Type: application/json\r\n\r\n{\n  "user": "a"\n}';
 
-function editorFor(real: string, selection?: EditorSelection): { state: EditorState; ref: RealTextRef } {
-  const ref: RealTextRef = { current: real };
-  const state = EditorState.create({
-    doc: normalizeEol(real),
-    selection,
-    extensions: [realText.of(ref), EditorState.allowMultipleSelections.of(true)],
-  });
-  return { state, ref };
+function editorFor(real: string, selection?: EditorSelection): EditorState {
+ return EditorState.create({
+  doc: real,
+  selection,
+  extensions: [EditorState.lineSeparator.of(lineSeparatorFor(real)), EditorState.allowMultipleSelections.of(true), history()],
+ });
 }
 
-/** The doc position of the first occurrence of `needle` in the (CR-less) document. */
+/** The doc position of the first occurrence of `needle`, found in the message's own text. */
 function docIndex(state: EditorState, needle: string): number {
-  const at = state.doc.toString().indexOf(needle);
-  if (at < 0) throw new Error(`no ${JSON.stringify(needle)} in the document`);
-  return at;
+ const text = documentText(state);
+ const at = text.indexOf(needle);
+ if (at < 0) throw new Error(`no ${JSON.stringify(needle)} in the document`);
+ // each CRLF before `at` is one document position
+ return at - (text.slice(0, at).split(state.lineBreak).length - 1) * (state.lineBreak.length - 1);
 }
 
-/** What the editor's onChange now writes for one dispatch. */
-function written(state: EditorState, ref: RealTextRef, spec: TransactionSpec): { tr: Transaction; text: string } {
-  const tr = state.update(spec);
-  const text = reconcile(ref.current, [tr]) ?? tr.state.doc.toString();
-  return { tr, text };
+function written(state: EditorState, spec: TransactionSpec): string {
+ return documentText(state.update(spec).state);
 }
 
-describe("an unrelated edit keeps CRLF", () => {
-  test("typing one character into a CRLF request changes that character and nothing else", () => {
-    const { state, ref } = editorFor(REQUEST);
-    const at = docIndex(state, "target.example") + "target".length;
-    const { tr, text } = written(state, ref, { changes: { from: at, insert: "2" } });
-    // The defect: CodeMirror's own string, which the editor used to write back, has lost every CR.
-    expect(tr.state.doc.toString()).not.toContain("\r");
-    expect(text).toBe(REQUEST.replace("target.example", "target2.example"));
-  });
-
-  test("a deletion that spans a CRLF removes both bytes", () => {
-    const { state, ref } = editorFor("A: 1\r\nB: 2\r\n\r\n");
-    const from = docIndex(state, "1") + 1;
-    const { text } = written(state, ref, { changes: { from, to: from + 1 } });
-    expect(text).toBe("A: 1B: 2\r\n\r\n");
-  });
-
-  test("a typed line break takes the ending of the line it is typed on, in a mixed message", () => {
-    const { state, ref } = editorFor(REQUEST);
-    const inHead = docIndex(state, "Content-Type");
-    const head = written(state, ref, { changes: { from: inHead, insert: "X-New: 1\n" } }).text;
-    expect(head).toBe(REQUEST.replace("Content-Type", "X-New: 1\r\nContent-Type"));
-    const inBody = docIndex(state, '"user"');
-    const body = written(state, ref, { changes: { from: inBody, insert: "\n" } }).text;
-    expect(body).toBe(REQUEST.replace('"user"', '\n"user"'));
-  });
-
-  test("a pasted CRLF block in a CRLF head stays CRLF", () => {
-    const { state, ref } = editorFor("GET / HTTP/1.1\r\nHost: a\r\n\r\n");
-    const at = docIndex(state, "Host");
-    // A paste reaches the document already split into lines; the inserted Text joins them with "\n".
-    const { text } = written(state, ref, { changes: { from: at, insert: "A: 1\r\nB: 2\r\n" } });
-    expect(text).toBe("GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\nHost: a\r\n\r\n");
-  });
-
-  test("successive transactions replay in order", () => {
-    const { state, ref } = editorFor("A\r\nB\r\n");
-    const first = state.update({ changes: { from: 0, insert: "x" } });
-    const second = first.state.update({ changes: { from: first.state.doc.length, insert: "C" } });
-    expect(reconcile(ref.current, [first, second])).toBe("xA\r\nB\r\nC");
-  });
-
-  test("lone CR line breaks are kept too", () => {
-    const { state, ref } = editorFor("A\rB\rC");
-    const { text } = written(state, ref, { changes: { from: docIndex(state, "B") + 1, insert: "!" } });
-    expect(text).toBe("A\rB!\rC");
-  });
-
-  test("a stale real text is detected, and the document stands in rather than a bad splice", () => {
-    const { state, ref } = editorFor("A\r\nB");
-    ref.current = "something else\r\n";
-    expect(realTextOf(state)).toBeNull();
-    const tr = state.update({ changes: { from: 0, insert: "x" } });
-    expect(reconcile(ref.current, [tr])).toBeNull();
-    expect(selectionText(state.update({ selection: { anchor: 0, head: 3 } }).state)).toBe("A\nB");
-  });
+describe("lineSeparatorFor", () => {
+ test("CRLF wins whenever the message has one", () => {
+  expect(lineSeparatorFor(REQUEST)).toBe("\r\n");
+  expect(lineSeparatorFor("a\nb\r\nc")).toBe("\r\n");
+ });
+ test("LF, lone CR, and no break", () => {
+  expect(lineSeparatorFor("a\nb")).toBe("\n");
+  expect(lineSeparatorFor("a\rb")).toBe("\r");
+  expect(lineSeparatorFor("GET / HTTP/1.1")).toBe("\n");
+  expect(lineSeparatorFor("")).toBe("\n");
+ });
+ test("with no CRLF the first kind of break decides", () => {
+  expect(lineSeparatorFor("a\rb\nc")).toBe("\r");
+  expect(lineSeparatorFor("a\nb\rc")).toBe("\n");
+ });
 });
 
-describe("selection actions read and write real text", () => {
-  const spanning = (state: EditorState) => {
-    const from = docIndex(state, "HTTP/1.1");
-    return EditorSelection.single(from, docIndex(state, "target"));
-  };
+describe("the document round-trips the message natively", () => {
+ test.each([
+  ["CRLF", REQUEST],
+  ["LF", "a\nb\nc"],
+  ["lone CR", "a\rb\rc"],
+  ["mixed CRLF and LF", "x\r\ny\nz\r\n"],
+  ["trailing CRLF", "a\r\n"],
+ ])("%s", (_name, message) => {
+  expect(documentText(editorFor(message))).toBe(message);
+ });
 
-  test("Convert selection across a header break encodes the CR (editor transformSelection path)", () => {
-    const base = editorFor(REQUEST);
-    const { state, ref } = editorFor(REQUEST, spanning(base.state));
-    expect(selectionText(state)).toBe("HTTP/1.1\r\nHost: ");
-    const spec = selectionTransformSpec(state, urlEncodeAllChars)!;
-    expect(spec.changes[0]!.insert).toMatch(/%0d%0a/i);
-    const { text } = written(state, ref, spec);
-    expect(text).toBe(REQUEST.replace("HTTP/1.1\r\nHost: ", urlEncodeAllChars("HTTP/1.1\r\nHost: ")));
-    expect(text.slice(text.indexOf("target"))).toBe(REQUEST.slice(REQUEST.indexOf("target")));
-  });
+ test("a break is one document position, so message positions map as before", () => {
+  const state = editorFor("ab\r\ncd");
+  expect(state.doc.length).toBe(5);
+  expect(state.doc.lines).toBe(2);
+ });
 
-  test("a decode whose output holds CRLF writes those exact bytes, even into an LF body", () => {
-    const message = "POST / HTTP/1.1\r\nHost: a\r\n\r\nline1\nPAYLOAD\nline3";
-    const encoded = base64Encode("x\r\ny");
-    const withPayload = message.replace("PAYLOAD", encoded);
-    const seed = editorFor(withPayload);
-    const from = docIndex(seed.state, encoded);
-    const { state, ref } = editorFor(withPayload, EditorSelection.single(from, from + encoded.length));
-    const { text } = written(state, ref, selectionTransformSpec(state, base64Decode)!);
-    expect(text).toBe(message.replace("PAYLOAD", "x\r\ny"));
-  });
+ test("a break of another kind stays a character in its line, not a line", () => {
+  const state = editorFor("x\r\ny\nz");
+  expect(state.doc.lines).toBe(2);
+  expect(documentText(state)).toBe("x\r\ny\nz");
+ });
+});
 
-  test("every selected range converts, each from its own real text", () => {
-    const real = "A\r\nB\r\nC\r\nD";
-    const seed = editorFor(real);
-    const selection = EditorSelection.create([
-      EditorSelection.range(docIndex(seed.state, "A"), docIndex(seed.state, "B") + 1),
-      EditorSelection.range(docIndex(seed.state, "C"), docIndex(seed.state, "D") + 1),
-    ]);
-    const { state, ref } = editorFor(real, selection);
-    const { text } = written(state, ref, selectionTransformSpec(state, (input) => `[${JSON.stringify(input)}]`)!);
-    expect(text).toBe('["A\\r\\nB"]\r\n["C\\r\\nD"]');
-  });
+describe("an unrelated edit keeps CRLF (eslt)", () => {
+ test("typing one character changes that character and nothing else", () => {
+  const state = editorFor(REQUEST);
+  const at = docIndex(state, "target.example") + "target".length;
+  expect(written(state, { changes: { from: at, insert: "2" } })).toBe(REQUEST.replace("target.example", "target2.example"));
+ });
 
-  test("Ctrl+Alt+C copies the selection with its CR bytes", () => {
-    const base = editorFor(REQUEST);
-    const { state } = editorFor(REQUEST, spanning(base.state));
-    expect(selectionText(state)).toBe("HTTP/1.1\r\nHost: ");
-    expect(realTextOf(state)).toBe(REQUEST);
-  });
+ test("a deletion that spans a CRLF removes both bytes", () => {
+  const state = editorFor("a\r\nb");
+  expect(written(state, { changes: { from: 1, to: 2 } })).toBe("ab");
+ });
 
-  test("an empty selection converts nothing", () => {
-    const { state } = editorFor(REQUEST);
-    expect(selectionTransformSpec(state, (input) => input.toUpperCase())).toBeNull();
+ test("a typed line break takes the message's separator", () => {
+  const state = editorFor("a\r\nb");
+  expect(written(state, { changes: { from: 1, insert: state.lineBreak } })).toBe("a\r\n\r\nb");
+ });
+
+ test("lone CR messages stay lone CR", () => {
+  const state = editorFor("a\rb");
+  expect(written(state, { changes: { from: 3, insert: "!" } })).toBe("a\rb!");
+ });
+});
+
+describe("undo keeps the CR bytes (oob3)", () => {
+ test("undoing a conversion across a CRLF restores the CRLF", () => {
+  const base = editorFor(REQUEST);
+  const from = docIndex(base, "HTTP/1.1");
+  const state = editorFor(REQUEST, EditorSelection.single(from, docIndex(base, "target")));
+  const spec = selectionTransformSpec(state, urlEncodeAllChars)!;
+  let next = state.update({ ...spec, userEvent: "input" }).state;
+  expect(documentText(next)).not.toBe(REQUEST);
+  expect(undoDepth(next)).toBe(1);
+  let result = next;
+  undo({
+   state: next,
+   dispatch: (tr) => {
+    result = tr.state;
+   },
   });
+  expect(documentText(result)).toBe(REQUEST);
+ });
+});
+
+describe("selection actions read and write the real bytes (ngao)", () => {
+ const spanning = (state: EditorState) => EditorSelection.single(docIndex(state, "HTTP/1.1"), docIndex(state, "target"));
+
+ test("Convert selection across a header break encodes the CR", () => {
+  const state = editorFor(REQUEST, spanning(editorFor(REQUEST)));
+  expect(selectionText(state)).toBe("HTTP/1.1\r\nHost: ");
+  const spec = selectionTransformSpec(state, urlEncodeAllChars)!;
+  expect(spec.changes[0]!.insert).toMatch(/%0d%0a/i);
+  const text = written(state, spec);
+  expect(text).toBe(REQUEST.replace("HTTP/1.1\r\nHost: ", urlEncodeAllChars("HTTP/1.1\r\nHost: ")));
+ });
+
+ test("a decode whose output holds CRLF writes those exact bytes, even into an LF body", () => {
+  const encoded = base64Encode("x\r\ny");
+  const withPayload = `POST / HTTP/1.1\r\nHost: a\r\n\r\nline1\n${encoded}\nline3`;
+  const seed = editorFor(withPayload);
+  const from = docIndex(seed, encoded);
+  const state = editorFor(withPayload, EditorSelection.single(from, from + encoded.length));
+  expect(written(state, selectionTransformSpec(state, base64Decode)!)).toBe(`POST / HTTP/1.1\r\nHost: a\r\n\r\nline1\nx\r\ny\nline3`);
+ });
+
+ test("every selected range converts, each from its own bytes", () => {
+  const real = "A\r\nB\r\nC\r\nD";
+  const seed = editorFor(real);
+  const selection = EditorSelection.create([
+   EditorSelection.range(docIndex(seed, "A"), docIndex(seed, "B") + 1),
+   EditorSelection.range(docIndex(seed, "C"), docIndex(seed, "D") + 1),
+  ]);
+  const state = editorFor(real, selection);
+  expect(written(state, selectionTransformSpec(state, (input) => `[${JSON.stringify(input)}]`)!)).toBe('["A\\r\\nB"]\r\n["C\\r\\nD"]');
+ });
+
+ test("an empty selection converts nothing", () => {
+  expect(selectionTransformSpec(editorFor(REQUEST), (input) => input.toUpperCase())).toBeNull();
+ });
 });
 
 describe("palette codecs (selectedText / transformSelectionIn)", () => {
-  /** Enough of an EditorView for the palette helpers: they read state, dispatch and focus. */
-  function fakeView(state: EditorState, ref: RealTextRef) {
-    const view = {
-      state,
-      writes: [] as string[],
-      dispatch(spec: TransactionSpec) {
-        const tr = view.state.update(spec);
-        const next = reconcile(ref.current, [tr]) ?? tr.state.doc.toString();
-        ref.current = next;
-        view.writes.push(next);
-        view.state = tr.state;
-      },
-      focus() {},
-    };
-    return view;
-  }
+ function fakeView(state: EditorState) {
+  const view = {
+   state,
+   writes: [] as string[],
+   dispatch(spec: TransactionSpec) {
+    const tr = view.state.update(spec);
+    view.writes.push(documentText(tr.state));
+    view.state = tr.state;
+   },
+   focus() {},
+  };
+  return view;
+ }
+ const across = () => {
+  const base = editorFor(REQUEST);
+  return editorFor(REQUEST, EditorSelection.single(docIndex(base, "1.1"), docIndex(base, "Host") + 4));
+ };
 
-  test("the read-only path copies real text across a CRLF", () => {
-    const base = editorFor(REQUEST);
-    const from = docIndex(base.state, "1.1");
-    const { state, ref } = editorFor(REQUEST, EditorSelection.single(from, docIndex(base.state, "Host") + 4));
-    expect(selectedText(fakeView(state, ref) as unknown as EditorView)).toBe("1.1\r\nHost");
-  });
+ test("the read-only path copies the bytes across a CRLF", () => {
+  expect(selectedText(fakeView(across()) as unknown as EditorView)).toBe("1.1\r\nHost");
+ });
 
-  test("the writable path converts the CR and leaves the rest of the message's endings alone", () => {
-    const base = editorFor(REQUEST);
-    const from = docIndex(base.state, "1.1");
-    const { state, ref } = editorFor(REQUEST, EditorSelection.single(from, docIndex(base.state, "Host") + 4));
-    const view = fakeView(state, ref);
-    const reported = transformSelectionIn(view as unknown as EditorView, (input) => input.replace("\r\n", "<CRLF>"));
-    expect(reported).toBe("1.1<CRLF>Host");
-    expect(view.writes).toEqual([REQUEST.replace("1.1\r\nHost", "1.1<CRLF>Host")]);
-  });
+ test("the writable path converts the CR and leaves the rest alone", () => {
+  const view = fakeView(across());
+  const reported = transformSelectionIn(view as unknown as EditorView, (input) => input.replace("\r\n", "<CRLF>"));
+  expect(reported).toBe("1.1<CRLF>Host");
+  expect(view.writes).toEqual([REQUEST.replace("1.1\r\nHost", "1.1<CRLF>Host")]);
+ });
 });
 
-describe("helpers", () => {
-  test("lineEndingAt reads the break that ends the line, else the one before", () => {
-    expect(lineEndingAt("a\r\nb\nc", 0)).toBe("\r\n");
-    expect(lineEndingAt("a\r\nb\nc", 3)).toBe("\n");
-    expect(lineEndingAt("a\r\nb", 4)).toBe("\r\n");
-    expect(lineEndingAt("abc", 1)).toBe("\n");
-  });
+describe("pasted and Pretty line endings (PR 363 review)", () => {
+ const paste = (state: EditorState, text: string) => {
+  const filtered = state.facet(EditorView.clipboardInputFilter).reduce((t, f) => f(t, state), text);
+  return written(state, { changes: { from: 0, insert: filtered } });
+ };
+ const withFilter = (real: string) =>
+  EditorState.create({ doc: real, extensions: [EditorState.lineSeparator.of(lineSeparatorFor(real)), pasteLineBreaks] });
 
-  test("applyDocChanges keeps every byte outside the changes", () => {
-    const real = "a\r\nb\r\nc";
-    expect(applyDocChanges(real, [{ from: 2, to: 3, insert: "B", exact: false }])).toBe("a\r\nB\r\nc");
-    expect(applyDocChanges(real, [{ from: 0, to: 0, insert: "z\r", exact: true }])).toBe("z\ra\r\nb\r\nc");
-  });
+ test("LF text pasted into a CRLF request takes CRLF", () => {
+  expect(paste(withFilter(REQUEST), "a\nb\rc\r\nd")).toBe(`a\r\nb\r\nc\r\nd${REQUEST}`);
+ });
+ test("CRLF text pasted into an LF message takes LF", () => {
+  expect(paste(withFilter("x\ny"), "a\r\nb")).toBe("a\nb" + "x\ny");
+ });
+ test("the pasted breaks are real line breaks of the document", () => {
+  const state = withFilter(REQUEST);
+  const next = state.update({ changes: { from: 0, insert: state.facet(EditorView.clipboardInputFilter)[0]!("a\nb", state) } }).state;
+  expect(next.doc.line(1).text).toBe("a");
+  expect(next.doc.line(2).text.startsWith("b")).toBe(true);
+ });
+});
+
+describe("mixed line endings (PR 363 review, notice only)", () => {
+ const MIXED = 'POST /x HTTP/1.1\r\nHost: h\r\n\r\n{\n  "a": 1\n}';
+ test("detects a CRLF head over an LF body, and nothing else", () => {
+  expect(hasMixedLineEndings(MIXED)).toBe(true);
+  expect(hasMixedLineEndings(REQUEST.replace(/\n  "user": "a"\n/, ""))).toBe(false);
+  expect(hasMixedLineEndings("a\nb\nc")).toBe(false);
+  expect(hasMixedLineEndings("a\r\nb\r\n")).toBe(false);
+  expect(hasMixedLineEndings("")).toBe(false);
+ });
+ test("the document still holds a mixed message's bytes exactly, and an edit keeps them", () => {
+  const state = editorFor(MIXED);
+  expect(documentText(state)).toBe(MIXED);
+  expect(written(state, { changes: { from: 0, insert: "!" } })).toBe(`!${MIXED}`);
+ });
 });

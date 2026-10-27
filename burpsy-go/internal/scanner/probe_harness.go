@@ -178,6 +178,13 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	}
 	h.typeIndex, h.issue, h.disabled, h.declines = cc.CheckTypeIndex, cc.CheckIssue, cc.DisabledMethods, cc.MethodDeclines
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
+	// GraphQL ingestion validation (graphql_ingest.go): a document no GraphQL server would
+	// parse yields no argument points - probing inside it measures the server's parser
+	// error path, never a resolver. Off, the harness ships the string-scan shape bcheck
+	// derives unvalidated.
+	if !s.ConfigSnapshot().DisableGraphQLIngest {
+		h.points = filterGraphQLPointsByValidation(h.points)
+	}
 
 	baseline, err := h.send(ctx, raw)
 	if err != nil {

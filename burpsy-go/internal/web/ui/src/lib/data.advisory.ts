@@ -12,13 +12,13 @@ import { useResource } from "./data";
 import type { Advisory, AdvisoryCatalogue } from "./types.advisory";
 
 export const advisoryKeys = {
-  /**
-   * Keyed on both filters because the filtering happens server-side, so each combination is a
-   * different response. The catalogue itself is static, so these entries stay warm for the session
-   * and going back to a previous filter is instant.
-   */
-  catalogue: (q: string, severity: string) => ["advisories", q, severity] as const,
-  definition: (typeIndex: string) => ["advisories", "definition", typeIndex] as const,
+ /**
+  * Keyed on both filters because the filtering happens server-side, so each combination is a
+  * different response. The catalogue itself is static, so these entries stay warm for the session
+  * and going back to a previous filter is instant.
+  */
+ catalogue: (q: string, severity: string) => ["advisories", q, severity] as const,
+ definition: (typeIndex: string) => ["advisories", "definition", typeIndex] as const,
 };
 
 /**
@@ -33,10 +33,10 @@ export const advisoryKeys = {
  * Callers pass a debounced term — this is one request per settled keystroke, not per keystroke.
  */
 export const useAdvisories = (q: string, severity: string) =>
-  useResource<AdvisoryCatalogue>(
-    advisoryKeys.catalogue(q, severity),
-    `/api/advisories${query({ q, severity: severity === "all" ? "" : severity })}`,
-  );
+ useResource<AdvisoryCatalogue>(
+  advisoryKeys.catalogue(q, severity),
+  `/api/advisories${query({ q, severity: severity === "all" ? "" : severity })}`,
+ );
 
 /**
  * One definition in full.
@@ -46,8 +46,8 @@ export const useAdvisories = (q: string, severity: string) =>
  * both.
  */
 export const useAdvisory = (typeIndex: string | null) =>
-  useResource<Advisory>(
-    advisoryKeys.definition(typeIndex ?? ""),
-    `/api/advisories/${typeIndex ?? ""}`,
-    typeIndex !== null && typeIndex !== "",
-  );
+ useResource<Advisory>(
+  advisoryKeys.definition(typeIndex ?? ""),
+  `/api/advisories/${typeIndex ?? ""}`,
+  typeIndex !== null && typeIndex !== "",
+ );

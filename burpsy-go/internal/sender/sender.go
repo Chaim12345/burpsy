@@ -16,10 +16,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
@@ -37,6 +39,12 @@ type Sender struct {
 	client *http.Client
 	config *SenderConfig
 	net    NetworkSettings
+	// netGen is the network-settings generation: bumped by every ApplyNetwork and
+	// WithUpstreamCarrier call, it is the part of the pool stamp that retires connections
+	// and caller-owned h2 sessions when settings or the carrier change (dial_identity.go).
+	// Guarded by mu with the state it versions, so a capture reads the generation, the
+	// carrier and the config as one consistent snapshot.
+	netGen uint64
 	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
 	// the path. Building a CertPool parses every system root, and this is the handshake path for every
 	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
@@ -46,6 +54,22 @@ type Sender struct {
 	// pool holds the HTTP/1 connections kept alive for reuse (ry5n, keepalive.go). Its zero value is
 	// an empty pool.
 	pool http1Pool
+	// closeDelimitedAuthorities remembers pool keys whose HTTP/1 responses arrived close-delimited:
+	// either HTTP/1.0-style by design, or salvaged from a truncated Content-Length body
+	// (httputil.TruncatedBodyError). Reusing a connection to such an authority buys nothing - the
+	// peer closed it - and NOT asking for the close costs real time: a peer that truncates while
+	// offering keep-alive holds the connection until its own idle timer fires, and OWASP Juice
+	// Shop's serve-index /ftp/ listing makes every fetch wait ~5s for 59 bytes that never come.
+	// A marked authority's next request carries Connection: close and skips the pool, so the EOF
+	// that frames its response arrives with the body instead of one keep-alive period later.
+	closeDelimitedAuthorities sync.Map
+	// httpHook is the optional extension traffic-hook seam (http_hook.go); nil means no hook and
+	// a byte-identical send path. Set once at boot via WithHTTPHook.
+	httpHook HTTPHook
+	// httpHook* are the running hook totals the tool-log surface reads via HTTPHookCounts.
+	httpHookRequestsChanged  atomic.Int64
+	httpHookResponsesChanged atomic.Int64
+	httpHookFailures         atomic.Int64
 	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
 	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
 	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
@@ -115,6 +139,9 @@ type SenderConfig struct {
 	// credential store. Held here rather than on Sender because both dial paths need it and both read
 	// their knobs from the config.
 	ClientCerts alpn.ClientCertSource
+	// TLSFingerprints binds host patterns to browser ClientHello fingerprints (63pf). Nil
+	// means every dial presents Go's own hello, the behaviour before the setting existed.
+	TLSFingerprints *TLSFingerprints
 	// UpstreamCarrier is the global SOCKS layer this sender's egress legs are opened through.
 	// Nil means no carrier, which is the behaviour every send had before the layer existed.
 	//
@@ -387,6 +414,18 @@ func (s *Sender) Network() NetworkSettings {
 	return s.net
 }
 
+// requestHasConnectionHeader reports whether a raw HTTP/1 request carries any Connection
+// header, so the close-delimited accommodation can add its own only where none exists —
+// never over one the operator wrote.
+func requestHasConnectionHeader(raw []byte) bool {
+	head, _, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !ok {
+		return false
+	}
+	_, present := httputil.HeaderValue(head, "connection")
+	return present
+}
+
 // ApplyNetwork installs new network settings and rebuilds the typed path's transport for them.
 //
 // It validates first and changes nothing on refusal: a half-applied settings document — the new
@@ -403,8 +442,15 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	s.net = normalised
 	s.client = buildClient(s.config, normalised, s.carrier)
 	// A kept connection was dialled under the settings just replaced (resolution, TLS, timeouts), so
-	// none of them may carry the next send.
+	// none of them may carry the next send. The pool flush reaches the h1 pool; the generation bump
+	// is what retires the caller-owned h2 sessions this sender cannot flush (dial_identity.go).
+	s.netGen++
 	s.pool.closeAll()
+	// The close-delimited marks keyed the same dial decisions as the pool: an authority
+	// that close-delimited under the old network may answer completely under the new
+	// resolution or carrier, and an uncleared mark would force fresh connections for the
+	// process's life (PR #363 review).
+	s.closeDelimitedAuthorities = sync.Map{}
 	return nil
 }
 
@@ -470,7 +516,7 @@ func resolveUpstream(config *SenderConfig) (*upstream.Policy, error) {
 // dialForProgram's cleartext arm all come here, so a proxy setting cannot cover some of them and not
 // others. That was the state before — three independent net.Dialers, none of which had heard of
 // SenderConfig.ProxyURL.
-func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.Conn, error) {
+func (s *Sender) dialPlain(ctx context.Context, host string, port uint16, id dialIdentity) (net.Conn, error) {
 	if s.upstreamErr != nil {
 		return nil, s.upstreamErr
 	}
@@ -480,18 +526,20 @@ func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.C
 	// whatever TCP connection upstream.Dialer opens, to the proxy or to the origin. Building a bare
 	// net.Dialer here instead — which is what this did before the network settings landed — would have
 	// meant that configuring a proxy silently stopped honouring the operator's resolver.
-	settings := s.Network()
+	// Settings, policy, carrier and address are all the capture-time freeze, not live reads:
+	// the stamp this dial's connection will carry names these values (dial_identity.go).
+	settings := id.settings
 	dialer := upstream.Dialer{
-		Policy: s.upstream,
+		Policy: id.upstream,
 		// The global SOCKS layer. Every dial in this package carries it, not just the transport's:
 		// the raw path — which is the one Repeater sends through, and therefore the one an operator
 		// exercising the setting from the UI actually uses — would otherwise go direct and make the
 		// setting look installed and inert (burpsy-react-ui-mr83 part 3).
-		Carrier: s.carrier,
+		Carrier: id.carrier,
 		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 		Base:    settings.dialer(),
 	}
-	return dialer.DialContext(ctx, "tcp", settings.dialAddressFor(ctx, host, port))
+	return dialer.DialContext(ctx, "tcp", id.dialAddr)
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -521,7 +569,12 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 		s.protocols.hits.Add(1)
 		return known, nil
 	}
-	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(true))
+	id, cerr := s.captureDialIdentity(ctx, host, port, true)
+	if cerr != nil {
+		return ProtocolSupportUnknown, fmt.Errorf("discovering %s's protocol: %w",
+			formatAuthority(host, port, useTLS), cerr)
+	}
+	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(true), id)
 	if err != nil {
 		return ProtocolSupportUnknown, fmt.Errorf("discovering %s's protocol: %w",
 			formatAuthority(host, port, useTLS), err)
@@ -540,7 +593,7 @@ func (s *Sender) ProtocolFor(ctx context.Context, host string, port uint16, useT
 // the TLS session is still end-to-end with the origin, so the certificate verified and the protocol
 // negotiated are the origin's own. A proxy that terminated TLS here would be reporting its own ALPN as
 // the target's.
-func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string) (*tls.Conn, string, error) {
+func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []string, id dialIdentity) (net.Conn, string, error) {
 	if s.upstreamErr != nil {
 		return nil, "", s.upstreamErr
 	}
@@ -551,7 +604,9 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// open tunnel and the handshake runs on top of it, so the certificate verified and the protocol
 	// negotiated are the origin's, not the proxy's. Base is what stops the proxied branch from losing
 	// the operator's resolver on its way to the proxy.
-	settings := s.Network()
+	// The settings are the capture-time freeze, like every other dial input: the same value
+	// the stamp's generation versions (dial_identity.go).
+	settings := id.settings
 	connect := time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond
 	// All three dial concerns in one place. A client certificate configured for this host is
 	// presented here too, which covers every raw-bytes TLS path in the package at once:
@@ -569,10 +624,15 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		MinVersion:         minVersion,
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
-		ClientCerts:        s.config.ClientCerts,
+		// The certificate source and fingerprint are the capture-time freeze: the handshake
+		// presents what the stamp names, not whatever the stores hold when it runs
+		// (dial_identity.go, burpsy-react-ui-o388-predial-vs-dial).
+		ClientCerts: id.certSource(),
 		// Repeater's Override SNI (k011), when this send carries one. Every raw TLS path dials here,
 		// so the override reaches h2 and HTTP/1 sends alike.
 		SNI: sniOverride(ctx),
+		// The per-target browser fingerprint (63pf); empty keeps Go's own hello.
+		Fingerprint: id.fingerprint,
 	}
 	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
 	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
@@ -580,17 +640,17 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// a bare socket, so the layer was configured, reported as configured, and never carried a single
 	// connection. Burp's setting says "every outbound connection", and the gate made it mean "every
 	// connection to an upstream proxy" (burpsy-react-ui-mr83 part 3).
-	if s.upstream != nil && !s.upstream.Empty() || s.carrier != nil {
+	if id.wrap {
 		dialer.Carry = upstream.Dialer{
-			Policy:  s.upstream,
-			Carrier: s.carrier,
+			Policy:  id.upstream,
+			Carrier: id.carrier,
 			Timeout: connect,
 			Base:    settings.dialer(),
 		}.DialContext
 	}
-	conn, negotiated, err := dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
+	conn, negotiated, err := dialer.Dial(ctx, host, id.dialAddr, offer)
 	if err == nil && s.config.ServerCerts != nil {
-		s.config.ServerCerts.Record(host, port, conn.ConnectionState().PeerCertificates)
+		s.config.ServerCerts.Record(host, port, alpn.PeerCertificates(conn))
 	}
 	return conn, negotiated, err
 }
@@ -999,6 +1059,21 @@ func (s *Sender) SendRaw(ctx context.Context, host string, port uint16, useTLS b
 // It will not change what is being asked in order to use a newer protocol. A request carrying a
 // Transfer-Encoding, a duplicated Content-Length, an unreadable request line — the probes this tool
 // exists to send — go out as HTTP/1.1 verbatim, with a Downgrade naming the construct. See protocol.go.
+// observeCloseDelimited marks an authority whose HTTP/1 response arrived close-delimited, so the
+// next send to it asks for the close up front (see closeDelimitedAuthorities). Only the head
+// decides: ResponseIsFrameless is exactly "a body may follow, yet neither Content-Length nor
+// Transfer-Encoding frames it" - the shape a truncated body takes after the salvage reframed it,
+// and the shape an HTTP/1.0-style response always had.
+func (s *Sender) observeCloseDelimited(key string, resp []byte) {
+	head, _, ok := bytes.Cut(resp, []byte("\r\n\r\n"))
+	if !ok {
+		return
+	}
+	if httputil.ResponseIsFrameless(append(head, []byte("\r\n\r\n")...)) {
+		s.closeDelimitedAuthorities.Store(key, struct{}{})
+	}
+}
+
 func (s *Sender) SendRawOutcome(
 	ctx context.Context,
 	host string,
@@ -1008,6 +1083,11 @@ func (s *Sender) SendRawOutcome(
 	pref ProtocolPreference,
 ) ([]byte, SendOutcome, error) {
 	settings := s.Network()
+	if pref == ProtocolPreferenceHTTP3 {
+		// h3 shares neither the socket nor the framing with the h1/h2 path below; it has its own
+		// send leg in h3.go.
+		return s.sendH3(ctx, host, port, useTLS, rawRequest)
+	}
 	projectHTTP1 := pref == ProtocolPreferenceAuto && !settings.DefaultToHTTP2() && !burpsyhttp2.IsHTTP2Request(rawRequest)
 	if projectHTTP1 {
 		// Burp's "Default to HTTP/2" off (ry5n): a send that named no protocol is planned as pinned,
@@ -1025,9 +1105,33 @@ func (s *Sender) SendRawOutcome(
 	// Keep-alive (ry5n): an HTTP/1 send may ride a connection an earlier send left reusable.
 	keep := settings.KeepAliveHTTP1() && !settings.Streaming.isStreaming(host)
 	key := poolKey(host, port, useTLS)
+	connCloseAdded := false
+	// The send went out with a header the operator did not write; the record says so, on
+	// success and failure alike, because the bytes went out either way.
+	const connCloseNote = "Connection: close added (request carried no Connection header); the authority close-delimited its previous response"
+	if _, closeDelimited := s.closeDelimitedAuthorities.Load(key); closeDelimited {
+		// The mark forces a fresh, non-pooled connection (keep=false) unconditionally: that
+		// is what it exists for. Connection: close is ADDED only when the request carries
+		// no Connection header of its own — overwriting one the operator wrote would
+		// rewrite their bytes without a word, and an operator-set Connection: keep-alive
+		// still gets the fresh connection the mark demands (PR #363 review).
+		keep = false
+		if !requestHasConnectionHeader(plan.http1) {
+			plan.http1 = httputil.EnsureConnectionClose(plan.http1)
+			connCloseAdded = true
+		}
+	}
 	if keep {
-		if ic := s.pool.take(key, plan.wantH2); ic != nil {
+		// The take re-evaluates each candidate's OWN dial address against the live
+		// configuration (dial_identity.go): no capture, and no DNS lookup, on a pool
+		// hit. The fresh dial below captures its own identity — a configuration change
+		// landing during a failed pooled exchange governs the redial, as it did before
+		// the freeze.
+		if ic := s.pool.take(key, plan.wantH2, s.routeForDialAddr(host, useTLS)); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
+			if err == nil {
+				s.observeCloseDelimited(key, resp)
+			}
 			if err == nil || !retryOnFresh(err, plan.http1) {
 				down := plan.block
 				if down == nil {
@@ -1049,18 +1153,26 @@ func (s *Sender) SendRawOutcome(
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
 		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
+		if err == nil {
+			s.observeCloseDelimited(key, resp)
+		}
 		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
+		if connCloseAdded {
+			out.Note = connCloseNote
+		}
 		return resp, out, err
 	}
 
 	// HTTP/2 connection reuse (adkx): a carriable request rides the tab's open h2 session when there
 	// is one. Keyed by the caller's key, the authority and the SNI override, so a session opened under
-	// one ClientHello is never handed to a send asking for another.
+	// one ClientHello is never handed to a send asking for another. The session also carries the
+	// route captured immediately before its dial, so a route or certificate change retires it
+	// (h2sess-stamp).
 	opts, _ := SendOptionsFrom(ctx)
 	sessionKey := ""
 	if opts.H2Sessions != nil && plan.wantH2 {
 		sessionKey = opts.H2SessionKey + "\x00" + formatAuthority(host, port, true) + "\x00" + opts.SNI
-		if sess := opts.H2Sessions.take(sessionKey); sess != nil {
+		if sess := opts.H2Sessions.take(sessionKey, s.routeForDialAddr(host, true)); sess != nil {
 			opts.H2Sessions.reused.Add(1)
 			resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 			out := s.finish(host, port, useTLS, alpn.H2, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
@@ -1069,7 +1181,17 @@ func (s *Sender) SendRawOutcome(
 		}
 	}
 
-	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
+	// The pool stamp names the identity this dial consumes: captured at this dial decision
+	// point — after any failed pooled exchange, so the retry reads the configuration live at
+	// redial as it always has — and the dial below runs on its frozen values, so a route or
+	// certificate change during the dial or the exchange neither relabels the connection
+	// (burpsy-react-ui-o388) nor stamps it with an identity it never presented
+	// (burpsy-react-ui-o388-predial-vs-dial).
+	dialID, derr := s.captureDialIdentity(ctx, host, port, useTLS)
+	if derr != nil {
+		return nil, SendOutcome{}, derr
+	}
+	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2), dialID)
 	if err != nil {
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
@@ -1100,7 +1222,7 @@ func (s *Sender) SendRawOutcome(
 		}
 		opts.H2Sessions.opened.Add(1)
 		kept = true
-		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn)}
+		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn), route: dialID.route, dialAddr: dialID.dialAddr}
 		resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
 		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
 		return resp, out, err
@@ -1134,14 +1256,23 @@ func (s *Sender) SendRawOutcome(
 		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
 		stop()
 		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+		if err == nil {
+			s.observeCloseDelimited(key, resp)
+		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
-			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2, route: dialID.route, dialAddr: dialID.dialAddr})
 		}
 		return resp, out, err
 	}
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
+	if err == nil {
+		s.observeCloseDelimited(key, resp)
+	}
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+	if connCloseAdded {
+		out.Note = connCloseNote
+	}
 	return resp, out, err
 }
 
@@ -1317,7 +1448,12 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 //
 // With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
 func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
-	conn, err := s.dialPlain(ctx, host, port)
+	// The stamp names the identity this dial consumes - see the note at the TLS dial.
+	dialID, derr := s.captureDialIdentity(ctx, host, port, false)
+	if derr != nil {
+		return nil, "", derr
+	}
+	conn, err := s.dialPlain(ctx, host, port, dialID)
 	if err != nil {
 		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
@@ -1328,7 +1464,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
 	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
-		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br})
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br, route: dialID.route, dialAddr: dialID.dialAddr})
 	} else {
 		conn.Close()
 	}
@@ -1437,6 +1573,9 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 		s.net.Timeouts.ConnectMS = total
 	}
 	s.client = buildClient(s.config, s.net, s.carrier)
+	// A dial input changed in place: bump the generation so caller-owned pools retire what was dialled
+	// under the old value (dial_identity.go), as ApplyNetwork does.
+	s.netGen++
 	s.pool.closeAll()
 	return s
 }
@@ -1464,6 +1603,9 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
 	s.client = buildClient(s.config, s.net, s.carrier)
+	// A dial input changed in place: bump the generation so caller-owned pools retire what was dialled
+	// under the old value (dial_identity.go), as ApplyNetwork does.
+	s.netGen++
 	s.pool.closeAll()
 	return s
 }
@@ -1550,6 +1692,10 @@ func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
 	if s == nil {
 		return s
 	}
+	// The field writes, the generation bump and the client rebuild happen inside one locked
+	// section, so a capture (dial_identity.go) reads the carrier and the generation as one
+	// consistent pair — it either precedes this swap or follows it, never straddles it.
+	s.mu.Lock()
 	s.carrier = carrier
 	// The config too, because the next client rebuild reads from there rather than from the Sender —
 	// a WithTLSVerify or a settings change would otherwise drop the carrier silently.
@@ -1560,8 +1706,10 @@ func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
 	// construction, so setting the field afterwards would leave the transport dialling through a nil
 	// layer while the field reported one — the live pass caught exactly that: the console reported the
 	// carrier configured, every dial site read the field, and the connection still went out direct.
-	s.mu.Lock()
 	s.client = buildClient(s.config, s.net, carrier)
+	// Same retirement as ApplyNetwork: the pool flush covers h1, the generation covers the
+	// caller-owned h2 sessions dialled under the previous layer (dial_identity.go).
+	s.netGen++
 	s.pool.closeAll()
 	s.mu.Unlock()
 	return s
@@ -1572,5 +1720,7 @@ func (s *Sender) UpstreamCarrier() *upstream.Carrier {
 	if s == nil {
 		return nil
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.carrier
 }

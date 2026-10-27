@@ -131,7 +131,7 @@ func (s *Server) buildRouteTools() []tool {
 // because MCP tool names are the addressing scheme: two descriptors with one name is a tool a
 // client cannot call unambiguously.
 func toolNameFor(pattern string) string {
-	trimmed := strings.Trim(pattern, "/")
+	trimmed := strings.Trim(subtreeForm(pattern), "/")
 	if trimmed == "" {
 		// The "/" entry is the console's own asset route (index.html and the SPA catch-all).
 		return "root"
@@ -158,7 +158,7 @@ func toolNameFor(pattern string) string {
 func uniqueToolName(r web.MCPRouteInfo, used map[string]bool) string {
 	base := toolNameFor(r.Pattern)
 	name := base
-	if used[name] && strings.HasSuffix(r.Pattern, "/") {
+	if used[name] && isSubtreePattern(r.Pattern) {
 		name = base + "_subtree"
 	}
 	for i := 2; used[name]; i++ {
@@ -191,7 +191,7 @@ func describeRoute(r web.MCPRouteInfo) string {
 		b.WriteString("Confirmation: not required.")
 	}
 
-	if strings.HasSuffix(r.Pattern, "/") {
+	if isSubtreePattern(r.Pattern) {
 		fmt.Fprintf(&b, " This is a subtree pattern, not a requestable URL: the path argument is required, for example %s.", pathExample(r))
 	}
 	return b.String()
@@ -267,7 +267,7 @@ func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 	}
 
 	required := []string{}
-	if strings.HasSuffix(r.Pattern, "/") {
+	if isSubtreePattern(r.Pattern) {
 		props["path"] = map[string]any{
 			"type": "string",
 			"description": fmt.Sprintf("Concrete request path under %s, for example %s. Required: %s is a subtree pattern and is not itself a requestable URL.",
@@ -287,10 +287,14 @@ func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 // pathExample is a concrete path under a subtree pattern: the manifest's own subPath when it names
 // one, otherwise a placeholder that makes the shape obvious.
 func pathExample(r web.MCPRouteInfo) string {
-	if r.SubPath != "" {
-		return r.Pattern + r.SubPath
+	sub := r.SubPath
+	if sub == "" {
+		sub = "{id}"
 	}
-	return r.Pattern + "{id}"
+	if i := strings.Index(r.Pattern, "{"); i >= 0 {
+		return r.Pattern[:i] + sub + r.Pattern[strings.Index(r.Pattern, "}")+1:]
+	}
+	return r.Pattern + sub
 }
 
 // confirmToolDescriptor describes the mint step.
@@ -463,7 +467,7 @@ func describeGrouped(g groupSpec, ops []op) string {
 	b.WriteString("Operations (pass one as \"op\"):")
 	for _, o := range ops {
 		fmt.Fprintf(&b, "\n- %s — %s", o.name, o.route.Summary)
-		if strings.HasSuffix(o.route.Pattern, "/") {
+		if isSubtreePattern(o.route.Pattern) {
 			fmt.Fprintf(&b, " [subtree: pass \"path\" (e.g. %s) or \"id\"]", pathExample(o.route))
 		}
 	}
@@ -510,7 +514,7 @@ func schemaForGrouped(ops []op) map[string]any {
 	subtree := false
 	for _, o := range ops {
 		names = append(names, o.name)
-		if strings.HasSuffix(o.route.Pattern, "/") {
+		if isSubtreePattern(o.route.Pattern) {
 			subtree = true
 		}
 	}
@@ -641,12 +645,70 @@ func resolveOp(t tool, args callArgs) (op, error) {
 	}
 	o, ok := t.byOp[name]
 	if !ok {
+		o, ok = legacyOp(t.ops, name)
+	}
+	if !ok {
 		return op{}, fmt.Errorf("%q is not an operation of the %s tool; it fronts %s", args.Op, t.Name, strings.Join(opNames(t.ops), ", "))
 	}
 	if m := strings.ToUpper(strings.TrimSpace(args.Method)); m != "" && m != o.method {
 		return op{}, fmt.Errorf("method %s contradicts the operation %s; the operation names its own verb", m, o.name)
 	}
 	return o, nil
+}
+
+// legacyOp finds the operation a pre-fxxm subtree spelling ("GET /api/datasets/") names: the op
+// whose remainder-wildcard key ("GET /api/datasets/{rest...}") has that trailing-slash form. An agent
+// that states the old op name keeps working. Only a name that ends in "/" can be a legacy spelling.
+func legacyOp(ops []op, name string) (op, bool) {
+	if !strings.HasSuffix(name, "/") {
+		return op{}, false
+	}
+	for _, o := range ops {
+		verb, pattern, ok := strings.Cut(o.name, " ")
+		if ok && strings.HasSuffix(pattern, "...}") && verb+" "+subtreeForm(pattern) == name {
+			return o, true
+		}
+	}
+	// A route rekeyed to a {param} pattern ("GET /api/message/{id}") is the operation the old
+	// "GET /api/message/" spelling named: the first op, in the tool's own order, whose pattern is that
+	// prefix followed by a parameter segment. "{$}" is an exact-match marker, not a parameter.
+	nverb, npath, ok := strings.Cut(name, " ")
+	if !ok {
+		return op{}, false
+	}
+	var found op
+	n := 0
+	for _, o := range ops {
+		verb, pattern, ok := strings.Cut(o.name, " ")
+		if !ok || verb != nverb || !strings.HasPrefix(pattern, npath) {
+			continue
+		}
+		if rest := pattern[len(npath):]; strings.HasPrefix(rest, "{") && rest != "{$}" {
+			found = o
+			n++
+		}
+	}
+	// More than one candidate (POST /api/tasks/ fronts cancel, again, pause and resume) means the old
+	// spelling no longer says which operation was meant; guessing could cancel a task the caller meant
+	// to pause, so the caller is refused and shown the real op names.
+	return found, n == 1
+}
+
+// subtreeForm maps a remainder-wildcard key ("/api/datasets/{rest...}") onto the trailing-slash
+// subtree spelling it replaced ("/api/datasets/"); any other pattern is returned unchanged. Tool
+// names, path arguments and id joins are derived from the subtree spelling, so rekeying a route to
+// a remainder wildcard does not rename its tool or change how an agent addresses it.
+func subtreeForm(pattern string) string {
+	if strings.HasSuffix(pattern, "...}") {
+		if i := strings.LastIndex(pattern, "/"); i >= 0 {
+			return pattern[:i+1]
+		}
+	}
+	return pattern
+}
+
+func isSubtreePattern(pattern string) bool {
+	return strings.HasSuffix(subtreeForm(pattern), "/")
 }
 
 func opNames(ops []op) []string {
@@ -659,7 +721,7 @@ func opNames(ops []op) []string {
 
 // listTools answers tools/list.
 func (s *Server) listTools(req request) response {
-	return s.ok(req, map[string]any{"tools": s.tools})
+	return s.ok(req, map[string]any{"tools": s.visibleTools()})
 }
 
 // ---- tools/call ---------------------------------------------------------------------------------
@@ -702,6 +764,9 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 		return s.fail(req, codeInvalidParams, "no tool named %q; call tools/list for the surface", params.Name)
 	}
 
+	if why := s.refusedByPolicy(params.Name); why != "" {
+		return s.ok(req, map[string]any{"content": errResult(why).Content, "isError": true})
+	}
 	res := s.invoke(ctx, t, args, call)
 	out := map[string]any{"content": res.Content}
 	if res.IsError {
@@ -810,13 +875,35 @@ func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
 			return resolvedCall{}, err
 		}
 		route, method = o.route, o.method
-		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" && strings.HasSuffix(route.Pattern, "/") {
-			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" {
+			id := strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+			switch {
+			case isSubtreePattern(route.Pattern):
+				// The id fills the first placeholder and everything after it: for
+				// "/api/intruder/attacks/{id}/{action...}" the id "7/pause" names
+				// "/api/intruder/attacks/7/pause", never a path with a literal "{id}" in it.
+				base := subtreeForm(route.Pattern)
+				if i := strings.Index(base, "{"); i >= 0 {
+					base = base[:i]
+				}
+				args.Path = base + id
+			case strings.Contains(route.Pattern, "{id}"):
+				args.Path = strings.Replace(route.Pattern, "{id}", id, 1)
+			}
 		}
+	}
+	// Checked before the path is resolved, on what the caller asked for, so the refusal does not depend
+	// on whether the manifest has the route yet.
+	errPolicy := fmt.Errorf("the agent policy is the operator's: it cannot be read or changed over the MCP transport")
+	if isPolicyPath(args.Path) || isPolicyPath(route.Pattern) {
+		return resolvedCall{}, errPolicy
 	}
 	path, err := s.resolvePath(t.Name, route, args)
 	if err != nil {
 		return resolvedCall{}, err
+	}
+	if isPolicyPath(path) {
+		return resolvedCall{}, errPolicy
 	}
 	if method == "" {
 		if method, err = chooseMethod(route, args); err != nil {
@@ -867,7 +954,7 @@ func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (st
 		}
 	}
 
-	if !strings.HasSuffix(r.Pattern, "/") {
+	if !isSubtreePattern(r.Pattern) && !strings.Contains(r.Pattern, "{") {
 		if raw == "" {
 			raw = r.Pattern
 		}
@@ -875,7 +962,8 @@ func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (st
 			return "", fmt.Errorf("the %s tool calls %s and nothing else; %q is a different route — call its own tool", name, r.Pattern, raw)
 		}
 	} else if raw == "" {
-		return "", fmt.Errorf("%s is a subtree pattern and is not itself a URL: supply \"path\", for example %s", r.Pattern, pathExample(r))
+		// A subtree or {param} pattern is not itself a URL; the caller names the concrete path.
+		return "", fmt.Errorf("%s is not itself a URL: supply \"path\", for example %s", r.Pattern, pathExample(r))
 	}
 
 	resolved, ok := web.MCPRouteForPath(raw)
@@ -994,6 +1082,9 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	t, ok := s.byName[name]
 	if !ok || name == confirmToolName || name == taskStatusToolName {
 		return s.ok(req, errResult(fmt.Sprintf("%q is not a tool on this surface. Pass \"tool\" (the tool you will call) and \"arguments\" (its exact arguments); the refusal of the call prints both.", name)))
+	}
+	if why := s.refusedByPolicy(name); why != "" {
+		return s.ok(req, errResult(why))
 	}
 	var callArgsOf callArgs
 	if len(args.Arguments) > 0 {

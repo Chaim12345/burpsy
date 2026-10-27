@@ -488,6 +488,18 @@ type LimitReport struct {
 
 	// FrontierRemaining counts URLs still queued when the crawl stopped.
 	FrontierRemaining int `json:"frontier_remaining"`
+	// PhaseDropped counts follow-up retries abandoned because their crawl phase ended before its
+	// passes recovered them (burpsy-react-ui-crediso): the retry was owed by a session the phase
+	// boundary retired, and re-issuing it under the next phase's session would be a different
+	// request. Reported beside FrontierDropped for the same reason: an abandoned retry is a
+	// coverage hole, and an operator reading the failed count needs to know which ones were
+	// never tried again.
+	PhaseDropped int `json:"phase_dropped"`
+	// AuthChallengedDropped counts the URLs the unauthenticated phase bounced off (401/403) past
+	// maxAuthChallenged (burpsy-react-ui-crediso): the challenged set is bounded, and a bound
+	// nobody can see is a bound nobody can plan around. These pages are not re-fetched with a
+	// session — a coverage hole the count names.
+	AuthChallengedDropped int `json:"auth_challenged_dropped"`
 	// FrontierDropped counts URLs refused admission because the frontier was at capacity.
 	FrontierDropped int `json:"frontier_dropped"`
 	// SpeculativeDropped counts speculative-phase candidates (burpsy-react-ui-t5m0) refused

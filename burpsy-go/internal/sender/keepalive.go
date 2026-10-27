@@ -32,6 +32,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // http1IdleTimeout is Burp's five seconds of inactivity after which a kept connection is closed.
@@ -46,7 +48,14 @@ type idleConn struct {
 	negotiated string
 	// offeredH2 is true when the connection's handshake offered h2 and the target chose otherwise.
 	offeredH2 bool
-	timer     *time.Timer
+	// route fingerprints what the connection was dialled under - see Sender.captureDialIdentity.
+	// A pooled connection whose route no longer matches the live configuration is never reusable
+	// again.
+	route string
+	// dialAddr is the address the dial opened - the upstream policy's lookup key (ForAddr),
+	// carried so a take can re-evaluate the rule for it without resolving the host again.
+	dialAddr string
+	timer    *time.Timer
 }
 
 type http1Pool struct {
@@ -64,12 +73,27 @@ func poolKey(host string, port uint16, useTLS bool) string {
 
 // take returns the most recently kept connection for key, or nil. With needOfferedH2, only a
 // connection whose handshake already offered h2 qualifies.
-func (p *http1Pool) take(key string, needOfferedH2 bool) *idleConn {
+func (p *http1Pool) take(key string, needOfferedH2 bool, routeFor func(dialAddr string) string) *idleConn {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	list := p.idle[key]
 	for i := len(list) - 1; i >= 0; i-- {
 		ic := list[i]
+		// The candidate is re-evaluated under the live configuration FOR ITS OWN dial
+		// address: the rule that routes that address today must be the rule it was dialled
+		// under. Re-evaluating the candidate's address — rather than resolving the host
+		// again — is what keeps a pool hit free of DNS lookups when a family filter makes
+		// resolution live (burpsy-react-ui-o388-predial-vs-dial).
+		if ic.route != routeFor(ic.dialAddr) {
+			// Dialled under a different upstream rule or client identity than the live
+			// configuration asks for now. Keeping it would resurrect it the moment the
+			// route flipped back, so it is closed, not skipped.
+			p.idle[key] = append(list[:i:i], list[i+1:]...)
+			list = p.idle[key]
+			ic.timer.Stop()
+			go ic.conn.Close()
+			continue
+		}
 		if needOfferedH2 && !ic.offeredH2 {
 			continue
 		}
@@ -149,8 +173,8 @@ func reusableAfter(request, response []byte) bool {
 	if !requestEndsAtFraming(request) {
 		return false
 	}
-	reqHead, _, _ := bytes.Cut(request, []byte("\r\n\r\n"))
-	respHead, _, ok := bytes.Cut(response, []byte("\r\n\r\n"))
+	reqHead, _, _ := httputil.CutHead(request)
+	respHead, _, ok := httputil.CutHead(response)
 	if !ok {
 		return false
 	}
@@ -192,7 +216,7 @@ func reusableAfter(request, response []byte) bool {
 // waiting for bytes, which the next send would supply). The header checks reuse planH2's octet rules
 // (protocol.go) so the two readings of a request's head cannot disagree about what a field is.
 func requestEndsAtFraming(raw []byte) bool {
-	head, rest, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	head, rest, ok := httputil.CutHead(raw)
 	if !ok {
 		return false
 	}

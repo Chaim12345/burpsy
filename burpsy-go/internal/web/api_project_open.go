@@ -163,10 +163,6 @@ type projectOpenReq struct {
 // in the direction people do not expect. The confirm gate is the right control for it, and this
 // route is one of the few where refusing by default is more honest than proceeding.
 func (s *Server) handleProjectOpen(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req projectOpenReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -358,10 +354,6 @@ func (s *Server) projectView() projectView {
 // filter, and it is stated in the answer (projectDir) so the console shows what it listed rather
 // than implying a search happened.
 func (s *Server) handleProjectList(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	resp := projectListResp{}
 	if s.persist == nil {
 		resp.Note = "this instance was started without -db, so there is no project directory to list"

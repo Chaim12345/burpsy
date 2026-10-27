@@ -1,5 +1,7 @@
 package web
 
+import "strings"
+
 // This file holds the route manifest and the risk taxonomy every consumer reads.
 //
 // It was extracted from route_manifest_test.go because the risk class is not a
@@ -68,20 +70,34 @@ type route struct {
 	// operator reaches.
 	subPath string
 	// actionPaths are the ACTION sub-paths under a subtree pattern, each with its own allowed-method
-	// set — "1/cancel": {"POST"} under "/api/tasks/". subPath alone cannot express these: one
-	// subtree can route "/api/tasks/1" to DELETE and "/api/tasks/1/cancel" to POST, and a single
-	// concrete path tests exactly one of them.
+	// set — "1/run": {"POST"} under "/api/session/rules/". subPath alone cannot express these: one
+	// subtree can route "/api/session/rules/1" to PUT and "/api/session/rules/1/run" to POST, and a
+	// single concrete path tests exactly one of them.
 	//
 	// This exists because that gap shipped a bug. The /api/tasks/ entry's subPath was narrowed from
 	// "{id}/cancel" to "1" in the same commit that moved cancel into an inline branch with no verb
 	// guard, so GET /api/tasks/pause answered 200 and set the suite-wide pause
 	// (burpsy-react-ui-0gg5). Naming each action path here is what makes the 405 sweep reach them.
+	// (The tasks family itself is per-pattern routes since fxxm batch 2; the subtrees below that
+	// still dispatch by suffix keep this field.)
 	actionPaths map[string][]string
 	// pathValidatedFirst marks a handler that resolves its path segment *before* checking the method,
 	// so a bogus segment answers 404 rather than 405 whatever the verb. Correct behaviour — "there is
 	// no such direction" is a truer answer than "wrong verb" — but it means the 405 test has to send a
 	// valid segment, which is what subPath supplies.
 	pathValidatedFirst bool
+}
+
+// concretePath builds the requestable URL a manifest entry's subPath names: appended
+// under a subtree pattern, substituted for the wildcard in a "{id}" pattern
+// (burpsy-react-ui-fxxm).
+func concretePath(pattern, subPath string) string {
+	// "{$}" anchors a pattern to its exact trailing slash and is not part of a URL.
+	pattern = strings.TrimSuffix(pattern, "{$}")
+	if i := strings.Index(pattern, "{"); i >= 0 {
+		return pattern[:i] + subPath + pattern[strings.LastIndex(pattern, "}")+1:]
+	}
+	return pattern + subPath
 }
 
 // manifest is every route this server registers. Keep it sorted by pattern; the test enforces that,
@@ -195,7 +211,7 @@ var manifest = map[string]route{
 		summary: "Burp's Collaborator health check: eight connection items against a fresh address on " +
 			"the registered domain, then whether each protocol's interaction came back through polling",
 	},
-	"/api/collaborator/interaction/": {
+	"/api/collaborator/interaction/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
 	},
@@ -293,7 +309,7 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskDestructive,
 		summary: "clears the dashboard's event log (Burp's \"Clear event log\"); the SSE stream at /api/events is a different resource",
 	},
-	"/api/datasets/": {
+	"/api/datasets/{rest...}": {
 		// riskRead: a read-only table view over lists other read routes already serve
 		// (burpsy-react-ui-co88). No credential-class list is offered as a source.
 		methods: []string{"GET"}, risk: riskRead, subPath: "history",
@@ -319,7 +335,7 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
 	},
-	"/api/engagement/": {
+	"/api/engagement/{kind...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
 	},
@@ -335,7 +351,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PATCH"}, risk: riskLocal, subPath: "0",
 		summary: "one exchange row by id; PATCH sets its notes and/or highlight (UX-15)",
 	},
-	"/api/exchange/in-browser/": {
+	"/api/exchange/in-browser/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "one exchange's stored response replayed verbatim for Show response in browser",
 	},
@@ -456,13 +472,13 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "interception state: enabled, wired, and what is currently held",
 	},
-	"/api/intercept/": {
+	"/api/intercept/{rest...}": {
 		// POST only, and this is also the catch-all under /api/intercept — see the note in setupRoutes
 		// about preserving handleInterceptHeld's breadth through the Phase 1 ServeMux migration.
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
 		summary: "resolve one held message: forward, drop, or forward edited bytes",
 	},
-	"/api/intercept/annotate/": {
+	"/api/intercept/annotate/{id}": {
 		// POST {comment, highlight} onto one held message (burpsy-react-ui-5q8u). Writes only the
 		// operator's own annotation on the queue — no traffic is sent, resolved or changed, so the
 		// risk is the same class as the queue view itself.
@@ -502,7 +518,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body",
 	},
-	"/api/intercept/rules/": {
+	"/api/intercept/rules/{dir...}": {
 		// "requests" and "responses", plural — see directionFor. The singular was a guess when this
 		// entry was first written, and it answered 404 "Unknown direction" for every verb, which the
 		// 405 test read as a missing guard. The handler was right; the manifest was wrong.
@@ -533,7 +549,16 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "every intruder attack this process is running, with its status; sends nothing",
 	},
-	"/api/intruder/attacks/": {
+	"/api/intruder/attacks/{$}": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "no task id: answers the 404 that names the expected form",
+	},
+	"/api/intruder/attacks/{id}": {
+		// The no-action shape of the old subtree: kept so its "Expected ..." 404 body survives.
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "no action segment: answers the 404 that names the expected form",
+	},
+	"/api/intruder/attacks/{id}/{action...}": {
 		methods: []string{"POST"}, risk: riskLocal, subPath: "1/stop",
 		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
 			"an attack past acting on answers 409",
@@ -582,7 +607,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "the LLM post-scan second look over gated findings (Standard profile: High any-confidence, Medium tentative-or-better) — advice attached to findings, never a promotion",
 	},
-	"/api/message/": {
+	"/api/message/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
@@ -651,6 +676,13 @@ var manifest = map[string]route{
 	// is not made visible by the traffic at the moment it is made, which is exactly when an unattended
 	// caller should have to confirm. Classifying a saved-limits editor as an ordinary local write
 	// would be reading "sends nothing itself" as "harmless".
+	"/api/openapi.json": {
+		// The document this route serves is generated from this manifest and the route schema table,
+		// so it carries nothing an attacker could not read off the binary — and it is the same shape
+		// the MCP surface already publishes tool-by-tool. riskRead by that argument.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the OpenAPI 3.1 document for this whole API, generated from the route manifest and schema table (burpsy-react-ui-pg5a)",
+	},
 	"/api/pools": {
 		methods: []string{"GET", "POST"}, risk: riskScope,
 		summary: "the saved named resource pools, with which of each pool's bounds every tool path can " +
@@ -786,6 +818,18 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "Repeater's Save entire history: a tab's sends as one file, request/response bytes base64 by message id",
 	},
+	"/api/repeater/graphql-query": {
+		// riskRead: the edit is text surgery on the operator's own draft - nothing is dialled,
+		// nothing is stored. The send that later carries the draft is riskEgress as ever.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "replace one operation's query inside a raw request's GraphQL carrier (JSON body " +
+			"or URL parameter), changing no other byte but Content-Length",
+	},
+	"/api/repeater/graphql-validate": {
+		// riskRead: parse and report. gqlparser sees the document and nothing leaves the box.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "parse one GraphQL document with the pinned gqlparser and report errors with positions",
+	},
 	"/api/repeater/send": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",
@@ -812,6 +856,15 @@ var manifest = map[string]route{
 			"with a captured connection's own handshake), recording the handshake exchange and the reply " +
 			"frames; to-client is refused with its reason",
 	},
+	"/api/repeater/ws-handshake-preview": {
+		// riskRead: it dials nothing and returns only what the operator can already read - a
+		// captured handshake from the store, or the synthetic head a new connection would send.
+		// The send it prepares an edit for is gated on ws-send, not here.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "preview the negotiation request a Repeater WS send would dial with - a captured " +
+			"connection's refreshed head (socket) or a new connection's synthetic one (target) - " +
+			"for the edit-before-connect editor (ws3e)",
+	},
 	"/api/repeater/ws-attach": {
 		// riskEgress, the same class as ws-send: one operator-authored frame, into one connection. It
 		// dials nothing — the socket must be one the proxy is relaying right now, looked up by its
@@ -821,7 +874,7 @@ var manifest = map[string]route{
 		summary: "write one WebSocket frame into a connection open through the proxy (Repeater attach), " +
 			"to the server or to the client; scope-gated on the connection's target, recorded on its history",
 	},
-	"/api/report/": {
+	"/api/report/{rest...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
 		summary: "export findings as json, sarif, html or Burp-XML (m7dk)",
 	},
@@ -924,6 +977,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "decode a protobuf or gRPC-framed body into a field tree without a .proto (burpsy-react-ui-3x2g), so an operator can read an otherwise opaque binary body; a pure transform that sends nothing",
 	},
+	"/api/protobuf/reflect-decode": {
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "fetch a target's schema via gRPC server reflection the operator explicitly named, then decode the body with it (burpsy-react-ui-47id); one bounded exchange to the target per call, scope-authorised before any dial, and the response marks the target-served names as reflection-sourced",
+	},
 	"/api/protobuf/encode": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "re-encode an edited protobuf field tree back to body bytes, re-framing it when it was gRPC (burpsy-react-ui-3x2g)",
@@ -935,6 +992,10 @@ var manifest = map[string]route{
 	"/api/dominvader/hit": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "the endpoint burpsy's own DOM-auditor extension reports one source/sink flow to; records a hit the operator's browser produced",
+	},
+	"/api/dominvader/scan": {
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "run the finite opt-in DOM pollution probe plan in an isolated context, same-origin and live engagement-scope gated on each request; workers and frames are not exercised",
 	},
 	"/api/dominvader/hits": {
 		methods: []string{"DELETE"}, risk: riskLocal,
@@ -1024,7 +1085,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "start a capture: N sends of one request, one token extracted per response",
 	},
-	"/api/sequencer/capture/": {
+	"/api/sequencer/capture/{rest...}": {
 		// Two operations under one subtree, and deliberately different verbs: reading a token list does
 		// not change state, stopping a capture does. Unguarded, `GET .../stop` answered {"stopped":true}
 		// — a state change reported for a request that could not have caused one.
@@ -1078,6 +1139,10 @@ var manifest = map[string]route{
 		// test drives verbs the manifest lists — POST here is the Test-macro dry-run plus the
 		// /run and /move actions that already lived under it.
 		methods: []string{"PUT", "DELETE", "POST"}, risk: riskCredential, subPath: "1",
+		// Named per action so the 405 fallback can answer Allow for the action the caller
+		// actually hit (TestSessionRuleMoveRejectsOtherMethods pins "POST" for /move), and so
+		// the sweep reaches each action with its own verb set rather than the subtree union.
+		actionPaths: map[string][]string{"1/run": {"POST"}, "1/test": {"POST"}, "1/move": {"POST"}},
 		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it; " +
 			"POST {id}/run replays the macro through the sender, POST {id}/test is Burp's Test macro — a " +
 			"dry-run reporting each step's sent form, response, set cookies and extraction outcomes " +
@@ -1129,7 +1194,7 @@ var manifest = map[string]route{
 		summary: "the skill library from -skills DIR: each skill, the tools it calls, whether it is available " +
 			"and disabled for this project, and every refused manifest with why",
 	},
-	"/api/skills/": {
+	"/api/skills/{rest...}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "none",
 		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
 	},
@@ -1142,30 +1207,46 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",
 	},
-	"/api/tasks/": {
+	"/api/tasks/pause": {
+		// The suite-wide gate (burpsy-react-ui-8gw): Burp's dashboardPauseAllTasksButton. A literal
+		// beside the {id} patterns - ServeMux resolves it ahead of "/api/tasks/{id}", so this never
+		// parses "pause" as an id (TestTasksSuiteWidePauseResumeAreLiterals pins the precedence).
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "hold every running task at its next gate; the answer's count says how many were holding",
+	},
+	"/api/tasks/resume": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "release the suite-wide hold; the answer's count says how many were holding",
+	},
+	"/api/tasks/{id}": {
 		// DELETE is riskLocal, not riskDestructive, and the line matters: it removes a ROW from the
 		// task list, not any evidence the row pointed at. The crawl's findings, the exchanges it
 		// captured and its coverage report all live elsewhere and survive it — the list entry is
-		// burpsy's own state about past work, which is riskLocal's definition. POST {id}/again is
-		// riskLocal too by its route: it starts a crawl, but /api/crawl — the same act from the New
+		// burpsy's own state about past work, which is riskLocal's definition.
+		// GET reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
+		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal, subPath: "1",
+		summary: "GET: one task's row and an async task's finished body. " +
+			"DELETE removes a finished task's row (a running task answers 409 — cancel first)",
+	},
+	"/api/tasks/{id}/again": {
+		// riskLocal by its route: it starts a crawl, but /api/crawl — the same act from the New
 		// scan dialog — is classified by what the crawl does after the start, which the confirmation
 		// gate already covers at its own route.
-		// GET {id} reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
-		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
-		actionPaths: map[string][]string{
-			"1/cancel": {"POST"},
-			"1/pause":  {"POST"},
-			"1/resume": {"POST"},
-			"pause":    {"POST"},
-			"resume":   {"POST"},
-		},
-		summary: "GET {id}: one task's row and an async task's finished body. " +
-			"POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
-			"POST {id}/pause and {id}/resume hold one task at its next gate and release it (a task kind that " +
-			"never reaches a gate answers 409; g0ba); " +
-			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
-			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "re-run a crawl task at its target (only crawl kind re-runs; 409 otherwise)",
+	},
+	"/api/tasks/{id}/cancel": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "ask a running task to stop (unknown or finished id answers 404)",
+	},
+	"/api/tasks/{id}/pause": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "hold one task at its next gate (a task kind that never reaches a gate answers 409; g0ba)",
+	},
+	"/api/tasks/{id}/resume": {
+		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
+		summary: "release one task's hold (a task kind that never reaches a gate answers 409; g0ba)",
 	},
 	"/api/tools/compare": {
 		methods: []string{"POST"}, risk: riskRead,
@@ -1210,7 +1291,7 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskLocal,
 		summary: "the organizer's saved items",
 	},
-	"/api/tools/organizer/": {
+	"/api/tools/organizer/{rest...}": {
 		// POST updates title/note/highlight, PUT .../status sets the workflow status, DELETE removes.
 		// Not GET. The status PUT exists because a status change is one deliberate operator decision
 		// (Burp applies it from the item's status submenu), kept off the POST edit form the same way
@@ -1226,7 +1307,7 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "create a collection: POST {name}; a duplicate name is a 400",
 	},
-	"/api/tools/organizer/collections/": {
+	"/api/tools/organizer/collections/{rest...}": {
 		// The collections surface: PUT {id} renames / sets the About note, POST {id}/duplicate
 		// copies the group with its items under fresh ids, PUT {id}/items moves or copies items
 		// in (and PUT /inbox moves them back), DELETE {id} deletes with ?items=inbox (default,
@@ -1257,14 +1338,14 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "WebSocket frames, per connection",
 	},
-	"/api/ws/message/": {
+	"/api/ws/message/{id}": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "one WebSocket frame's payload, as text or hex",
 	},
 	"/ca.crt": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the CA certificate the proxy signs leaves with, so a browser can be told to trust it",
-	}, "/reissue/": {
+	}, "/reissue/{token...}": {
 		// The minted URL's fetch surface, outside /api on purpose: it is what the operator
 		// pastes into their browser, and it spends a token before anything else. riskEgress
 		// because the fetch is the send; the token is the operator's own mint.

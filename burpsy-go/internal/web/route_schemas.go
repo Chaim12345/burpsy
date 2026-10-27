@@ -24,12 +24,37 @@ import (
 // route cannot reach the MCP surface untyped. GET entries are optional and carry query parameters.
 var routeSchemas = map[string]opSchema{
 	// ---- reads with query parameters ----------------------------------------------------------
-	"GET /api/advisories": {query: []queryParam{
-		{name: "q", kind: "string", desc: "substring filter over name and type index"},
-		{name: "severity", kind: "string", desc: "only definitions of this typical severity"},
-	}},
+	"GET /api/advisories": {
+		query: []queryParam{
+			{name: "q", kind: "string", desc: "substring filter over name and type index"},
+			{name: "severity", kind: "string", desc: "only definitions of this typical severity"},
+		},
+		// CONFIRMED (code read): handleAdvisories encodes advisoryCatalogueView.
+		response: typeOf[advisoryCatalogueView](),
+	},
+	"GET /api/advisories/": {
+		// CONFIRMED (code read): handleAdvisoryDetail encodes advisoryDetailView, which returns
+		// issueAdvisoryView.
+		response: typeOf[issueAdvisoryView](),
+	},
+	"GET /api/stats": {
+		// CONFIRMED (code read): handleStats encodes StatsView.
+		response: typeOf[StatsView](),
+	},
+	"GET /api/config/export": {
+		// CONFIRMED (code read): handleConfigExport encodes configBundle.
+		response: typeOf[configBundle](),
+	},
+	"GET /api/network/proxy": {
+		// CONFIRMED (code read): writeNetworkProxy encodes networkProxyView.
+		response: typeOf[networkProxyView](),
+	},
+	"GET /api/ws/connections": {
+		// CONFIRMED (code read): handleWSConnections encodes []wsConnectionView.
+		response: typeOf[[]wsConnectionView](),
+	},
 	"GET /api/crawl": {query: []queryParam{{name: "task", kind: "integer", desc: "a crawl or API-scan task id; omitted means the latest"}}},
-	"GET /api/datasets/": {query: []queryParam{
+	"GET /api/datasets/{rest...}": {query: []queryParam{
 		{name: "pattern", kind: "string", desc: "RE2 regex a row must match (in any column, or in columns)"},
 		{name: "case_insensitive", kind: "boolean"},
 		{name: "columns", kind: "string", desc: "comma-separated columns the pattern is matched against"},
@@ -45,7 +70,7 @@ var routeSchemas = map[string]opSchema{
 	}},
 	"GET /api/crawl/live": {query: []queryParam{{name: "task", kind: "integer", desc: "the crawl task to watch"}}},
 	"GET /api/discovery":  {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
-	"GET /api/engagement/": {query: []queryParam{
+	"GET /api/engagement/{kind...}": {query: []queryParam{
 		{name: "host", kind: "string", desc: "limit the search to one host"},
 		{name: "q", kind: "string", desc: "the search term"},
 		{name: "limit", kind: "integer", desc: "most rows to return"},
@@ -55,16 +80,20 @@ var routeSchemas = map[string]opSchema{
 		{name: "limit", kind: "integer", desc: "most lines to return"},
 	}},
 	"GET /api/hidden-inputs": {query: []queryParam{{name: "task", kind: "integer", desc: "one guessing run by task id; omitted lists the retained runs"}}},
-	"GET /api/history": {query: []queryParam{
-		{name: "limit", kind: "integer", desc: "most rows to return, newest first (default 300)"},
-		{name: "q", kind: "string", desc: "a burpsy-query filter expression over host/path/method/status"},
-		{name: "search", kind: "string", desc: "Burp's Search box: a term matched over row columns and both messages"},
-		{name: "search_case", kind: "boolean", desc: "case-sensitive search"},
-		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
-		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
-	}},
+	"GET /api/history": {
+		query: []queryParam{
+			{name: "limit", kind: "integer", desc: "most rows to return, newest first (default 300)"},
+			{name: "q", kind: "string", desc: "a burpsy-query filter expression over host/path/method/status"},
+			{name: "search", kind: "string", desc: "Burp's Search box: a term matched over row columns and both messages"},
+			{name: "search_case", kind: "boolean", desc: "case-sensitive search"},
+			{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
+			{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
+		},
+		// CONFIRMED (code read): historyGet encodes []*ExchangeView.
+		response: typeOf[[]*ExchangeView](),
+	},
 	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
-	"GET /api/message/": {query: []queryParam{
+	"GET /api/message/{id}": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},
 		{name: "pattern", kind: "string", desc: "an RE2 regular expression: anchor the window at its first match; matches lists up to 100 match offsets"},
@@ -73,7 +102,7 @@ var routeSchemas = map[string]opSchema{
 	}},
 	"GET /api/network/auth":         {query: []queryParam{{name: "host", kind: "string"}, {name: "scheme", kind: "string"}}},
 	"GET /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string"}}},
-	"GET /api/report/": {query: []queryParam{
+	"GET /api/report/{rest...}": {query: []queryParam{
 		{name: "severity", kind: "string", desc: "minimum severity to include"},
 		{name: "host", kind: "string", desc: "only issues on this host"},
 		{name: "exclude_false_positives", kind: "boolean"},
@@ -124,24 +153,31 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
 	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
-	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
-	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
-	"POST /api/repeater/ws-send":         {body: typeOf[repeaterWsSendReq]()},
+	"POST /api/repeater/graphql-query":    {body: typeOf[repeaterGraphQLQueryReq]()},
+	"POST /api/repeater/graphql-validate": {body: typeOf[repeaterGraphQLValidateReq]()},
+	"POST /api/repeater/send":             {body: typeOf[repeaterSendReq]()},
+	"POST /api/repeater/send-group":       {body: typeOf[repeaterGroupSendReq]()},
+	"POST /api/repeater/ws-send":          {body: typeOf[repeaterWsSendReq]()},
+	"GET /api/repeater/ws-handshake-preview": {query: []queryParam{
+		{name: "socket", kind: "integer", desc: "preview the refreshed clone of this WebSocket ID's captured handshake"},
+		{name: "target", kind: "string", desc: "preview a new connection's synthetic head for this ws:// or host:port target"},
+		{name: "path", kind: "string", desc: "the request path for a target preview; omitted means /"},
+	}},
 	"POST /api/repeater/ws-attach":       {body: typeOf[repeaterWsAttachReq]()},
 	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
 	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},
 
-	"POST /api/intercept/": {variants: map[string]reflect.Type{
+	"POST /api/intercept/{rest...}": {variants: map[string]reflect.Type{
 		"1/forward": typeOf[interceptForwardReq](),
 		"1/drop":    typeOf[interceptDropReq](),
 	}, optional: true},
-	"POST /api/intercept/annotate/":         {body: typeOf[interceptAnnotateReq]()},
+	"POST /api/intercept/annotate/{id}":     {body: typeOf[interceptAnnotateReq]()},
 	"POST /api/intercept/drop-all":          {body: typeOf[interceptDropAllReq](), optional: true},
 	"POST /api/intercept/enable":            {body: typeOf[interceptEnableReq]()},
 	"POST /api/intercept/forward-all":       noBody,
 	"POST /api/intercept/in-scope-only":     {body: typeOf[interceptInScopeOnlyReq]()},
 	"PUT /api/intercept/newline-correction": {body: typeOf[interceptNewlineCorrectionReq]()},
-	"PUT /api/intercept/rules/":             {body: typeOf[interceptListState]()},
+	"PUT /api/intercept/rules/{dir...}":     {body: typeOf[interceptListState]()},
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
 	"POST /api/proxy/history-logging":       {body: typeOf[proxyHistoryLoggingReq]()},
 
@@ -178,11 +214,16 @@ var routeSchemas = map[string]opSchema{
 		"0/again":  typeOf[scannerAuditReq](),
 		"0/cancel": nil,
 	}, optional: true},
-	"POST /api/schedules":    {body: typeOf[schedule.Schedule]()},
-	"PUT /api/schedules/":    {body: typeOf[schedule.Schedule]()},
-	"DELETE /api/schedules/": noBody,
-	"POST /api/tasks/":       noBody,
-	"DELETE /api/tasks/":     noBody,
+	"POST /api/schedules":         {body: typeOf[schedule.Schedule]()},
+	"PUT /api/schedules/":         {body: typeOf[schedule.Schedule]()},
+	"DELETE /api/schedules/":      noBody,
+	"POST /api/tasks/pause":       noBody,
+	"POST /api/tasks/resume":      noBody,
+	"DELETE /api/tasks/{id}":      noBody,
+	"POST /api/tasks/{id}/again":  noBody,
+	"POST /api/tasks/{id}/cancel": noBody,
+	"POST /api/tasks/{id}/pause":  noBody,
+	"POST /api/tasks/{id}/resume": noBody,
 
 	// ---- Scan Checks / Configuration -----------------------------------------------------------
 	"PUT /api/scanner/checks/enable":    {body: typeOf[corpusCheckEnableReq]()},
@@ -195,6 +236,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/scanner/secrets":          {body: typeOf[scannerSecretsReq]()},
 	"PUT /api/dominvader":               {body: typeOf[domInvaderReq]()},
 	"POST /api/dominvader/hit":          {body: typeOf[dominvader.Hit]()},
+	"POST /api/dominvader/scan":         noBody,
 	"DELETE /api/dominvader/hits":       noBody,
 	"POST /api/scanner/configs":         {body: typeOf[scanConfigWriteReq]()},
 	"PUT /api/scanner/configs":          {body: typeOf[scanConfigWriteReq]()},
@@ -271,20 +313,22 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/config/import":      {body: typeOf[configBundle]()},
 
 	// ---- Fuzzing ------------------------------------------------------------------------------
-	"POST /api/intruder/run":           {body: typeOf[intruderRunReq]()},
-	"POST /api/intruder/again":         {body: typeOf[intruderAgainReq]()},
-	"POST /api/crawl/logins":           {body: typeOf[recordedLoginSaveReq]()},
-	"POST /api/crawl/logins/replay":    {body: typeOf[recordedLoginReplayReq]()},
-	"DELETE /api/crawl/logins":         {query: []queryParam{{name: "id", kind: "string", desc: "the recorded login to remove"}}},
-	"POST /api/intruder/points":        {body: typeOf[intruderPointsReq]()},
-	"POST /api/intruder/attacks/":      noBody,
-	"POST /api/intruder/payload-files": {raw: "the wordlist file's bytes, one payload per line (not JSON)"},
-	"PUT /api/authz/identities":        {body: typeOf[authzIdentitiesReq]()},
-	"POST /api/authz/test":             {body: typeOf[authzTestReq]()},
-	"POST /api/sequencer/analyse":      {body: typeOf[sequencerAnalyseReq]()},
-	"POST /api/sequencer/capture":      {body: typeOf[sequencerCaptureReq]()},
-	"POST /api/sequencer/capture/":     noBody,
-	"PUT /api/sequencer/settings":      {body: typeOf[sequencer.SettingsEdit]()},
+	"POST /api/intruder/run":                      {body: typeOf[intruderRunReq]()},
+	"POST /api/intruder/again":                    {body: typeOf[intruderAgainReq]()},
+	"POST /api/crawl/logins":                      {body: typeOf[recordedLoginSaveReq]()},
+	"POST /api/crawl/logins/replay":               {body: typeOf[recordedLoginReplayReq]()},
+	"DELETE /api/crawl/logins":                    {query: []queryParam{{name: "id", kind: "string", desc: "the recorded login to remove"}}},
+	"POST /api/intruder/points":                   {body: typeOf[intruderPointsReq]()},
+	"POST /api/intruder/attacks/{id}/{action...}": noBody,
+	"POST /api/intruder/attacks/{id}":             noBody,
+	"POST /api/intruder/attacks/{$}":              noBody,
+	"POST /api/intruder/payload-files":            {raw: "the wordlist file's bytes, one payload per line (not JSON)"},
+	"PUT /api/authz/identities":                   {body: typeOf[authzIdentitiesReq]()},
+	"POST /api/authz/test":                        {body: typeOf[authzTestReq]()},
+	"POST /api/sequencer/analyse":                 {body: typeOf[sequencerAnalyseReq]()},
+	"POST /api/sequencer/capture":                 {body: typeOf[sequencerCaptureReq]()},
+	"POST /api/sequencer/capture/{rest...}":       noBody,
+	"PUT /api/sequencer/settings":                 {body: typeOf[sequencer.SettingsEdit]()},
 
 	// ---- Collaborator -------------------------------------------------------------------------
 	"POST /api/collaborator/payload":  {body: typeOf[collaboratorPayloadReq](), optional: true},
@@ -303,24 +347,25 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/tools/rules/test":            {body: typeOf[matchReplaceTestReq]()},
 	"PUT /api/tools/rules":                  {body: typeOf[matchReplaceSetSpec]()},
 	"POST /api/protobuf/decode":             {body: typeOf[protobufDecodeReq]()},
+	"POST /api/protobuf/reflect-decode":     {body: typeOf[protobufReflectReq]()},
 	"POST /api/protobuf/encode":             {body: typeOf[protobufEncodeReq]()},
 	"POST /api/tools/log":                   {body: typeOf[toolLogSetCaptureReq]()},
 	"DELETE /api/tools/log":                 noBody,
 	"PATCH /api/tools/log/":                 {body: typeOf[toolLogSetCommentReq]()},
 	"POST /api/tools/organizer":             {body: typeOf[organizerReq]()},
-	"POST /api/tools/organizer/":            {body: typeOf[organizerItemReq]()},
-	"PUT /api/tools/organizer/":             {variants: map[string]reflect.Type{"1/status": typeOf[organizerItemStatusReq]()}},
-	"DELETE /api/tools/organizer/":          noBody,
+	"POST /api/tools/organizer/{rest...}":   {body: typeOf[organizerItemReq]()},
+	"PUT /api/tools/organizer/{rest...}":    {variants: map[string]reflect.Type{"1/status": typeOf[organizerItemStatusReq]()}},
+	"DELETE /api/tools/organizer/{rest...}": noBody,
 	"POST /api/tools/organizer/collections": {body: typeOf[organizerCollectionCreateReq]()},
-	"PUT /api/tools/organizer/collections/": {variants: map[string]reflect.Type{
+	"PUT /api/tools/organizer/collections/{rest...}": {variants: map[string]reflect.Type{
 		"1":       typeOf[organizerCollectionUpdateReq](),
 		"inbox":   typeOf[organizerInboxMoveReq](),
 		"1/items": typeOf[organizerCollectionItemsReq](),
 	}},
-	"POST /api/tools/organizer/collections/": {variants: map[string]reflect.Type{
+	"POST /api/tools/organizer/collections/{rest...}": {variants: map[string]reflect.Type{
 		"1/duplicate": nil,
 	}},
-	"DELETE /api/tools/organizer/collections/": {query: []queryParam{
+	"DELETE /api/tools/organizer/collections/{rest...}": {query: []queryParam{
 		{name: "items", kind: "string", desc: "what happens to the collection's items", enum: []string{"inbox", "delete"}},
 	}},
 

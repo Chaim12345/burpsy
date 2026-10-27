@@ -76,6 +76,13 @@ const (
 	// ruleLenient honours any header whose trimmed name is transfer-encoding and whose value mentions
 	// chunked, unfolds continuation lines and accepts bare LF line endings.
 	ruleLenient
+	// ruleIgnoreBody reads no body at all, whatever Content-Length says: the CL.0 front end (and
+	// the client-side desync server) that answers the request and leaves the "body" to be parsed
+	// as the next request.
+	ruleIgnoreBody
+	// ruleNoChunkExt reads chunked bodies but refuses a chunk-size line carrying an extension:
+	// the strict half of the TE.0/chunk-extension disagreement.
+	ruleNoChunkExt
 )
 
 // h2Downgrade is how a TLS listener's HTTP/2 side rewrites a request for its HTTP/1.1 back end.
@@ -108,6 +115,16 @@ var desyncSpecs = map[string]desyncSpec{
 	"desync-h2-te":           {front: ruleLenient, reframe: true, back: ruleCompliant, tls: true, h2: h2PassTE},
 	"desync-h2-cl":           {front: ruleLenient, reframe: true, back: ruleCompliant, tls: true, h2: h2PassCL},
 	"desync-h2-compliant":    {front: ruleLenient, reframe: true, back: ruleCompliant, tls: true, h2: h2Compliant},
+	// 0vzb.40: CL.0 and client-side desync share one client-observable shape: the server answers
+	// the POST without reading its declared body, then parses the body bytes as the next request
+	// on the same connection. Both hops read no body, so the leftover is re-parsed as a request
+	// and its (canary 404) answer takes the follow-up's response slot. The two endpoints differ
+	// in what the fixture teaches, not in the wiring.
+	"desync-cl0":         {front: ruleIgnoreBody, back: ruleIgnoreBody},
+	"desync-client-side": {front: ruleIgnoreBody, back: ruleIgnoreBody},
+	// Safe twins.
+	"desync-cl0-safe": {front: ruleCompliant, back: ruleCompliant},
+	"desync-csd-safe": {front: ruleCompliant, back: ruleCompliant},
 }
 
 // ListenerNames lists every listener StartListener can start.
@@ -338,6 +355,8 @@ type framing struct {
 	chunked bool
 	length  int
 	status  int // non-zero: refuse the request with this status
+	// noExt refuses a chunk-size line carrying an extension (ruleNoChunkExt).
+	noExt bool
 }
 
 func contentLength(headers []rawHeader) framing {
@@ -395,6 +414,16 @@ func decideFraming(rule framingRule, headers []rawHeader) framing {
 			}
 		}
 		return contentLength(headers)
+	case ruleIgnoreBody:
+		return framing{length: 0}
+	case ruleNoChunkExt:
+		for _, h := range headers {
+			if strings.EqualFold(h.name, "transfer-encoding") &&
+				strings.Contains(strings.ToLower(h.value), "chunked") {
+				return framing{chunked: true, noExt: true}
+			}
+		}
+		return contentLength(headers)
 	}
 	return contentLength(headers)
 }
@@ -416,6 +445,9 @@ func readBody(br *bufio.Reader, f framing) (raw, decoded []byte, err error) {
 		}
 		size := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		if i := strings.IndexByte(size, ';'); i >= 0 {
+			if f.noExt {
+				return nil, nil, errMalformed
+			}
 			size = size[:i]
 		}
 		size = strings.Trim(size, " \t")
@@ -480,6 +512,19 @@ func serveBack(c net.Conn, rule framingRule) {
 				c.Write(statusResponse(400))
 			}
 			return
+		}
+		// A smuggled-request canary path answers 404 with a marker body: the CL.0 / client-side
+		// desync fixtures need a smuggled request's answer to be distinguishable from the
+		// endpoint's own page. No declared endpoint path carries the marker, so nothing else
+		// changes.
+		if strings.Contains(head.line, "-canary-404") {
+			body := "burpsy smuggled canary " + head.line // echo the request line, as 404 pages do
+			resp := "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: " +
+				strconv.Itoa(len(body)) + "\r\n\r\n" + body
+			if _, err := c.Write([]byte(resp)); err != nil {
+				return
+			}
+			continue
 		}
 		resp := "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " +
 			strconv.Itoa(len(desyncPage)) + "\r\n\r\n"
@@ -863,6 +908,14 @@ func desyncEndpoints() []Endpoint {
 			Note: "both hops are RFC 9112 compliant: chunked wins over Content-Length and a malformed framing header is refused, so they never disagree about where a request ends"},
 		{Path: "/desync/safe/normalising", Listener: "desync-normalising", Row: "HTTP request smuggling", Safe: true,
 			Note: "a lenient front end decodes the body by its own rule and re-frames it with its own Content-Length before forwarding; the back end honours only Content-Length, which is exactly what it is sent"},
+		{Path: "/desync/cl0", Listener: "desync-cl0", Row: "HTTP request smuggling",
+			Note: "the endpoint answers a POST without reading its Content-Length body; the body bytes are parsed as the next request on the connection (CL.0)"},
+		{Path: "/desync/safe/cl0", Listener: "desync-cl0-safe", Row: "HTTP request smuggling", Safe: true,
+			Note: "both hops read the declared body, so nothing is left to be re-parsed"},
+		{Path: "/desync/clientside", Listener: "desync-client-side", Row: "Client-side desync",
+			Note: "answers a POST without reading its declared body, then parses the body bytes as the next request: a browser-deliverable desync"},
+		{Path: "/desync/safe/clientside", Listener: "desync-csd-safe", Row: "Client-side desync", Safe: true,
+			Note: "reads the declared body before answering"},
 	}
 }
 

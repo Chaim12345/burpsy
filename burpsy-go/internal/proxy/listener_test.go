@@ -203,3 +203,37 @@ func Test_the_invisible_proxying_switch_decides_the_host_header_fallback_live(t 
 		t.Errorf("with invisible proxying off, the origin-form request got %q, want a 400 refusal", got)
 	}
 }
+
+// burpsy-react-ui-6858 fix round: a Host field name padded with whitespace before its colon can
+// never steer invisible routing. The request validation ahead of the routing read already refuses
+// it with a 400, and the routing read itself (proxy.go's invisible branch) uses the strict
+// HeaderValueExact — the unit test beside requestHead pins that second layer.
+func Test_an_invisible_listener_ignores_a_padded_host_header(t *testing.T) {
+	host, port := originSaying(t, "invisible-ok")
+	s := NewServer(NewProxyConfig(core.NewTrafficStore()).
+		WithScope(testScope()).
+		WithLogger(zap.NewNop()))
+	addr := startLiveProxy(t, s)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	req := "GET /invisible HTTP/1.1\r\n" +
+		"Host : " + host + ":" + strconv.Itoa(int(port)) + "\r\n" +
+		"Connection: close\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+	resp, err := io.ReadAll(bufio.NewReader(conn))
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if strings.Contains(string(resp), "invisible-ok") {
+		t.Errorf("a Host header padded before its colon steered invisible routing:\n%q", resp)
+	}
+}

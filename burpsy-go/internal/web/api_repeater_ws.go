@@ -35,6 +35,7 @@ package web
 // operator can compare the reply with the original.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,6 +84,18 @@ type repeaterWsSendReq struct {
 	// Socket is the WebSocket ID (the handshake exchange) to clone. A pointer because exchange 0
 	// is a real id: an absent field and the store's first connection must not read the same.
 	Socket *uint64 `json:"socket,omitempty"`
+	// Handshake is the operator's edited negotiation request (burpsy-react-ui-ws3e), Burp's
+	// "manipulate the negotiation request" before connect or reconnect. It replaces the captured
+	// or synthetic head entirely: the wire invariants are refreshed exactly as a clone's are
+	// (wsclient.CloneHandshake - fresh nonce, no extension offer, origin-form target, no body)
+	// and everything else reaches the wire byte for byte, because the edit IS the test. The dial
+	// authority comes from Socket (that connection's target) or Target, never from the edited
+	// Host line - which the operator may legitimately change under test. Refuses Clone: one send
+	// cannot take its negotiation request from two places. A pointer because an absent field and
+	// an explicitly empty one must not read the same: absent sends the captured or synthetic head,
+	// while "" is an edit that erased the request - refused with its reason rather than silently
+	// dialling a negotiation the operator did not write.
+	Handshake *string `json:"handshake,omitempty"`
 }
 
 // repeaterWsSendResp is the reply.
@@ -135,10 +148,6 @@ func wsSchemeTarget(target string) (string, bool, error) {
 
 // handleRepeaterWsSend resends one WebSocket frame over a fresh connection.
 func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req repeaterWsSendReq
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -162,8 +171,39 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 	}
 	host, port, tls, path, opcode, payload := plan.host, plan.port, plan.tls, plan.path, plan.opcode, plan.payload
 
+	// The extension websocket hook (burpsy-react-ui-wiwh slice 3, ws_hook.go): "created"
+	// sees the authorised handshake, "message" the frame payload. A created-phase
+	// replacement re-passes the plan's raw-bytes gate against the SAME authority and
+	// must still parse, or the send is refused closed — the bytes on the wire are the
+	// bytes the scope authorised, and the dial target always comes from the plan.
+	// The hooked bytes are what is sent AND what is recorded, the plan's own contract.
+	handshake := plan.handshake
+	if res := s.applyWsHook(r.Context(), "created", handshake); res.Dropped {
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "WS-SEND", path, 0, nil, 0, "dropped by extension hook (created)", nil)
+		http.Error(w, "dropped by extension hook", http.StatusBadGateway)
+		return
+	} else if res.Changed {
+		if aerr := s.scope.AuthoriseRaw(host, port, tls, res.Raw); aerr != nil {
+			http.Error(w, "refused: the extension's handshake rewrite failed the scope gate: "+aerr.Error(), http.StatusForbidden)
+			return
+		}
+		hookPath, perr := wsHandshakePath(res.Raw)
+		if perr != nil {
+			http.Error(w, "refused: the extension's handshake rewrite does not parse: "+perr.Error(), http.StatusForbidden)
+			return
+		}
+		handshake, path = res.Raw, hookPath
+	}
+	if res := s.applyWsHook(r.Context(), "message", payload); res.Dropped {
+		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "WS-SEND", path, 0, nil, 0, "dropped by extension hook (message)", nil)
+		http.Error(w, "dropped by extension hook", http.StatusBadGateway)
+		return
+	} else if res.Changed {
+		payload = res.Raw
+	}
+
 	started := time.Now()
-	reply, err := wsclient.SendFrameWithHandshake(r.Context(), s.sender, host, port, tls, plan.handshake, wsclient.Frame{Opcode: opcode, Payload: payload})
+	reply, err := wsclient.SendFrameWithHandshake(r.Context(), s.sender, host, port, tls, handshake, wsclient.Frame{Opcode: opcode, Payload: payload})
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 		// The tool log row is written for the same reason the HTTP send writes one: a send
@@ -174,7 +214,7 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.recordWsSend(host, port, tls, path, plan.handshake, opcode, payload, reply, started)
+	resp := s.recordWsSend(host, port, tls, path, handshake, opcode, payload, reply, started)
 	resp.ElapsedMs = elapsed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -190,6 +230,21 @@ type wsSendPlan struct {
 	handshake []byte
 	opcode    core.WsOpcode
 	payload   []byte
+}
+
+// wsHandshakePath re-reads the request line of a hook-rewritten handshake, the rule
+// the proxy's refreshedRequestLine states: what is recorded must agree with what is
+// sent, so a "created" replacement moves the recorded path to the hooked one.
+func wsHandshakePath(handshake []byte) (string, error) {
+	line, _, ok := bytes.Cut(handshake, []byte("\r\n"))
+	if !ok {
+		return "", errors.New("no request line")
+	}
+	parts := strings.Fields(string(line))
+	if len(parts) < 2 || !strings.HasPrefix(parts[1], "/") {
+		return "", fmt.Errorf("request line %q is not an origin-form ws handshake", line)
+	}
+	return parts[1], nil
 }
 
 // wsOpcodeOf parses the opcode a send may carry: data frames only.
@@ -230,6 +285,9 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (plan wsSendPlan, code int
 	opcode, err = wsOpcodeOf(req.Opcode, req.Payload)
 	if err != nil {
 		return wsSendPlan{}, http.StatusBadRequest, err
+	}
+	if req.Handshake != nil {
+		return s.prepareWsEditedHandshake(req, opcode)
 	}
 	if req.Clone {
 		return s.prepareWsClone(req, opcode)
@@ -352,8 +410,11 @@ func (s *Server) recordWsSend(
 		}, ev.Payload)
 	}
 
+	// Messages starts as the empty slice, never nil: a target that answers with no data frames is
+	// a clean send, and the wire must say "messages":[] for it — null throws in the pane, which
+	// declares the field non-nullable (repeater_ws_wire_arrays_test.go pins the bytes).
 	resp := repeaterWsSendResp{ExchangeID: ex.ID, ClosedByPeer: reply.ClosedByPeer,
-		CloseCode: reply.CloseCode, CloseReason: reply.CloseReason}
+		CloseCode: reply.CloseCode, CloseReason: reply.CloseReason, Messages: []repeaterWsMessage{}}
 	resp.Handshake = strings.TrimSpace(strings.SplitN(string(reply.RawHandshake), "\r\n", 2)[0])
 	for _, ev := range reply.Messages {
 		resp.Messages = append(resp.Messages, repeaterWsMessage{

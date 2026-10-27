@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -138,5 +139,36 @@ func TestEngagementUnknownKindIsANamedRefusal(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "comments") {
 		t.Errorf("refusal %q does not name the valid kinds", rec.Body.String())
+	}
+}
+
+// fxxm: /api/engagement/{kind...} is the old subtree with a named remainder: an empty, nested or
+// slash-terminated remainder is looked up as a kind text and answers the same 404 body as before;
+// the named kinds still resolve and the literal clickbandit.js route outranks the wildcard.
+func TestEngagementRemainderKeepsTheOldUnknownKindAnswer(t *testing.T) {
+	s := newTestServer()
+	for path, kind := range map[string]string{
+		"/api/engagement/":               "",
+		"/api/engagement/a/b":            "a/b",
+		"/api/engagement/comments/extra": "comments/extra",
+		"/api/engagement/comments/":      "comments/",
+		"/api/engagement/nope":           "nope",
+	} {
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		want := fmt.Sprintf("unknown engagement kind %q; the kinds are comments, scripts, references", kind)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("GET %s = %d %q, want 404 containing %q", path, rec.Code, rec.Body.String(), want)
+		}
+	}
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/engagement/comments", nil))
+	if rec.Code != http.StatusOK {
+		t.Errorf("GET /api/engagement/comments = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/engagement/clickbandit.js", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "javascript") {
+		t.Errorf("clickbandit.js = %d %q, want the literal asset route to win over {kind...}", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }

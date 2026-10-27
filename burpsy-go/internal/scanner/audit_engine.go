@@ -382,6 +382,14 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckWebSocketHijacking = false
 		case "CheckClientIPSpoofing":
 			cfg.CheckClientIPSpoofing = false
+		case "CheckServerSidePrototypePollution":
+			cfg.CheckServerSidePrototypePollution = false
+		case "CheckRaceConditions":
+			cfg.CheckRaceConditions = false
+		case "CheckOAuth":
+			cfg.CheckOAuth = false
+		case "CheckURLAuthBypass":
+			cfg.CheckURLAuthBypass = false
 		case "CheckCookieAttributes":
 			cfg.CheckCookieAttributes = false
 		case "CheckSubdomainTakeover":
@@ -471,6 +479,7 @@ type probeCounts struct {
 	sent      uint32
 	failed    uint32
 	refused   uint32
+	limited   uint32
 }
 
 // probeMeter counts the probes checks actually send, so the request budget bounds reality rather
@@ -488,9 +497,10 @@ type probeMeter struct {
 	// down, because a sweep that ignored N rate-limit responses is a sweep an operator must
 	// be able to distinguish from one the target never throttled.
 	rateLimitedCount atomic.Uint32
-	// limitedStatus is the most recent rate-limit status seen (0 = none), read by the
-	// dispatch loop to decide the backoff wait. Only the LAST status matters: a mixed 429
-	// then 503 sequence backs off the same either way.
+	// limitedStatus is the most recent rate-limit status seen (0 = none, or recovered),
+	// read by the dispatch loop to decide the backoff wait. Only the LAST status matters:
+	// a mixed 429 then 503 sequence backs off the same either way, and a probe answered
+	// normally clears it (succeeded), so the wait stops as soon as the target recovers.
 	limitedStatus atomic.Uint32
 }
 
@@ -505,6 +515,12 @@ func (m *probeMeter) attempt() {
 func (m *probeMeter) succeeded() {
 	if m != nil {
 		m.sent.Add(1)
+		// A response that was not a rate-limit answer clears the backoff flag (fkl8):
+		// limitedStatus is the LAST status seen, so a target that answers normally again
+		// has recovered and the dispatch loop stops paying the wait. Probes answered 429/503
+		// call succeeded() and then rateLimited() (probe_harness.go, scanner.go), so the flag
+		// still lands on the limited status for those; a transport failure clears nothing.
+		m.limitedStatus.Store(0)
 	}
 }
 
@@ -513,6 +529,24 @@ func (m *probeMeter) failure() {
 		m.failed.Add(1)
 	}
 }
+
+// MaxConsecutiveRateLimitedSteps bounds how many checks in a row the engine runs while the
+// target is answering every probe 429/503 (fkl8-b). Burp abandons an item under persistent
+// throttling rather than paying the backoff wait for the whole plan; without the same bound a
+// hot endpoint turns DefaultAutoBackoffMs x every remaining check into minutes of waiting that
+// produce no evidence. A step that sent nothing, or got one normal answer, leaves the streak
+// alone or resets it - the breaker fires only when asking has stopped producing answers.
+const MaxConsecutiveRateLimitedSteps = 8
+
+// MaxItemAutoBackoffWaits bounds how many backoff beats ONE item pays (fkl8-c). The
+// consecutive-limited breaker bounds the uniformly-throttled item, but a target that throttles
+// only some probe shapes - a per-key cap that 429s the captured email and answers a mutated
+// one, say - flaps the meter: a normal answer clears the streak while the next 429 marks it
+// again, so every flapped step would pay DefaultAutoBackoffMs without ever reaching the
+// breaker. A full plan of courtesy waits is the minutes-of-no-evidence the breaker exists to
+// prevent (the vulnapp's /auth/otp/capped safe row took 90s for one login form). Four beats
+// of courtesy per item, then full speed; the uniform case still ends at the breaker.
+const MaxItemAutoBackoffWaits = 4
 
 // rateLimited records one 429/503 probe response (fkl8). Nil-safe like its siblings.
 func (m *probeMeter) rateLimited(status int) {
@@ -541,6 +575,7 @@ func (m *probeMeter) snapshot() probeCounts {
 		sent:      m.sent.Load(),
 		failed:    m.failed.Load(),
 		refused:   m.refused.Load(),
+		limited:   m.rateLimitedCount.Load(),
 	}
 }
 
@@ -552,6 +587,7 @@ func (m *probeMeter) since(before probeCounts) probeCounts {
 		sent:      now.sent - before.sent,
 		failed:    now.failed - before.failed,
 		refused:   now.refused - before.refused,
+		limited:   now.limited - before.limited,
 	}
 }
 
@@ -639,6 +675,11 @@ type auditRun struct {
 	// On the run, not the scanner: one audit's repetition prior must not bound a different
 	// audit against the same host — the same discipline the request meter and breakers hold.
 	lightAudit map[lightAuditKey]uint32
+
+	// unitVariants counts, per variant-invariant unit base key, the distinct content-variant
+	// keys this run has admitted - the re-dispatch cap's memory (burpsy-go W4). Guarded by r.mu,
+	// like lightAudit: AuditSession dispatches items concurrently.
+	unitVariants map[string]map[string]bool
 
 	// perHostLastProbe is the last time a probe was sent to each host (m0sv).
 	perHostLastProbe map[string]time.Time
@@ -769,6 +810,47 @@ func (r *auditRun) lightAuditRecordClean(kind, host string) {
 		r.lightAudit = make(map[lightAuditKey]uint32)
 	}
 	r.lightAudit[lightAuditKey{kind: kind, host: host}]++
+}
+
+// unitVariantCapped reports whether this dispatch unit is a content variant beyond the run's
+// cap (burpsy-go W4), admitting the variant's key on first sight so a re-walk of the same unit
+// (a follow-up pass, or a re-capture of identical content) is never capped after the fact.
+//
+// Passive units are exempt: their key carries the "|passive" suffix, and re-running them on new
+// content costs analysis of an exchange already in hand, not requests. Units without a content
+// fingerprint (per-request, per-insertion-point) are exempt by construction - they key by
+// exchange ID, so every capture is meant to be its own unit.
+func (r *auditRun) unitVariantCapped(key string) bool {
+	if strings.HasSuffix(key, "|passive") {
+		return false
+	}
+	capN := r.cfg.MaxUnitVariantsPerUnit
+	if capN == 0 {
+		return false
+	}
+	i := strings.Index(key, "#fp")
+	if i < 0 {
+		return false
+	}
+	base := key[:i]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unitVariants == nil {
+		r.unitVariants = make(map[string]map[string]bool)
+	}
+	set := r.unitVariants[base]
+	if set == nil {
+		set = make(map[string]bool)
+		r.unitVariants[base] = set
+	}
+	if set[key] {
+		return false
+	}
+	if uint64(len(set)) >= uint64(capN) {
+		return true
+	}
+	set[key] = true
+	return false
 }
 
 // outOfTime reports whether the wall-clock budget is spent.
@@ -937,6 +1019,10 @@ type AuditOutcome struct {
 	// N rate-limit responses is a sweep an operator must be able to distinguish from one the
 	// target never throttled.
 	RateLimited int `json:"rate_limited"`
+	// RateLimitedBounded counts checks never attempted because the target answered every
+	// recent probe 429/503 and the engine stopped asking (fkl8-b). Distinct from RateLimited:
+	// that one counts waits behind work that ran, this one counts work that never ran.
+	RateLimitedBounded int `json:"rate_limited_bounded"`
 	// PointsSkippedRepetitive counts insertion points the light-audit tier skipped because
 	// their (kind, host) had produced enough clean points this run (7bkj). Not a
 	// check-level disposition — the check ran, on fewer points — so it sits beside
@@ -1000,6 +1086,11 @@ type AuditOutcome struct {
 	// threshold that failed it.
 	UnitsPlanned   int `json:"units_planned"`
 	UnitsAbandoned int `json:"units_abandoned"`
+	// UnitsVariantCapped counts dispatch units refused by the run's content-variant cap
+	// (MaxUnitVariantsPerUnit, burpsy-go W4): the cap said this endpoint's checks already
+	// covered enough content variants. A unit-level fact like the two above, deliberately
+	// outside the disposition partition - the checks inside are counted AlreadyCovered.
+	UnitsVariantCapped int `json:"units_variant_capped"`
 	// FollowUpPasses is how many extra passes a failed item was re-dispatched. Zero is the common
 	// case and means the item failed and stopped, which is a coverage loss an operator has to be able
 	// to see rather than infer from a request count.
@@ -1071,8 +1162,8 @@ type DispositionCount struct {
 
 // Dispositions is the full disposition histogram, in DispositionAll order, so a caller can render
 // *why* the engine stopped without hard-coding which of the counters mean "did not look".
-func (o AuditOutcome) Dispositions() [9]DispositionCount {
-	counts := [9]int{
+func (o AuditOutcome) Dispositions() [10]DispositionCount {
+	counts := [10]int{
 		o.Ran,
 		o.Skipped,
 		o.SendFailures,
@@ -1082,8 +1173,9 @@ func (o AuditOutcome) Dispositions() [9]DispositionCount {
 		o.UnitAbandoned,
 		o.ItemFailed,
 		o.SessionPaused,
+		o.RateLimitedBounded,
 	}
-	var out [9]DispositionCount
+	var out [10]DispositionCount
 	for i, d := range DispositionAll {
 		out[i] = DispositionCount{
 			Disposition:    d,
@@ -1489,44 +1581,59 @@ type planStep struct {
 	check int
 }
 
-// plan groups the check set into dispatch units for one exchange, coarsest scope first.
+// plan groups the check set into dispatch units for one exchange: every passive unit first (each
+// in its scope's place within the scope order), then every active unit, coarsest scope first.
+//
+// Passive checks get units of their own, dispatched ahead of all active ones (burpsy-go W6). A
+// passive step needs no probe, so when it runs nothing has happened yet that the item breaker
+// could trip on. Placed behind the active families of a shared unit, a passive step died with the
+// unit when those families tripped the breaker - findings that needed no requests lost to the
+// failure of checks that did. A passive unit's key carries a "|passive" suffix so its failure
+// memory and per-unit counters stay apart from the active unit of the same scope.
 //
 // Returns the units, a flat plan of steps in dispatch order, and the number of checks that have no
 // dispatch unit at all. Those last are counted rather than dropped: a check that silently vanishes
 // from the plan would make the outcome's counters stop summing to the check set, and the whole point
 // of the counters is that they do.
 func plan(ex *core.Exchange, checks []activeCheck) (units []dispatchUnit, steps []planStep, undispatchable int) {
-	for _, scope := range DispatchScopeAll {
-		var members []int
-		for i, c := range checks {
-			if c.scope != scope || c.rowSkip != "" {
+	emit := func(passive bool) {
+		for _, scope := range DispatchScopeAll {
+			var members []int
+			for i, c := range checks {
+				if c.scope != scope || c.rowSkip != "" || c.passive != passive {
+					continue
+				}
+				// A check with no implementation has nowhere to run, whatever its scope claims. Counted
+				// here rather than admitted and then declined, because admitting it would spend a ledger
+				// bit and a budget test on work that cannot happen.
+				if c.run == nil {
+					undispatchable++
+					continue
+				}
+				members = append(members, i)
+			}
+			if len(members) == 0 {
 				continue
 			}
-			// A check with no implementation has nowhere to run, whatever its scope claims. Counted
-			// here rather than admitted and then declined, because admitting it would spend a ledger
-			// bit and a budget test on work that cannot happen.
-			if c.run == nil {
-				undispatchable++
+			key, ok := scope.UnitKey(ex)
+			if !ok {
+				// A check bound to a scope this engine cannot key is in the same position as one with no
+				// implementation.
+				undispatchable += len(members)
 				continue
 			}
-			members = append(members, i)
-		}
-		if len(members) == 0 {
-			continue
-		}
-		key, ok := scope.UnitKey(ex)
-		if !ok {
-			// A check bound to a scope this engine cannot key is in the same position as one with no
-			// implementation.
-			undispatchable += len(members)
-			continue
-		}
-		ix := len(units)
-		units = append(units, dispatchUnit{scope: scope, key: key})
-		for _, c := range members {
-			steps = append(steps, planStep{unit: ix, check: c})
+			if passive {
+				key += "|passive"
+			}
+			ix := len(units)
+			units = append(units, dispatchUnit{scope: scope, key: key})
+			for _, c := range members {
+				steps = append(steps, planStep{unit: ix, check: c})
+			}
 		}
 	}
+	emit(true)
+	emit(false)
 	return units, steps, undispatchable
 }
 
@@ -1702,7 +1809,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			bumpPhase(&o, c.phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
 		}
 	}
-	rowSel := newRowSelection(s.ConfigSnapshot().OnlyRows)
+	// One snapshot feeds the row selection and the queue row's enumeration below: both
+	// must read the same configuration even if an operator flips a switch mid-audit.
+	snap := s.ConfigSnapshot()
+	rowSel := newRowSelection(snap.OnlyRows)
 	o.UnitsPlanned = len(units)
 
 	// The queue's row for this item, filled in at the one moment every fact it needs is in hand: the
@@ -1710,7 +1820,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions())
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions(), !snap.DisableGraphQLIngest)
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 
@@ -1766,6 +1876,8 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// FollowUpPasses was reported as 1 while no second pass ran, and the tail double-counted every
 	// step as ItemFailed. An outer loop says the same thing structurally: a retry is another turn
 	// of this loop, and falling out of it is what ends the item.
+	consecutiveLimited := 0
+	backoffPaid := 0
 	for {
 		// The plan is exhausted, not merely re-entered: the condition is the INNER loop's, and
 		// without it a pass that ran out of steps would index past the end — a failed item whose
@@ -1773,6 +1885,21 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		for pos < len(steps) {
 			unitIx := steps[pos].unit
 			abandoned := false
+			// The content-variant cap (burpsy-go W4): a unit beyond the run's variant budget is
+			// consumed here as AlreadyCovered - the endpoint's checks covered their variant
+			// allowance already, and "covered" is the honest bucket, unlike UnitAbandoned (a
+			// failure) or ItemFailed. The breaker's unit streak is deliberately not touched:
+			// a capped unit says nothing about whether the target is failing.
+			if run.unitVariantCapped(units[unitIx].key) {
+				o.UnitsVariantCapped++
+				for pos < len(steps) && steps[pos].unit == unitIx {
+					check := steps[pos].check
+					pos++
+					run.cfg.Items.Step(exchangeID)
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.AlreadyCovered }, func(po *PhaseOutcome) { po.AlreadyCovered++ })
+				}
+				continue
+			}
 			for pos < len(steps) && steps[pos].unit == unitIx {
 				// Hard stops. Each is monotone — once spent it stays spent — so the rest of the plan is
 				// attributed in one go rather than re-tested per step.
@@ -1807,15 +1934,25 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				// Unset inherits the default; set-and-zero is the real off. Resolving the wait here,
 				// at the read, keeps the field's wire shape one value with no second "enabled" flag
 				// to fall out of sync.
+				// Persistent-throttle bound (fkl8-b): when every recent check was answered only
+				// with 429/503, the next steps will be too - the fixture or WAF is hot for this
+				// item, not for one probe. Stop asking: the remaining plan is attributed
+				// DispositionRateLimited, which is a bounded result an operator can act on,
+				// instead of minutes of backoff that end in the same nothing.
+				if consecutiveLimited >= MaxConsecutiveRateLimitedSteps {
+					stop, stopped = DispositionRateLimited, true
+					break
+				}
 				ms := DefaultAutoBackoffMs
 				if run.cfg.AutoBackoffMs.Set {
 					ms = run.cfg.AutoBackoffMs.Value
 				}
-				if ms > 0 && meter != nil && meter.limitedStatus.Load() != 0 {
+				if ms > 0 && meter != nil && meter.limitedStatus.Load() != 0 && backoffPaid < MaxItemAutoBackoffWaits {
 					select {
 					case <-time.After(time.Duration(ms) * time.Millisecond):
 					case <-ctx.Done():
 					}
+					backoffPaid++
 					bumpPhase(&o, checks[steps[pos].check].phase, func(o *AuditOutcome) *int { return &o.RateLimited }, func(po *PhaseOutcome) { po.RateLimited++ })
 				}
 
@@ -1886,6 +2023,15 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				stopClock()
 				d := meter.since(before)
 				run.releasePerHostInFlight(ex.Host)
+				// fkl8-b streak accounting: a check that sent probes and got ONLY rate-limit
+				// answers extends the streak; any normal answer resets it; a check that sent
+				// nothing (pure analysis of the captured exchange) leaves it alone.
+				switch {
+				case d.limited > 0 && d.limited == d.sent:
+					consecutiveLimited++
+				case d.sent > d.limited:
+					consecutiveLimited = 0
+				}
 
 				// Stopped by the item's dynamic time limit rather than by the target: Skipped with the
 				// reason, BEFORE the failure branch, because a limit the run imposed on itself must not
@@ -1959,6 +2105,11 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 					// abandoning the unit: it is not evidence the target is failing (4kmr).
 					if checks[check].dynamicJS {
 						breaker.browserCheckFailed(units[unitIx].key, checks[check].name)
+					} else if checks[check].passive {
+						// A passive check's failure is an analysis error on an exchange already
+						// in hand, not evidence the target is failing: remembered for the
+						// re-pass narrowing, never counted towards abandoning the unit (W6).
+						breaker.passiveCheckFailed(units[unitIx].key, checks[check].name)
 					} else {
 						abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
 					}
@@ -1979,9 +2130,12 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 							zap.Int("dropped", len(verdict)))
 					}
 					// The same failure as above by a different cause: the check ran and every
-					// probe it placed was refused. Recorded against the unit so a re-pass does not
-					// re-send it blind.
-					breaker.checkFailed(units[unitIx].key, checks[check].name)
+					// probe it placed was refused. Same consequence too, which is what the
+					// assignment says — the breaker's verdict used to be dropped here, so a unit
+					// whose checks all failed THIS way climbed the streak without ever
+					// abandoning: the remaining checks dispatched into a target that was
+					// refusing everything, and unitFinished(false) then reset the unit streak.
+					abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
 					continue
 				}
 				countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Ran }, func(po *PhaseOutcome) { po.Ran++ })
@@ -2069,6 +2223,15 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			}
 			counted[i] = true
 			bumpPhase(&o, checks[steps[i].check].phase, func(o *AuditOutcome) *int { return &o.NotRun }, func(po *PhaseOutcome) { po.NotRun++ })
+		}
+		o.State = ItemStateBounded
+	case stopped && stop == DispositionRateLimited:
+		for i := pos; i < len(steps); i++ {
+			if counted[i] {
+				continue
+			}
+			counted[i] = true
+			bumpPhase(&o, checks[steps[i].check].phase, func(o *AuditOutcome) *int { return &o.RateLimitedBounded }, func(po *PhaseOutcome) { po.RateLimitedBounded++ })
 		}
 		o.State = ItemStateBounded
 	case stopped && stop == DispositionRequestBudgetSpent:

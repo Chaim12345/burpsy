@@ -22,11 +22,7 @@ import (
 // handler only resolves hosts against the store and wires the download headers.
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	format := strings.TrimPrefix(r.URL.Path, "/api/report/")
+	format := r.PathValue("rest")
 	format = strings.TrimSuffix(format, "/")
 
 	// finding/{id} is Burp's "Report selected issues" (issues.html:195-228) made honest: the

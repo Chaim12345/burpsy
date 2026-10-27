@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/textproto"
 	"strconv"
 	"strings"
 )
@@ -92,15 +91,7 @@ func StreamResponse(br *bufio.Reader, head []byte, onChunk func([]byte)) (Stream
 		return StreamResult{Completed: true}, nil
 	}
 
-	headerBlock := head
-	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
-		headerBlock = headerBlock[idx+1:]
-	}
-	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
-	mimeHead, err := h.ReadMIMEHeader()
-	if err != nil {
-		return StreamResult{}, fmt.Errorf("parsing response headers: %w", err)
-	}
+	te, cl := ResponseFraming(head)
 
 	var out bytes.Buffer
 	remaining := MaxStreamingBodyBytes
@@ -115,10 +106,10 @@ func StreamResponse(br *bufio.Reader, head []byte, onChunk func([]byte)) (Stream
 		onChunk(chunk)
 	}
 
-	if te := mimeHead.Get("Transfer-Encoding"); strings.EqualFold(te, "chunked") {
+	if strings.EqualFold(te, "chunked") {
 		return streamChunked(br, &out, remaining, emit)
 	}
-	if cl := mimeHead.Get("Content-Length"); cl != "" {
+	if cl != "" {
 		n, err := strconv.ParseInt(cl, 10, 64)
 		if err != nil || n < 0 {
 			return StreamResult{}, fmt.Errorf("bad Content-Length %q", cl)

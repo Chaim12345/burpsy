@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/intercept"
 )
 
 func qaFrame(op core.WsOpcode, fin bool, payload []byte, mask [4]byte) []byte {
@@ -164,13 +165,172 @@ func TestInjectionUnderLoadNeverCorruptsTheStream(t *testing.T) {
 			t.Fatalf("message %d corrupted: %q", next, s[:min(len(s), 40)])
 		}
 		next++
-		mu.Lock()
-		done := injected
-		mu.Unlock()
 		if next == n {
 			wg.Wait()
+			// Read the injected count AFTER the wait: it can still grow while the
+			// senders drain, and the snapshot before the wait would under-count.
 			mu.Lock()
-			done = injected
+			done := injected
+			mu.Unlock()
+			if seenInj >= done {
+				break
+			}
+		}
+	}
+	wg.Wait()
+	t.Logf("client msgs %d, injected ok %d, seen %d", next, injected, seenInj)
+}
+
+// The interception-on half of TestInjectionUnderLoadNeverCorruptsTheStream (burpsy-react-ui-i9ti.3,
+// whose acceptance criterion names "-race ... with interception both on and off"). Every client
+// message is HELD for the operator before it is relayed, and an auto-resolver forwards each hold as
+// it appears, while four injectors race the relay. Held bytes have not reached the wire, so the
+// sink's reassembler is the only boundary oracle an injector has: if interception ever let a
+// partial frame reach the wire ahead of its hold, or the release path wrote outside the sink, an
+// injected frame would land inside a message and the origin's stream would break.
+func TestInjectionUnderInterceptionNeverCorruptsTheStream(t *testing.T) {
+	engine := intercept.NewEngine()
+	engine.SetEnabled(true)
+	if err := engine.SetRules(intercept.DirectionWebSocketToServer, true, nil); err != nil {
+		t.Fatalf("SetRules: %v", err)
+	}
+	f := openLiveWsWith(t, engine)
+	if err := f.client.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear client read deadline: %v", err)
+	}
+
+	// The operator: forward every held frame the moment it appears. A hold whose poll loses to a
+	// sibling poll is already resolved, so Forward's error is ignored.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for _, h := range engine.Held() {
+				_ = engine.Forward(h.ID, nil, false, nil)
+			}
+			time.Sleep(500 * time.Microsecond)
+		}
+	}()
+
+	// Fewer messages than the interception-off half: every one waits out a hold, so the stream's
+	// cost is the resolver's poll, not the wire.
+	const n = 150
+	var stream []byte
+	pauseAt := map[int]bool{}
+	for i := 0; i < n; i++ {
+		m := [4]byte{byte(i), 1, 2, 3}
+		p := []byte(fmt.Sprintf("client-%04d-%s", i, string(make([]byte, i%300))))
+		if i%5 == 0 {
+			stream = append(stream, qaFrame(core.WsOpcodeText, false, p[:len(p)/2], m)...)
+			pauseAt[len(stream)] = true
+			stream = append(stream, qaFrame(core.WsOpcodePing, true, []byte("pp"), m)...)
+			pauseAt[len(stream)] = true
+			stream = append(stream, qaFrame(core.WsOpcodeContinuation, true, p[len(p)/2:], m)...)
+		} else {
+			stream = append(stream, qaFrame(core.WsOpcodeText, true, p, m)...)
+		}
+	}
+	go func() {
+		for off := 0; off < len(stream); {
+			end := off + 1 + (off*7)%97
+			if end > len(stream) {
+				end = len(stream)
+			}
+			for k := off + 1; k < end; k++ {
+				if pauseAt[k] {
+					end = k
+					break
+				}
+			}
+			if _, err := f.client.Write(stream[off:end]); err != nil {
+				t.Logf("client feed write: %v", err)
+				return
+			}
+			off = end
+			if pauseAt[off] {
+				time.Sleep(3 * time.Millisecond)
+			} else {
+				time.Sleep(20 * time.Microsecond)
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	injected := 0
+	var mu sync.Mutex
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte(fmt.Sprintf("inj-%d-%d", g, j))); err == nil {
+					mu.Lock()
+					injected++
+					mu.Unlock()
+				} else {
+					t.Logf("inject: %v", err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}(g)
+	}
+	if err := f.origin.conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatalf("origin read deadline: %v", err)
+	}
+	next := 0
+	var frag []byte
+	open := false
+	seenInj := 0
+	for next < n || seenInj < 100 {
+		hdr, p, err := qaRead(f.origin.Reader)
+		if err != nil {
+			wg.Wait()
+			t.Fatalf("origin read after %d client msgs %d injected: %v (injected ok=%d)", next, seenInj, err, injected)
+		}
+		switch hdr.Opcode {
+		case core.WsOpcodePing:
+			continue
+		case core.WsOpcodeContinuation:
+			if !open {
+				t.Fatalf("continuation without open message")
+			}
+			frag = append(frag, p...)
+			if hdr.FIN {
+				open = false
+				p = frag
+			} else {
+				continue
+			}
+		default:
+			if open {
+				t.Fatalf("new data frame %q inside an open fragmented message", p)
+			}
+			if !hdr.FIN {
+				open = true
+				frag = append([]byte(nil), p...)
+				continue
+			}
+		}
+		s := string(p)
+		if len(s) >= 4 && s[:4] == "inj-" {
+			seenInj++
+			continue
+		}
+		want := fmt.Sprintf("client-%04d-", next)
+		if len(s) < len(want) || s[:len(want)] != want {
+			t.Fatalf("message %d corrupted: %q", next, s[:min(len(s), 40)])
+		}
+		next++
+		if next == n {
+			wg.Wait()
+			// Read the injected count AFTER the wait: it can still grow while the
+			// senders drain, and the snapshot before the wait would under-count.
+			mu.Lock()
+			done := injected
 			mu.Unlock()
 			if seenInj >= done {
 				break

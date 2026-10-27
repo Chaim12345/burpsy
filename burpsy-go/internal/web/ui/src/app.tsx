@@ -1,3 +1,4 @@
+import { cn } from "./lib/cn";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { PlatformAuthPrompt } from "./ui/platform-auth-prompt";
 import { scopeAllowsEverything } from "./lib/scope-state";
@@ -39,30 +40,60 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { api, copyToClipboard, gatedFetch, json, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
-import { queryClient, useConnection, useEventStream, useIntercept, useProject, useProjectEpoch, useRenameProject, useScope, useStats } from "./lib/data";
+import {
+ api,
+ copyToClipboard,
+ gatedFetch,
+ json,
+ downloadText,
+ formatBytes,
+ formatCount,
+ historyToCSV,
+ relativeTime,
+ requestFromUrl,
+ templateRequest,
+} from "./lib/api";
+import {
+ queryClient,
+ useConnection,
+ useEventStream,
+ useIntercept,
+ useProject,
+ useProjectEpoch,
+ useRenameProject,
+ useScope,
+ useStats,
+} from "./lib/data";
 import { useScannerLive } from "./lib/data.attack";
 import { useCrawls } from "./lib/data.observe";
 import { attentionFor, attentionSignals } from "./lib/attention";
 import { useCaCert } from "./lib/data.policy";
-import {
- attackConfigFilename,
- parseAttackConfig,
- serializeAttackConfig,
-} from "./lib/intruder-config-file";
+import { attackConfigFilename, parseAttackConfig, serializeAttackConfig } from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
-import { settingsPaletteActions } from "./lib/settings-sections";
-import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
-import { THEME_SLOTS, themeTokenVars } from "./lib/theme-import";
+import { requestSettingsSection, settingsPaletteActions } from "./lib/settings-sections";
+import { helpMenuGroups } from "./lib/help-menu";
+import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, useApp } from "./lib/store";
+import { useThemeEffect } from "./lib/use-theme-effect";
 import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, SHORTCUT_ACTIONS, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useCommandChord, useKeymap } from "./lib/keymap";
 import { commandsVersion, hasCommand, runCommand, subscribeCommands, unavailableReason, useCommandHandler } from "./lib/commands";
 import { catalogueCommands } from "./lib/palette-commands";
 import { usePluginHotkeys } from "./lib/plugin-hotkeys";
-import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
+import {
+ clearHiddenToolTabs,
+ clearToolTabOrder,
+ moveToolTab,
+ neighbourTab,
+ orderToolTabs,
+ readHiddenToolTabs,
+ readToolTabOrder,
+ writeHiddenToolTabs,
+ writeToolTabOrder,
+} from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
+import { BottomDock } from "./ui/bottom-dock";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
@@ -73,7 +104,6 @@ import { HiddenInputsDialog } from "./ui/hidden-inputs-dialog";
 import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
 import { ClickbanditDialog } from "./ui/clickbandit-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
-
 
 function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const keymap = useKeymap();
@@ -87,7 +117,10 @@ function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        <div className="shortcut-row" key={entry.id}>
         <div>
          {chordKeys(entry, keymap).map((key, i) => (
-          <span key={key}>{i > 0 ? "+" : null}<Kbd>{key}</Kbd></span>
+          <span key={key}>
+           {i > 0 ? "+" : null}
+           <Kbd>{key}</Kbd>
+          </span>
          ))}
         </div>
         <span>
@@ -101,60 +134,6 @@ function ShortcutHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (op
    </div>
   </Modal>
  );
-}
-
-function useThemeEffect(): void {
- const theme = useApp((state) => state.theme);
- const uiScale = useApp((state) => state.uiScale);
- const editorFont = useApp((state) => state.editorFont);
- const editorFontFamily = useApp((state) => state.editorFontFamily);
- const customTheme = useApp((state) => state.customTheme);
- const themePreview = useApp((state) => state.themePreview);
- useEffect(() => {
-  const apply = () => document.documentElement.setAttribute("data-theme", resolveTheme(theme));
-  apply();
-  if (theme !== "system") return;
-  const media = window.matchMedia("(prefers-color-scheme: dark)");
-  media.addEventListener("change", apply);
-  return () => media.removeEventListener("change", apply);
- }, [theme]);
- // The two text scales (burpsy-react-ui-7bd) ride the same attribute pattern as the
- // theme: one place on <html>, everything downstream reads the custom property.
- useEffect(() => {
-  document.documentElement.style.setProperty("--ui-scale", uiScaleFactor(uiScale));
- }, [uiScale]);
- useEffect(() => {
-  document.documentElement.style.setProperty("--editor-font-size", editorFont);
- }, [editorFont]);
- // The editor font family (burpsy-react-ui-mqrn): a non-default choice sets --editor-font-family,
- // which the editor's CodeMirror theme reads; "default" removes the property so the editor falls
- // back to the stylesheet's --font-mono. Family and size are separate custom properties so one can
- // change without disturbing the other.
- useEffect(() => {
-  const stack = editorFontStack(editorFontFamily);
-  if (stack) document.documentElement.style.setProperty("--editor-font-family", stack);
-  else document.documentElement.style.removeProperty("--editor-font-family");
- }, [editorFontFamily]);
- // The imported theme (burpsy-react-ui-fpew): set an inline override on <html> for every slot the
- // theme names (an inline property beats semantic.css's :root rule), and remove every other slot the
- // theme could have named so a reverted or narrowed theme falls back to the Penpot default instead of
- // keeping a stale override. Walking THEME_SLOTS rather than a remembered key set means the cleanup is
- // correct even across a reload where the previous overrides were never in this document's inline style.
- useEffect(() => {
-  const style = document.documentElement.style;
-  // A live preview overlays the kept theme (themePreview ?? customTheme): previewing shows the file
-  // before it is kept, and a preview that read badly is escaped by a reload because themePreview is
-  // not persisted. themeTokenVars tolerates a corrupted persisted theme (an object without tokens)
-  // rather than letting Object.entries throw and take the whole app down on load.
-  const active = themePreview ?? customTheme;
-  const vars = active ? themeTokenVars(active) : {};
-  for (const slot of THEME_SLOTS) {
-   const prop = `--${slot}`;
-   const value = vars[prop];
-   if (value !== undefined) style.setProperty(prop, value);
-   else style.removeProperty(prop);
-  }
- }, [customTheme, themePreview]);
 }
 
 /**
@@ -324,6 +303,24 @@ function App(): JSX.Element {
  // this lives; the tab keeps working when hidden — hotkeys, the palette and links into its routes
  // all still reach it — so hiding is a statement about chrome, never about capability.
  const [hiddenTools, setHiddenTools] = useState<string[]>(() => readHiddenToolTabs());
+ // The operator's tab order (sk29): dragging a tab along the strip, remembered across reloads.
+ const [toolOrder, setToolOrder] = useState<string[]>(() => readToolTabOrder());
+ const [draggedTool, setDraggedTool] = useState<string | null>(null);
+ const [dragOverTool, setDragOverTool] = useState<string | null>(null);
+ const orderedTools = orderToolTabs(TOOLS, toolOrder);
+ const dropTool = (onto: string) => {
+  if (draggedTool && draggedTool !== onto) {
+   const next = moveToolTab(
+    orderedTools.map((entry) => entry.id),
+    draggedTool,
+    onto,
+   );
+   setToolOrder(next);
+   writeToolTabOrder(next);
+  }
+  setDraggedTool(null);
+  setDragOverTool(null);
+ };
  const setToolHidden = (id: string, hidden: boolean) => {
   const next = hidden ? [...new Set([...hiddenTools, id])] : hiddenTools.filter((entry) => entry !== id);
   setHiddenTools(next);
@@ -503,21 +500,32 @@ function App(): JSX.Element {
  // there are thirteen tools and ten digits: four tabs are reachable only this way.
  const cycleTool = useCallback(
   (delta: number) => {
-   const tools = TOOLS;
-   const currentTool = toolOf(route);
-   const at = tools.findIndex((entry) => entry.id === currentTool.id);
-   if (at === -1) return;
-   // Wraps, because a cycle that stops at the ends makes the last tab unreachable from the
-   // first without counting.
-   const next = tools[(at + delta + tools.length) % tools.length]!;
-   navigate(entryLeaf(next));
+   // The strip the operator sees: a dragged tab order (sk29) moves the neighbours too. Wraps,
+   // because a cycle that stops at the ends makes the last tab unreachable from the first
+   // without counting.
+   const next = neighbourTab(orderedTools, toolOf(route).id, delta);
+   if (next) navigate(entryLeaf(next));
   },
-  [route, navigate],
+  [route, navigate, orderedTools],
  );
- useHotkeys(nextToolChord, (event) => { event.preventDefault(); cycleTool(1); },
-  { enableOnFormTags: true }, [nextToolChord, cycleTool]);
- useHotkeys(prevToolChord, (event) => { event.preventDefault(); cycleTool(-1); },
-  { enableOnFormTags: true }, [prevToolChord, cycleTool]);
+ useHotkeys(
+  nextToolChord,
+  (event) => {
+   event.preventDefault();
+   cycleTool(1);
+  },
+  { enableOnFormTags: true },
+  [nextToolChord, cycleTool],
+ );
+ useHotkeys(
+  prevToolChord,
+  (event) => {
+   event.preventDefault();
+   cycleTool(-1);
+  },
+  { enableOnFormTags: true },
+  [prevToolChord, cycleTool],
+ );
 
  // Bound from the keymap, not a literal: the Settings table edits these, and a literal here
  // would mean an operator's rebind changed the row the modal displays and nothing else.
@@ -577,7 +585,9 @@ function App(): JSX.Element {
     toast.success(result.paused ? `Tasks paused (${result.running} running)` : "Tasks resumed");
     void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
    })
-   .catch((failure: unknown) => toast.error(`Could not toggle task execution: ${failure instanceof Error ? failure.message : String(failure)}`));
+   .catch((failure: unknown) =>
+    toast.error(`Could not toggle task execution: ${failure instanceof Error ? failure.message : String(failure)}`),
+   );
  });
  useHotkeys(
   themeChord,
@@ -645,8 +655,7 @@ function App(): JSX.Element {
    });
    const body: unknown = await res.json().catch(() => null);
    if (!res.ok || !body || typeof body !== "object" || !("status" in body)) {
-    const detail =
-     body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : res.statusText;
+    const detail = body && typeof body === "object" && "error" in body ? String((body as { error: unknown }).error) : res.statusText;
     // Nothing was applied, and the file's coverage was never read — `omitted` stays undefined so
     // the modal reports an absence of information rather than a partial transfer it knows nothing
     // about. Collapsing those two is the bug this bead exists to fix, in a new place.
@@ -792,13 +801,13 @@ function App(): JSX.Element {
  const startBlocker = attackRunning
   ? "An attack is already running."
   : intruderStatus
-   ? intruderStatus.refusal
-   : intruderLaunchBlocker(intruderConfig);
+    ? intruderStatus.refusal
+    : intruderLaunchBlocker(intruderConfig);
  const stopBlocker = !attackRunning
   ? "No attack is running."
   : intruderStatus?.controllable
-   ? null
-   : "The running attack has not been identified yet — its controls appear in the Intruder header once it is named.";
+    ? null
+    : "The running attack has not been identified yet — its controls appear in the Intruder header once it is named.";
 
  const INTRUDER_MENU: MenuGroup[] = [
   {
@@ -819,7 +828,9 @@ function App(): JSX.Element {
      id: "close-all-tabs",
      label: "Close all tabs",
      disabled: attackRunning,
-     hint: attackRunning ? "An attack is running; its report needs its tab to land in." : "Close every attack tab. Reopen closed tab brings them back one at a time.",
+     hint: attackRunning
+      ? "An attack is running; its report needs its tab to land in."
+      : "Close every attack tab. Reopen closed tab brings them back one at a time.",
      onSelect: closeAllIntruderTabs,
     },
     {
@@ -827,7 +838,9 @@ function App(): JSX.Element {
      label: closedIntruderTabs.length ? `Reopen closed tab (${closedIntruderTabs.length})` : "Reopen closed tab",
      icon: RotateCcw,
      disabled: closedIntruderTabs.length === 0,
-     hint: closedIntruderTabs.length ? "Bring back the most recently closed attack tab with its configuration and results." : "No attack tab has been closed this session.",
+     hint: closedIntruderTabs.length
+      ? "Bring back the most recently closed attack tab with its configuration and results."
+      : "No attack tab has been closed this session.",
      onSelect: () => {
       reopenIntruderTab();
       navigate("intruder");
@@ -868,7 +881,8 @@ function App(): JSX.Element {
      label: "Open saved attack",
      icon: FolderOpen,
      disabled: true,
-     hint: "burpsy has no project file, so a finished attack and its results are not stored on disk to be reopened. Save attack config writes the configuration to a JSON file instead.",
+     hint:
+      "burpsy has no project file, so a finished attack and its results are not stored on disk to be reopened. Save attack config writes the configuration to a JSON file instead.",
      onSelect: () => undefined,
     },
    ],
@@ -933,7 +947,8 @@ function App(): JSX.Element {
      label: "Configure predefined payload lists",
      icon: ListChecks,
      disabled: true,
-     hint: "burpsy has no payload-list library. A payload set can read a server-side file by name on the Intruder page's Payloads tab, which is the closest thing that exists.",
+     hint:
+      "burpsy has no payload-list library. A payload set can read a server-side file by name on the Intruder page's Payloads tab, which is the closest thing that exists.",
      onSelect: () => undefined,
     },
    ],
@@ -946,7 +961,8 @@ function App(): JSX.Element {
      label: "Scan defined insertion points",
      icon: ScanSearch,
      disabled: true,
-     hint: "burpsy's audit (POST /api/audit/{exchange}) derives its own insertion points and has no field that accepts a chosen set, so the positions marked here could not be the ones scanned.",
+     hint:
+      "burpsy's audit (POST /api/audit/{exchange}) derives its own insertion points and has no field that accepts a chosen set, so the positions marked here could not be the ones scanned.",
      onSelect: () => undefined,
     },
     {
@@ -954,7 +970,8 @@ function App(): JSX.Element {
      label: "Do active scan",
      icon: Radar,
      disabled: true,
-     hint: "The audit is keyed by exchange id; Intruder's base request is a stored message id, and a message carries no back-reference to the exchange it came from. Start an active audit from the History row instead.",
+     hint:
+      "The audit is keyed by exchange id; Intruder's base request is a stored message id, and a message carries no back-reference to the exchange it came from. Start an active audit from the History row instead.",
      onSelect: () => undefined,
     },
     {
@@ -962,7 +979,8 @@ function App(): JSX.Element {
      label: "Do passive scan",
      icon: Crosshair,
      disabled: true,
-     hint: "The only passive entry point (POST /api/scanner/passive-branch) sweeps a whole site-map branch, which is many exchanges rather than this one base request.",
+     hint:
+      "The only passive entry point (POST /api/scanner/passive-branch) sweeps a whole site-map branch, which is many exchanges rather than this one base request.",
      onSelect: () => undefined,
     },
     {
@@ -1126,9 +1144,31 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [themeChord, navigate, requestRepeaterTabSearch, repeaterTabSearchChord, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
+ }, [
+  themeChord,
+  navigate,
+  requestRepeaterTabSearch,
+  repeaterTabSearchChord,
+  theme,
+  toggleTheme,
+  density,
+  setDensity,
+  tableStripes,
+  setTableStripes,
+  setShortcutsOpen,
+  project.data?.name,
+  project.data?.persisted,
+  project.data?.backupable,
+  project.data?.database_note,
+  renameProject,
+  renameProjectViaDialog,
+  saveProjectCopy,
+  setProjectsOpen,
+ ]);
 
  const hasSubTabs = tool.leaves.length > 1;
+ // The Dashboard already shows both lists in full, so the dock would only repeat it there.
+ const showDock = route !== "dashboard";
 
  /**
   * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files;
@@ -1163,9 +1203,7 @@ function App(): JSX.Element {
     },
     {
      id: "state",
-     actions: [
-      { id: "dashboard", label: "Dashboard", icon: Gauge, onSelect: () => navigate("dashboard") },
-     ],
+     actions: [{ id: "dashboard", label: "Dashboard", icon: Gauge, onSelect: () => navigate("dashboard") }],
     },
    ],
   },
@@ -1216,11 +1254,9 @@ function App(): JSX.Element {
        label: project.data?.persisted ? `Project file: ${project.data.database}` : "No project file",
        icon: Database,
        disabled: true,
-       hint:
-        project.data?.persisted
-         ? `This instance's project is the database at ${project.data.database}.`
-         : (project.data?.database_note ??
-          "This instance was started without -db, so nothing it captures is persisted."),
+       hint: project.data?.persisted
+        ? `This instance's project is the database at ${project.data.database}.`
+        : (project.data?.database_note ?? "This instance was started without -db, so nothing it captures is persisted."),
        onSelect: () => undefined,
       },
       {
@@ -1265,7 +1301,8 @@ function App(): JSX.Element {
        label: "Import project file",
        icon: FileUp,
        disabled: true,
-       hint: "Declined: burpsy has no separate project container to merge into — the -db file IS the project, so an import would have to merge another database into the one this process is running on. Use Open or create project… to switch to that file instead.",
+       hint:
+        "Declined: burpsy has no separate project container to merge into — the -db file IS the project, so an import would have to merge another database into the one this process is running on. Use Open or create project… to switch to that file instead.",
        onSelect: () => undefined,
       },
      ],
@@ -1347,7 +1384,7 @@ function App(): JSX.Element {
      // a navigate: a hidden tab is still reachable by hotkey and by the command palette.
      title: "Top-level tabs",
      actions: [
-      ...TOOLS.map((entry) => ({
+      ...orderedTools.map((entry) => ({
        id: `tab-${entry.id}`,
        label: entry.label,
        checked: !hiddenTools.includes(entry.id),
@@ -1358,11 +1395,13 @@ function App(): JSX.Element {
        id: "restore-tabs",
        label: "Restore default tab layout",
        icon: RotateCcw,
-       disabled: hiddenTools.length === 0,
+       disabled: hiddenTools.length === 0 && toolOrder.length === 0,
        onSelect: () => {
         clearHiddenToolTabs();
+        clearToolTabOrder();
         setHiddenTools([]);
-        toast.success("Showing every top-level tab");
+        setToolOrder([]);
+        toast.success("Showing every top-level tab in the default order");
        },
       },
      ],
@@ -1423,15 +1462,15 @@ function App(): JSX.Element {
   },
   {
    label: "Help",
-   groups: [
-    {
-     id: "help",
-     actions: [
-      { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
-      { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: () => setPaletteOpen(true) },
-     ],
+   groups: helpMenuGroups({
+    openShortcuts: () => setShortcutsOpen(true),
+    openPalette: () => setPaletteOpen(true),
+    openDocumentation: () => navigate("discover"),
+    openDiagnostics: () => {
+     requestSettingsSection("diagnostics");
+     navigate("settings");
     },
-   ],
+   }),
   },
  ];
 
@@ -1440,7 +1479,7 @@ function App(): JSX.Element {
    <a className="skip-link" href="#main-content">
     Skip to workspace
    </a>
-   <div className={hasSubTabs ? "app-shell has-subtabs" : "app-shell"}>
+   <div className={`app-shell${hasSubTabs ? " has-subtabs" : ""}${showDock ? " has-dock" : ""}`}>
     {/* Menu bar, above the tool tabs as in Burp. Hidden on narrow viewports,
             where the command palette reaches the same actions. */}
     <div className="menu-bar">
@@ -1465,67 +1504,92 @@ function App(): JSX.Element {
       <span className="brand-name">burpsy</span>
      </div>
      <nav className="tool-tabs" aria-label="Tools">
-      {TOOLS.filter((entry) => !hiddenTools.includes(entry.id)).map((entry) => {
-       const Icon = entry.icon;
-       const current = entry.id === tool.id;
-       const signal = attentionFor(attention, entry.id);
-       return (
-        // Burp puts exactly three things on a tool tab's context menu: detach, reattach and
-        // hide. Detach is honoured as the browser's own answer to it — the route opened in a
-        // new window — and reattach is deliberately absent, because there is no window this
-        // page created and can close; the operator's browser window is their own. Hide
-        // writes the same preference the View menu's checkboxes do, so the two affordances
-        // cannot disagree about what is showing.
-        <ContextMenu
-         key={entry.id}
-         // A tool tab's menu is Burp's detach/hide trio, which carries no documentation entry.
-         docTopic={null}
-         groups={[
-          {
-           id: "tab",
-           actions: [
-            {
-             id: "tab-detach",
-             label: "Detach tab",
-             onSelect: () => {
-              window.open(`#${entryLeaf(entry)}`, "_blank", "noopener,noreferrer");
+      {orderedTools
+       .filter((entry) => !hiddenTools.includes(entry.id))
+       .map((entry) => {
+        const Icon = entry.icon;
+        const current = entry.id === tool.id;
+        const signal = attentionFor(attention, entry.id);
+        return (
+         // Burp puts exactly three things on a tool tab's context menu: detach, reattach and
+         // hide. Detach is honoured as the browser's own answer to it — the route opened in a
+         // new window — and reattach is deliberately absent, because there is no window this
+         // page created and can close; the operator's browser window is their own. Hide
+         // writes the same preference the View menu's checkboxes do, so the two affordances
+         // cannot disagree about what is showing.
+         <ContextMenu
+          key={entry.id}
+          // A tool tab's menu is Burp's detach/hide trio, which carries no documentation entry.
+          docTopic={null}
+          groups={[
+           {
+            id: "tab",
+            actions: [
+             {
+              id: "tab-detach",
+              label: "Detach tab",
+              onSelect: () => {
+               window.open(`#${entryLeaf(entry)}`, "_blank", "noopener,noreferrer");
+              },
              },
-            },
-            { id: "tab-hide", label: "Hide tab", onSelect: () => setToolHidden(entry.id, true) },
-           ],
-          },
-         ]}
-        >
-         <button
-          type="button"
-          className={current ? "tool-tab tool-tab-active" : "tool-tab"}
-          aria-current={current ? "page" : undefined}
-          // The count is in the tab before the tooltip is read, because a tooltip is not a
-          // signal: it needs a hover, and the operator is on another page with a stalled
-          // browser. The tooltip carries the sentence that explains it.
-          title={
-           signal ? `${signal.label}` : entry.hotkey ? `${entry.label} (alt+${entry.hotkey})` : entry.label
-          }
-          onClick={() => navigate(entryLeaf(entry))}
+             { id: "tab-hide", label: "Hide tab", onSelect: () => setToolHidden(entry.id, true) },
+            ],
+           },
+          ]}
          >
-          <Icon size={14} />
-          <span>{entry.label}</span>
-          {signal ? (
-           <>
-            {/* The bare number is for the eye, so it is hidden from the accessible name
+          <button
+           type="button"
+           className={cn(
+            current ? "tool-tab tool-tab-active" : "tool-tab",
+            dragOverTool === entry.id && draggedTool !== entry.id && "tool-tab-dragover",
+           )}
+           // Drag a tab along the strip to reorder it (sk29); the order is saved per browser.
+           draggable
+           onDragStart={(event) => {
+            setDraggedTool(entry.id);
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", entry.id);
+           }}
+           onDragOver={(event) => {
+            if (!draggedTool) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            setDragOverTool(entry.id);
+           }}
+           onDragLeave={() => setDragOverTool((over) => (over === entry.id ? null : over))}
+           onDrop={(event) => {
+            event.preventDefault();
+            dropTool(entry.id);
+           }}
+           onDragEnd={() => {
+            setDraggedTool(null);
+            setDragOverTool(null);
+           }}
+           aria-current={current ? "page" : undefined}
+           // The count is in the tab before the tooltip is read, because a tooltip is not a
+           // signal: it needs a hover, and the operator is on another page with a stalled
+           // browser. The tooltip carries the sentence that explains it.
+           title={signal ? `${signal.label}` : entry.hotkey ? `${entry.label} (alt+${entry.hotkey})` : entry.label}
+           onClick={() => navigate(entryLeaf(entry))}
+          >
+           <Icon size={14} />
+           <span>{entry.label}</span>
+           {signal ? (
+            <>
+             {/* The bare number is for the eye, so it is hidden from the accessible name
                           and the sentence carries it instead — the same split inspector.tsx uses,
                           and for the same reason: aria-label cannot name a <span>, which maps to
                           the generic role, so the label would simply be dropped. */}
-            <Badge tone="warn" className="tool-tab-attention" aria-hidden="true">
-             {signal.count}
-            </Badge>
-            <span className="sr-only">{signal.label}</span>
-           </>
-          ) : null}
-         </button>
-        </ContextMenu>
-       );
-      })}
+             <Badge tone="warn" className="tool-tab-attention" aria-hidden="true">
+              {signal.count}
+             </Badge>
+             <span className="sr-only">{signal.label}</span>
+            </>
+           ) : null}
+          </button>
+         </ContextMenu>
+        );
+       })}
      </nav>
      <div className="toolbar-right">
       <Badge tone={live ? "good" : "warn"}>
@@ -1546,10 +1610,7 @@ function App(): JSX.Element {
       <IconButton label="Settings" onClick={() => navigate("settings")}>
        <Settings size={15} />
       </IconButton>
-      <IconButton
-       label={resolveTheme(theme) === "dark" ? "Use light theme" : "Use dark theme"}
-       onClick={toggleTheme}
-      >
+      <IconButton label={resolveTheme(theme) === "dark" ? "Use light theme" : "Use dark theme"} onClick={toggleTheme}>
        {resolveTheme(theme) === "dark" ? <Sun size={15} /> : <Moon size={15} />}
       </IconButton>
      </div>
@@ -1558,21 +1619,23 @@ function App(): JSX.Element {
     {/* Secondary row, only for tools that own more than one view. */}
     {hasSubTabs ? (
      <nav className="sub-tabs" aria-label={`${tool.label} views`}>
-      {tool.leaves.filter((child) => !child.hidden).map((child) => {
-       const current = child.id === route;
-       return (
-        <button
-         key={child.id}
-         type="button"
-         className={current ? "sub-tab sub-tab-active" : "sub-tab"}
-         aria-current={current ? "page" : undefined}
-         title={child.description}
-         onClick={() => navigate(child.id)}
-        >
-         {child.label}
-        </button>
-       );
-      })}
+      {tool.leaves
+       .filter((child) => !child.hidden)
+       .map((child) => {
+        const current = child.id === route;
+        return (
+         <button
+          key={child.id}
+          type="button"
+          className={current ? "sub-tab sub-tab-active" : "sub-tab"}
+          aria-current={current ? "page" : undefined}
+          title={child.description}
+          onClick={() => navigate(child.id)}
+         >
+          {child.label}
+         </button>
+        );
+       })}
      </nav>
     ) : null}
 
@@ -1581,6 +1644,8 @@ function App(): JSX.Element {
       <ActivePage key={projectEpoch} />
      </ErrorBoundary>
     </main>
+
+    {showDock ? <BottomDock /> : null}
 
     {/* The status bar as a landmark (burpsy-react-ui-4t8a): a <footer> gives
             screen-reader users a navigable contentinfo region, so the status text is
@@ -1606,7 +1671,11 @@ function App(): JSX.Element {
       {formatCount(stats.data?.exchanges)} exchanges
      </span>
      <span>{formatCount(stats.data?.messages)} messages</span>
-     <span>{scopeAllowsEverything(scope.data) ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}` : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
+     <span>
+      {scopeAllowsEverything(scope.data)
+       ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}`
+       : `scope: ${scope.data?.rules.length ?? 0} rules`}
+     </span>
      {caAvailable ? (
       <a className="status-link" href="/ca.crt" download>
        <ShieldCheck size={11} />
@@ -1618,9 +1687,7 @@ function App(): JSX.Element {
        no CA
       </span>
      )}
-     <span className="status-push">
-      {eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}
-     </span>
+     <span className="status-push">{eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}</span>
     </footer>
    </div>
 
@@ -1670,8 +1737,8 @@ function App(): JSX.Element {
     description={attackLoadError ?? undefined}
    >
     <p>
-     Nothing was loaded. The attack on the Intruder page is untouched — a configuration that
-     cannot be restored in full is refused rather than applied in part.
+     Nothing was loaded. The attack on the Intruder page is untouched — a configuration that cannot be restored in full is refused rather
+     than applied in part.
     </p>
    </Modal>
    <Modal
@@ -1681,9 +1748,8 @@ function App(): JSX.Element {
     description="The payload sets, processing rules, grep expressions and limits go back to their defaults."
    >
     <p>
-     The base message, target and marked insertion points are kept, so the attack still points at
-     the same request. The last report is cleared: it was produced by the configuration being
-     replaced.
+     The base message, target and marked insertion points are kept, so the attack still points at the same request. The last report is
+     cleared: it was produced by the configuration being replaced.
     </p>
     <div className="toolbar">
      <button type="button" className="button" onClick={() => setConfirmAttackDefaults(false)}>
@@ -1741,19 +1807,15 @@ function App(): JSX.Element {
       </p>
       {importResult.omitted === undefined ? (
        <p className="field-hint">
-        <strong>This file does not say what it can carry.</strong> It carries no coverage block, so
-        the settings it cannot carry are unknown: they were neither transferred nor reported
-        missing. Treat this as a partial
-        transfer unless you can see otherwise — a bundle that says nothing about its coverage has
-        not been shown to be complete.
+        <strong>This file does not say what it can carry.</strong> It carries no coverage block, so the settings it cannot carry are
+        unknown: they were neither transferred nor reported missing. Treat this as a partial transfer unless you can see otherwise — a
+        bundle that says nothing about its coverage has not been shown to be complete.
        </p>
       ) : importResult.omitted.length ? (
        <p className="field-hint">
-        <strong>
-         {importResult.partial ? "This is a partial transfer." : "This file reports omissions."}
-        </strong>{" "}
-        The following {importResult.omitted.length === 1 ? "setting is" : `${importResult.omitted.length} settings are`} not
-        carried by this bundle and were not transferred: {importResult.omitted.join(", ")}.
+        <strong>{importResult.partial ? "This is a partial transfer." : "This file reports omissions."}</strong> The following{" "}
+        {importResult.omitted.length === 1 ? "setting is" : `${importResult.omitted.length} settings are`} not carried by this bundle and
+        were not transferred: {importResult.omitted.join(", ")}.
        </p>
       ) : null}
      </>

@@ -218,6 +218,12 @@ const (
 
 // crawlStartReq is the POST body. Every bound is optional and falls back to the engine's own
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
+// crawlLoginReq is one username/password pair of a crawl launch's logins (burpsy-react-ui-uzil).
+type crawlLoginReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
 	// Protocols is Burp's "Protocol settings" (burpsy-react-ui-in8j): "both" is "Scan using HTTP &
@@ -253,6 +259,12 @@ type crawlStartReq struct {
 	// (burpsy-react-ui-bc2x) — security.txt, OpenID/OAuth metadata, app-link associations, a CSAF
 	// index. Opt-in: it adds seven requests per authority.
 	RequestWellKnown bool `json:"request_well_known,omitempty"`
+	// Logins are the application-login credentials the crawl authenticates with
+	// (burpsy-react-ui-uzil): the crawler finds the application's login form and logs in with
+	// each pair in turn, crawling the content behind the login. The values ride the request like
+	// any launch parameter and reach the exchange store only masked; they are never logged.
+	// A login still submits a form, so it runs only when SubmitForms is on.
+	Logins []crawlLoginReq `json:"logins,omitempty"`
 	// Config is a scan configuration by name, applied to the CRAWL half of it (burpsy-react-ui-3ok6).
 	//
 	// A Burp configuration carries a `scanner` object and a `crawler` object, and importing one is a
@@ -859,9 +871,20 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// The five discovery switches a named configuration carries in crawler/customization
 	// (burpsy-react-ui-tyso): API definitions, SOAP WSDLs, GraphQL introspection, hidden-GraphQL
 	// guessing and fragment routing. Like the threshold, Burp exposes them nowhere but the
-	// configuration, so there is no request field to overlay them with, and a request naming no
-	// configuration — or one that does not name the key — keeps the engine's zero value, which is off.
-	var configSwitches configCrawlSwitches
+	// configuration, so there is no request field to overlay them with.
+	//
+	// burpsy-react-ui-qpdp: Burp ships parse_api_definitions and parse_soap_wsdls ON in
+	// Preferences/CrawlDefaults.json, so a request naming no configuration starts with the two
+	// document readers on, matching Burp's no-config crawl. Both are read-only against traffic the
+	// crawl already sent: the document is fetched as an ordinary linked page whatever the switch
+	// says, and the operations it declares enter through admit() as ordinary GET discoveries, so
+	// nothing here writes to the target. perform_graphql_introspection, which Burp also ships on,
+	// deliberately stays off: it is the one switch that makes the crawl originate a POST of its
+	// own initiative, and a burpsy crawl that was not asked does not write — the same rule
+	// SubmitForms carries as "a requirement rather than a default". A request naming a
+	// configuration still takes all five from the file: naming one is how the operator turns
+	// introspection on, or either reader off.
+	configSwitches := configCrawlSwitches{ParseAPIDefinitions: true, ParseSOAPWSDLs: true}
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.
@@ -882,6 +905,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 			PerformGraphQLIntrospection: whole.PerformGraphQLIntrospection,
 			GuessHiddenGraphQLEndpoints: whole.GuessHiddenGraphQLEndpoints,
 			FragmentsRoute:              whole.FragmentsRoute,
+			AttemptSelfRegister:         whole.AttemptSelfRegister,
+			TriggerLoginFailures:        whole.TriggerLoginFailures,
+			ProvidedLoginsOnly:          whole.ProvidedLoginsOnly,
 		}
 	}
 	// The error-handling keys overlay the named configuration the same way the limits do: a field the
@@ -1584,6 +1610,26 @@ type configCrawlSwitches struct {
 	PerformGraphQLIntrospection bool
 	GuessHiddenGraphQLEndpoints bool
 	FragmentsRoute              bool
+	// The login-functions family (burpsy-react-ui-uzil): a named configuration's
+	// crawler/login_functions keys and crawl_optimization's provided-logins-only. Configuration-
+	// only, like the five above: Burp exposes them nowhere else, so there is no request field.
+	AttemptSelfRegister  bool
+	TriggerLoginFailures bool
+	ProvidedLoginsOnly   bool
+}
+
+// crawlLogins maps the launch request's pairs onto the engine's credential type. Empty pairs are
+// dropped: a login with no password is a submission the application refuses, which the crawl
+// would count as a failed login that was never tried.
+func crawlLogins(in []crawlLoginReq) []crawler.LoginCredential {
+	var out []crawler.LoginCredential
+	for _, l := range in {
+		if l.Username == "" && l.Password == "" {
+			continue
+		}
+		out = append(out, crawler.LoginCredential{Username: l.Username, Password: l.Password})
+	}
+	return out
 }
 
 // crawlConfig is the crawler configuration an operator-launched crawl runs under, and it exists as a
@@ -1634,15 +1680,23 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		PerformGraphQLIntrospection: switches.PerformGraphQLIntrospection,
 		GuessHiddenGraphQLEndpoints: switches.GuessHiddenGraphQLEndpoints,
 		FragmentsRoute:              switches.FragmentsRoute,
-		Limits:                      limits,
-		ErrorHandling:               eh,
-		RequestWellKnown:            req.RequestWellKnown,
-		RequestsPerSecond:           req.RequestsPerSecond,
-		Pool:                        poolLimit,
-		UserAgent:                   req.UserAgent,
-		Headers:                     req.Headers,
-		OnFetch:                     onFetch,
-		Render:                      nil,
+		// burpsy-react-ui-uzil, wired on the nc9s/tyso precedent: the parser reported these keys
+		// applied, so the start reply does not name them as unapplied — this literal is what makes
+		// that claim true. The login switches and the request's logins meet here: credentials with
+		// no switches is the plain login; the switches shape what happens around it.
+		LoginCredentials:       crawlLogins(req.Logins),
+		AttemptSelfRegister:    switches.AttemptSelfRegister,
+		UseInvalidUsernames:    switches.TriggerLoginFailures,
+		AuthenticatedCrawlOnly: switches.ProvidedLoginsOnly,
+		Limits:                 limits,
+		ErrorHandling:          eh,
+		RequestWellKnown:       req.RequestWellKnown,
+		RequestsPerSecond:      req.RequestsPerSecond,
+		Pool:                   poolLimit,
+		UserAgent:              req.UserAgent,
+		Headers:                req.Headers,
+		OnFetch:                onFetch,
+		Render:                 nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
 		// The browser-interaction pass (burpsy-react-ui-spa1), left nil here and wired in startCrawl

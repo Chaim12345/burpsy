@@ -6,8 +6,10 @@ name: Nightly
 # Not required by branch protection: a scheduled run is attached to no pull request.
 #
 #   e2e-go   e2e-go.sh against a local target.
-#   race     every go.yml test shard except race-web-0/1, under -race (CI_SHARD_RACE=1). With
-#            race-web on every push to master, the race detector covers the whole module.
+#   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
+#   fuzz     every listed fuzz target for 5 minutes each, one process per target (scripts/ci-fuzz.sh).
+#   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
+#            race-web and race-core on every push to master, the race detector covers the whole module.
 #
 # There is no separate plain (non-race) full-suite job: the push to master already runs the full
 # suite on the commit this run tests, and the race run executes the same tests again (a superset,
@@ -97,3 +99,124 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
           key: ${{ steps.env.outputs.cache-key }}
+
+  # Scored benchmark (bead j1mk.38; the burpsy side of j1mk.1): burpsy's active scanner against OWASP
+  # VulnerableApp, scored by scripts/bench/run_vulnapp.py, then compared with the tracked baseline
+  # in scripts/bench/baseline/vulnapp.json. Regressions fail the job (a lower strict score beyond a
+  # 1-point margin, fewer true positives for a type, more false positives for a type); an
+  # improvement never does, and is printed so the baseline can be moved up in a reviewed commit.
+  # With no baseline committed yet the job passes with a warning and uploads the result to commit.
+  # The result JSON and markdown table are kept as the run's artifact, so the trend is readable.
+  bench-vulnapp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - name: Start OWASP VulnerableApp
+        run: |
+          docker run -d --name vulnapp -p 9090:9090 sasanlabs/owasp-vulnerableapp@sha256:01232bc8c9dd6d12cdc320212fa36e9f913860e83f1d766bd0bd034ceb385149
+          for i in $(seq 60); do curl -fsS -o /dev/null http://127.0.0.1:9090/VulnerableApp/scanner && exit 0; sleep 2; done
+          docker logs vulnapp | tail -50
+          echo "::error::VulnerableApp did not come up"; exit 1
+      - name: Build and start burpsy
+        working-directory: burpsy-go
+        run: |
+          go build -o /tmp/burpsy ./cmd/burpsy
+          nohup /tmp/burpsy -db /tmp/bsy.db -proxy 127.0.0.1:18080 -web 127.0.0.1:18081 -scope-include 127.0.0.1 >/tmp/burpsy-bench.log 2>&1 &
+          for i in $(seq 30); do curl -fsS -o /dev/null http://127.0.0.1:18081/ && exit 0; sleep 1; done
+          tail -50 /tmp/burpsy-bench.log; echo "::error::burpsy did not come up"; exit 1
+      - name: Score VulnerableApp
+        run: python3 scripts/bench/run_vulnapp.py --out /tmp/bench
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vulnapp-bench
+          path: /tmp/bench
+          if-no-files-found: warn
+      - name: Compare with the tracked baseline
+        run: |
+          result=$(ls -t /tmp/bench/vulnapp-*.json | head -1)
+          rc=0
+          python3 scripts/bench/compare_baseline.py "$result" scripts/bench/baseline/vulnapp.json || rc=$?
+          if [ "$rc" = 3 ]; then
+            echo "::warning::no baseline in scripts/bench/baseline/vulnapp.json; commit the uploaded result there to start tracking regressions"
+            exit 0
+          fi
+          exit "$rc"
+      - name: burpsy log (on failure)
+        if: failure()
+        run: tail -100 /tmp/burpsy-bench.log || true
+
+
+  # Reference-tool parity (bead j1mk.1): burpsy and each class's pinned reference tool are run on
+  # the same targets and the findings diffed (scripts/bench/parity_run.py). The registered classes
+  # grow as their beads land (j1mk.13, .14, .15, ...); with none registered the job passes with the
+  # harness's note. A report, not a gate, like parity.py: reference-only rows are misses to file as
+  # beads, and the run's parity.json/parity.md plus history.jsonl are the stored trend. capped-run
+  # is deliberately not used here (its own header: each Actions job already has a runner to
+  # itself); scripts/bench/nightly-parity.sh is the capped local/agent entry point.
+  bench-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - name: Build burpsy and the demo target
+        working-directory: burpsy-go
+        run: |
+          go build -o /tmp/burpsy ./cmd/burpsy
+          go build -o /tmp/demo-target ./cmd/demo-target
+      - name: Start the target and burpsy
+        run: |
+          nohup /tmp/demo-target -addr 127.0.0.1:19090 >/tmp/parity-target.log 2>&1 &
+          nohup python3 scripts/bench/crawlfix.py -addr 127.0.0.1:19091 >/tmp/parity-crawlfix.log 2>&1 &
+          nohup /tmp/burpsy -db /tmp/bsy-parity.db -proxy 127.0.0.1:18080 -web 127.0.0.1:18081 -scope-include 127.0.0.1 >/tmp/burpsy-parity.log 2>&1 &
+          for i in $(seq 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:19090/ && curl -fsS -o /dev/null http://127.0.0.1:19091/ && curl -fsS -o /dev/null http://127.0.0.1:18081/ && exit 0
+            sleep 1
+          done
+          tail -50 /tmp/parity-target.log /tmp/burpsy-parity.log
+          echo "::error::target or burpsy did not come up"; exit 1
+      - name: Run every registered parity class
+        run: python3 scripts/bench/parity_run.py --all --out /tmp/parity --burpsy-web http://127.0.0.1:18081 --burpsy-proxy http://127.0.0.1:18080
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity
+          path: /tmp/parity
+          if-no-files-found: warn
+      - name: burpsy log (on failure)
+        if: failure()
+        run: tail -100 /tmp/burpsy-parity.log /tmp/parity-target.log || true
+
+  # One `go test -fuzz` process per target (go test takes one per run). 10 targets x 5 min fits the
+  # timeout. A listed target missing from its package fails the job (ci-fuzz.sh verify). A crasher is
+  # written to internal/<pkg>/testdata/fuzz/<Target>/ and uploaded: commit it as the regression test.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - name: Every listed target exists
+        run: scripts/ci-fuzz.sh verify
+      - name: Fuzz
+        env:
+          CI_FUZZ_TIME: 5m
+        run: scripts/ci-fuzz.sh run
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashers
+          path: burpsy-go/internal/*/testdata/fuzz/
+          if-no-files-found: ignore

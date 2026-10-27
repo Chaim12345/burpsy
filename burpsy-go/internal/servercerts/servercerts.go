@@ -5,7 +5,9 @@
 // The sender's TLS dials, its typed transport, and the proxy's upstream leg each hand the chain they
 // received to one Store. A certificate is one entry however often it is seen, keyed by the SHA-256 of
 // its DER, with every authority it was presented on (bounded) and when it was first and last seen.
-// The store is bounded too; past the bound the least recently seen certificate goes first.
+// The store is bounded too; past the bound the least recently seen certificate goes first
+// (a golang-lru cache carries that order - burpsy-react-ui-z5l6 - instead of a hand-rolled
+// lowest-LastSeen scan: recording touches the entry, so LRU order IS least-recently-seen).
 package servercerts
 
 import (
@@ -17,6 +19,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	lru "github.com/hashicorp/golang-lru/v2"
 )
 
 const (
@@ -48,13 +52,20 @@ type Entry struct {
 
 // Store is the bounded, deduplicated record. The zero value is not usable; use New.
 type Store struct {
-	mu      sync.Mutex
-	entries map[string]*Entry
+	mu sync.Mutex
+	// entries is the LRU cache carrying the bound and the eviction order. lru.Cache is
+	// internally locked; mu exists for what the cache cannot guard - Entry field updates
+	// through a returned pointer, and Record's check-then-act across Get and Add.
+	entries *lru.Cache[string, *Entry]
 	now     func() time.Time
 }
 
 // New returns an empty store.
-func New() *Store { return &Store{entries: map[string]*Entry{}, now: time.Now} }
+func New() *Store {
+	// The bound is a positive constant, the only shape lru.New can refuse.
+	entries, _ := lru.New[string, *Entry](MaxCertificates)
+	return &Store{entries: entries, now: time.Now}
+}
 
 // Record notes the chain a server presented on host:port. Nil-safe, so a caller without a store
 // simply records nothing.
@@ -72,11 +83,10 @@ func (s *Store) Record(host string, port uint16, chain []*x509.Certificate) {
 		}
 		sum := sha256.Sum256(cert.Raw)
 		key := hex.EncodeToString(sum[:])
-		e, ok := s.entries[key]
+		// Get touches: a re-recorded certificate is recently seen, so it must not be the
+		// next one evicted.
+		e, ok := s.entries.Get(key)
 		if !ok {
-			if len(s.entries) >= MaxCertificates {
-				s.evictLocked()
-			}
 			e = &Entry{
 				Subject: cert.Subject.String(), Issuer: cert.Issuer.String(), SerialNumber: cert.SerialNumber.String(),
 				DNSNames: append([]string{}, cert.DNSNames...), IPAddresses: []string{},
@@ -86,7 +96,8 @@ func (s *Store) Record(host string, port uint16, chain []*x509.Certificate) {
 			for _, ip := range cert.IPAddresses {
 				e.IPAddresses = append(e.IPAddresses, ip.String())
 			}
-			s.entries[key] = e
+			// Add evicts the least recently seen entry itself past the bound.
+			s.entries.Add(key, e)
 		}
 		e.Count++
 		e.LastSeen = now
@@ -106,16 +117,6 @@ func (s *Store) Record(host string, port uint16, chain []*x509.Certificate) {
 	}
 }
 
-func (s *Store) evictLocked() {
-	var oldest string
-	for k, e := range s.entries {
-		if oldest == "" || e.LastSeen.Before(s.entries[oldest].LastSeen) {
-			oldest = k
-		}
-	}
-	delete(s.entries, oldest)
-}
-
 // List returns every recorded certificate, most recently seen first. Never nil.
 func (s *Store) List() []Entry {
 	if s == nil {
@@ -123,8 +124,11 @@ func (s *Store) List() []Entry {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Entry, 0, len(s.entries))
-	for _, e := range s.entries {
+	// Values walks the cache oldest-first WITHOUT touching recency: a read must not change
+	// which certificate eviction picks next.
+	values := s.entries.Values()
+	out := make([]Entry, 0, len(values))
+	for _, e := range values {
 		c := *e
 		c.DNSNames = append([]string{}, e.DNSNames...)
 		c.IPAddresses = append([]string{}, e.IPAddresses...)
@@ -147,5 +151,5 @@ func (s *Store) Clear() {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = map[string]*Entry{}
+	s.entries.Purge()
 }

@@ -17,7 +17,16 @@ describe("the auth method", () => {
   expect(fetchAuthProblem(blankFetchAuth("none"))).toBeNull();
   expect(fetchAuthProblem(blankFetchAuth("basic"))).toContain("username");
   expect(fetchAuthProblem(blankFetchAuth("bearer"))).toContain("token");
-  expect(fetchAuthProblem({ ...blankFetchAuth("oauth2_client_credentials"), type: "oauth2_client_credentials", tokenUrl: "", clientId: "app", clientSecret: "s", scope: "" })).toContain("token URL");
+  expect(
+   fetchAuthProblem({
+    ...blankFetchAuth("oauth2_client_credentials"),
+    type: "oauth2_client_credentials",
+    tokenUrl: "",
+    clientId: "app",
+    clientSecret: "s",
+    scope: "",
+   }),
+  ).toContain("token URL");
  });
 });
 
@@ -25,11 +34,19 @@ describe("what Fetch posts", () => {
  test("no auth key at all for none, and the server's field names for the rest", () => {
   expect(fetchRequestBody(" https://a.test/spec ", { type: "none" })).toEqual({ url: "https://a.test/spec" });
   expect(fetchRequestBody("https://a.test/spec", { type: "basic", username: "alice", password: "p w" }).auth).toEqual({
-   type: "basic", username: "alice", password: "p w",
+   type: "basic",
+   username: "alice",
+   password: "p w",
   });
-  expect(fetchRequestBody("https://a.test/spec", {
-   type: "oauth2_client_credentials", tokenUrl: "https://a.test/token", clientId: "app", clientSecret: "sec", scope: "",
-  }).auth).toEqual({ type: "oauth2_client_credentials", token_url: "https://a.test/token", client_id: "app", client_secret: "sec" });
+  expect(
+   fetchRequestBody("https://a.test/spec", {
+    type: "oauth2_client_credentials",
+    tokenUrl: "https://a.test/token",
+    clientId: "app",
+    clientSecret: "sec",
+    scope: "",
+   }).auth,
+  ).toEqual({ type: "oauth2_client_credentials", token_url: "https://a.test/token", client_id: "app", client_secret: "sec" });
  });
 });
 

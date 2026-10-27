@@ -107,9 +107,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
+      # Depth 2: the new-issues-only golangci-lint run compares with HEAD^1 (the base tip on a pull
+      # request's merge commit) or with the commit a push moved past.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Fetch the pushed-over commit
+        if: github.event_name == 'push'
+        working-directory: .
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: git fetch --no-tags --depth=1 origin "$BEFORE" || echo "could not fetch $BEFORE; golangci-lint falls back to HEAD^1"
       - uses: ./.github/actions/burpsy-test-env
         id: env
         with:
@@ -127,6 +137,16 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
+      # golangci-lint (v2) on the lines this change touches only: the findings already in the tree
+      # are a backlog, not a gate (scripts/ci/golangci.yml has the linter set and the reasons).
+      - name: golangci-lint (new issues only)
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: ../scripts/ci-lint.sh lint "$BASE"
+      # govulncheck: fails on a reachable vulnerability that is not in
+      # scripts/ci/govulncheck-baseline.txt, so a NEW one blocks and the known ones are tracked.
+      - name: govulncheck (new reachable vulnerabilities only)
+        run: ../scripts/ci-lint.sh vuln
       - name: Save the Go cache (lint)
         if: always() && github.event_name != 'pull_request' && steps.env.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -182,6 +202,9 @@ jobs:
           - { shard: rest, flavor: rest, save: true }
           - { shard: race-web-0, flavor: race-web, save: true }
           - { shard: race-web-1, flavor: race-web, save: false }
+          # internal/proxy, internal/dash and internal/pool under -race (bead 8pki); the next packages join it once
+          # shown race-clean, watching this job's time.
+          - { shard: race-core, flavor: race-core, save: true }
     name: test (${{ matrix.shard }})
     env:
       CI_AFFECTED_BASE: ${{ needs.changes.outputs.mode == 'affected' && needs.changes.outputs.base || '' }}
@@ -296,6 +319,12 @@ jobs:
 
       # tsc --noEmit, token checks, the gated-routes check, script tests and the src/lib tests (which
       # hold the no-native-dialogs guard). `bun run build` does NOT type-check; this step does.
+      # check:api-types regenerates src/lib/api-schema.d.ts via openapi-typescript, which lives in
+      # tools/api-types (kept out of the UI's bun deps so bun.lock stays the pinned-bun bundle lock).
+      # Without this install the check exits "openapi-typescript is not installed" (run 40212590940).
+      - name: install api-types generator deps
+        run: npm --prefix tools/api-types ci --no-audit --no-fund
+
       - name: bun run check
         run: bun run check
 
@@ -346,3 +375,78 @@ jobs:
       # (always a merge commit under branch protection) it is the previous tip.
       - name: beads lint
         run: python3 -I scripts/beads-lint.py --base HEAD^1
+
+      # The lint's own regression suite (throwaway git repos). PYTHONDONTWRITEBYTECODE keeps the run
+      # from leaving .pyc files in the checkout.
+      - name: beads lint tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python3 -I scripts/beads-lint_test.py
+
+  # UAT: the CLI, used the way an operator uses it (beads uat1). scripts/uat-cli.sh builds the real
+  # burpsy binary and a fixture target, checks exit codes, proxies a request, audits it through the
+  # confirmation gate and requires the reflected XSS the target declares. A short flow on every
+  # change; e2e-go.sh (the broad API suite) stays nightly. Add `uat-cli` and `uat-ui` to the
+  # required checks to make them block a merge.
+  uat-cli:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      # NO_PROXY is cleared: curl applies it even to an explicit -x proxy (see nightly.yml).
+      - name: CLI UAT
+        run: env -u NO_PROXY -u no_proxy scripts/uat-cli.sh
+
+  # UAT: the browser console (bead uat2; harness by the web-ui lane under ui/e2e). Playwright drives
+  # the real console against a real burpsy-go the harness builds and seeds: load, send from Repeater,
+  # find the exchange. The served console is the embedded ui/dist, so it is rebuilt first with the
+  # pinned bun. Chrome start-up has failed on runners before (bead 2o0c), so: Playwright's own
+  # Chromium, BURPSY_UAT_NO_SANDBOX=1, a 60s launch timeout, and no retries (a retry that goes green
+  # hides a flake). Trace and screenshot on failure, and JUnit, are uploaded.
+  uat-ui:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: burpsy-go/internal/web/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Build the console (bun)
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Install the e2e dependencies and Chromium
+        working-directory: burpsy-go/internal/web/ui/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Browser UAT
+        working-directory: burpsy-go/internal/web/ui/e2e
+        env:
+          BURPSY_UAT_NO_SANDBOX: "1"
+        run: npm run uat
+      - name: UAT results (trace, screenshot, JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-ui-artifacts
+          path: burpsy-go/internal/web/ui/e2e/artifacts
+          if-no-files-found: warn

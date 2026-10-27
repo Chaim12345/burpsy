@@ -175,7 +175,9 @@ func containsAny(forms []string, needle string) bool {
 // rule: Burp's substrings and sqlmap's per-DBMS regexes (sqlmap_errors.go), whose matches name the
 // engine in DBMS.
 func ClassifySQLError(baselineBody, injectedBody string) ErrorEvidence {
-	return addSqlmapErrorEvidence(classifySQLErrorAttributed(baselineBody, injectedBody, SQLErrorSignatures),
+	return addORMErrorEvidence(
+		addSqlmapErrorEvidence(classifySQLErrorAttributed(baselineBody, injectedBody, SQLErrorSignatures),
+			baselineBody, injectedBody),
 		baselineBody, injectedBody)
 }
 

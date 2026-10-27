@@ -282,6 +282,14 @@ type RateLimiter struct {
 	slots     chan struct{}
 	name      string
 	auto      *autoState
+	// groupTurn serializes PaceN's slot acquisition. The all-or-nothing loop takes slots
+	// one at a time; two groups doing that concurrently can split the pool and each wait on
+	// the other forever (PR #363 review). A waiting group therefore holds NO slots until it
+	// holds them all - no hold-and-wait cycle. Plain Pace does not take it: the one slot a
+	// Pace holds frees on its own, so it can never be part of a cycle. It is a 1-capacity
+	// channel, not a sync.Mutex, so a group QUEUED for its turn still honors its own ctx
+	// while a slot-blocked leader holds it (a mutex wait cannot be cancelled).
+	groupTurn chan struct{}
 	// variation is the delay schedule, nil for the flat bucket. Guarded by mu, the bucket's own
 	// lock, because it is read and advanced only inside reserve — which already holds it — so a
 	// varied pool grows no second lock and no lock order to get wrong.
@@ -336,6 +344,7 @@ func NewRateLimiter(limit *RateLimit) *RateLimiter {
 		last:      time.Now(),
 		slots:     make(chan struct{}, slots),
 		name:      limit.Name,
+		groupTurn: make(chan struct{}, 1),
 	}
 	if limit.AutoThrottle != nil {
 		l.auto = &autoState{cfg: *limit.AutoThrottle}
@@ -403,6 +412,79 @@ func (l *RateLimiter) Pace(ctx context.Context) (func(), error) {
 	return permit.Release, nil
 }
 
+// MaxGroupPace is the largest group PaceN admits. A synchronized race group measures a
+// handful of simultaneous arrivals; anything past this cap is a flood wearing a race test's
+// clothes, and it is refused up front like a group the pool can never admit.
+const MaxGroupPace = 64
+
+// PaceN reserves n in-flight slots and spends n rate tokens as one atomic reservation, for a
+// group whose members must leave together (burpsy-react-ui-0vzb.8, the scanner's
+// single-packet race groups).
+//
+// All-or-nothing: the caller either holds the whole group or holds nothing. A pool whose
+// in-flight capacity is below n can never admit the group, so that is declined up front with
+// a "cannot admit" error instead of queued forever; a pool momentarily too full blocks until
+// the slots free or ctx ends, and a cancelled wait returns every slot it had already taken.
+// The one release function gives all n slots back and is idempotent, matching Pace.
+//
+// The n rate tokens go through a single reservation (reserveN), so the budget the group
+// costs is exactly what n Paces would spend - one logical probe is still n requests of
+// target traffic - without staggering the members across n separate waits. Staggered
+// releases are the one outcome this method exists to prevent: a "simultaneous" group that
+// trickles out reports a race that was never run.
+func (l *RateLimiter) PaceN(ctx context.Context, n int) (func(), error) {
+	if n < 1 {
+		return nil, fmt.Errorf("declined: a group of %d is not a group", n)
+	}
+	if n > MaxGroupPace {
+		return nil, fmt.Errorf("declined: a group of %d exceeds the %d-member cap", n, MaxGroupPace)
+	}
+	if n > cap(l.slots) {
+		return nil, fmt.Errorf("declined: the pool cannot admit %d requests at once (its in-flight cap is %d)",
+			n, cap(l.slots))
+	}
+	select {
+	case l.groupTurn <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	taken := 0
+	releaseTaken := func() {
+		for ; taken > 0; taken-- {
+			<-l.slots
+		}
+	}
+	for taken < n {
+		select {
+		case l.slots <- struct{}{}:
+			taken++
+		case <-ctx.Done():
+			releaseTaken()
+			<-l.groupTurn
+			return nil, ctx.Err()
+		}
+	}
+	<-l.groupTurn
+	if wait := l.reserveN(time.Now(), n); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			releaseTaken()
+			return nil, ctx.Err()
+		}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for i := 0; i < n; i++ {
+				<-l.slots
+			}
+		})
+	}, nil
+}
+
 // reserve charges one request to the bucket and returns how long the caller must wait to spend it.
 //
 // Reservation, not polling: a caller that finds the bucket empty still takes its token and drives
@@ -433,6 +515,43 @@ func (l *RateLimiter) reserve(now time.Time) time.Duration {
 	}
 	// Clamp to the ceiling: a very small rps makes -tokens/rps arbitrarily large, and an
 	// unrepresentable wait must saturate, not panic or overflow.
+	wait := -l.tokens / rps
+	l.mu.Unlock()
+	if wait >= MAX_WAIT.Seconds() {
+		return MAX_WAIT
+	}
+	return time.Duration(wait * float64(time.Second))
+}
+
+// reserveN charges a whole group to the budget as one reservation and returns how long the
+// group must wait: the bucket is driven n tokens negative at once (the same end state n
+// reserves would reach, without the n staggered waits between), and a varied schedule books
+// n gaps with the group waiting for the last of them.
+func (l *RateLimiter) reserveN(now time.Time, n int) time.Duration {
+	if l.perSecond <= 0 {
+		return 0
+	}
+	if n == 1 {
+		return l.reserve(now)
+	}
+	rps := l.chargeThrottle(l.perSecond)
+	if l.variation != nil {
+		var wait time.Duration
+		for i := 0; i < n; i++ {
+			if w := l.reserveVaried(now, rps); w > wait {
+				wait = w
+			}
+		}
+		return wait
+	}
+	l.mu.Lock()
+	elapsed := now.Sub(l.last).Seconds()
+	l.last = now
+	l.tokens = math.Min(l.tokens+elapsed*rps, l.burst) - float64(n)
+	if l.tokens >= 0 {
+		l.mu.Unlock()
+		return 0
+	}
 	wait := -l.tokens / rps
 	l.mu.Unlock()
 	if wait >= MAX_WAIT.Seconds() {

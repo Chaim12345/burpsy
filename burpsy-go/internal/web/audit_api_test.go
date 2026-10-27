@@ -76,8 +76,11 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 	if body.Outcome.State != "audited" {
 		t.Errorf("outcome.state = %q, want \"audited\"", body.Outcome.State)
 	}
-	if len(body.Dispositions) != 9 {
-		t.Fatalf("dispositions = %d buckets, want the whole nine-way partition", len(body.Dispositions))
+	// Ten buckets: the nine-way partition plus rate_limited_bounded (fkl8-b), the disposition a
+	// persistent-429/503 target earns when the engine stops asking. A bucket added without this
+	// test changing is a partition the wire never said out loud.
+	if len(body.Dispositions) != 10 {
+		t.Fatalf("dispositions = %d buckets, want the whole ten-way partition", len(body.Dispositions))
 	}
 	sum, stopped := 0, 0
 	for _, d := range body.Dispositions {
@@ -98,8 +101,8 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 	if sum != body.ActiveChecks {
 		t.Errorf("dispositions sum to %d, want the whole check set (%d)", sum, body.ActiveChecks)
 	}
-	if stopped != 6 {
-		t.Errorf("buckets marked as the engine declining to look = %d, want 6", stopped)
+	if stopped != 7 {
+		t.Errorf("buckets marked as the engine declining to look = %d, want 7", stopped)
 	}
 	if body.Summary == "" {
 		t.Error("summary is empty; it is what a log line and the CLI print")

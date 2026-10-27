@@ -197,8 +197,15 @@ func (s DispatchScope) UnitKey(ex *core.Exchange) (string, bool) {
 	// Zero (an exchange minted without the capture seam) keys the way it always did, so
 	// restored sessions and tests that build exchanges by hand do not change identity
 	// mid-run.
+	// The volatility-normalized shape fingerprint keys the unit when the capture seam provided
+	// one (burpsy-go W4): a re-capture differing only in a rotated cookie or CSRF token then
+	// collapses to the unit it already was instead of re-dispatching every check of the scope.
+	// The raw fingerprint is the fallback for exchanges minted before the seam existed or by
+	// hand; zero keys the way it always did.
 	fp := ""
-	if ex.RequestFP != 0 {
+	if ex.RequestShapeFP != 0 {
+		fp = fmt.Sprintf("#fp%x", ex.RequestShapeFP)
+	} else if ex.RequestFP != 0 {
 		fp = fmt.Sprintf("#fp%x", ex.RequestFP)
 	}
 	switch s {
@@ -207,7 +214,10 @@ func (s DispatchScope) UnitKey(ex *core.Exchange) (string, bool) {
 	case DispatchScopePerPath:
 		return origin + pathOnly + fp, true
 	case DispatchScopePerUrl:
-		return origin + ex.Path + fp, true
+		// The request target carries the query string, so it carries the same volatile values
+		// the shape fingerprint masks (burpsy-go W4): key on the masked target or a rotated
+		// CSRF token in the URL re-mints the unit no matter what the fingerprint says.
+		return origin + core.MaskVolatileParamValues(ex.Path) + fp, true
 	case DispatchScopePerRequest:
 		return fmt.Sprintf("%s#%d", origin, ex.ID), true
 	case DispatchScopePerInsertionPoint, DispatchScopeStoredPerInsertionPoint:
@@ -282,10 +292,15 @@ const (
 	// DispositionSessionPaused means not admitted: the session-level failure breaker paused the run
 	// before this item.
 	DispositionSessionPaused
+	// DispositionRateLimited means not admitted: the target answered every recent probe 429/503,
+	// so the engine stopped asking rather than grinding the rest of the plan behind backoff
+	// (fkl8-b). Appended after the original nine so the wire numbers of the existing
+	// dispositions do not move.
+	DispositionRateLimited
 )
 
-// DispositionAll is all nine, in the order AuditOutcome.Dispositions reports them.
-var DispositionAll = [9]Disposition{
+// DispositionAll is all ten, in the order AuditOutcome.Dispositions reports them.
+var DispositionAll = [10]Disposition{
 	DispositionRan,
 	DispositionUnsupported,
 	DispositionSendFailed,
@@ -295,6 +310,7 @@ var DispositionAll = [9]Disposition{
 	DispositionUnitAbandoned,
 	DispositionItemFailed,
 	DispositionSessionPaused,
+	DispositionRateLimited,
 }
 
 // IsDispatched reports whether the check actually reached the target. Only these produce evidence.
@@ -334,6 +350,8 @@ func (d Disposition) String() string {
 		return "item failed"
 	case DispositionSessionPaused:
 		return "session paused"
+	case DispositionRateLimited:
+		return "rate limited"
 	}
 	return "unknown disposition"
 }
@@ -359,6 +377,8 @@ func (d Disposition) Explanation() string {
 		return "not started: too many failing dispatch units on this request"
 	case DispositionSessionPaused:
 		return "not started: the session was paused by the failure breaker"
+	case DispositionRateLimited:
+		return "not started: the target rate-limited every recent probe, so the engine stopped asking"
 	}
 	return "unknown disposition"
 }
@@ -531,6 +551,14 @@ type AuditConfig struct {
 	ManualSpans [][2]int
 	// TimeBudget is the wall-clock ceiling for the whole run.
 	TimeBudget time.Duration
+	// DeferredTimeBudget is the wall-clock ceiling for the deferred phase alone (FinishScan:
+	// the stored re-fetch, the browser render pass and the pending-claim drain). The audit's
+	// own budget ends with dispatch, and before this field existed the deferred half was
+	// bounded only by the task context: N re-fetch candidates x the per-request sender
+	// timeout could stretch a 120s audit by minutes with no number anywhere to show for it
+	// (burpsy-go arch review W3). Zero inherits DefaultDeferredBudget; a run that wants the
+	// old unbounded shape sets it negative.
+	DeferredTimeBudget time.Duration
 	// MaxRequests is the ceiling on outbound probe requests for the whole run. Unset leaves it
 	// uncapped.
 	//
@@ -545,6 +573,17 @@ type AuditConfig struct {
 	// ConsecutiveUnitFailuresToFailItem is Burp's
 	// `consecutive_insertion_point_failures_to_fail_audit_item`.
 	ConsecutiveUnitFailuresToFailItem uint32
+	// MaxUnitVariantsPerUnit caps how many distinct content variants of one (scope, endpoint)
+	// dispatch unit a run will dispatch (burpsy-go W4). The shape fingerprint masks the
+	// well-known volatile regions; this caps what masking cannot know about - a volatile
+	// region with an unrecognized name re-mints a unit per capture, and without a bound the
+	// re-dispatch is limited only by capture count. Variants beyond the cap are counted
+	// AlreadyCovered (the scope's checks DID cover this endpoint this run) and the unit is
+	// reported in AuditOutcome.UnitsVariantCapped. 0 = unlimited, the default: the shape
+	// fingerprint hashes a JSON body byte-exact, so on a single-URL API (GraphQL, JSON-RPC) every
+	// operation is its own variant and any cap silently stops auditing the operations after it.
+	// An operator who sets a cap opts into that trade.
+	MaxUnitVariantsPerUnit uint32
 	// PauseSessionAfterFailedItems is Burp's `pause_task_failed_audit_item_count`.
 	PauseSessionAfterFailedItems uint32
 	// PauseSessionAtFailedItemPercentage is Burp's `pause_task_failed_audit_item_percentage`.
@@ -927,6 +966,11 @@ func (cfg AuditConfig) NestedInsertionPointsEnabled() bool {
 	return !cfg.enumerateOptions().NoNested
 }
 
+// DefaultDeferredBudget is the default wall-clock bound on the deferred phase (W3): long
+// enough for the pending drain (claims carry DefaultPendingDeadline=30s) plus the re-fetch
+// pass on a healthy target, short enough that a scan's total stays near its named budget.
+const DefaultDeferredBudget = 60 * time.Second
+
 // DefaultAuditBudget is the default wall-clock budget for one audit run.
 //
 // Sized so a completely unresponsive host fails fast rather than occupying a goroutine for the
@@ -963,9 +1007,11 @@ func (cfg AuditConfig) resolvedMaxItemsInProgress() uint32 {
 func DefaultAuditConfig() AuditConfig {
 	return AuditConfig{
 		TimeBudget:                            DefaultAuditBudget,
+		DeferredTimeBudget:                    DefaultDeferredBudget,
 		MaxRequests:                           OptUint32{},
 		ConsecutiveCheckFailuresToAbandonUnit: 2,
 		ConsecutiveUnitFailuresToFailItem:     2,
+		MaxUnitVariantsPerUnit:                0,
 		PauseSessionAfterFailedItems:          0,
 		PauseSessionAtFailedItemPercentage:    0,
 	}
@@ -2366,6 +2412,17 @@ func (b *itemBreaker) checkFailed(unit, check string) bool {
 // either way about whether the transport recovered. The failure is still remembered, so a follow-up
 // pass does not re-run it blind.
 func (b *itemBreaker) browserCheckFailed(unit, check string) {
+	b.rememberFailure(unit, check)
+}
+
+// passiveCheckFailed records that a passive check failed within unit, WITHOUT counting it towards
+// abandoning the unit (burpsy-go W6).
+//
+// The breaker asks whether the TARGET is failing. A passive check sends nothing, so its failure is
+// an analysis error on an exchange already in hand and says nothing about the probes queued behind
+// it: counted, the first two passive parse errors would abandon every active check left in the
+// unit. The failure is still remembered, so a follow-up pass does not re-run it blind.
+func (b *itemBreaker) passiveCheckFailed(unit, check string) {
 	b.rememberFailure(unit, check)
 }
 

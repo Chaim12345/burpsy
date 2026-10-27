@@ -293,13 +293,21 @@ func (a *AuthorisedSender) programRequestURL(req burpsyhttp2.ProgramRequest) str
 // which for that probe is the entire finding.
 func (a *AuthorisedSender) dialForProgram(ctx context.Context, forceH2 bool) (net.Conn, string, error) {
 	if !a.tls {
-		conn, err := a.net.dialPlain(ctx, a.host, a.port)
+		id, cerr := a.net.captureDialIdentity(ctx, a.host, a.port, false)
+		if cerr != nil {
+			return nil, "", cerr
+		}
+		conn, err := a.net.dialPlain(ctx, a.host, a.port, id)
 		if err != nil {
 			return nil, "", fmt.Errorf("connection failed: %w", err)
 		}
 		return conn, "", nil
 	}
-	conn, negotiated, err := a.net.dialTLS(ctx, a.host, a.port, alpn.EgressOffer(true))
+	id, cerr := a.net.captureDialIdentity(ctx, a.host, a.port, true)
+	if cerr != nil {
+		return nil, "", cerr
+	}
+	conn, negotiated, err := a.net.dialTLS(ctx, a.host, a.port, alpn.EgressOffer(true), id)
 	if err != nil {
 		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}

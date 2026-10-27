@@ -4,91 +4,85 @@ import { api, json } from "./api";
 import type { CompareOp } from "./response-diff";
 import type { H2Field, KettleAnswer } from "./kettle";
 import type { WsAttachResult, WsRepeaterSendResult } from "./types";
-import type {
-  RepeaterGroupSendItem,
-  RepeaterGroupSendMode,
-  RepeaterGroupSendResult,
-  RepeaterResult,
-  RepeaterSendOptions,
-} from "./types";
-import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView , WordlistsResponse } from "./types.tools";
+import type { RepeaterGroupSendItem, RepeaterGroupSendMode, RepeaterGroupSendResult, RepeaterResult, RepeaterSendOptions } from "./types";
+import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView, WordlistsResponse } from "./types.tools";
 
 export interface IntruderRunRequest {
-  msg_id: number;
-  target: string;
-  all: boolean;
-  mode: string;
-  points: number[];
-  /**
-   * Hand-marked payload positions (Burp's Add §): raw byte ranges of the base request, spliced
-   * wire-faithfully alongside the selected discovered points. The server refuses a span outside
-   * the request or overlapping another position.
-   */
-  manual_points?: { start: number; end: number }[];
-  payload_sets?: string[][];
-  payload_sources?: PayloadSource[];
-  payload_rules?: PayloadRuleSpec[];
-  /**
-   * Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the characters
-   * percent-encoded in every generated payload as the final pass, after the rule
-   * chain. Omitted means none — spaces and control characters are always encoded
-   * additionally server-side, since a request containing them cannot be delivered.
-   */
-  url_encode_characters?: string;
-  /**
-   * Burp's auto-pause (burpsy-react-ui-2cvk). Omitted entirely when the operator has not turned it
-   * on, which is the point: an absent field and a present-but-empty expression list must not be two
-   * wire shapes for "I did not choose", so the console sends neither. Expressions are compiled by
-   * RE2 on the server and an uncompilable one is a 400, which surfaces next to the field.
-   */
-  auto_pause?: {
-    expressions: string[];
-    /** Pause when none of them appears, rather than when one does. */
-    missing: boolean;
-    /** Simple strings are matched literally and case-folded; false means RE2. */
-    simple: boolean;
-    /** Only meaningful with `simple`: regex entries carry their own case flags. */
-    case_sensitive?: boolean;
-  };
-  /** Regular expressions, compiled by RE2 on the server — never literal strings. */
-  grep_match?: string;
-  grep_extract?: string;
-  max_requests: number;
-  /**
-   * A saved resource pool by name (Burp's Resource pool sub-tab).
-   *
-   * Mutually exclusive with `max_in_flight`, `rps` and auto-throttle: the server refuses a request
-   * carrying both, because a pool already states those bounds and accepting two answers to "how
-   * fast may this attack run" would mean silently dropping one while the report named the pool.
-   * See Server.intruderLimits in internal/web/api_tools.go. `max_requests` is not part of that
-   * exclusion — it is the attack's size bound, not its rate — and still applies.
-   */
-  pool?: string;
-  max_in_flight?: number;
-  rps?: number;
-  /**
-   * Burp's resource-pool "With random variations" (burpsy-react-ui-nn0n), as a percentage of the
-   * interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of it. Part
-   * of the same exclusion as `rps` — a named pool states how its own delay behaves.
-   *
-   * The server refuses 100 or more (a downward variation would be a zero gap) rather than clamping,
-   * and the engine's schedule is seeded, so the delays a run takes can be replayed. See
-   * intruder.DelayVariation in internal/intruder/limit.go.
-   */
-  delay_jitter_percent?: number;
-  /** Burp's throttleIncrementMillis: every gap is this many milliseconds longer than the one
-   *  before it. 0..600000, Burp's own bound on a delay; a negative one is refused, not clamped. */
-  delay_increment_ms?: number;
-  /** Seeds the jitter. Omitted is 0, which is a seed like any other — the schedule is replayable
-   *  either way, and a different number is a differently-shaped run. */
-  delay_seed?: number;
-  /**
-   * Burp's Intruder "Follow redirections" (tirx): "never" | "on_site" | "in_scope" | "always",
-   * or omitted for the standing network-settings policy (never, by default). Each hop is
-   * re-authorised through the same scope gate the first request went through — see
-   * internal/web/api_tools.go's intruderRedirectPolicy.
-   */
-  follow_redirects?: string;
+ msg_id: number;
+ target: string;
+ all: boolean;
+ mode: string;
+ points: number[];
+ /**
+  * Hand-marked payload positions (Burp's Add §): raw byte ranges of the base request, spliced
+  * wire-faithfully alongside the selected discovered points. The server refuses a span outside
+  * the request or overlapping another position.
+  */
+ manual_points?: { start: number; end: number }[];
+ payload_sets?: string[][];
+ payload_sources?: PayloadSource[];
+ payload_rules?: PayloadRuleSpec[];
+ /**
+  * Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the characters
+  * percent-encoded in every generated payload as the final pass, after the rule
+  * chain. Omitted means none — spaces and control characters are always encoded
+  * additionally server-side, since a request containing them cannot be delivered.
+  */
+ url_encode_characters?: string;
+ /**
+  * Burp's auto-pause (burpsy-react-ui-2cvk). Omitted entirely when the operator has not turned it
+  * on, which is the point: an absent field and a present-but-empty expression list must not be two
+  * wire shapes for "I did not choose", so the console sends neither. Expressions are compiled by
+  * RE2 on the server and an uncompilable one is a 400, which surfaces next to the field.
+  */
+ auto_pause?: {
+  expressions: string[];
+  /** Pause when none of them appears, rather than when one does. */
+  missing: boolean;
+  /** Simple strings are matched literally and case-folded; false means RE2. */
+  simple: boolean;
+  /** Only meaningful with `simple`: regex entries carry their own case flags. */
+  case_sensitive?: boolean;
+ };
+ /** Regular expressions, compiled by RE2 on the server — never literal strings. */
+ grep_match?: string;
+ grep_extract?: string;
+ max_requests: number;
+ /**
+  * A saved resource pool by name (Burp's Resource pool sub-tab).
+  *
+  * Mutually exclusive with `max_in_flight`, `rps` and auto-throttle: the server refuses a request
+  * carrying both, because a pool already states those bounds and accepting two answers to "how
+  * fast may this attack run" would mean silently dropping one while the report named the pool.
+  * See Server.intruderLimits in internal/web/api_tools.go. `max_requests` is not part of that
+  * exclusion — it is the attack's size bound, not its rate — and still applies.
+  */
+ pool?: string;
+ max_in_flight?: number;
+ rps?: number;
+ /**
+  * Burp's resource-pool "With random variations" (burpsy-react-ui-nn0n), as a percentage of the
+  * interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of it. Part
+  * of the same exclusion as `rps` — a named pool states how its own delay behaves.
+  *
+  * The server refuses 100 or more (a downward variation would be a zero gap) rather than clamping,
+  * and the engine's schedule is seeded, so the delays a run takes can be replayed. See
+  * intruder.DelayVariation in internal/intruder/limit.go.
+  */
+ delay_jitter_percent?: number;
+ /** Burp's throttleIncrementMillis: every gap is this many milliseconds longer than the one
+  *  before it. 0..600000, Burp's own bound on a delay; a negative one is refused, not clamped. */
+ delay_increment_ms?: number;
+ /** Seeds the jitter. Omitted is 0, which is a seed like any other — the schedule is replayable
+  *  either way, and a different number is a differently-shaped run. */
+ delay_seed?: number;
+ /**
+  * Burp's Intruder "Follow redirections" (tirx): "never" | "on_site" | "in_scope" | "always",
+  * or omitted for the standing network-settings policy (never, by default). Each hop is
+  * re-authorised through the same scope gate the first request went through — see
+  * internal/web/api_tools.go's intruderRedirectPolicy.
+  */
+ follow_redirects?: string;
 }
 
 /**
@@ -97,29 +91,29 @@ export interface IntruderRunRequest {
  * repeating the browser's "The user aborted a request."
  */
 export class SendCancelled extends Error {
-  constructor() {
-    super("Send cancelled");
-    this.name = "SendCancelled";
-  }
+ constructor() {
+  super("Send cancelled");
+  this.name = "SendCancelled";
+ }
 }
 
 export interface RepeaterSendBody {
-  target: string;
-  request: string;
-  /** The request's exact bytes, base64, when the body is binary (burpsy-react-ui-ytkk). Takes
-   *  precedence over `request` server-side; a JSON string cannot carry a non-UTF-8 body. */
-  request_base64?: string;
-  protocol: string;
-  from_exchange?: number;
-  options?: RepeaterSendOptions;
-  /** The tab's note, recorded as the sent exchange's comment so it travels to other tools (jva5). */
-  note?: string;
-  /** The tab's Override SNI (k011). */
-  sni?: string;
-  /** The tab, which keys its reused HTTP/2 connection (adkx). */
-  tab_id?: string;
-  /** A kettled tab's HTTP/2 header list (jae5), sent as written; the body still comes from `request`. */
-  h2_headers?: H2Field[];
+ target: string;
+ request: string;
+ /** The request's exact bytes, base64, when the body is binary (burpsy-react-ui-ytkk). Takes
+  *  precedence over `request` server-side; a JSON string cannot carry a non-UTF-8 body. */
+ request_base64?: string;
+ protocol: string;
+ from_exchange?: number;
+ options?: RepeaterSendOptions;
+ /** The tab's note, recorded as the sent exchange's comment so it travels to other tools (jva5). */
+ note?: string;
+ /** The tab's Override SNI (k011). */
+ sni?: string;
+ /** The tab, which keys its reused HTTP/2 connection (adkx). */
+ tab_id?: string;
+ /** A kettled tab's HTTP/2 header list (jae5), sent as written; the body still comes from `request`. */
+ h2_headers?: H2Field[];
 }
 
 /**
@@ -160,6 +154,31 @@ export interface RepeaterWsSendBody {
  clone?: boolean;
  /** The WebSocket ID to clone. */
  socket?: number;
+ /**
+  * The operator's edited negotiation request (ws3e). Replaces the captured (clone) or synthetic
+  * (new) head entirely; the dial authority still comes from `socket` or `target`, never from the
+  * edited Host line. The server refuses clone + handshake, and planWsSend never sends both.
+  */
+ handshake?: string;
+}
+
+/** The negotiation request a Repeater WS send would dial with (ws3e). */
+export interface WsHandshakePreview {
+ handshake: string;
+ source: "clone" | "new";
+}
+
+/**
+ * The head the editor opens on: the refreshed clone of a captured connection's handshake
+ * (`socket`), or the synthetic head a new connection would dial (`target`, `path`). The server
+ * builds it, so what-you-edit-is-what-is-sent has one source of truth.
+ */
+export function fetchWsHandshakePreview(params: { socket?: number; target?: string; path?: string }) {
+ const q = new URLSearchParams();
+ if (params.socket !== undefined) q.set("socket", String(params.socket));
+ if (params.target !== undefined) q.set("target", params.target);
+ if (params.path !== undefined) q.set("path", params.path);
+ return api<WsHandshakePreview>(`/api/repeater/ws-handshake-preview?${q.toString()}`);
 }
 
 /**
@@ -180,6 +199,44 @@ export function useRepeaterWsAttach() {
  * body (a fresh dial has no client to send to), and records the handshake exchange so the
  * result can offer "view in WebSockets history".
  */
+/** One gqlparser complaint, with the position the editor's squiggle needs when the parser gave one. */
+export interface GraphQLValidationError {
+ message: string;
+ line?: number;
+ column?: number;
+}
+
+export interface GraphQLValidateResult {
+ ok: boolean;
+ errors: GraphQLValidationError[];
+}
+
+/**
+ * Parse one GraphQL document with the server's pinned gqlparser - the same parser and token
+ * limit the scanner's ingest gate uses, so "valid here" and "scanned there" cannot drift
+ * (4xqt.3). Read-only: the document is the whole body and nothing is sent anywhere.
+ */
+export function validateGraphQLQuery(query: string) {
+ return api<GraphQLValidateResult>("/api/repeater/graphql-validate", json("POST", { query }));
+}
+
+export interface GraphQLQueryResult {
+ /** The whole request with exactly the operation's query content replaced. */
+ request: string;
+ /** Which carrier the query was replaced in: "body" (JSON) or "params" (URL). */
+ source: string;
+}
+
+/**
+ * Replace one operation's query inside a raw request's GraphQL carrier (4xqt.3). The server
+ * rewrites exactly that string's content - variables, operation name, extensions, formatting
+ * and header order reach the draft unchanged, with Content-Length moved when a body edit moved
+ * it - so the edit is the query and nothing else.
+ */
+export function applyGraphQLQuery(request: string, index: number, query: string) {
+ return api<GraphQLQueryResult>("/api/repeater/graphql-query", json("POST", { request, index, query }));
+}
+
 export function useRepeaterWsSend() {
  const inFlight = useRef<AbortController | null>(null);
  const mutation = useMutation({
@@ -203,42 +260,42 @@ export function useRepeaterWsSend() {
 }
 
 export function useRepeaterSend() {
-  // One controller per hook instance, so the Cancel button can only ever abort this tab's send.
-  const inFlight = useRef<AbortController | null>(null);
+ // One controller per hook instance, so the Cancel button can only ever abort this tab's send.
+ const inFlight = useRef<AbortController | null>(null);
 
-  const mutation = useMutation({
-    mutationFn: async (body: RepeaterSendBody) => {
-      const controller = new AbortController();
-      inFlight.current = controller;
-      try {
-        return await api<RepeaterResult>("/api/repeater/send", {
-          ...json("POST", body),
-          signal: controller.signal,
-        });
-      } catch (failure) {
-        // fetch rejects an aborted request with a DOMException named AbortError. Translated here so
-        // no caller has to know that, and so a cancellation cannot be rendered as a request failure.
-        if (controller.signal.aborted) throw new SendCancelled();
-        throw failure;
-      } finally {
-        if (inFlight.current === controller) inFlight.current = null;
-      }
-    },
-  });
+ const mutation = useMutation({
+  mutationFn: async (body: RepeaterSendBody) => {
+   const controller = new AbortController();
+   inFlight.current = controller;
+   try {
+    return await api<RepeaterResult>("/api/repeater/send", {
+     ...json("POST", body),
+     signal: controller.signal,
+    });
+   } catch (failure) {
+    // fetch rejects an aborted request with a DOMException named AbortError. Translated here so
+    // no caller has to know that, and so a cancellation cannot be rendered as a request failure.
+    if (controller.signal.aborted) throw new SendCancelled();
+    throw failure;
+   } finally {
+    if (inFlight.current === controller) inFlight.current = null;
+   }
+  },
+ });
 
-  return {
-    mutate: mutation.mutate,
-    isPending: mutation.isPending,
-    error: mutation.error,
-    /** Abort the send in flight. A no-op when nothing is in flight, so it is safe to bind blindly. */
-    cancel: () => inFlight.current?.abort(),
-  };
+ return {
+  mutate: mutation.mutate,
+  isPending: mutation.isPending,
+  error: mutation.error,
+  /** Abort the send in flight. A no-op when nothing is in flight, so it is safe to bind blindly. */
+  cancel: () => inFlight.current?.abort(),
+ };
 }
 
 export interface RepeaterGroupSendBody {
-  mode: RepeaterGroupSendMode;
-  /** The group's tabs in tab order. Order is the test in a smuggling or desync send, so it is not sorted. */
-  items: RepeaterGroupSendItem[];
+ mode: RepeaterGroupSendMode;
+ /** The group's tabs in tab order. Order is the test in a smuggling or desync send, so it is not sorted. */
+ items: RepeaterGroupSendItem[];
 }
 
 /**
@@ -255,32 +312,32 @@ export interface RepeaterGroupSendBody {
  * partly-sent traffic by construction, and the toast says so.
  */
 export function useSendRepeaterGroup() {
-  const inFlight = useRef<AbortController | null>(null);
+ const inFlight = useRef<AbortController | null>(null);
 
-  const mutation = useMutation({
-    mutationFn: async (body: RepeaterGroupSendBody) => {
-      const controller = new AbortController();
-      inFlight.current = controller;
-      try {
-        return await api<RepeaterGroupSendResult>("/api/repeater/send-group", {
-          ...json("POST", body),
-          signal: controller.signal,
-        });
-      } catch (failure) {
-        if (controller.signal.aborted) throw new SendCancelled();
-        throw failure;
-      } finally {
-        if (inFlight.current === controller) inFlight.current = null;
-      }
-    },
-  });
+ const mutation = useMutation({
+  mutationFn: async (body: RepeaterGroupSendBody) => {
+   const controller = new AbortController();
+   inFlight.current = controller;
+   try {
+    return await api<RepeaterGroupSendResult>("/api/repeater/send-group", {
+     ...json("POST", body),
+     signal: controller.signal,
+    });
+   } catch (failure) {
+    if (controller.signal.aborted) throw new SendCancelled();
+    throw failure;
+   } finally {
+    if (inFlight.current === controller) inFlight.current = null;
+   }
+  },
+ });
 
-  return {
-    mutate: mutation.mutate,
-    isPending: mutation.isPending,
-    error: mutation.error,
-    cancel: () => inFlight.current?.abort(),
-  };
+ return {
+  mutate: mutation.mutate,
+  isPending: mutation.isPending,
+  error: mutation.error,
+  cancel: () => inFlight.current?.abort(),
+ };
 }
 
 /**
@@ -297,39 +354,38 @@ export function useSendRepeaterGroup() {
  * lying about what it is doing, which is the same defect as a missing panel.
  */
 export interface InterceptNewlineCorrection {
-  add_missing_blank_line: boolean;
-  trim_trailing_newlines_urlencoded_body: boolean;
+ add_missing_blank_line: boolean;
+ trim_trailing_newlines_urlencoded_body: boolean;
 }
 
 export function useInterceptNewlineCorrection() {
-  return useQuery({
-    queryKey: ["intercept", "newline-correction"],
-    queryFn: ({ signal }) => api<InterceptNewlineCorrection>("/api/intercept/newline-correction", { signal }),
-    // The settings do not change on their own, and the page already polls the queue; refetching this
-    // on the same cadence would be a second request per poll for a value that only changes when the
-    // operator changes it.
-    staleTime: 30_000,
-  });
+ return useQuery({
+  queryKey: ["intercept", "newline-correction"],
+  queryFn: ({ signal }) => api<InterceptNewlineCorrection>("/api/intercept/newline-correction", { signal }),
+  // The settings do not change on their own, and the page already polls the queue; refetching this
+  // on the same cadence would be a second request per poll for a value that only changes when the
+  // operator changes it.
+  staleTime: 30_000,
+ });
 }
 
 export function useSetInterceptNewlineCorrection() {
-  return useMutation({
-    mutationFn: (next: InterceptNewlineCorrection) =>
-      api<InterceptNewlineCorrection>("/api/intercept/newline-correction", json("PUT", next)),
-  });
+ return useMutation({
+  mutationFn: (next: InterceptNewlineCorrection) => api<InterceptNewlineCorrection>("/api/intercept/newline-correction", json("PUT", next)),
+ });
 }
 
 export function useIntruderPoints() {
-  return useMutation({
-    mutationFn: (body: { msg_id: number; all: boolean; payload_placement?: "append" }) =>
-      api<PointView[]>("/api/intruder/points", json("POST", body)),
-  });
+ return useMutation({
+  mutationFn: (body: { msg_id: number; all: boolean; payload_placement?: "append" }) =>
+   api<PointView[]>("/api/intruder/points", json("POST", body)),
+ });
 }
 
 export function useIntruderRun() {
-  return useMutation({
-    mutationFn: (body: IntruderRunRequest) => api<unknown>("/api/intruder/run", json("POST", body)),
-  });
+ return useMutation({
+  mutationFn: (body: IntruderRunRequest) => api<unknown>("/api/intruder/run", json("POST", body)),
+ });
 }
 
 /**
@@ -342,12 +398,12 @@ export function useIntruderRun() {
  * process that is already busy driving the attack.
  */
 export function useIntruderAttacks(enabled: boolean) {
-  return useQuery({
-    queryKey: ["intruder", "attacks"],
-    queryFn: ({ signal }) => api<IntruderAttacksResp>("/api/intruder/attacks", { signal }),
-    enabled,
-    refetchInterval: enabled ? 1_000 : false,
-  });
+ return useQuery({
+  queryKey: ["intruder", "attacks"],
+  queryFn: ({ signal }) => api<IntruderAttacksResp>("/api/intruder/attacks", { signal }),
+  enabled,
+  refetchInterval: enabled ? 1_000 : false,
+ });
 }
 
 /**
@@ -357,23 +413,23 @@ export function useIntruderAttacks(enabled: boolean) {
  * the same reason SendCancelled is not an Error notice.
  */
 export class AttackActionStale extends Error {
-  constructor(readonly action: string) {
-    super(`Attack is no longer in a state that ${action} can change`);
-    this.name = "AttackActionStale";
-  }
+ constructor(readonly action: string) {
+  super(`Attack is no longer in a state that ${action} can change`);
+  this.name = "AttackActionStale";
+ }
 }
 
 export interface IntruderAttackActionBody {
-  task_id: number;
-  action: "pause" | "resume" | "stop";
+ task_id: number;
+ action: "pause" | "resume" | "stop";
 }
 
 /** The 200 body of a successful action: the id, what was done, and the state it left the attack in. */
 export interface IntruderAttackActionResult {
-  task_id: number;
-  action: string;
-  applied: boolean;
-  status: IntruderAttack["status"];
+ task_id: number;
+ action: string;
+ applied: boolean;
+ status: IntruderAttack["status"];
 }
 
 /**
@@ -385,20 +441,20 @@ export interface IntruderAttackActionResult {
  * Aborting the fetch would throw that report away, which is the worse of the two honest options.
  */
 export function useIntruderAttackAction() {
-  return useMutation<IntruderAttackActionResult, Error, IntruderAttackActionBody>({
-    mutationFn: async ({ task_id, action }) => {
-      try {
-        return await api<IntruderAttackActionResult>(`/api/intruder/attacks/${task_id}/${action}`, json("POST", {}));
-      } catch (failure) {
-        // 409 is "the action cannot apply", not a failure: the attack ended between the button
-        // appearing and the click landing. Translated so the page reports it as information.
-        if (failure && typeof failure === "object" && "status" in failure && (failure as { status: number }).status === 409) {
-          throw new AttackActionStale(action);
-        }
-        throw failure;
-      }
-    },
-  });
+ return useMutation<IntruderAttackActionResult, Error, IntruderAttackActionBody>({
+  mutationFn: async ({ task_id, action }) => {
+   try {
+    return await api<IntruderAttackActionResult>(`/api/intruder/attacks/${task_id}/${action}`, json("POST", {}));
+   } catch (failure) {
+    // 409 is "the action cannot apply", not a failure: the attack ended between the button
+    // appearing and the click landing. Translated so the page reports it as information.
+    if (failure && typeof failure === "object" && "status" in failure && (failure as { status: number }).status === 409) {
+     throw new AttackActionStale(action);
+    }
+    throw failure;
+   }
+  },
+ });
 }
 
 /** GET /api/wordlists (kal): the payload-corpus inventory, bundled and uploaded. No poll —
@@ -422,27 +478,27 @@ export function useWordlists() {
  * the list itself, so every Inspector edit asks again and an unchanged list is never re-asked.
  */
 export function useKettleAnswer(fields: H2Field[] | null, tls: boolean) {
-  return useQuery({
-    queryKey: ["h2-kettle", tls, fields],
-    enabled: fields !== null && fields.length > 0,
-    staleTime: Infinity,
-    queryFn: () => api<KettleAnswer>("/api/http2/kettle", json("POST", { fields, tls })),
-  });
+ return useQuery({
+  queryKey: ["h2-kettle", tls, fields],
+  enabled: fields !== null && fields.length > 0,
+  staleTime: Infinity,
+  queryFn: () => api<KettleAnswer>("/api/http2/kettle", json("POST", { fields, tls })),
+ });
 }
 
 export function useResponseChanges(
-  previous: { exchange_id: number; response: string } | null,
-  current: { exchange_id: number; response: string } | null,
-  enabled: boolean,
+ previous: { exchange_id: number; response: string } | null,
+ current: { exchange_id: number; response: string } | null,
+ enabled: boolean,
 ) {
-  return useQuery({
-    queryKey: ["repeater-response-changes", previous?.exchange_id, current?.exchange_id],
-    enabled: enabled && previous !== null && current !== null,
-    staleTime: Infinity,
-    queryFn: () =>
-      api<{ identical: boolean; truncated: boolean; ops: CompareOp[] }>(
-        "/api/tools/compare",
-        json("POST", { a: previous!.response, b: current!.response, granularity: "words", response: true }),
-      ),
-  });
+ return useQuery({
+  queryKey: ["repeater-response-changes", previous?.exchange_id, current?.exchange_id],
+  enabled: enabled && previous !== null && current !== null,
+  staleTime: Infinity,
+  queryFn: () =>
+   api<{ identical: boolean; truncated: boolean; ops: CompareOp[] }>(
+    "/api/tools/compare",
+    json("POST", { a: previous!.response, b: current!.response, granularity: "words", response: true }),
+   ),
+ });
 }

@@ -111,7 +111,12 @@ func (c *Crawler) SeedFromSiteMap(sm *sitemap.SiteMap, origins []string, scopeAl
 				if own[key] {
 					continue
 				}
-				c.queued[key] = true
+				// Marked under the crawl's current phase — always the unauthenticated phase,
+				// which is when seeding runs — through the same namespaced key enqueue consults
+				// (burpsy-react-ui-crediso). A credential phase's own seen-set starts empty, so
+				// a phase re-requests a seeded URL behind its login: the seed recorded what the
+				// unauthenticated view already knew, not what this credential's session shows.
+				c.queued[c.dedupKey(method, u, nil, "")] = true
 				seeded++
 			}
 		}

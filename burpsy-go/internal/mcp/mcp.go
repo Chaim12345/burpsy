@@ -68,6 +68,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/agent"
 	"github.com/burpsy-go/burpsy/internal/web"
 )
 
@@ -153,6 +154,9 @@ type Options struct {
 	// NoNotifications turns off the console watcher that pushes task completion and High findings as
 	// notifications/message.
 	NoNotifications bool
+	// Policy, when set, is the project's agent policy, read on every tools/list and tools/call so a
+	// change takes effect without a restart. Nil means no policy: every tool is listed.
+	Policy func() agent.Policy
 }
 
 // Surface is which tool list tools/list publishes.
@@ -200,6 +204,7 @@ type Server struct {
 	watchers  sync.WaitGroup
 	levelMu   sync.Mutex
 	level     string
+	policy    func() agent.Policy
 }
 
 // New builds a server. It validates the options that would otherwise fail on the first tool call,
@@ -271,6 +276,7 @@ func New(opts Options) (*Server, error) {
 		syncWindow: window,
 		events:     &http.Client{},
 		notify:     !opts.NoNotifications,
+		policy:     opts.Policy,
 		level:      "info",
 		baseURL:    base,
 		http:       client,

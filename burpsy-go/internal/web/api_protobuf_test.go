@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/grpcproto"
@@ -144,7 +145,7 @@ func TestProtobufDecodeNamesFieldsFromAProto(t *testing.T) {
 func TestProtobufDecodeResolvesTheMessageFromTheRPCPath(t *testing.T) {
 	s := newTestServer()
 	b64 := base64.StdEncoding.EncodeToString(protoSample(t))
-	const proto = `package p; message A { int32 a_id = 1; string a_s = 2; } message B { int32 b_id = 1; string b_s = 2; }
+	const proto = `syntax = "proto3"; package p; message A { int32 a_id = 1; string a_s = 2; } message B { int32 b_id = 1; string b_s = 2; }
 service S { rpc Call (A) returns (B); }`
 	for dir, want := range map[string]string{"request": "a_id", "response": "b_id"} {
 		rec := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto, "rpc_path": "/p.S/Call", "direction": dir})
@@ -155,5 +156,50 @@ service S { rpc Call (A) returns (B); }`
 		if got := resp.Frames[0].Fields[0].Name; got != want {
 			t.Errorf("%s: field 1 named %q, want %q (message %q)", dir, got, want, resp.Message)
 		}
+	}
+}
+
+func TestProtobufDecodeAnUnresolvedImportNamesItselfAndTheFallback(t *testing.T) {
+	s := newTestServer()
+	body := map[string]any{
+		"body_base64": base64.StdEncoding.EncodeToString(protoSample(t)),
+		"proto":       "syntax = \"proto3\";\nimport \"acme/missing.proto\";\nmessage M { int32 a = 1; }",
+	}
+	r := postJSON(t, s, "/api/protobuf/decode", body)
+	if r.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", r.Code)
+	}
+	text := r.Body.String()
+	if !strings.Contains(text, "acme/missing.proto") {
+		t.Fatalf("the error must name the unresolved import: %q", text)
+	}
+	if !strings.Contains(text, "omit the proto") {
+		t.Fatalf("the error must point at the schemaless fallback: %q", text)
+	}
+}
+
+func TestProtobufDecodeTheOracleRefusesANonconformingBodyHonestly(t *testing.T) {
+	s := newTestServer()
+	proto := `syntax = "proto3"; message M { int32 n = 1; string s = 2; }`
+	// Field 2 declared string, bytes 0xff: invalid UTF-8. The schemaless walk
+	// shows it as hex; the oracle refuses the schema's claims over it.
+	b64 := base64.StdEncoding.EncodeToString([]byte{0x08, 0x96, 0x01, 0x12, 0x01, 0xff})
+	r := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto, "message": "M"})
+	if r.Code != http.StatusOK {
+		t.Fatalf("a nonconforming body is reported, not a 400: got %d", r.Code)
+	}
+	var resp protoDecodeResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	fr := resp.Frames[0]
+	if fr.Error == "" || !strings.Contains(fr.Error, "M") {
+		t.Fatalf("the mismatch must be named: %+v", fr)
+	}
+	if len(fr.Fields) != 2 {
+		t.Fatalf("the schemaless structure stays visible: %+v", fr)
+	}
+	if fr.Fields[0].Name != "" || fr.Fields[1].Name != "" {
+		t.Fatalf("a nonconforming body drops the schema's names: %+v", fr.Fields)
 	}
 }

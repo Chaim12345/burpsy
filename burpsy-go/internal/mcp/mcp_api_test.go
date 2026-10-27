@@ -102,7 +102,7 @@ func TestA3MiBBodyIsReadPastTheResultCapThroughWindows(t *testing.T) {
 	}
 	id := fmt.Sprint(uint64(mid))
 
-	whole := callGrouped(t, base, "history", map[string]any{"op": "GET /api/message/", "id": id})
+	whole := callGrouped(t, base, "history", map[string]any{"op": "GET /api/message/{id}", "id": id})
 	if !strings.Contains(textOf(whole), "truncated at") {
 		t.Fatal("a 3 MiB message read whole was not cut at the cap; this test's premise is gone")
 	}
@@ -114,7 +114,7 @@ func TestA3MiBBodyIsReadPastTheResultCapThroughWindows(t *testing.T) {
 			t.Fatal("more windows than a 3 MiB body can need")
 		}
 		res := callGrouped(t, base, "history", map[string]any{
-			"op": "GET /api/message/", "id": id,
+			"op": "GET /api/message/{id}", "id": id,
 			"query": map[string]string{"byte_offset": fmt.Sprint(offset), "max_bytes": "65536"},
 		})
 		if res.IsError || strings.Contains(textOf(res), "truncated at") {

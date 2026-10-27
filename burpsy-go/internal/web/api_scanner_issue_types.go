@@ -32,10 +32,6 @@ type issueTypeView struct {
 
 // handleScannerIssueTypes serves the catalogue rows, in type-index order.
 func (s *Server) handleScannerIssueTypes(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	all := scanner.All()
 	rows := make([]issueTypeView, 0, len(all))
 	for _, d := range all {

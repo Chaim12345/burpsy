@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -66,10 +67,6 @@ type extensionNameRequest struct {
 // The policy travels with the list rather than living only on its own route because the empty case
 // needs it: a list of no plugins is only readable next to "here is the flag that admits one".
 func (s *Server) handleExtensions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, s.extensionHost().List())
 }
 
@@ -122,10 +119,6 @@ func (s *Server) handleExtensionUnload(w http.ResponseWriter, r *http.Request) {
 // render an output console from one instant and an error console from another, and the interesting case
 // — a plugin that logged a line and then died — is exactly where those two disagree.
 func (s *Server) handleExtensionConsole(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	name := r.URL.Query().Get("name")
 	if name == "" {
 		http.Error(w, "a console needs the name of an allowlisted plugin: ?name=<name>", http.StatusBadRequest)
@@ -155,10 +148,6 @@ func (s *Server) handleExtensionConsole(w http.ResponseWriter, r *http.Request) 
 // into the UI: a hand-maintained copy of a wire protocol drifts, and a plugin author cannot tell that
 // it has.
 func (s *Server) handleExtensionAPIs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	writeJSON(w, http.StatusOK, extension.API())
 }
 
@@ -174,6 +163,14 @@ type extensionInvokeRequest struct {
 	Message      *int   `json:"message,omitempty"`
 	Raw          string `json:"raw,omitempty"`
 	Selection    string `json:"selection,omitempty"`
+	// Selected and Editor are hotkey.invoke's context (burpsy-react-ui-gqvg): the rows the
+	// operator had highlighted and the message open in the editor when the chord fired. The
+	// caller supplies both — this route still does not read the traffic store, so a hotkey
+	// plugin sees exactly what the operator's screen was already showing. The host strips
+	// them for every non-hotkey kind and enforces MaxHotkeySelection; the edge repeats the
+	// cap so an oversized selection is a 400 here, not a 502 from the invoke path.
+	Selected []extension.SelectedExchange `json:"selected,omitempty"`
+	Editor   *extension.EditorMessage     `json:"editor,omitempty"`
 }
 
 // handleExtensionInvoke serves POST /api/extensions/invoke: run one registration the plugin declared.
@@ -188,10 +185,6 @@ type extensionInvokeRequest struct {
 // store — and a plugin still has no route to that store at all, which is what UnsupportedCapabilities
 // says on the APIs tab.
 func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req extensionInvokeRequest
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable invocation: "+err.Error(), http.StatusBadRequest)
@@ -201,12 +194,19 @@ func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "an invocation needs a plugin name and a registration id", http.StatusBadRequest)
 		return
 	}
+	if len(req.Selected) > extension.MaxHotkeySelection {
+		http.Error(w, fmt.Sprintf("a hotkey invocation carries at most %d selected rows, got %d",
+			extension.MaxHotkeySelection, len(req.Selected)), http.StatusBadRequest)
+		return
+	}
 	result, err := s.extensionHost().Invoke(r.Context(), req.Name, extension.InvokeParams{
 		Registration: req.Registration,
 		Exchange:     req.Exchange,
 		Message:      req.Message,
 		Raw:          req.Raw,
 		Selection:    req.Selection,
+		Selected:     req.Selected,
+		Editor:       req.Editor,
 	})
 	if err != nil {
 		// The plugin's own error text, verbatim, and the row beside it: an invocation that failed
@@ -240,10 +240,6 @@ type extensionOrderRequest struct {
 // is the defect this route exists to avoid: the reordering has to be the thing that dispatches, and
 // an operator has to be able to tell a move that happened from one that could not.
 func (s *Server) handleExtensionOrder(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req extensionOrderRequest
 	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable move: "+err.Error(), http.StatusBadRequest)
@@ -305,6 +301,8 @@ func extensionStatus(err error, fallback int) int {
 		return http.StatusNotFound
 	case errors.Is(err, extension.ErrUnknownRegistration):
 		return http.StatusNotFound
+	case errors.Is(err, extension.ErrSelectionTooLarge), errors.Is(err, extension.ErrInvalidSelection):
+		return http.StatusBadRequest
 	case errors.Is(err, extension.ErrAlreadyLoaded), errors.Is(err, extension.ErrNotLoaded):
 		return http.StatusConflict
 	default:
