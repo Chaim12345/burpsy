@@ -450,7 +450,7 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	// that close-delimited under the old network may answer completely under the new
 	// resolution or carrier, and an uncleared mark would force fresh connections for the
 	// process's life (PR #363 review).
-	s.closeDelimitedAuthorities = sync.Map{}
+	s.closeDelimitedAuthorities.Clear() // in place: in-flight sends Load and Store it without s.mu
 	return nil
 }
 

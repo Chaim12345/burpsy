@@ -67,6 +67,7 @@ risk=(
   "burpsy-go/internal/web/ui/scripts/gen-gated-routes.ts|gated routes"
   "burpsy-go/internal/web/ui/src/lib/gated-routes.ts|gated routes"
   "burpsy-go/internal/web/ui/src/lib/route-risk.ts|gated routes"
+  "burpsy-go/internal/web/ui/src/lib/api.ts|gated routes (client gated-route resolver)"
   # MCP risk-class placement: which tools an MCP client is offered, in which group.
   "burpsy-go/internal/mcp/groups.go|MCP risk-class placement"
   # Credential, client-certificate, CA and TLS material. proxy.go is listed whole because it mints

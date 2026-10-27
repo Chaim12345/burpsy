@@ -300,6 +300,22 @@ func (s *Server) prepareRepeaterSend(
 // that rode a shared socket inside sender.SendKeepAlive has no per-exchange timing to report, and
 // core.UnmeasuredDuration is how that is said out loud instead of being written as a zero that reads
 // as an instantaneous send.
+// withSendNote returns spec with what the sender did to the send appended to its note: a header it
+// added, a body it cut at the cap (SendOutcome.Note). The stored exchange records the request as
+// written and the response as rendered, so without the note a modified request or a truncated
+// response would read as untouched.
+func (spec repeaterSendSpec) withSendNote(note string) repeaterSendSpec {
+	if note == "" {
+		return spec
+	}
+	note = "[burpsy] " + note
+	if spec.Note != "" {
+		note = spec.Note + "\n\n" + note
+	}
+	spec.Note = note
+	return spec
+}
+
 func (s *Server) recordRepeaterExchange(
 	spec repeaterSendSpec, rawResp []byte, protocol core.Protocol, duration core.ExchangeDuration, started time.Time,
 ) (resp repeaterSendResp, ex *core.Exchange) {
@@ -421,10 +437,14 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 		// that arrived with no bytes in it.
 		// nil exchange as well as nil length: the send never reached a response, so nothing was
 		// stored and there are no bytes for Logger's viewer to resolve.
-		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
+		msg := err.Error()
+		if outcome.Note != "" {
+			msg += " (" + outcome.Note + ")"
+		}
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, msg, nil)
 		return repeaterSendResp{}, err
 	}
-	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	resp, _ := s.recordRepeaterExchange(spec.withSendNote(outcome.Note), rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
 	if spec.H2Sessions != nil {
 		// Whether this request was the first on its connection — the fact HTTP/2 connection reuse
 		// exists to let an operator control (adkx).

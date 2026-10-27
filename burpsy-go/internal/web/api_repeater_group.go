@@ -362,7 +362,7 @@ func (s *Server) sendGroupItemSynchronized(
 		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
 		return repeaterGroupItemResult{TabID: tabID, Error: err.Error()}
 	}
-	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	resp, _ := s.recordRepeaterExchange(spec.withSendNote(outcome.Note), rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
 	return repeaterGroupItemResult{TabID: tabID, Result: &resp, DurationMeasured: true, arrivedAt: time.Now()}
 }
 
