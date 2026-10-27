@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "7867ae67c467",
+  "strategy": "manual-commit",
+  "branch": "beads-batch2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/scanner/sqli_techniques.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/67ae67c467/0/metadata.json",
+      "transcript": "/78/67ae67c467/0/full.jsonl",
+      "compact_transcript": "/78/67ae67c467/0/transcript.jsonl",
+      "content_hash": "/78/67ae67c467/0/content_hash.txt",
+      "prompt": "/78/67ae67c467/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1175,
+    "cache_read_tokens": 724976,
+    "output_tokens": 573,
+    "api_call_count": 1
+  },
+  "redaction": {
+    "replacements": 94,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 3,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 10,
+      "entropy": 31,
+      "key_context": 29,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
