@@ -4416,6 +4416,17 @@ function LlmTriageSection(): JSX.Element {
   }
  }, [get.data, draft]);
 
+ if (get.data?.needs_project) {
+  return (
+   <Card>
+    <SectionHeading title="LLM triage" />
+    <Empty
+     title="Needs a project"
+     detail="The triage endpoint is stored with the project. Open or create one (File › Open project, or start with -db) to configure it."
+    />
+   </Card>
+  );
+ }
  if (get.error) return <ErrorNotice error={get.error} />;
  if (!get.data || draft === null) return <LoadingPanel />;
 

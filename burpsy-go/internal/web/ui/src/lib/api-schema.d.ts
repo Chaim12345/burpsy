@@ -12284,6 +12284,7 @@ export interface operations {
                     configured?: boolean;
                     enabled?: boolean;
                     model?: string;
+                    needs_project?: boolean;
                 };
             };
         };

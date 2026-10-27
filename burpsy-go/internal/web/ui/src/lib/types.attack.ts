@@ -538,6 +538,8 @@ export interface TriageSettingsView {
  model: string;
  api_key?: string;
  configured: boolean;
+ /** No project is open, so nothing can be stored. */
+ needs_project?: boolean;
 }
 
 /** One skill in GET /api/skills (burpsy-react-ui-ulsy): a packaged prompt technique from the

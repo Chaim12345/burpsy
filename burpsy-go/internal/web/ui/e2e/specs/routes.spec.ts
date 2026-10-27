@@ -17,12 +17,6 @@ test.describe("routes", () => {
       consoleErrors,
       failedRequests,
     }) => {
-      // KNOWN PRODUCT ISSUE, found when this suite first ran in CI (bead e2eorph, 2026-10-27): the
-      // harness starts burpsy without -db, and the Settings page's LLM triage section asks
-      // GET /api/settings/triage regardless, which answers 503 ("persistence is not attached") and
-      // renders as an error notice. test.fail keeps the check live: it turns red when the page
-      // stops making a request it knows can fail on a project-less instance, and this line goes.
-      test.fail(route.id === "settings", "GET /api/settings/triage -> 503 on an instance started without -db");
       await page.goto(`/#${route.id}`);
 
       // The h1 assertion is the render check. Every page got one in commit 608da8e; asserting the
