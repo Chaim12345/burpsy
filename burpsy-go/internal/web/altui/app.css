@@ -57,6 +57,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .pane-head {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--line); background: var(--bg-panel); flex: 0 0 auto;
+  /* Crowded heads (Prove's tabs + counts + report controls) must drop to a second line
+     on a phone instead of pushing controls past the clipped right edge. Heads with two
+     short items are unchanged: nothing wraps until the line is full. */
+  flex-wrap: wrap;
 }
 .pane-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--text-dim); }
 .pane-body { flex: 1; overflow: auto; }
@@ -164,7 +168,7 @@ td.mono, .mono { font-family: var(--mono); }
 .issue-row.sel { background: var(--bg-raised); }
 .issue-name { flex: 1; }
 .issue-host { color: var(--text-dim); font-family: var(--mono); font-size: 12px; }
-.countbar { display: flex; gap: 8px; align-items: center; }
+.countbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* ---- modal ---- */
 #modal-root:empty { display: none; }
