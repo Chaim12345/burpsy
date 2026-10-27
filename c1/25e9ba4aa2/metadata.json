@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "c125e9ba4aa2",
+  "strategy": "manual-commit",
+  "branch": "beads-batch2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/web/api_triage.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/ui/e2e/specs/routes.spec.ts",
+    "burpsy-go/internal/web/ui/src/lib/api-schema.d.ts",
+    "burpsy-go/internal/web/ui/src/lib/types.attack.ts",
+    "burpsy-go/internal/web/ui/src/pages/settings.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c1/25e9ba4aa2/0/metadata.json",
+      "transcript": "/c1/25e9ba4aa2/0/full.jsonl",
+      "compact_transcript": "/c1/25e9ba4aa2/0/transcript.jsonl",
+      "content_hash": "/c1/25e9ba4aa2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 11571,
+    "cache_read_tokens": 9685043,
+    "output_tokens": 4978,
+    "api_call_count": 14
+  },
+  "redaction": {
+    "replacements": 89,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 0,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 10,
+      "entropy": 29,
+      "key_context": 29,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
