@@ -96,7 +96,7 @@ func TestIsFrameableAgreesWithTheBrowser(t *testing.T) {
 		actx, cancel = chromedp.NewRemoteAllocator(context.Background(), remote)
 	} else {
 		actx, cancel = chromedp.NewExecAllocator(context.Background(),
-			append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", true))...)
+			append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", true), chromedp.NoSandbox)...)
 	}
 	defer cancel()
 	for i, c := range frameableCases {

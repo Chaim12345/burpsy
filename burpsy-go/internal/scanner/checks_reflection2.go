@@ -554,7 +554,7 @@ func checkSSIInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 				"the "+string(point.Kind)+" parameter "+point.Name+
 					" reached a Server-Side Includes processor that parsed and evaluated the injected directive")}, nil
 		}
-		if esiEvaluated(ctx, h, point) {
+		if strings.Contains(res.Body, trueToken) && esiEvaluated(ctx, h, point) {
 			return []*Finding{buildProbeFinding(cc, ssiInjectionIssue, "firm",
 				"an injected Edge Side Includes comment (<!--esi-->) was removed between two tokens twice, while "+
 					"an ordinary HTML comment in the same place was not",

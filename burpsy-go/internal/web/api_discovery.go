@@ -570,9 +570,9 @@ func discoveryFinish(ctx context.Context, task *dash.Handle, res extscan.FFUFRes
 		// floor rather than a total.
 		task.FinishWithNote(dash.Breakdown{
 			Found: uint64(len(res.Discoveries)),
-			Gated: uint64(res.OutOfScope),
+			Gated: uint64(res.OutOfScope + res.GateRefused),
 		}, fmt.Sprintf("%d path(s) discovered, %d dropped as out of scope",
-			len(res.Discoveries), res.OutOfScope))
+			len(res.Discoveries), res.OutOfScope+res.GateRefused))
 		return "done"
 	case res.Outcome == extscan.OutcomeFailed:
 		task.Fail(res.Err)
