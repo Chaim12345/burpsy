@@ -304,3 +304,38 @@ func TestThePreScanFilterRunsBeforeTheSweepsOwnGates(t *testing.T) {
 			"first, so this exchange is filtered, not skipped", r.SkippedNoResponse)
 	}
 }
+
+// The store chain behind a sweep: a native passive finding must land on an issue for the host
+// that produced it, bound to that exchange. Before the construction sites set ExchangeID, every
+// built-in finding resolved exchange 0, so the second host's sweep merged into the first host's
+// issue and both occurrences pointed at the wrong host.
+func TestNativePassiveFindingsStayHostSeparatedAndBoundToTheirExchange(t *testing.T) {
+	s := passiveBranchServer(t)
+	idA := core.ExchangeID(captureExchange(t, s, "alpha.invalid", "/", 200, "text/html"))
+	idB := core.ExchangeID(captureExchange(t, s, "beta.invalid", "/", 200, "text/html"))
+
+	passiveBranch(t, s, `{"host":"alpha.invalid"}`)
+	passiveBranch(t, s, `{"host":"beta.invalid"}`)
+
+	want := map[string]core.ExchangeID{"alpha.invalid": idA, "beta.invalid": idB}
+	seen := map[string]bool{}
+	for _, f := range s.findings.All() {
+		if f.Name != "Missing X-Content-Type-Options Header" {
+			continue
+		}
+		id, ok := want[f.Target.Host]
+		if !ok {
+			t.Fatalf("finding filed on unexpected host %q", f.Target.Host)
+		}
+		if seen[f.Target.Host] {
+			t.Fatalf("two findings for %q: the hosts merged, which is the cross-host dedup this test exists to refuse", f.Target.Host)
+		}
+		seen[f.Target.Host] = true
+		if len(f.Occurrences) != 1 || f.Occurrences[0].ExchangeID != id {
+			t.Errorf("host %q: occurrences %+v, want exactly one bound to exchange %d", f.Target.Host, f.Occurrences, id)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("host-separated findings = %d, want one per host (%d): %v", len(seen), len(want), seen)
+	}
+}
