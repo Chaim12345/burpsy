@@ -154,7 +154,7 @@ func TestPaceNWaitingForAnotherGroupStillHonorsContext(t *testing.T) {
 	defer a.Release()
 	defer b.Release()
 	// The leader blocks on slots for far longer than the queued group's deadline.
-	slow, stopSlow := context.WithTimeout(context.Background(), 2*time.Second)
+	slow, stopSlow := context.WithTimeout(context.Background(), 30*time.Second)
 	defer stopSlow()
 	leader := make(chan error, 1)
 	go func() { _, err := l.PaceN(slow, 2); leader <- err }()
@@ -167,7 +167,9 @@ func TestPaceNWaitingForAnotherGroupStillHonorsContext(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the queued group ended with %v, want its own deadline", err)
 	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+	// The leader waits 30s; the queued group's own 100ms deadline must end it far sooner. 5s of
+	// slack keeps a loaded runner from reading a correct run as a failure (burpsy-react-ui-timing-bounds).
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("the queued group outlived its context by %v waiting on the leader's turn", elapsed)
 	}
 }

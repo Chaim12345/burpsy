@@ -78,7 +78,9 @@ func TestSetAndZeroDisablesTheBackoffWait(t *testing.T) {
 	cfg.AutoBackoffMs = SomeUint32(0)
 	start := time.Now()
 	_, _ = scan.AuditWithin(context.Background(), id, cfg)
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+	// One inherited backoff step is DefaultAutoBackoffMs (2s); the bound sits just under it, so a single
+	// wait fails the test while a slow runner auditing without one does not (burpsy-react-ui-timing-bounds).
+	if elapsed := time.Since(start); elapsed >= time.Duration(DefaultAutoBackoffMs)*time.Millisecond*9/10 {
 		t.Fatalf("a set-and-zero backoff still waited %v — zero is the real off, not a spelling of unset", elapsed)
 	}
 }
