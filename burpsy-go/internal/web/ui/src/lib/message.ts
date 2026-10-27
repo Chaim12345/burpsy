@@ -402,9 +402,11 @@ export function compactMessage(pretty: string): string {
 }
 
 /**
- * Indents markup with a break between adjacent tags. `sep` is the break it inserts, the message's own
- * separator, so a CRLF response's Pretty view splits into lines in an editor that splits on CRLF; a
- * newline already inside the body (a text node's) stays exactly as it was.
+ * Indents markup with one break between tags: adjacent tags, and tags the body already separated with
+ * a line break (the break and the whitespace around it are replaced). `sep` is the break it writes,
+ * the message's own separator, so a CRLF response's Pretty view splits into lines in an editor that
+ * splits on CRLF. A line break inside a text node keeps its own CR/LF; only the indentation around it
+ * changes.
  */
 function prettyMarkup(input: string, sep = "\n"): string {
  let depth = 0;
@@ -418,8 +420,13 @@ function prettyMarkup(input: string, sep = "\n"): string {
   return indented;
  };
  return input
-  .split(/(?<=>)(?=<)/)
-  .map((part) => part.split("\n").map(indent).join("\n"))
+  .split(/(?<=>)(?:[ \t]*\r?\n\s*)?(?=<)/)
+  .map((part) =>
+   part
+    .split(/(\r?\n)/)
+    .map((piece, i) => (i % 2 === 1 ? piece : indent(piece)))
+    .join(""),
+  )
   .join(sep);
 }
 
