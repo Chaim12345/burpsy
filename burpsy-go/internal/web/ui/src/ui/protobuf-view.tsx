@@ -336,7 +336,8 @@ function SchemaBar({
  const [pasting, setPasting] = useState(false);
  const [draft, setDraft] = useState("");
  const fileRef = useRef<HTMLInputElement>(null);
- // Pick batches resolve asynchronously; a batch a newer pick has superseded must not land.
+ // Pick batches resolve asynchronously; a batch superseded by a newer pick, a paste or a clear must
+ // not land (burpsy-react-ui-pggap): every schema change here advances the one generation.
  const pickGen = useRef(0);
 
  // One file is the single-file schema form; several are the rsu2 file SET, whose imports resolve
@@ -413,6 +414,7 @@ function SchemaBar({
       size="small"
       disabled={!draft.trim()}
       onClick={() => {
+       pickGen.current += 1;
        setProtoSchema({ name: "pasted .proto", text: draft });
        setPasting(false);
        setDraft("");
@@ -460,7 +462,14 @@ function SchemaBar({
      <Button size="small" variant="outline" onClick={() => fileRef.current?.click()}>
       Replace .proto
      </Button>
-     <Button size="small" variant="outline" onClick={() => setProtoSchema(null)}>
+     <Button
+      size="small"
+      variant="outline"
+      onClick={() => {
+       pickGen.current += 1;
+       setProtoSchema(null);
+      }}
+     >
       Clear schema
      </Button>
     </>

@@ -162,6 +162,9 @@ function GraphQLOperationEditor({
  }
  useEffect(() => () => {
   draftGen.current++;
+  // No op is in flight for a dead component: a finally that resolves after the unmount must not
+  // call setBusy on it (generations start at 1, so 0 matches none).
+  inflightGen.current = 0;
  }, []);
  const dirty = draft !== operation.query;
  const check = () => {
