@@ -19,9 +19,15 @@ name: Go
 #                                      skipped and `gate` reports success. The one Go test such a
 #                                      change could break (no tracked text file holds a raw control
 #                                      byte) is re-checked by the changes job itself.
-#   nightly (nightly.yml)              e2e-go.sh, and every shard but race-web under -race: the whole
-#                                      module under the race detector, internal/web's part of it
-#                                      being here on every push to master.
+#   nightly (nightly.yml)              e2e-go.sh, and every shard but race-web and race-core under
+#                                      -race: the whole
+#                                      module under the race detector, internal/web's part of it and
+#                                      race-core's being here.
+#
+# Under -race here, on every run: internal/web (race-web-0/1) and race-core's internal/proxy,
+# internal/dash, internal/pool, internal/sender and internal/intruder. On a pull request each runs
+# only if the affected set contains it, like every other shard; a PR that changes internal/sender
+# therefore gets sender, and internal/proxy (which imports it), under the race detector.
 #
 # What the affected set cannot see, and what closes each gap: merge skew between two PRs (the full
 # run on the push to master, on the exact merged tree); a test that reads another directory's file
@@ -202,8 +208,10 @@ jobs:
           - { shard: rest, flavor: rest, save: true }
           - { shard: race-web-0, flavor: race-web, save: true }
           - { shard: race-web-1, flavor: race-web, save: false }
-          # internal/proxy, internal/dash and internal/pool under -race (bead 8pki); the next packages join it once
-          # shown race-clean, watching this job's time.
+          # internal/proxy, internal/dash and internal/pool under -race (bead 8pki), and internal/sender
+          # and internal/intruder (bead racepr: the 2026-10-27 review found a race and a deadlock
+          # there that only the nightly run could see); on a PR, those of them the PR affects. The
+          # next packages join it once shown race-clean, watching this job's time.
           - { shard: race-core, flavor: race-core, save: true }
     name: test (${{ matrix.shard }})
     env:

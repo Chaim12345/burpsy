@@ -9,7 +9,8 @@ name: Nightly
 #   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
 #   fuzz     every listed fuzz target for 5 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
-#            race-web and race-core on every push to master, the race detector covers the whole module.
+#            race-web and race-core on every push to master, the race detector covers the whole module
+#            (race-core: internal/proxy, dash, pool, sender, intruder; scripts/ci-shard.sh lists them).
 #
 # There is no separate plain (non-race) full-suite job: the push to master already runs the full
 # suite on the commit this run tests, and the race run executes the same tests again (a superset,
