@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b1tyaviib</task-id>
+<tool-use-id>toolu_015F6vLHT3C1Sm3WZxxMjzT3</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/b1tyaviib.output</output-file>
+<status>completed</status>
+<summary>Background command "export GOTOOLCHAIN=go1.27.3 PATH=/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/scratchpad/bin:$PATH BURPSY_ALLOW_UNVERIFIED_EXTSCAN=1 &amp;&amp; (cd burpsy-go &amp;&amp; go build ./...) &amp;&amp; pkgs=$(scripts/affected-go-tests.sh origin/backlog-b9 | tr '\n' ' ') &amp;&amp; echo "$pkgs" &amp;&amp; scripts/capped-run.sh -- sh -c "cd burpsy-go &amp;&amp; go test -count=1 -timeout 30m $pkgs" &gt; /tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/scratchpad/t1b.log 2&gt;&amp;1; echo exit=$?" completed (exit code 0)</summary>
+</task-notification>
