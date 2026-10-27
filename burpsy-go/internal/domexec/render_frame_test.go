@@ -16,7 +16,7 @@ func TestEveryRenderThatAsksForAFrameGetsOneQuickly(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		started := time.Now()
-		html, out, err := b.RenderedDOMWithOptions(ctx, u, RenderOptions{Screenshot: true})
+		html, out, err := b.renderedDOMWithOptions(ctx, u, RenderOptions{Screenshot: true})
 		cancel()
 		if err != nil || html == "" {
 			t.Fatalf("render %d: %v", i, err)
@@ -29,7 +29,7 @@ func TestEveryRenderThatAsksForAFrameGetsOneQuickly(t *testing.T) {
 		}
 	}
 	// Not asked, not taken.
-	_, out, err := b.RenderedDOMWithOptions(context.Background(), u, RenderOptions{})
+	_, out, err := b.renderedDOMWithOptions(context.Background(), u, RenderOptions{})
 	if err != nil || out.Screenshot != nil {
 		t.Fatalf("a render that did not ask got a frame: %v %d", err, len(out.Screenshot))
 	}

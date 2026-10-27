@@ -391,7 +391,7 @@ func checkClientSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 	}
 	ex := cc.Exchange
 	env := cstiEnv{
-		render: browser,
+		render: gatedRenderer{browser: browser, scope: cc.Scanner.scope},
 		served: func(ctx context.Context, target string) (string, bool) {
 			uri, err := cstiRequestURI(target)
 			if err != nil {

@@ -625,17 +625,25 @@ func scanKind(requested string) (string, error) {
 // runs. A scan whose DOM checks declined for a missing browser reports the same decline to
 // the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
 // wire parse was the whole story.
-func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
-	return s.crawlRendererIn(nil, nil)
+func (s *Server) crawlRenderer(scope crawler.Scope) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
+	return s.crawlRendererIn(nil, scope, nil)
 }
 
 // crawlRendererIn is crawlRenderer inside a recorded login's session (burpsy-react-ui-xhtk), so an
 // authenticated crawl's rendered pass sees the logged-in application rather than its login page. A
 // nil session is the ordinary renderer.
 //
+// Without a session every render runs in a fresh scope-gated browser context whose gate is the CRAWL's
+// scope (burpsy-react-ui-browser-render-unscoped) — the crawlInteractor's arrangement. The page was
+// admitted by the crawl, but the scripts, beacons, XHR and frames it pulls in while it renders were
+// not, and an ungated render sent them wherever the page pointed. Refusals reach the crawl as a
+// per-page skip record (RenderOutcome.Blocked), so a page rendered without its out-of-scope CDN reads
+// as incomplete rather than as complete. With a recorded login's session, the session's own gate (the
+// engagement scope) does the same job and its refusals are reported on the login block.
+//
 // live, when set, is the crawl's live view (burpsy-react-ui-1l3x): the render marks its page as the one
 // being looked at and, at most once a second, brings back a viewport frame from the same tab.
-func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
+func (s *Server) crawlRendererIn(sess *domexec.Session, scope crawler.Scope, live *crawlLive) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
 	if s.wiredScanner() == nil || !s.wiredScanner().DOMCapabilityConfigured() {
 		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
 		// function that returns "" would be a render that always produced nothing -- which the engine
@@ -662,7 +670,7 @@ func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ct
 			if berr != nil {
 				return "", crawler.RenderOutcome{}, berr
 			}
-			html, outcome, err = browser.RenderedDOMWithOptions(ctx, targetURL, opts)
+			html, outcome, err = browser.RenderedDOMGated(ctx, targetURL, opts, crawlScopeGate{scope: scope, engagement: s.scope})
 		}
 		// The OUTCOME form, so a render that reached its cap is reported as capped. The previous
 		// call read the DOM after a fixed 300 ms and said nothing about whether the page had settled
@@ -681,6 +689,7 @@ func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ct
 			Capped:   outcome.Capped,
 			Waited:   outcome.Waited,
 			Requests: reqs,
+			Blocked:  outcome.Blocked,
 		}, err
 	}
 }
@@ -1018,7 +1027,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh, configFormOptThreshold, configSwitches)
 	cfg.OnSend = live.onSend
 	if cfg.RenderWithOutcome != nil {
-		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
+		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, cfg.Scope, live)
 	}
 	// The interaction pass (burpsy-react-ui-spa1), in the recorded login's session when there is one so
 	// it drives the logged-in application and is scope-gated by the session's own proxy. A nil
@@ -1230,7 +1239,7 @@ func (s *Server) auditCrawlLocations(ctx context.Context, taskID uint64, rep *cr
 	block := crawler.RenderedAuditReport{
 		Candidates: summary.Candidates, NoScript: summary.NoScript, Capped: summary.Capped,
 		Rendered: summary.Rendered, Failed: summary.Failed, ScriptOnly: summary.ScriptOnly,
-		Declined: summary.Declined,
+		ScopeBlocked: summary.ScopeBlocked, Declined: summary.Declined,
 	}
 	rep.RenderedAudit = &block
 	for _, rf := range findings {
@@ -1659,9 +1668,10 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 	// only to fail immediately. Declared here rather than at the call site so this method is the
 	// whole configuration and nothing about it hides in the caller.
 	_ = onFetch
+	crawlScopeValue := s.mustCrawlScope(req.Scope, seeds)
 	return crawler.Config{
 		Seeds:  seeds,
-		Scope:  s.mustCrawlScope(req.Scope, seeds),
+		Scope:  crawlScopeValue,
 		Sender: s.sender,
 		Capture: scanner.Capture{
 			Store:    s.store,
@@ -1710,7 +1720,7 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		OnFetch:                onFetch,
 		Render:                 nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
-		RenderWithOutcome: s.crawlRenderer(),
+		RenderWithOutcome: s.crawlRenderer(crawlScopeValue),
 		// The browser-interaction pass (burpsy-react-ui-spa1), left nil here and wired in startCrawl
 		// only when the operator asked for it, because it needs the recorded login's session. Off by
 		// default: it navigates and, with FillInteractionForms, writes.

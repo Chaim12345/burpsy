@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,21 @@ func TestGeneratePayloadMintsDistinctTokens(t *testing.T) {
 	}
 }
 
+// loopbackGate is the render scope for these tests: the victim page and the listener both live on
+// 127.0.0.1, on different ports, and nothing else may be reached.
+type loopbackGate struct{}
+
+func (loopbackGate) AllowURL(u *url.URL) error {
+	return loopbackGate{}.AllowAuthority(u.Hostname(), 0, false)
+}
+
+func (loopbackGate) AllowAuthority(host string, _ uint16, _ bool) error {
+	if host != "127.0.0.1" {
+		return fmt.Errorf("%s is not loopback", host)
+	}
+	return nil
+}
+
 // TestCaptureThroughRealBrowser is the test the rest exist to support: it serves a page
 // carrying the payload exactly as an injection would, renders it in headless Chrome, and
 // asserts HitsFor returns what that browser actually sent. Nothing about the callback
@@ -95,7 +111,7 @@ func TestCaptureThroughRealBrowser(t *testing.T) {
 	// browser makes is genuinely cross-origin — the path a real blind-XSS hit takes.
 	pageURL := victim.URL + "/inbox"
 
-	if _, err := browser.RenderedDOM(context.Background(), pageURL); err != nil {
+	if _, err := browser.RenderedDOM(context.Background(), pageURL, loopbackGate{}); err != nil {
 		t.Fatalf("rendering the victim page: %v", err)
 	}
 
@@ -159,7 +175,7 @@ func TestDOMSnippetIsCapped(t *testing.T) {
 	}))
 	t.Cleanup(victim.Close)
 
-	if _, err := browser.RenderedDOM(context.Background(), victim.URL); err != nil {
+	if _, err := browser.RenderedDOM(context.Background(), victim.URL, loopbackGate{}); err != nil {
 		t.Fatalf("rendering the oversized page: %v", err)
 	}
 

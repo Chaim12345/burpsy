@@ -3,6 +3,7 @@ package extscan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,15 @@ type FFUFResult struct {
 	Outcome     Outcome
 	Target      Target
 	Discoveries []Discovery
+	// EgressGate says what the run's egress gate enforced (EgressGatePerRequest
+	// or EgressGatePerAuthority); empty when the tool was never launched.
+	EgressGate string
+	// GateRefused counts the requests the egress gate refused before they were
+	// sent (a wordlist entry that escaped the authorised subtree, an excluded
+	// path); GateRefusals is a sample (at most 50). ffuf sees each refusal as a
+	// 403 from the gate, which the scope filter then drops from Discoveries.
+	GateRefused  int
+	GateRefusals []string
 	// OutOfScope counts paths ffuf reported that the engagement scope does not
 	// authorise, and which were therefore dropped from Discoveries.
 	//
@@ -136,6 +146,18 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 		return res
 	}
 
+	gate, refusals, mode, err := startEgressGate(cfg, scope, target)
+	if err != nil {
+		res.Outcome = OutcomeUnauthorised
+		if !errors.Is(err, ErrUnauthorised) {
+			res.Outcome = OutcomeFailed
+		}
+		res.Err = err
+		return res
+	}
+	defer gate.Close()
+	res.EgressGate = mode
+
 	dir, err := os.MkdirTemp("", "burpsy-ffuf-")
 	if err != nil {
 		res.Outcome = OutcomeFailed
@@ -145,32 +167,12 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	defer os.RemoveAll(dir)
 	outFile := filepath.Join(dir, "ffuf.json")
 
-	fuzzURL := strings.TrimSuffix(target.URL, "/") + "/FUZZ"
-	args := []string{
-		"-u", fuzzURL,
-		"-w", opts.Wordlist,
-		"-of", "json",
-		"-o", outFile,
-		// -s keeps the progress spinner off the captured stream; -noninteractive
-		// stops ffuf reaching for a console it does not have here.
-		"-s", "-noninteractive",
-	}
-	if opts.Extensions != "" {
-		args = append(args, "-e", opts.Extensions)
-	}
-	if opts.MatchCodes != "" {
-		args = append(args, "-mc", opts.MatchCodes)
-	}
-	if opts.Threads > 0 {
-		args = append(args, "-t", fmt.Sprint(opts.Threads))
-	}
-	if opts.Rate > 0 {
-		args = append(args, "-rate", fmt.Sprint(opts.Rate))
-	}
+	args := ffufArgs(target, opts, outFile, gate.URL())
 	res.Command = append([]string{path}, args...)
 
 	_, stderr, code, runErr := run(ctx, cfg, path, args)
 	res.ExitCode = code
+	res.GateRefused, res.GateRefusals = int(gate.Refused()), refusals.snapshot()
 	if runErr != nil {
 		res.Outcome = OutcomeFailed
 		res.Err = fmt.Errorf("extscan: ffuf: %w: %s", runErr, trimErr(stderr))
@@ -197,6 +199,37 @@ func RunFFUF(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Targ
 	res.Discoveries, res.OutOfScope = filterInScope(scope, target, discoveries)
 	res.Outcome = OutcomeCompleted
 	return res
+}
+
+// ffufArgs builds ffuf's argv (after the binary). proxyURL is the run's egress
+// gate and is always passed (-x): there is no ffuf invocation from this package
+// that dials on its own.
+func ffufArgs(target Target, opts FFUFOptions, outFile, proxyURL string) []string {
+	fuzzURL := strings.TrimSuffix(target.URL, "/") + "/FUZZ"
+	args := []string{
+		"-u", fuzzURL,
+		"-w", opts.Wordlist,
+		"-of", "json",
+		"-o", outFile,
+		// -s keeps the progress spinner off the captured stream; -noninteractive
+		// stops ffuf reaching for a console it does not have here.
+		"-s", "-noninteractive",
+		// Every request through the egress gate.
+		"-x", proxyURL,
+	}
+	if opts.Extensions != "" {
+		args = append(args, "-e", opts.Extensions)
+	}
+	if opts.MatchCodes != "" {
+		args = append(args, "-mc", opts.MatchCodes)
+	}
+	if opts.Threads > 0 {
+		args = append(args, "-t", fmt.Sprint(opts.Threads))
+	}
+	if opts.Rate > 0 {
+		args = append(args, "-rate", fmt.Sprint(opts.Rate))
+	}
+	return args
 }
 
 // parseFFUF turns ffuf's JSON envelope into discoveries.

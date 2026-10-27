@@ -201,6 +201,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 	// The provider is lazy, so naming an engine costs nothing until a DOM check asks for it; a scan
 	// with no DOM-based check in its set never starts a browser at all.
 	if domOpts != nil {
+		domOpts.EgressDial = ctx.sender.EgressDialContext
 		ctx.scanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
 	// The session coordinator is attached here rather than in the literal above because ctx.sess

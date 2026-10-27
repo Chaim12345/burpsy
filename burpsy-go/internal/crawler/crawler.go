@@ -575,6 +575,10 @@ type RenderOutcome struct {
 	Waited time.Duration
 	// Requests are the XHR/fetch requests the page issued while it rendered (burpsy-react-ui-hzzl).
 	Requests []RenderedRequest
+	// Blocked are the requests the page tried to make that the render's scope gate refused
+	// (burpsy-react-ui-browser-render-unscoped). Non-empty means the rendered DOM is what an
+	// in-scope-only browser saw, and the page is recorded as such.
+	Blocked []string
 }
 
 // RenderedRequest is one request a rendered page issued at run time.
@@ -943,6 +947,9 @@ type RenderedAuditReport struct {
 	// the finding: content that exists only after the page's script runs is invisible to every
 	// wire-bytes check, including the crawl's own audit.
 	ScriptOnly int `json:"script_only"`
+	// ScopeBlocked is how many rendered pages requested something outside the engagement scope that
+	// the render's scope gate refused: their rendered DOM is incomplete, not wrong.
+	ScopeBlocked int `json:"scope_blocked"`
 	// Declined explains a pass that did not run for a reason that is not an error.
 	Declined string `json:"declined,omitempty"`
 }
@@ -952,8 +959,12 @@ func (r RenderedAuditReport) Summary() string {
 	if r.Declined != "" {
 		return "no rendered-DOM audit: " + r.Declined
 	}
-	return fmt.Sprintf("%d of %d location(s) rendered in a browser, %d with content the wire response never carried",
+	out := fmt.Sprintf("%d of %d location(s) rendered in a browser, %d with content the wire response never carried",
 		r.Rendered, r.Candidates, r.ScriptOnly)
+	if r.ScopeBlocked > 0 {
+		out += fmt.Sprintf("; %d rendered without out-of-scope resources the scope gate refused", r.ScopeBlocked)
+	}
+	return out
 }
 
 // Complete reports whether the crawl exhausted its frontier without hitting a bound. False means the
@@ -2606,6 +2617,15 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 				l.foundAtRendered = true
 				rep.LinksFound++
 				c.admit(l, item.url, item.depth+1, rep, lim)
+			}
+			if renderOutcome != nil && len(renderOutcome.Blocked) > 0 {
+				first := renderOutcome.Blocked[0]
+				c.skips.record(SkipRecord{
+					Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
+					FoundAt: item.foundAt,
+					Detail: fmt.Sprintf("the rendered-DOM pass refused %d out-of-scope request(s) the page made (first: %s), "+
+						"so its rendered links are those an in-scope-only browser saw", len(renderOutcome.Blocked), first),
+				})
 			}
 			if renderOutcome != nil {
 				c.admitRenderedRequests(renderOutcome.Requests, item, rep, lim)

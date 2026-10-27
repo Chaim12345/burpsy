@@ -64,7 +64,9 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		return err
 	}
 
-	cfg := extscan.Config{Tools: ctx.toolAllowlist}
+	// The tool's every request goes through extscan's egress gate, which dials
+	// what scope allows through the sender's egress route.
+	cfg := extscan.Config{Tools: ctx.toolAllowlist, EgressDial: ctx.sender.EgressDialContext}
 	var rows []report.Row
 	runCtx := context.Background()
 	// Under `all`, a tool that could not look must still fail the command. The
@@ -103,6 +105,7 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		if res.OutOfScope > 0 {
 			fmt.Fprintf(ctx.out, "ffuf: %d reported path(s) dropped as outside the engagement scope\n", res.OutOfScope)
 		}
+		printGate(ctx, "ffuf", res.EgressGate, res.GateRefused, res.GateRefusals)
 	}
 
 	if sub == "nuclei" || sub == "all" {
@@ -137,6 +140,7 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 		if res.OutOfScope > 0 {
 			fmt.Fprintf(ctx.out, "nuclei: %d reported hit(s) dropped as outside the engagement scope\n", res.OutOfScope)
 		}
+		printGate(ctx, "nuclei", res.EgressGate, res.GateRefused, res.GateRefusals)
 	}
 
 	// The runners cannot number their own rows: neither knows the other ran, and
@@ -215,4 +219,18 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// printGate states what the run's egress gate enforced and what it refused, so a run whose requests
+// were stopped at the gate does not read as one that simply found less.
+func printGate(ctx *cliContext, tool, mode string, refused int, sample []string) {
+	if mode != "" {
+		fmt.Fprintf(ctx.out, "%s: egress gate %s\n", tool, mode)
+	}
+	if refused > 0 {
+		fmt.Fprintf(ctx.out, "%s: the egress gate refused %d out-of-scope request(s) before they were sent\n", tool, refused)
+		for _, line := range sample {
+			fmt.Fprintf(ctx.out, "  refused: %s\n", line)
+		}
+	}
 }
