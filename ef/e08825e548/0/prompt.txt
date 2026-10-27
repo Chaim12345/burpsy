@@ -1,0 +1,8 @@
+<task-notification>
+<task-id>ad31d16b804fb61be</task-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/ad31d16b804fb61be.output</output-file>
+<status>failed</status>
+<summary>Agent "Fix rebind-read, repeater scope, file perms" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-ad31d16b804fb61be</worktreePath><worktreeBranch>worktree-agent-ad31d16b804fb61be</worktreeBranch></worktree>
+</task-notification>
