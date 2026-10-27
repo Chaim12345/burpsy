@@ -439,6 +439,25 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			}
 		}
 
+		// The null-byte variants (burpsy-react-ui-nulbyte, xss_nullbyte.go): the point's own value, a
+		// NUL, then the payload, for a defence that reads the value only up to the NUL. Last, because
+		// they matter only where everything above failed, and not where a fragment candidate is
+		// already waiting for the browser. They are not gated on the plain observation having
+		// reflected: the allowlist shape answers an unrecognised value with nothing at all.
+		if !xssBreakoutConfirmed(evidence) && len(fragmentCands) == 0 {
+			// Only a confirmed breakout is merged: a reflection seen only through the variant would
+			// otherwise send this point down the route-driven browser confirmation below, which
+			// the plain probes alone did not ask for.
+			nb := xssNullByteVariants(ctx, h, point, browserConfirm)
+			if xssBreakoutConfirmed(nb.evidence) {
+				evidence |= nb.evidence
+				viaDecoding = append(viaDecoding, xssNullByteVariantName)
+				landedOn = nb.landedOn
+			} else if len(nb.fragmentCands) > 0 {
+				fragment, fragmentCands = true, nb.fragmentCands
+			}
+		}
+
 		if len(decodedOnly) > 0 {
 			// "Suspicious input transformation (reflected)" is a catalogue row with its own
 			// descriptor (checks_final.go); the finding is filed under THAT row rather than a
@@ -500,7 +519,7 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		evidenceText := xssEvidenceText(evidence)
 		if len(viaDecoding) > 0 {
 			evidenceText += " via " + strings.Join(viaDecoding, ", ")
-			detail += "; the plain payload did not break out, the encoded one did"
+			detail += "; the plain payload did not break out, the variant named in the evidence did"
 		}
 		findings = append(findings, &Finding{
 			Name:             xssReflectedIssue,
