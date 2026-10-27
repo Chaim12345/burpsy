@@ -22,6 +22,7 @@ export async function renderMap(el) {
         <select id="f-method"><option value="">any method</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
         <select id="f-status"><option value="">any status</option><option value="2">2xx</option><option value="3">3xx</option><option value="4">4xx</option><option value="5">5xx</option></select>
         <label class="mut" style="font-size:12px"><input type="checkbox" id="f-scope"> in scope</label>
+        <button class="act" id="f-export" title="Download the visible rows as one JSON file: request/response bytes from the store, base64, by message id">Export</button>
       </div>
       <div class="pane-body"><div id="map-rows"><div class="spin">loading…</div></div></div>
     </div>`;
@@ -29,6 +30,7 @@ export async function renderMap(el) {
   el.querySelector('#f-method').onchange = (e) => { state.filters.method = e.target.value; drawRows(); };
   el.querySelector('#f-status').onchange = (e) => { state.filters.status = e.target.value; drawRows(); };
   el.querySelector('#f-scope').onchange = (e) => { state.filters.inScopeOnly = e.target.checked; drawRows(); };
+  el.querySelector('#f-export').onclick = exportVisible;
   await refreshMap();
 }
 
@@ -124,13 +126,20 @@ function drawRows() {
 }
 
 async function openExchange(id) {
+  openExchangeDrawer(id, document.getElementById('view-map'));
+}
+
+// openExchangeDrawer fetches one recorded exchange and shows it in the shared
+// drawer. Exported so Search results open the same drawer Map rows do. Reads
+// only; the drawer's annotate and scope actions stay behind their own clicks.
+export async function openExchangeDrawer(id, container) {
   try {
     const ex = await api.get(`/api/exchange/${id}`);
     const [req, resp] = await Promise.all([
       api.get(`/api/message/${ex.request}?max_bytes=65536`).catch(() => null),
       ex.response ? api.get(`/api/message/${ex.response}?max_bytes=65536`).catch(() => null) : null,
     ]);
-    showDrawer(ex, req, resp);
+    showDrawer(ex, req, resp, container);
   } catch (e) { toast(`exchange: ${e.message}`, true); }
 }
 
@@ -145,7 +154,7 @@ function fmtMsg(m, fallback) {
   return out;
 }
 
-function showDrawer(ex, req, resp) {
+function showDrawer(ex, req, resp, container) {
   document.querySelector('.drawer')?.remove();
   const d = document.createElement('div');
   d.className = 'drawer';
@@ -189,7 +198,7 @@ function showDrawer(ex, req, resp) {
         </div>
       </div>
     </div>`;
-  document.getElementById('view-map').appendChild(d);
+  (container || document.getElementById('view-map')).appendChild(d);
   d.querySelector('#dx-close').onclick = () => d.remove();
   d.querySelector('#dx-hl').value = ex.highlight || '';
   d.querySelector('#dx-probe').onclick = () => {
@@ -211,4 +220,51 @@ function showDrawer(ex, req, resp) {
       if (r !== undefined) toast(`${ex.host}:${ex.port} added to scope`);
     } catch (e) { toast(e.message, true); }
   };
+}
+
+// exportVisible downloads the rows the history table currently shows as one
+// JSON file. The backend (POST /api/repeater/history-export, a read that sends
+// nothing) resolves each row's request/response bytes from the store by
+// message id, so binary bodies round-trip byte-identical, and rows it cannot
+// serve come back listed under "skipped" rather than dropped.
+async function exportVisible() {
+  const rows = filteredRows().slice().reverse(); // file order: oldest first, as recorded
+  if (!rows.length) { toast('nothing to export: no visible rows', true); return; }
+  const entries = rows.map((r) => ({
+    request_msg_id: r.request ?? null,
+    response_msg_id: r.response ?? null,
+    exchange_id: r.id,
+    kind: 'http',
+    sent_at: r.started_ms ? new Date(r.started_ms).toISOString() : undefined,
+  }));
+  const f = state.filters;
+  const desc = [f.q && `path/host contains "${f.q}"`, f.method && `method ${f.method}`, f.status && `status ${f.status}xx`, f.inScopeOnly && 'in scope only']
+    .filter(Boolean).join(', ');
+  const body = {
+    tab: 'http-history',
+    target: desc ? `visible rows (${desc})` : 'all visible rows',
+    note: 'recorded HTTP history exported from the alternative console',
+    entries,
+  };
+  let res;
+  try {
+    res = await fetch('/api/repeater/history-export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { toast(`export failed: ${e.message}`, true); return; }
+  if (!res.ok) { toast(`export refused: ${await res.text()}`, true); return; }
+  const file = await res.json();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const name = (cd.match(/filename="([^"]+)"/) || [])[1] || 'burpsy-history-export.json';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  const skipped = (file.skipped || []).length;
+  toast(`exported ${file.exported} of ${file.requested} rows` +
+    (skipped ? ` · ${skipped} skipped (listed in the file)` : '') +
+    (file.missing_responses ? ` · ${file.missing_responses} without a recorded response` : ''));
 }

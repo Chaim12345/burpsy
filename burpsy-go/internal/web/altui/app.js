@@ -1,4 +1,5 @@
 import { renderMap, refreshMap } from './views/map.js';
+import { renderSearch } from './views/search.js';
 import { renderProbe, loadExchange } from './views/probe.js';
 import { renderProve, refreshProve } from './views/prove.js';
 import { renderScope, refreshScope } from './views/scope.js';
@@ -14,6 +15,7 @@ function switchView(name) {
   if (!rendered.has(name)) {
     rendered.add(name);
     if (name === 'map') renderMap(el);
+    if (name === 'search') renderSearch(el);
     if (name === 'probe') renderProbe(el);
     if (name === 'prove') renderProve(el);
     if (name === 'tools') renderTools(el);
@@ -70,7 +72,7 @@ function events() {
 
 // Keyboard-first (spec): g then letter switches workflow lane; Enter opens the
 // selected history row; j/k move the selection; ctrl/cmd+Enter sends in Probe.
-const laneKeys = { m: 'map', p: 'probe', v: 'prove' };
+const laneKeys = { m: 'map', s: 'search', p: 'probe', v: 'prove' };
 let gPending = false;
 window.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);

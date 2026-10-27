@@ -49,15 +49,16 @@ func TestAltAssetsAreServedWithTheRightTypeAndBehindTheCredential(t *testing.T) 
 	s := newAuthServer(t)
 	hdr := authBasic("u", testAuthToken)
 	cases := map[string]string{
-		"/alt/app.js":         "javascript",
-		"/alt/api.js":         "javascript",
-		"/alt/components.js":  "javascript",
-		"/alt/views/map.js":   "javascript",
-		"/alt/views/probe.js": "javascript",
-		"/alt/views/prove.js": "javascript",
-		"/alt/views/tools.js": "javascript",
-		"/alt/views/scope.js": "javascript",
-		"/alt/app.css":        "text/css",
+		"/alt/app.js":          "javascript",
+		"/alt/api.js":          "javascript",
+		"/alt/components.js":   "javascript",
+		"/alt/views/map.js":    "javascript",
+		"/alt/views/probe.js":  "javascript",
+		"/alt/views/prove.js":  "javascript",
+		"/alt/views/tools.js":  "javascript",
+		"/alt/views/scope.js":  "javascript",
+		"/alt/views/search.js": "javascript",
+		"/alt/app.css":         "text/css",
 	}
 	for p, typ := range cases {
 		if r := authDoReq(s, http.MethodGet, p, "burpsy.example.com", nil, ""); r.Code != http.StatusUnauthorized {

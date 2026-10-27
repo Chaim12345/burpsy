@@ -33,7 +33,7 @@ async function rawCall(method, url, body, extraHeaders = {}) {
       return data2;
     });
   }
-  if (!res.ok) throw new ApiError(data?.error || res.statusText || 'request failed', res.status, data);
+  if (!res.ok) throw new ApiError(data?.error || (typeof data?.raw === 'string' && data.raw.trim()) || res.statusText || 'request failed', res.status, data);
   return data;
 }
 
