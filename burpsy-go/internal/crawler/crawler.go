@@ -128,7 +128,7 @@
 //     authorised against scope again on its own request bytes. A cross-host redirect therefore
 //     cannot escape scope, because there is no code path that dials a redirect target without
 //     re-authorising it.
-//   - **Every request is rate limited.** intruder.RateLimiter, reused rather than reimplemented, so
+//   - **Every request is rate limited.** ratelimit.RateLimiter, reused rather than reimplemented, so
 //     this package does not become the third rate limiter in the repository.
 //
 // # robots.txt: read as a discovery source, never obeyed as a restriction
@@ -174,8 +174,8 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
-	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/query"
+	"github.com/burpsy-go/burpsy/internal/ratelimit"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
@@ -370,7 +370,7 @@ type Config struct {
 	// The crawl loop sends one request and waits for the response before building the next, so a
 	// ceiling above 1 bounds nothing. Report.Pool says which pool ran and Report.PoolConcurrency
 	// records the ceiling that did not apply, and pool.Support() states the same thing on the API.
-	Pool *intruder.RateLimit
+	Pool *ratelimit.RateLimit
 	// UserAgent is the User-Agent header sent. Empty takes DefaultUserAgent.
 	UserAgent string
 	// Headers are extra request headers, sent on every request — a Cookie header from a
@@ -1120,15 +1120,15 @@ type Crawler struct {
 	// retention is the parsed post-fetch query (DSL-03 gate b), nil when the operator gave none.
 	retention *query.Expr
 	// limiter is the aggregate rate cap; hostLimiters holds one per authority. See visit for why both.
-	limiter      *intruder.RateLimiter
-	hostLimiters map[string]*intruder.RateLimiter
+	limiter      *ratelimit.RateLimiter
+	hostLimiters map[string]*ratelimit.RateLimiter
 	requestsPer  float64
 	// rateCapped says whether requestsPer is a cap at all. Only a named pool can turn the cap off,
 	// and the two facts have to travel together — a bare 0 would otherwise read as "zero requests a
 	// second", which is a stall rather than an absence of a limit.
 	rateCapped bool
 	// throttle is the per-host AutoThrottle, from the pool when there is one. nil is throttling off.
-	throttle *intruder.AutoThrottle
+	throttle *ratelimit.AutoThrottle
 	// poolName and poolConcurrency are carried for the report only: the name so a crawl can say what
 	// bounded it, and the concurrency ceiling so it can say which of that pool's bounds it could not
 	// honour. Neither is read on the request path.
@@ -1448,7 +1448,7 @@ func New(cfg Config) (*Crawler, error) {
 	// off in a pool switches it off here. That is a real loss of protection for an unattended crawl
 	// and it is the operator's own instruction, made in a dialog that says so, rather than a default
 	// this package quietly overrides.
-	throttle := intruder.DefaultAutoThrottle()
+	throttle := ratelimit.DefaultAutoThrottle()
 	poolName := ""
 	poolConcurrency := 0
 	if p := cfg.Pool; p != nil {
@@ -1492,7 +1492,7 @@ func New(cfg Config) (*Crawler, error) {
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
 		// host that sent it, so throttling lives on the per-host limiters instead.
-		limiter: intruder.NewRateLimiter(&intruder.RateLimit{
+		limiter: ratelimit.NewRateLimiter(&ratelimit.RateLimit{
 			PerSecond: perSecond(), Burst: 1, MaxInFlight: 1, Name: limiterName("crawl", poolName),
 		}),
 		skips:   newSkipLedger(maxRecords),
@@ -1513,7 +1513,7 @@ func New(cfg Config) (*Crawler, error) {
 		// -1 until the first SUCCESSFUL credential login: "no login has unlocked anything
 		// yet" must read differently from "the login unlocked everything from location 0".
 		credLoginLocationBase: -1,
-		hostLimiters:          make(map[string]*intruder.RateLimiter),
+		hostLimiters:          make(map[string]*ratelimit.RateLimiter),
 		robotsSeeded:          make(map[string]bool),
 		requestsPer:           rps,
 		rateCapped:            capped,
@@ -3830,7 +3830,7 @@ func (c *Crawler) senderFor(u *url.URL) *sender.AuthorisedSender {
 // every other host in the crawl, which is the wrong direction: the hosts being slowed are the ones
 // that were coping. The aggregate cap that stops fifty hosts from multiplying the traffic is the
 // separate crawl-wide limiter, held in Crawler.limiter — see visit.
-func (c *Crawler) limiterFor(u *url.URL) *intruder.RateLimiter {
+func (c *Crawler) limiterFor(u *url.URL) *ratelimit.RateLimiter {
 	key := strings.ToLower(u.Hostname()) + ":" + strconv.Itoa(int(portOf(u)))
 	if l, ok := c.hostLimiters[key]; ok {
 		return l
@@ -3840,7 +3840,7 @@ func (c *Crawler) limiterFor(u *url.URL) *intruder.RateLimiter {
 		v := c.requestsPer
 		per = &v
 	}
-	l := intruder.NewRateLimiter(&intruder.RateLimit{
+	l := ratelimit.NewRateLimiter(&ratelimit.RateLimit{
 		PerSecond: per, Burst: 1, MaxInFlight: 1, Name: limiterName("crawl:"+key, c.poolName),
 		// A run of 429s or 503s from one host halves the rate at that host for the next fifty grants.
 		// An unattended crawl needs this: nobody is watching to notice the target asking for mercy.

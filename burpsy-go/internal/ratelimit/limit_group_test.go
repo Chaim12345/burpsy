@@ -1,4 +1,4 @@
-package intruder
+package ratelimit
 
 // PaceN: the atomic group reservation behind the scanner's synchronized race groups
 // (burpsy-react-ui-0vzb.8). A group either holds its N slots and N tokens together or holds

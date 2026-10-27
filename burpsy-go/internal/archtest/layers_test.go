@@ -33,12 +33,10 @@ var layerRules = []struct {
 // test fails on any edge NOT listed (a new violation) and on any listed edge that no longer exists
 // (fixed: delete the line so it cannot quietly come back).
 var knownViolations = map[string]string{
-	"internal/proxy -> internal/scanner":    "misplaced-primitives (core.ExchangeSink for scanner.Capture)",
-	"internal/crawler -> internal/scanner":  "misplaced-primitives (core.ExchangeSink for scanner.Capture)",
-	"internal/crawler -> internal/intruder": "misplaced-primitives (internal/ratelimit)",
-	"internal/pool -> internal/intruder":    "misplaced-primitives (internal/ratelimit)",
-	"internal/persist -> internal/scanner":  "scanconfig-wire-keys (persist the wire view, not scanner.ScanConfig)",
-	"internal/mcp -> internal/web":          "route-statements (manifest leaf package)",
+	"internal/proxy -> internal/scanner":   "misplaced-primitives (core.ExchangeSink for scanner.Capture)",
+	"internal/crawler -> internal/scanner": "misplaced-primitives (core.ExchangeSink for scanner.Capture)",
+	"internal/persist -> internal/scanner": "scanconfig-wire-keys (persist the wire view, not scanner.ScanConfig)",
+	"internal/mcp -> internal/web":         "route-statements (manifest leaf package)",
 }
 
 func under(pkg, prefix string) bool { return pkg == prefix || strings.HasPrefix(pkg, prefix+"/") }
