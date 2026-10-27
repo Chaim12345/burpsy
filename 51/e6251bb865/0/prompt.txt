@@ -1,0 +1,18 @@
+Less work on tests more work on feturs
+Your putting more counts then code cut it down to minimal short counts were needed if code isn't self explaining 
+Read https://docs.entire.com/installation and understand how we can intertwined this repo to it 
+Set up Entire in this existing Git repository and verify it works.
+
+1. Confirm the CLI is installed: run `entire version`. If it's missing, see https://entire.com/install.sh (Linux/macOS) or `brew install --cask entireio/tap/entire`.
+2. From the repository root, run:
+   entire enable -y --agent claude-code
+   (Add `--agent-help-skill --search-skill` to install the skills. Add `--import-history` to import the last 30 days of existing sessions.)
+3. Verify the setup:
+   - `entire status --detailed` should show Entire as enabled.
+   - `entire agent list` should show claude-code as installed.
+   - Confirm `.entire/settings.json` and `.claude/settings.json` exist.
+4. Run `entire doctor` if anything looks wrong. If hooks have drifted, run `entire enable --force`.
+5. Test a checkpoint: make a small change, then `git add` and `git commit`. Answer "yes" when asked to link the commit to the session context. Then run `entire checkpoint list` and confirm a checkpoint appears.
+6. Only if I ask for search, mirrors, or other cloud features, run `entire login` and `entire auth status`.
+
+Report the output of each verification command.
