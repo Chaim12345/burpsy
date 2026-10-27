@@ -6,10 +6,12 @@ name: Nightly
 # Not required by branch protection: a scheduled run is attached to no pull request.
 #
 #   e2e-go   e2e-go.sh against a local target.
+#   e2e-ui   the Playwright console suite (ui/e2e/specs) against a harness-built burpsy-go.
 #   bench-vulnapp  the scored VulnerableApp benchmark against the tracked baseline (scripts/bench).
 #   fuzz     every fuzz target for 2 minutes each, one process per target (scripts/ci-fuzz.sh).
 #   race     every go.yml test shard except race-web-0/1 and race-core, under -race (CI_SHARD_RACE=1). With
-#            race-web and race-core on every push to master, the race detector covers the whole module.
+#            race-web and race-core on every push to master, the race detector covers the whole module
+#            (race-core: internal/proxy, dash, pool, sender, intruder; scripts/ci-shard.sh lists them).
 #   report   when any job above fails, opens (or comments on) one `nightly-failure` issue naming the
 #            failed jobs and the commit, so a red night reaches someone instead of sitting in the tab.
 #
@@ -60,6 +62,56 @@ jobs:
         run: |
           tail -100 /tmp/burpsy-go.log || true
           cat /tmp/burpsy-go-e2e-build.log 2>/dev/null || true
+
+  # The Playwright console suite (bead e2eorph): ui/e2e/specs, run by ui/e2e/playwright.config.ts.
+  # Until this job it ran in no workflow and rotted unseen. Which config runs where:
+  #   playwright.uat.config.ts  specs-uat/ (2 specs)  go.yml uat-ui, every code change
+  #   playwright.config.ts      specs/ (28 files)     here, nightly
+  # The setup mirrors go.yml's uat-ui: the harness (ui/e2e/harness) builds and seeds a real
+  # burpsy-go, which serves the embedded ui/dist, so the console is rebuilt with the pinned bun
+  # first; Playwright's own Chromium, BURPSY_UAT_NO_SANDBOX=1, no retries (a retry that goes green
+  # hides a flake). npx playwright test is called directly, not through e2e-ui.sh: that wrapper
+  # turns a missing browser into exit 0 for verify.sh, which in CI would be a green job that ran
+  # nothing. No spec is skipped to make this green: a check that trips over a known product defect
+  # is marked test.fail with the defect named in the spec, so it still runs, and turns this job red
+  # the day the defect is fixed and the marker is stale. The HTML report, traces and screenshots
+  # (failures, plus every screenshots.spec.ts capture) are uploaded. ~35 minutes on 2 CPUs locally.
+  e2e-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: burpsy-go/internal/web/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/burpsy-test-env
+        with:
+          cache-flavor: lint
+          tools: "false"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - name: Build the console (bun)
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: Install the e2e dependencies and Chromium
+        working-directory: burpsy-go/internal/web/ui/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Playwright console suite
+        working-directory: burpsy-go/internal/web/ui/e2e
+        env:
+          BURPSY_UAT_NO_SANDBOX: "1"
+        run: npx playwright test
+      - name: Results (HTML report, traces, screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ui-artifacts
+          path: burpsy-go/internal/web/ui/e2e/artifacts
+          if-no-files-found: warn
 
   # The race detector beyond internal/web (which go.yml runs under -race on every push to master).
   # Until 2026-10-13 this was one job over the module minus three exclusions, and two of them
@@ -237,7 +289,7 @@ jobs:
   # nightly-failure collects every red night (a new comment per run) until someone closes it. Only
   # this job gets issues:write; the workflow default stays contents:read.
   report:
-    needs: [e2e-go, race, bench-vulnapp, bench-parity, fuzz]
+    needs: [e2e-go, e2e-ui, race, bench-vulnapp, bench-parity, fuzz]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

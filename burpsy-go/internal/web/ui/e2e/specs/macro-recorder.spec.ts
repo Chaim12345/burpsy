@@ -1,8 +1,13 @@
-import { expect } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 
 const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
+
+// The macro's step cards only. The rule editor's action cards (session.tsx ActionCard) share the
+// .step-card class, and a new rule now carries default actions, so a bare .step-card count also
+// counted those (5 for 3 recorded steps). A macro step is the card with a "Step N URL" field.
+const macroSteps = (page: Page) => page.locator(".step-card").filter({ has: page.getByLabel(/^Step \d+ URL$/) });
 
 // Burp's Macro Recorder is a selection over Proxy history, not a form: "Macros are made up of
 // requests taken from the Proxy history … Select the items you need from the Proxy history list"
@@ -60,7 +65,7 @@ test.describe("Session page — Macro Recorder from Proxy history", () => {
     // Three steps, not four: the rule's untouched placeholder step is replaced, not left above the
     // recorded flow. A blank step has no URL and would fail validation at save time, which is how a
     // recorder that "worked" still cannot produce a usable rule.
-    await expect(page.locator(".step-card")).toHaveCount(3);
+    await expect(macroSteps(page)).toHaveCount(3);
 
     expect(consoleErrors).toEqual([]);
   });
@@ -75,7 +80,7 @@ test.describe("Session page — Macro Recorder from Proxy history", () => {
     // A new rule starts as one untouched placeholder step, so that is the baseline the cancel has
     // to leave alone. Counting rather than reading a value, because "nothing was added" is a
     // statement about how many steps exist.
-    const steps = page.locator(".step-card");
+    const steps = macroSteps(page);
     await expect(steps).toHaveCount(1);
 
     await page.getByRole("button", { name: "Record from history" }).click();

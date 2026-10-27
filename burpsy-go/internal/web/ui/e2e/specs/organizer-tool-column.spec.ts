@@ -36,20 +36,28 @@ test.describe("Organizer Tool column and filter — burpsy-react-ui-ldfk", () =>
     // rather than silently checking the wrong row.
     await saveExchange(page, "5");
 
+    // Organizer items persist across the run, and organizer-message-pane.spec.ts (which sorts first)
+    // saves exchange 0 too, so the table may hold more than this test's two rows. The assertions are
+    // about this test's rows and about the filter's effect, not about the table's total.
     const rows = page.locator('table:has(th:text("Tool")) tbody tr.data-row');
-    await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: "#0" }).locator("td").nth(2)).toContainText("Proxy");
-    await expect(rows.filter({ hasText: "#5" }).locator("td").nth(2)).toContainText("Repeater");
+    const proxyRows = rows.filter({ hasText: "#0" });
+    const repeaterRow = rows.filter({ hasText: "#5" });
+    await expect(repeaterRow).toHaveCount(1);
+    await expect(proxyRows.first()).toBeVisible();
+    const total = await rows.count();
+    await expect(proxyRows.first().locator("td").nth(2)).toContainText("Proxy");
+    await expect(repeaterRow.locator("td").nth(2)).toContainText("Repeater");
 
-    // Filter by tool: narrowing to Repeater must hide the proxy-sourced row and keep the other.
+    // Filter by tool: narrowing to Repeater must hide the proxy-sourced rows and keep the other.
     await page.getByLabel("Tool", { exact: true }).selectOption("repeater");
-    await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toContainText("#5");
-    await expect(rows.first()).toContainText("Repeater");
+    await expect(proxyRows).toHaveCount(0);
+    await expect(repeaterRow).toHaveCount(1);
+    await expect(repeaterRow).toContainText("Repeater");
+    await expect(rows.filter({ hasNotText: "Repeater" })).toHaveCount(0);
 
-    // Back to "Any tool" restores both rows — the filter narrows, it does not discard.
+    // Back to "Any tool" restores every row — the filter narrows, it does not discard.
     await page.getByLabel("Tool", { exact: true }).selectOption("all");
-    await expect(rows).toHaveCount(2);
+    await expect(rows).toHaveCount(total);
 
     expect(consoleErrors).toEqual([]);
   });

@@ -55,17 +55,21 @@ test.describe("Shell — suite-wide Search", () => {
     await expect(repeated).toHaveCount(1);
     await expect(zebra).toHaveCount(1);
 
-    await dialog.getByLabel("Repeater").check();
+    // By role: each result row now has a "Preview ... from repeater" button, which a bare
+    // getByLabel("Repeater") also matched.
+    await dialog.getByRole("checkbox", { name: "Repeater", exact: true }).check();
     await dialog.getByRole("button", { name: "Search", exact: true }).click();
     await expect(repeated).toHaveCount(1);
     await expect(zebra).toHaveCount(0);
-    // Exactly one Repeater exchange exists, so the row count is the whole answer and the header can
-    // say so without a "may be more" caveat.
-    await expect(dialog.getByText(/^1 item of \d+ examined$/)).toBeVisible();
+    // The Repeater set is small enough to examine whole, so the header states a count with no
+    // "may be more" caveat. Not pinned to 1: in a full run, behaviour.spec's Inspector tests send
+    // Repeater requests of their own before this file runs (the seeded send is the only one only
+    // when this spec runs alone).
+    await expect(dialog.getByText(/^\d+ items? of \d+ examined$/)).toBeVisible();
 
     // The other way, to prove the narrowing is a filter and not a coincidence of which rows exist.
-    await dialog.getByLabel("Repeater").uncheck();
-    await dialog.getByLabel("Proxy history").check();
+    await dialog.getByRole("checkbox", { name: "Repeater", exact: true }).uncheck();
+    await dialog.getByRole("checkbox", { name: "Proxy history", exact: true }).check();
     await dialog.getByRole("button", { name: "Search", exact: true }).click();
     await expect(repeated).toHaveCount(0);
     await expect(zebra).toHaveCount(1);
@@ -126,7 +130,7 @@ test.describe("Shell — suite-wide Search", () => {
     consoleErrors,
   }) => {
     const dialog = await openSearch(page);
-    await dialog.getByLabel("Proxy history").check();
+    await dialog.getByRole("checkbox", { name: "Proxy history", exact: true }).check();
 
     // Only /quokka carries the term, so the negative search must return the other proxied rows.
     await search(dialog, "quokka");

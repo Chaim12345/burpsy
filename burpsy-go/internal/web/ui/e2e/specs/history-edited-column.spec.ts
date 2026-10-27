@@ -70,7 +70,7 @@ test.describe("History — the Edited column", () => {
       // keystroke would not prove the Inspector path stores a stage.
       const inspector = page.locator(".inspector");
       await inspector.getByLabel("Request attributes value for Target").fill("/intercept-edited");
-      await inspector.getByRole("button", { name: "Apply" }).click();
+      await inspector.getByRole("button", { name: "Apply", exact: true }).click();
 
       await page.getByRole("button", { name: "Forward", exact: true }).click();
       const body = await inFlight;

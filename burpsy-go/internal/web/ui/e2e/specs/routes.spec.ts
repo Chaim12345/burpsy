@@ -7,6 +7,9 @@
 import { expect, gotoApp, gotoRoute, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 
+/** nav.ts's one `hidden` leaf, as the palette labels it. */
+const HIDDEN_LEAF = "Proxy › Exchange detail";
+
 test.describe("routes", () => {
   for (const route of ROUTES) {
     test(`#${route.id} renders "${route.h1}" and logs no errors`, async ({
@@ -14,6 +17,12 @@ test.describe("routes", () => {
       consoleErrors,
       failedRequests,
     }) => {
+      // KNOWN PRODUCT ISSUE, found when this suite first ran in CI (bead e2eorph, 2026-10-27): the
+      // harness starts burpsy without -db, and the Settings page's LLM triage section asks
+      // GET /api/settings/triage regardless, which answers 503 ("persistence is not attached") and
+      // renders as an error notice. test.fail keeps the check live: it turns red when the page
+      // stops making a request it knows can fail on a project-less instance, and this line goes.
+      test.fail(route.id === "settings", "GET /api/settings/triage -> 503 on an instance started without -db");
       await page.goto(`/#${route.id}`);
 
       // The h1 assertion is the render check. Every page got one in commit 608da8e; asserting the
@@ -59,12 +68,34 @@ test.describe("routes", () => {
     }
 
     // And nothing extra: navigation entries plus the five commands the shell defines.
-    const navigationEntries = labels.filter((label) =>
-      ROUTES.some((route) => label.split("\n")[0]?.trim().endsWith(route.label)),
-    );
-    expect(navigationEntries.length).toBe(ROUTES.length);
+    // A "Go to" entry is shaped "Tool › Leaf" for the three tools with several leaves, or is a
+    // single-leaf tool's bare label. Counted by that shape, not by suffix-matching ROUTES: the palette
+    // also jumps to Settings sections, and "Settings › Scanner" ends with the Scanner leaf's label.
+    // Counting by shape is also what makes a leaf added to nav.ts and not to ROUTES fail here.
+    const multiLeaf = /^(Target|Proxy|Extensions) › /;
+    const singleLeaf = new Set(ROUTES.filter((route) => !["target", "proxy", "extender"].includes(route.tool)).map((route) => route.label));
+    // "Proxy › Exchange detail" is excluded by name: it is a hidden leaf (nav.ts `hidden: true`, the
+    // detached-window route) that the palette lists anyway — a known defect with its own test below.
+    const navigationEntries = labels
+      .map((label) => label.split("\n")[0]?.trim() ?? "")
+      .filter((first) => (multiLeaf.test(first) || singleLeaf.has(first)) && first !== HIDDEN_LEAF);
+    expect(navigationEntries.length, `palette "Go to" entries: ${navigationEntries.join(" | ")}`).toBe(ROUTES.length);
 
     expect(consoleErrors).toEqual([]);
+  });
+
+  test("a hidden nav leaf is not offered as a Go to entry", async ({ page }) => {
+    // KNOWN PRODUCT DEFECT, found when this suite first ran in CI (bead e2eorph, 2026-10-27).
+    // nav.ts marks the detached exchange window `hidden` because "routable and listed are separate
+    // questions" — listing it would offer "go to another detached window". app.tsx's paletteActions
+    // flat-maps every leaf without that filter, so the palette offers "Proxy › Exchange detail".
+    // test.fail keeps the check running; it goes red, and this marker goes, once the filter lands.
+    test.fail(true, "app.tsx paletteActions lists nav.ts hidden leaves (Proxy › Exchange detail)");
+    await gotoApp(page);
+    await page.keyboard.press("ControlOrMeta+k");
+    await expect(page.getByLabel("Search commands")).toBeVisible();
+    const labels = await page.locator("#palette-results [role=option] .palette-item-label").allInnerTexts();
+    expect(labels.map((label) => label.split("\n")[0]?.trim())).not.toContain(HIDDEN_LEAF);
   });
 
   test("every alt+N hotkey navigates to its tool's entry leaf", async ({ page, consoleErrors }) => {
