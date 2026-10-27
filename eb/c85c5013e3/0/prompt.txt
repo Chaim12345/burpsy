@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b1p2wnkjd</task-id>
+<tool-use-id>toolu_01G5HCpaFsDz6QKL4qRmX748</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/b1p2wnkjd.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart Entire login with file token store" completed (exit code 0)</summary>
+</task-notification>
