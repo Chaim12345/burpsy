@@ -43,6 +43,8 @@ func main() {
 	// Parse flags
 	proxyBind := flag.String("proxy", "127.0.0.1:8080", "proxy bind address")
 	webBind := flag.String("web", "127.0.0.1:8081", "web UI bind address")
+	webAllowedHosts := flag.String("web-allowed-host", "", "comma-separated Host names the console also answers to "+
+		"(name or name:port), for a non-loopback -web reached by DNS name; loopback and the -web address itself are always accepted")
 	captureDir := flag.String("capture-dir", "", "directory for segment-based capture")
 	dbFile := flag.String("db", "", "SQLite database for persistent state (history, findings, scope, rules)")
 	scopeInclude := flag.String("scope-include", "", "include host pattern in scope")
@@ -832,6 +834,7 @@ func main() {
 		// makes the import endpoint refuse rather than store a setting nothing reads.
 		WithTLSEngine(tlsEngine, *caDir).
 		WithBindAddrs(*proxyBind, *webBind).
+		WithAllowedHosts(mustAllowedHosts(*webAllowedHosts, logger)...).
 		WithDOMEngine(*domEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
