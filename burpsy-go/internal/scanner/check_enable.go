@@ -85,6 +85,30 @@ func (s *ActiveScanner) CorpusChecks() []*bcheck.Check {
 	return out
 }
 
+// BundledChecks returns the compiled-in corpus as the engine dispatches it: every bundled check
+// whose name no loaded check shadows (dispatchCorpusLocked's rule), in manifest order. Nil when the
+// binary was wired without one. The console lists these beside the loaded corpus, because a check
+// that runs in every audit and appears in no list is a check the operator cannot see or switch off
+// (burpsy-react-ui-0vzb.27).
+func (s *ActiveScanner) BundledChecks() []*bcheck.Check {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.bundled) == 0 {
+		return nil
+	}
+	loaded := make(map[string]bool, len(s.corpus))
+	for _, c := range s.corpus {
+		loaded[c.Name] = true
+	}
+	out := make([]*bcheck.Check, 0, len(s.bundled))
+	for _, c := range s.bundled {
+		if !loaded[c.Name] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // corpusChecksEnabled filters the corpus to the checks an operator has not disabled.
 //
 // Read at the same two sites enabledChecks already reads s.corpus, so the disabled set cannot be

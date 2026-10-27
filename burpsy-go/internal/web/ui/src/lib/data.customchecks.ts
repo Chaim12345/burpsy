@@ -25,7 +25,7 @@ export interface CheckValidation {
 
 export interface CheckSource {
  name: string;
- origin: "console" | "file";
+ origin: "console" | "file" | "bundled";
  file?: string;
  source: string;
  kind: CheckKind;

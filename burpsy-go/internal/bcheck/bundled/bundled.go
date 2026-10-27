@@ -289,6 +289,22 @@ func (m *Manifest) Check(sourcePath string) (*bcheck.Check, error) {
 	return nil, fmt.Errorf("bundled corpus: no entry %s", sourcePath)
 }
 
+// SourceOf returns an enabled check's embedded source by its check name, with the entry's upstream
+// path: what the console shows when an operator opens a bundled check (burpsy-react-ui-0vzb.27).
+func (m *Manifest) SourceOf(name string) (source, sourcePath string, ok bool) {
+	for _, e := range m.Entries {
+		if !e.Enabled || e.Name != name {
+			continue
+		}
+		raw, err := files.ReadFile(path.Join(Root, e.File))
+		if err != nil {
+			return "", "", false
+		}
+		return string(raw), e.SourcePath, true
+	}
+	return "", "", false
+}
+
 // Entry returns the entry for an upstream path.
 func (m *Manifest) Entry(sourcePath string) (Entry, bool) {
 	for _, e := range m.Entries {

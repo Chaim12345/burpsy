@@ -67,7 +67,15 @@ function CheckRow({
    </td>
    <td className="cell-num">{(row.run_count ?? 0).toLocaleString()}</td>
    <td>{row.severity || "—"}</td>
-   <td>{row.origin === "console" ? <Badge tone="info">console</Badge> : <span title={row.file}>{row.file ?? "file"}</span>}</td>
+   <td>
+    {row.origin === "console" ? (
+     <Badge tone="info">console</Badge>
+    ) : row.origin === "bundled" ? (
+     <Badge tone="neutral">bundled</Badge>
+    ) : (
+     <span title={row.file}>{row.file ?? "file"}</span>
+    )}
+   </td>
    <td>
     <Switch
      checked={!row.disabled}
@@ -114,7 +122,7 @@ export function ScannerChecksPage(): JSX.Element {
     setEditor({
      source: src.source,
      editing: src.origin === "console" ? src.name : null,
-     readOnly: src.origin === "file",
+     readOnly: src.origin !== "console",
      title: src.origin === "console" ? `Edit custom scan check — ${src.name}` : `View custom scan check — ${src.file ?? src.name}`,
     }),
    failed,
