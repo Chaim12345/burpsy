@@ -664,6 +664,8 @@ main {
   align-items: center;
   gap:var(--gap-lg);
   justify-content: space-between;
+  /* Actions that do not fit beside the title drop beneath it; they used to sit on top of it. */
+  flex-wrap: wrap;
   min-width: 0;
 }
 
@@ -709,7 +711,9 @@ main {
 }
 
 .page-actions {
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 100%;
+  margin-inline-start: auto;
 }
 
 .section-heading {
