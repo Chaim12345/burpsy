@@ -74,3 +74,36 @@ func TestIssueGzipSkipsSmallListsCountAndFullDocument(t *testing.T) {
 		t.Error("only the summary list is compressed")
 	}
 }
+
+// The Accept-Encoding matrix: q=0 refuses, "*" accepts, a longer token is not gzip, and both the
+// compressed and the identity variant say Vary.
+func TestIssueGzipAcceptEncodingMatrix(t *testing.T) {
+	s := gzipIssuesServer(gzipJSONMinRows + 10)
+	cases := map[string]bool{
+		"gzip":                true,
+		"GZIP":                true,
+		"gzip;q=0":            false,
+		"gzip;q=0.0":          false,
+		"gzip;q=0.5":          true,
+		"deflate, gzip;q=1.0": true,
+		"identity":            false,
+		"br":                  false,
+		"*":                   true,
+		"*;q=0":               false,
+		"gzip;q=0, *":         false,
+		"notgzip":             false,
+		"gzipped":             false,
+		"x-gzip":              true,
+		"":                    false,
+	}
+	for header, want := range cases {
+		rec := getIssues(s, "/api/issues?summary=1", header)
+		got := rec.Header().Get("Content-Encoding") == "gzip"
+		if got != want {
+			t.Errorf("Accept-Encoding %q: gzip = %v, want %v", header, got, want)
+		}
+		if rec.Header().Get("Vary") == "" {
+			t.Errorf("Accept-Encoding %q: response lacks Vary", header)
+		}
+	}
+}

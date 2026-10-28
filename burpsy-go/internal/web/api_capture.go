@@ -1380,13 +1380,16 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		body["findings"] = []issueFindingView{}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if brief && !countOnly && len(views) >= gzipJSONMinRows {
+		// Both variants of this response depend on the request's Accept-Encoding.
+		w.Header().Add("Vary", "Accept-Encoding")
+	}
 	if brief && !countOnly && len(views) >= gzipJSONMinRows && acceptsGzip(r) {
 		// The summary is ~370 bytes a row, so a big project is megabytes of repetitive JSON on every
 		// refetch. Compressed only for this read-only list, only when the client asked and the list is
 		// big enough to matter. Nothing streams here: the document is built in memory before it is sent.
 		var raw bytes.Buffer
 		if err := json.NewEncoder(&raw).Encode(body); err == nil {
-			w.Header().Add("Vary", "Accept-Encoding")
 			w.Header().Set("Content-Encoding", "gzip")
 			zw, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
 			_, _ = zw.Write(raw.Bytes())
@@ -1401,8 +1404,32 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 // hundred rows costs more CPU than the bytes it saves.
 const gzipJSONMinRows = 500
 
+// acceptsGzip reads Accept-Encoding the way RFC 9110 does: a listed coding (or "*") is acceptable
+// unless its qvalue is 0, and a coding that merely contains the text "gzip" is not gzip.
 func acceptsGzip(r *http.Request) bool {
-	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+	star := false
+	for _, part := range strings.Split(strings.Join(r.Header.Values("Accept-Encoding"), ","), ",") {
+		fields := strings.Split(part, ";")
+		coding := strings.ToLower(strings.TrimSpace(fields[0]))
+		if coding != "gzip" && coding != "x-gzip" && coding != "*" {
+			continue
+		}
+		ok := true
+		for _, p := range fields[1:] {
+			p = strings.ToLower(strings.TrimSpace(p))
+			if strings.HasPrefix(p, "q=") {
+				if q, err := strconv.ParseFloat(strings.TrimSpace(p[2:]), 64); err == nil && q <= 0 {
+					ok = false
+				}
+			}
+		}
+		if coding == "*" {
+			star = ok
+			continue
+		}
+		return ok
+	}
+	return star
 }
 
 // handleIssueByID routes /api/issues/{id} to the triage and delete paths. It exists as its own
