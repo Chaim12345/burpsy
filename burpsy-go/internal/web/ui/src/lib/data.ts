@@ -2,6 +2,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient, type UseQueryResult
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, json, query } from "./api";
+import { loadIssueDocument } from "./issue-worker";
 import { useApp, type RepeaterTab } from "./store";
 import type {
  Dashboard,
@@ -363,7 +364,28 @@ export function useSaveScannerConfig() {
 }
 export const useScope = () => useResource<Scope>(keys.scope, "/api/scope");
 export const useDashboard = () => useResource<Dashboard>(keys.dashboard, "/api/dashboard");
-export const useIssues = () => useResource<Issues>(keys.issues, "/api/issues");
+/**
+ * The issue list without the prose. Detail, remediation, evidence and the catalogue advisory
+ * are what made this document grow with the finding count; the tree and the dock render none of
+ * them. GET /api/issues/{id} is the full row, read when one finding is opened.
+ */
+/** Summary rows for the tree and any other reader of the same cache entry. Parsed in the issue
+ * worker when the browser has one, so opening this list is not a main-thread JSON.parse. */
+export function useIssueSummary(enabled = true) {
+ return useQuery({
+  queryKey: [...keys.issues, "summary"],
+  queryFn: ({ signal }) => loadIssueDocument("/api/issues?summary=1", signal),
+  enabled,
+ });
+}
+
+export const useIssues = (enabled = true) => useIssueSummary(enabled);
+
+/**
+ * The shell badge. Mounted on every page, so it must not download a row per finding — `count=1`
+ * is the severity tally and an empty list. `counted` is the number the badge shows.
+ */
+export const useIssueCount = () => useResource<Issues>([...keys.issues, "count"], "/api/issues?count=1");
 export const useSitemap = () => useResource<SiteMap>(keys.sitemap, "/api/sitemap");
 export const useOrganizer = () =>
  useResource<{ items: OrganizerItem[]; collections: OrganizerCollection[] }>(keys.organizer, "/api/tools/organizer");

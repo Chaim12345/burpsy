@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { filterByIssueSource, ISSUE_SOURCE_FILTERS, type IssueSourceFilter } from "../lib/issue-source-filter";
 import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
 import {
@@ -18,7 +19,7 @@ import { copyToClipboard } from "../lib/api";
 import { confirmDialog, promptDialog } from "../lib/dialogs";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
-import { useIssueLLMTriage, useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
+import { useIssue, useIssueLLMTriage, useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
 import { triageMenuGroups } from "../lib/issue-triage";
 import { useApp } from "../lib/store";
 import type { FindingDetail } from "../lib/types.attack";
@@ -187,6 +188,32 @@ function groupFindings(findings: FindingDetail[]): HostGroup[] {
  return out;
 }
 
+type IssueTreeRow =
+ | { kind: "host"; key: string; host: HostGroup; open: boolean }
+ | { kind: "path"; key: string; host: string; path: PathGroup; open: boolean }
+ | { kind: "leaf"; key: string; leaf: IssueLeaf };
+
+/** Hosts, paths and leaves in the order the tree paints them, with collapsed branches omitted.
+ * The Issues page virtualizes this list: a few thousand findings used to mount a context menu
+ * per leaf, and that is what froze the console once the count grew. */
+function flattenIssueTree(groups: HostGroup[], collapsed: Record<string, boolean>): IssueTreeRow[] {
+ const out: IssueTreeRow[] = [];
+ for (const host of groups) {
+  const hostKey = `h:${host.host}`;
+  const open = !collapsed[hostKey];
+  out.push({ kind: "host", key: hostKey, host, open });
+  if (!open) continue;
+  for (const path of host.paths) {
+   const pathKey = `p:${host.host}:${path.path}`;
+   const pathOpen = !collapsed[pathKey];
+   out.push({ kind: "path", key: pathKey, host: host.host, path, open: pathOpen });
+   if (!pathOpen) continue;
+   for (const leaf of path.leaves) out.push({ kind: "leaf", key: leaf.key, leaf });
+  }
+ }
+ return out;
+}
+
 export function ScannerPage(): JSX.Element {
  const { data: issues, error, isFetching, refetch } = useIssuesDetailed();
  const focusExchange = useApp((state) => state.focusExchange);
@@ -302,6 +329,21 @@ export function ScannerPage(): JSX.Element {
  }, [issues, severities, confidences, hideFalsePositives, sourceFilter, debouncedTerm]);
 
  const groups = useMemo(() => groupFindings(rows), [rows]);
+ const flatRows = useMemo(() => flattenIssueTree(groups, collapsed), [groups, collapsed]);
+ const treeRef = useRef<HTMLDivElement>(null);
+ const rowVirtualizer = useVirtualizer({
+  count: flatRows.length,
+  getScrollElement: () => treeRef.current,
+  estimateSize: () => 32,
+  overscan: 16,
+ });
+ useEffect(() => {
+  if (!selectedKey) return;
+  const index = flatRows.findIndex((row) => row.kind === "leaf" && row.key === selectedKey);
+  if (index >= 0) rowVirtualizer.scrollToIndex(index, { align: "auto" });
+  // The virtualizer's identity is stable for one scroll element; depending on it loops.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [selectedKey, flatRows]);
 
  useEffect(() => {
   if (issueFocus === null) return;
@@ -569,155 +611,145 @@ export function ScannerPage(): JSX.Element {
      detail={issues?.hint ?? "Captured and audited traffic has not produced findings."}
     />
    ) : (
-    <div className="row-list tree-pane" role="tree" aria-label="Findings by host and path">
-     {groups.map((host) => {
-      const hostKey = `h:${host.host}`;
-      const hostOpen = !collapsed[hostKey];
-      return (
-       <div key={hostKey} role="group">
-        <div
-         role="treeitem"
-         aria-level={1}
-         aria-expanded={hostOpen}
-         className="tree-row"
-         style={{ paddingLeft: 8 }}
-         onClick={() => setCollapsed((c) => ({ ...c, [hostKey]: hostOpen }))}
-        >
-         <button type="button" className="tree-toggle" aria-label={hostOpen ? `Collapse ${host.host}` : `Expand ${host.host}`}>
-          {hostOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-         </button>
-         <span className="tree-row-icon" aria-hidden="true">
-          <Globe size={12} />
-         </span>
-         <span className="tree-row-label" title={host.host}>
-          {host.host}
-         </span>
-         <span className="tree-row-meta">
-          <span className="tree-row-count cell-num">{host.count}</span>
-         </span>
+    <div ref={treeRef} className="row-list tree-pane" role="tree" aria-label="Findings by host and path">
+     <div style={{ height: rowVirtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+      {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+       const row = flatRows[virtualRow.index];
+       if (!row) return null;
+       const place = {
+        position: "absolute" as const,
+        top: 0,
+        left: 0,
+        width: "100%",
+        transform: `translateY(${virtualRow.start}px)`,
+       };
+       if (row.kind === "host") {
+        return (
+         <div
+          key={row.key}
+          data-index={virtualRow.index}
+          ref={rowVirtualizer.measureElement}
+          role="treeitem"
+          aria-level={1}
+          aria-expanded={row.open}
+          className="tree-row"
+          style={{ ...place, paddingLeft: 8 }}
+          onClick={() => setCollapsed((c) => ({ ...c, [row.key]: row.open }))}
+         >
+          <button type="button" className="tree-toggle" aria-label={row.open ? `Collapse ${row.host.host}` : `Expand ${row.host.host}`}>
+           {row.open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+          <span className="tree-row-icon" aria-hidden="true">
+           <Globe size={12} />
+          </span>
+          <span className="tree-row-label" title={row.host.host}>
+           {row.host.host}
+          </span>
+          <span className="tree-row-meta">
+           <span className="tree-row-count cell-num">{row.host.count}</span>
+          </span>
+         </div>
+        );
+       }
+       if (row.kind === "path") {
+        return (
+         <div
+          key={row.key}
+          data-index={virtualRow.index}
+          ref={rowVirtualizer.measureElement}
+          role="treeitem"
+          aria-level={2}
+          aria-expanded={row.open}
+          className="tree-row"
+          style={{ ...place, paddingLeft: 22 }}
+          onClick={() => setCollapsed((c) => ({ ...c, [row.key]: row.open }))}
+         >
+          <button type="button" className="tree-toggle" aria-label={row.open ? `Collapse ${row.path.path}` : `Expand ${row.path.path}`}>
+           {row.open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
+          <span className="tree-row-icon" aria-hidden="true" />
+          <span className="tree-row-label" title={row.path.path}>
+           {row.path.path}
+          </span>
+          <span className="tree-row-meta">
+           <span className="tree-row-count cell-num">{row.path.leaves.length}</span>
+          </span>
+         </div>
+        );
+       }
+       const leaf = row.leaf;
+       return (
+        <div key={row.key} data-index={virtualRow.index} ref={rowVirtualizer.measureElement} style={place}>
+         <ContextMenu groups={menuForLeaf(leaf)} docTopic="issues">
+          <div
+           role="treeitem"
+           aria-level={3}
+           aria-selected={leaf.key === selectedKey}
+           className={cn("tree-row", leaf.key === selectedKey && "active", leaf.finding.false_positive && "tree-row-false-positive")}
+           style={{ paddingLeft: 36 }}
+           onClick={() => setSelectedKey(leaf.key)}
+          >
+           <span className="tree-toggle" />
+           <span className="tree-row-icon" aria-hidden="true">
+            <SeverityDot severity={leaf.finding.severity} />
+           </span>
+           <span className="tree-row-label" title={findingName(leaf.finding)}>
+            {findingName(leaf.finding)}
+           </span>
+           <span className="tree-row-meta">
+            {leaf.finding.params && leaf.finding.params.length > 1 ? (
+             <span className="cell-dim tree-row-params" title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}>
+              {leaf.finding.params.length} params
+             </span>
+            ) : null}
+            {leaf.finding.false_positive ? (
+             <span className="tree-row-params" title="Marked false positive by an operator">
+              FP
+             </span>
+            ) : null}
+            {leaf.finding.severity_override ? (
+             <span className="tree-row-params" title={`Severity overridden from ${leaf.finding.original_severity}`}>
+              ⇩
+             </span>
+            ) : null}
+            <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
+            <span
+             className="cell-dim tree-row-params"
+             title={
+              leaf.finding.source === "manual"
+               ? "Recorded outside a run — no task raised this"
+               : leaf.finding.task_id
+                 ? `Raised by task ${leaf.finding.task_id}`
+                 : "Raised by a run that did not record which"
+             }
+            >
+             {leaf.finding.source === "manual" ? "manual" : "scan"}
+            </span>
+            <span className="cell-dim tree-row-params" title={foundAtTitle(leaf.finding.timestamp_unix_ms)}>
+             {formatFoundAt(leaf.finding.timestamp_unix_ms)}
+            </span>
+           </span>
+          </div>
+         </ContextMenu>
         </div>
-        {hostOpen
-         ? host.paths.map((path) => {
-            const pathKey = `p:${host.host}:${path.path}`;
-            const pathOpen = !collapsed[pathKey];
-            return (
-             <div key={pathKey} role="group">
-              <div
-               role="treeitem"
-               aria-level={2}
-               aria-expanded={pathOpen}
-               className="tree-row"
-               style={{ paddingLeft: 22 }}
-               onClick={() => setCollapsed((c) => ({ ...c, [pathKey]: pathOpen }))}
-              >
-               <button type="button" className="tree-toggle" aria-label={pathOpen ? `Collapse ${path.path}` : `Expand ${path.path}`}>
-                {pathOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-               </button>
-               <span className="tree-row-icon" aria-hidden="true" />
-               <span className="tree-row-label" title={path.path}>
-                {path.path}
-               </span>
-               <span className="tree-row-meta">
-                <span className="tree-row-count cell-num">{path.leaves.length}</span>
-               </span>
-              </div>
-              {pathOpen
-               ? path.leaves.map((leaf) => (
-                  <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)} docTopic="issues">
-                   <div
-                    role="treeitem"
-                    aria-level={3}
-                    aria-selected={leaf.key === selectedKey}
-                    className={cn(
-                     "tree-row",
-                     leaf.key === selectedKey && "active",
-                     leaf.finding.false_positive && "tree-row-false-positive",
-                    )}
-                    style={{ paddingLeft: 36 }}
-                    onClick={() => setSelectedKey(leaf.key)}
-                   >
-                    <span className="tree-toggle" />
-                    <span className="tree-row-icon" aria-hidden="true">
-                     <SeverityDot severity={leaf.finding.severity} />
-                    </span>
-                    <span className="tree-row-label" title={findingName(leaf.finding)}>
-                     {findingName(leaf.finding)}
-                    </span>
-                    <span className="tree-row-meta">
-                     {/*
-                                      A merged row covers several parameters, and the count is the
-                                      one fact that distinguishes it from a single observation at a
-                                      glance. Without it a five-parameter finding and a
-                                      one-parameter finding are the same line, and the merge reads
-                                      as though four results went missing.
-                                    */}
-                     {leaf.finding.params && leaf.finding.params.length > 1 ? (
-                      <span
-                       className="cell-dim tree-row-params"
-                       title={`Affects ${leaf.finding.params.length} parameters: ${leaf.finding.params.join(", ")}`}
-                      >
-                       {leaf.finding.params.length} params
-                      </span>
-                     ) : null}
-                     {/*
-                                      A false-positive mark must not ride on colour alone (a struck
-                                      label at tree density disappears into the strikethrough of
-                                      long names), so the row carries the letters too. The title
-                                      spells out what the mark means.
-                                    */}
-                     {leaf.finding.false_positive ? (
-                      <span className="tree-row-params" title="Marked false positive by an operator">
-                       FP
-                      </span>
-                     ) : null}
-                     {leaf.finding.severity_override ? (
-                      <span className="tree-row-params" title={`Severity overridden from ${leaf.finding.original_severity}`}>
-                       ⇩
-                      </span>
-                     ) : null}
-                     <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
-                     {/* When it was found and what found it (burpsy-react-ui-exiu). Without these the list
-                    is an unordered set of rows from every producer in the project: an operator cannot
-                    tell which of three tasks raised an issue, cannot separate a person's recording
-                    from the scanner's, and cannot order by when something turned up. */}
-                     <span
-                      className="cell-dim tree-row-params"
-                      title={
-                       leaf.finding.source === "manual"
-                        ? "Recorded outside a run — no task raised this"
-                        : leaf.finding.task_id
-                          ? `Raised by task ${leaf.finding.task_id}`
-                          : "Raised by a run that did not record which"
-                      }
-                     >
-                      {leaf.finding.source === "manual" ? "manual" : "scan"}
-                     </span>
-                     <span className="cell-dim tree-row-params" title={foundAtTitle(leaf.finding.timestamp_unix_ms)}>
-                      {formatFoundAt(leaf.finding.timestamp_unix_ms)}
-                     </span>
-                    </span>
-                   </div>
-                  </ContextMenu>
-                 ))
-               : null}
-             </div>
-            );
-           })
-         : null}
-       </div>
-      );
-     })}
+       );
+      })}
+     </div>
     </div>
    )}
   </div>
  );
 
- const advisory = selected ? (
+ // The list is a summary. Detail, remediation and the catalogue advisory are one finding,
+ // fetched when the row is opened, so the tree does not wait on every issue's prose.
+ const openIssue = useIssue(selected?.finding.id ?? null);
+ const shown = openIssue.data ?? selected?.finding ?? null;
+ const advisory = selected && shown ? (
   <div className="pane">
    <div className="detail-head">
     <div className="detail-head-title">
      <span className="eyebrow">
-      {selected.finding.host}
+      {shown.host}
       {selected.occurrence ? selected.occurrence.path : ""}
      </span>
      {/* The advisory pane's own heading, and the parent of the h3 sections inside it. It was
@@ -725,21 +757,21 @@ export function ScannerPage(): JSX.Element {
               screen reader as a level gone missing. The <strong> keeps the console's pane-title
               treatment, which `.detail-head-title strong` already defines. */}
      <h2>
-      <strong>{findingName(selected.finding)}</strong>
+      <strong>{findingName(shown)}</strong>
      </h2>
     </div>
     <div className="detail-actions">
-     <Badge tone={severityTone(selected.finding.severity)}>{selected.finding.severity}</Badge>
+     <Badge tone={severityTone(shown.severity)}>{shown.severity}</Badge>
      {/* The engine word rides alongside whenever an operator has overruled it: without it,
               "Informational" and "Informational, because an operator said so" render identically,
               and one of those is a decision worth arguing with. */}
-     {selected.finding.original_severity ? (
+     {shown.original_severity ? (
       <Badge tone="neutral" title={`Engine severity, overridden by an operator`}>
-       engine: {selected.finding.original_severity}
+       engine: {shown.original_severity}
       </Badge>
      ) : null}
-     <Badge tone={confidenceTone(selected.finding.confidence)}>{selected.finding.confidence}</Badge>
-     {selected.finding.false_positive ? <Badge tone="warn">False positive</Badge> : null}
+     <Badge tone={confidenceTone(shown.confidence)}>{shown.confidence}</Badge>
+     {shown.false_positive ? <Badge tone="warn">False positive</Badge> : null}
      {selected.occurrence ? (
       <Tooltip content="Open this exchange in HTTP history">
        <Button
@@ -766,8 +798,8 @@ export function ScannerPage(): JSX.Element {
     <TabsContent value="advisory" className="advisory-body">
      <DetailList
       rows={[
-       { label: "Check", value: selected.finding.check_name ?? "—" },
-       { label: "Host", value: selected.finding.host || "—" },
+       { label: "Check", value: shown.check_name ?? "—" },
+       { label: "Host", value: shown.host || "—" },
        { label: "Path", value: selected.occurrence?.path ?? "—" },
        // Only rendered when the finding names a parameter: an insertion-point BCheck or a
        // DOM sink is attributable to one input, a resource-level finding is not, and a row
@@ -777,36 +809,44 @@ export function ScannerPage(): JSX.Element {
        // every parameter the row covers rather than only the first observed. Showing one of
        // five would make the merge look like it had lost the other four. Singular label when
        // there is one, so the common case does not read as a list of one.
-       ...(selected.finding.params && selected.finding.params.length > 1
+       ...(shown.params && shown.params.length > 1
         ? [
            {
-            label: `Parameters (${selected.finding.params.length})`,
-            value: selected.finding.params.join(", "),
+            label: `Parameters (${shown.params.length})`,
+            value: shown.params.join(", "),
            },
           ]
-        : selected.finding.param
-          ? [{ label: "Parameter", value: selected.finding.param }]
+        : shown.param
+          ? [{ label: "Parameter", value: shown.param }]
           : []),
-       { label: "Times seen", value: selected.finding.times_seen },
+       { label: "Times seen", value: shown.times_seen },
        // How many later reports of this issue were merged into it (oorl) — shown only when some
        // were, so a finding seen once does not carry a row of zeros.
-       ...((selected.finding.merged_count ?? 0) > 0 ? [{ label: "Duplicates merged", value: selected.finding.merged_count ?? 0 }] : []),
+       ...((shown.merged_count ?? 0) > 0 ? [{ label: "Duplicates merged", value: shown.merged_count ?? 0 }] : []),
        // The quoted excerpt — for a leaked secret, the redacted key that says WHICH one (8j0d).
-       ...(selected.finding.evidence ? [{ label: "Evidence", value: selected.finding.evidence }] : []),
-       { label: "Occurrences", value: selected.finding.occurrences.length },
+       ...(shown.evidence ? [{ label: "Evidence", value: shown.evidence }] : []),
+       { label: "Occurrences", value: shown.occurrences.length },
        // Triage state, shown only when there is something to show: a row of "no comment"
        // placeholders for every untouched finding trains the eye to skip the block.
-       ...(selected.finding.original_confidence ? [{ label: "Engine confidence", value: selected.finding.original_confidence }] : []),
-       ...(selected.finding.comment ? [{ label: "Operator comment", value: selected.finding.comment }] : []),
+       ...(shown.original_confidence ? [{ label: "Engine confidence", value: shown.original_confidence }] : []),
+       ...(shown.comment ? [{ label: "Operator comment", value: shown.comment }] : []),
       ]}
      />
      <div>
       <h3>Issue detail</h3>
-      <p className="prose">{selected.finding.detail ?? "no detail recorded"}</p>
+      <p className="prose">
+       {openIssue.data
+        ? (openIssue.data.detail ?? "no detail recorded")
+        : openIssue.isError
+          ? "The issue record could not be loaded."
+          : "Loading the issue record…"}
+      </p>
      </div>
      <div>
       <h3>Remediation</h3>
-      <p className="prose">{selected.finding.remediation ?? "no remediation recorded"}</p>
+      <p className="prose">
+       {openIssue.data ? (openIssue.data.remediation ?? "no remediation recorded") : openIssue.isError ? "The issue record could not be loaded." : "Loading the issue record…"}
+      </p>
      </div>
      {/*
               The comment editor, in the pane as well as the context menu (burpsy-react-ui-pwd):
@@ -814,22 +854,30 @@ export function ScannerPage(): JSX.Element {
               round trip the writing does not survive. The block is keyed on the finding id, so
               switching findings resets the draft instead of leaking one finding's half-written
               note into the next pane — state that follows the selection is how the wrong issue
-              gets annotated.
+              gets annotated. It waits for the full record: the list row has no comment, and
+              seeding the editor from that empty string would keep the empty draft after the
+              real comment arrived.
             */}
-     <TriageCommentEditor
-      key={selected.finding.id}
-      finding={selected.finding}
-      onSave={(comment) => applyTriage(selected.finding, { comment }, comment.trim() === "" ? "Comment cleared" : "Comment saved")}
-     />
+     {openIssue.data ? (
+      <TriageCommentEditor
+       key={`${openIssue.data.id}:${openIssue.data.comment}`}
+       finding={openIssue.data}
+       onSave={(comment) => {
+        const record = openIssue.data;
+        if (!record) return;
+        applyTriage(record, { comment }, comment.trim() === "" ? "Comment cleared" : "Comment saved");
+       }}
+      />
+     ) : null}
      {/* The catalogue entry the check resolved to, rendered by the same component the browsable
               Issue definitions screen uses. Passing the note as well as the advisory is what keeps
               "no catalogue entry, and here is why" distinct from "nothing looked". */}
-     <AdvisoryReader advisory={selected.finding.advisory} note={selected.finding.advisory_note} />
-     {selected.finding.occurrences.length > 1 ? (
+     {openIssue.data ? <AdvisoryReader advisory={openIssue.data.advisory} note={openIssue.data.advisory_note} /> : null}
+     {shown.occurrences.length > 1 ? (
       <div>
-       <h3>All occurrences ({selected.finding.occurrences.length})</h3>
+       <h3>All occurrences ({shown.occurrences.length})</h3>
        <div className="actions">
-        {selected.finding.occurrences.map((occurrence, index) => (
+        {shown.occurrences.map((occurrence, index) => (
          <Button
           key={`${occurrence.exchange_id}-${index}`}
           variant="outline"
@@ -860,7 +908,7 @@ export function ScannerPage(): JSX.Element {
        readOnly
        value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
        bodyBase64={request.data?.body_base64}
-       filename={`finding-${selected.finding.id}-request.txt`}
+       filename={`finding-${shown.id}-request.txt`}
        menuGroups={actions.menu(exchange)}
       />
      )}
@@ -884,7 +932,7 @@ export function ScannerPage(): JSX.Element {
        }
        bodyBase64={response.data?.body_base64}
        requestPath={exchange.path}
-       filename={`finding-${selected.finding.id}-response.txt`}
+       filename={`finding-${shown.id}-response.txt`}
        menuGroups={actions.menu(exchange)}
       />
      )}

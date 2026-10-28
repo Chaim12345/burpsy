@@ -71,6 +71,25 @@ type callResult struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+	// Data and MimeType are an image block's base64 bytes and media type (Type "image").
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// MarshalJSON writes the members MCP defines for the block's type and no others: an image block
+// carries no "text", and a text block no empty "data".
+func (c contentBlock) MarshalJSON() ([]byte, error) {
+	if c.Type == "image" {
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
+		}{c.Type, c.Data, c.MimeType})
+	}
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{c.Type, c.Text})
 }
 
 // errResult is a tool-execution failure. MCP distinguishes this from a protocol error on purpose:
@@ -100,7 +119,7 @@ func (s *Server) buildRouteTools() []tool {
 	// The transport's own tool name is claimed first so a manifest route can never shadow it: a
 	// descriptor list where "burpsy_confirm" means a route is a list where the confirm flow is
 	// unreachable.
-	used := map[string]bool{confirmToolName: true, taskStatusToolName: true}
+	used := map[string]bool{confirmToolName: true, taskStatusToolName: true, screenshotToolName: true}
 
 	out := make([]tool, 0, len(routes)+1)
 	for _, r := range routes {
@@ -121,6 +140,9 @@ func (s *Server) buildRouteTools() []tool {
 	status := taskStatusDescriptor()
 	out = append(out, status)
 	s.byName[status.Name] = status
+	shot := screenshotDescriptor()
+	out = append(out, shot)
+	s.byName[shot.Name] = shot
 	return out
 }
 
@@ -380,7 +402,7 @@ func toolNeedsConfirm(t tool) bool {
 func (s *Server) buildGroupedTools() ([]tool, error) {
 	out := make([]tool, 0, len(groupedTools)+1)
 	for _, g := range groupedTools {
-		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName || g.name == taskStatusToolName {
+		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName || g.name == taskStatusToolName || g.name == screenshotToolName {
 			return nil, fmt.Errorf("mcp: grouped tool name %q is used twice", g.name)
 		}
 		t := tool{Name: g.name, byOp: make(map[string]op, len(g.ops))}
@@ -420,6 +442,9 @@ func (s *Server) buildGroupedTools() ([]tool, error) {
 	status := taskStatusDescriptor()
 	out = append(out, status)
 	s.byName[status.Name] = status
+	shot := screenshotDescriptor()
+	out = append(out, shot)
+	s.byName[shot.Name] = shot
 	return out, nil
 }
 
@@ -739,6 +764,11 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 	}
 	if strings.TrimSpace(params.Name) == "" {
 		return s.fail(req, codeInvalidParams, "tools/call requires a tool name")
+	}
+	// Before the shared argument decode: that one would accept "body" and "path", and this tool's
+	// refusal of exactly those is the point of its argument check.
+	if params.Name == screenshotToolName {
+		return s.callScreenshot(ctx, req, params.Arguments)
 	}
 
 	var args callArgs
@@ -1080,7 +1110,7 @@ type mintPreview struct {
 func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) response {
 	name := strings.TrimSpace(args.Tool)
 	t, ok := s.byName[name]
-	if !ok || name == confirmToolName || name == taskStatusToolName {
+	if !ok || name == confirmToolName || name == taskStatusToolName || name == screenshotToolName {
 		return s.ok(req, errResult(fmt.Sprintf("%q is not a tool on this surface. Pass \"tool\" (the tool you will call) and \"arguments\" (its exact arguments); the refusal of the call prints both.", name)))
 	}
 	if why := s.refusedByPolicy(name); why != "" {

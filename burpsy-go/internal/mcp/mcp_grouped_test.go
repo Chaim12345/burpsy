@@ -84,8 +84,8 @@ func routeVerbs() map[string]web.MCPRouteInfo {
 
 func TestTheDefaultSurfaceIsGroupedWithNoAssetsAndNoSubtreeSpellings(t *testing.T) {
 	tools, raw := listGrouped(t)
-	if len(tools) != len(groupedTools)+2 {
-		t.Fatalf("tools/list published %d tools, want the %d grouped tools plus %s and %s", len(tools), len(groupedTools), confirmToolName, taskStatusToolName)
+	if len(tools) != len(groupedTools)+3 {
+		t.Fatalf("tools/list published %d tools, want the %d grouped tools plus %s, %s and %s", len(tools), len(groupedTools), confirmToolName, taskStatusToolName, screenshotToolName)
 	}
 	if len(tools) >= 100 {
 		t.Fatalf("the grouped surface has %d tools; it exists to be far smaller than the 147-route surface", len(tools))
@@ -97,7 +97,7 @@ func TestTheDefaultSurfaceIsGroupedWithNoAssetsAndNoSubtreeSpellings(t *testing.
 		case strings.HasSuffix(tl.Name, "_subtree"), strings.HasPrefix(tl.Name, "api_"):
 			t.Fatalf("tool %q is a route-surface name on the grouped surface", tl.Name)
 		}
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 		if tl.Annotations.Group == "" || tl.Annotations.ShortDescription == "" {
@@ -169,7 +169,7 @@ func TestNoGroupedToolSpansTwoRiskClasses(t *testing.T) {
 	tools, _ := listGrouped(t)
 	verbs := routeVerbs()
 	for _, tl := range tools {
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 		if len(tl.Annotations.Operations) == 0 {
@@ -333,7 +333,7 @@ func TestTheGroupedSurfaceRefusesAnOperationTheManifestLacks(t *testing.T) {
 func TestEachGroupedSchemaOffersExactlyItsOperations(t *testing.T) {
 	tools, _ := listGrouped(t)
 	for _, tl := range tools {
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 		props, _ := tl.InputSchema["properties"].(map[string]any)

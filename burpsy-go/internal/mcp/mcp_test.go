@@ -166,8 +166,8 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 	for _, r := range manifest {
 		byRoute[r.Pattern] = r
 	}
-	if len(listed.Tools) != len(manifest)+2 {
-		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm and task-status tools",
+	if len(listed.Tools) != len(manifest)+3 {
+		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm, task-status and screenshot tools",
 			len(listed.Tools), len(manifest))
 	}
 
@@ -178,7 +178,7 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 			t.Fatalf("two tools are named %q; an MCP tool name is an address and has to name one tool", tl.Name)
 		}
 		names[tl.Name] = true
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 

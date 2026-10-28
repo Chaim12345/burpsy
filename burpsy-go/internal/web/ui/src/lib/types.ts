@@ -480,6 +480,9 @@ export interface Issues {
  hint?: string;
  findings: Finding[];
  counts?: Record<string, number>;
+ /** Findings in the severity buckets. False positives are not in it; they are `false_positives`. */
+ counted?: number;
+ false_positives?: number;
 }
 
 export interface HeldMessage {

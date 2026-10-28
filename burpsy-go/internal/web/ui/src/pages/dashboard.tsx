@@ -1,12 +1,11 @@
-import { taskActivityFindings } from "../lib/task-activity";
 import { useMemo, useRef, useState } from "react";
 import { parseSeeds } from "../lib/parse-seeds";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Square } from "lucide-react";
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
-import { useDashboard, useInvalidate, useIssues } from "../lib/data";
-import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { useDashboard, useInvalidate, useIssueCount } from "../lib/data";
+import { useScannerConfigs, useScannerLive, useSetScannerLive, useTaskIssueActivity } from "../lib/data.attack";
 import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import type { CrawlLoginReport } from "../lib/types.observe";
@@ -1328,7 +1327,7 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
 
 export function DashboardPage(): JSX.Element {
  const { data, error, isFetching, refetch } = useDashboard();
- const issues = useIssues();
+ const issues = useIssueCount();
  const live = useScannerLive();
  const setRoute = useApp((state) => state.setRoute);
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
@@ -1587,7 +1586,7 @@ function TaskDetail({
  // from zero, so higher id == raised later — the feed's whole point (burpsy-react-ui-i18).
  // With isolated scans' findings (13uw): a task's own view shows what it found even when the run
  // was isolated from All issues and the site map.
- const issuesDetailed = useIssuesDetailedWithIsolated();
+ const taskIssues = useTaskIssueActivity(task.id);
  // The retained run behind this task, when there is one. Only an API scan's row carries anything the
  // detail pane does not already have (its definition). Which kinds have a run is not something the
  // console should predict, so it does not: the retained-run list (the same registry the server answers
@@ -1603,7 +1602,8 @@ function TaskDetail({
  // find?"; it was the project-wide feed sorted and capped, which fails in two directions at once —
  // a task that found nothing showing other runs' findings under its own name, and a busy task
  // dropping its own older findings to the 20-cap while showing newer ones it never raised.
- const { shown: activityFindings, hidden: activityHidden } = taskActivityFindings(issuesDetailed.data?.findings ?? [], task.id);
+ const activityFindings = taskIssues.data?.shown ?? [];
+ const activityHidden = taskIssues.data?.hidden ?? 0;
  const openAdvisory = (finding: FindingDetail) => {
   // The Issues page is where an advisory opens; landing there with the finding selected is the
   // "way in" this feed exists to provide — the same focus mechanism History's focusExchange uses.

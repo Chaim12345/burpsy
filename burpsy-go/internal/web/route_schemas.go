@@ -92,7 +92,11 @@ var routeSchemas = map[string]opSchema{
 		// CONFIRMED (code read): historyGet encodes []*ExchangeView.
 		response: typeOf[[]*ExchangeView](),
 	},
-	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
+	"GET /api/issues": {query: []queryParam{
+		{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"},
+		{name: "summary", kind: "boolean", desc: "list rows without detail, remediation, evidence or the catalogue advisory; GET /api/issues/{id} returns the full row"},
+		{name: "count", kind: "boolean", desc: "severity counts and an empty findings array, for the shell badge that is mounted on every page"},
+	}},
 	"GET /api/message/{id}": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},

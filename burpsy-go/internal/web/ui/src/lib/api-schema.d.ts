@@ -1499,22 +1499,26 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        get?: never;
         /**
-         * operator triage of one finding — severity/confidence override, false-positive, comment — or delete it
+         * one finding in full (detail, remediation, advisory), or operator triage of it — severity/confidence override, false-positive, comment — or delete it
+         * @description Risk class destructive: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
+         */
+        get: operations["getApiIssuesById"];
+        /**
+         * one finding in full (detail, remediation, advisory), or operator triage of it — severity/confidence override, false-positive, comment — or delete it
          * @description Risk class destructive: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         put: operations["putApiIssuesById"];
         post?: never;
         /**
-         * operator triage of one finding — severity/confidence override, false-positive, comment — or delete it
+         * one finding in full (detail, remediation, advisory), or operator triage of it — severity/confidence override, false-positive, comment — or delete it
          * @description Risk class destructive: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         delete: operations["deleteApiIssuesById"];
         options?: never;
         head?: never;
         /**
-         * operator triage of one finding — severity/confidence override, false-positive, comment — or delete it
+         * one finding in full (detail, remediation, advisory), or operator triage of it — severity/confidence override, false-positive, comment — or delete it
          * @description Risk class destructive: an unattended caller must mint a confirmation for the exact call (POST {pattern}/confirm) and spend it in the X-Burpsy-Confirm header.
          */
         patch: operations["patchApiIssuesById"];
@@ -7555,11 +7559,44 @@ export interface operations {
     getApiIssues: {
         parameters: {
             query?: {
+                /** @description severity counts and an empty findings array, for the shell badge that is mounted on every page */
+                count?: "true" | "false" | "1" | "0";
                 /** @description also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them */
                 include_isolated?: "true" | "false" | "1" | "0";
+                /** @description list rows without detail, remediation, evidence or the catalogue advisory; GET /api/issues/{id} returns the full row */
+                summary?: "true" | "false" | "1" | "0";
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getApiIssuesById: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

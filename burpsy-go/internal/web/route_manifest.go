@@ -590,8 +590,8 @@ var manifest = map[string]route{
 		// per this file's own definition of the class — while the PUT beside it only writes burpsy's
 		// own state (a triage decision) and would be riskLocal alone. One pattern, one class: the
 		// manifest has no per-verb risk split, and understating the DELETE is the worse error.
-		methods: []string{"PUT", "PATCH", "DELETE"}, risk: riskDestructive, subPath: "0",
-		summary: "operator triage of one finding — severity/confidence override, false-positive, comment — or delete it",
+		methods: []string{"GET", "PUT", "PATCH", "DELETE"}, risk: riskDestructive, subPath: "0",
+		summary: "one finding in full (detail, remediation, advisory), or operator triage of it — severity/confidence override, false-positive, comment — or delete it",
 	},
 	"/api/issues/consolidation": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,

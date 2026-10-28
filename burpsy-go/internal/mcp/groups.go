@@ -156,8 +156,8 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "issues_edit", group: groupIssues,
-		short: "Changes an issue's severity, confidence or state, or deletes it.",
-		ops:   []string{"PUT /api/issues/", "PATCH /api/issues/", "DELETE /api/issues/"},
+		short: "Reads one finding in full, changes its severity, confidence or state, or deletes it.",
+		ops:   []string{"GET /api/issues/", "PUT /api/issues/", "PATCH /api/issues/", "DELETE /api/issues/"},
 	},
 	{
 		name: "issues_record", group: groupIssues,
