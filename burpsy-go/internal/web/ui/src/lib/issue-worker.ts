@@ -24,6 +24,10 @@ interface DoneMessage {
  hint?: string;
  loaded?: number;
  counts?: Record<string, number>;
+ /** The version this list is, for the next request's `base`. Absent when rows could not be addressed by id. */
+ version?: number;
+ /** Present when the chunks carried only changed rows: the full row order by id. */
+ order?: number[];
 }
 interface TopMessage {
  id: number;
@@ -79,6 +83,7 @@ function failWorker(reason: string, permanent = true): void {
 
 /** Test seam: forget a broken worker so the next call may try one again. */
 export function resetIssueWorkerForTests(): void {
+ held = null;
  worker?.terminate();
  worker = null;
  workerBroken = false;
@@ -168,34 +173,47 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
  });
 }
 
+/** The list the page last received from the worker, kept so the next response can send only differences. */
+let held: { version: number; rows: Map<number, FindingDetail> } | null = null;
+
 export async function loadIssueDocument(url: string, signal?: AbortSignal): Promise<IssuesDetail> {
  if (!canUseWorker()) return api<IssuesDetail>(url, { signal });
  try {
-  const findings: FindingDetail[] = [];
-  const doc = await callWorker<IssuesDetail>(
-   { type: "document", url },
+  const base = held;
+  const sent: FindingDetail[] = [];
+  const done = await callWorker<DoneMessage>(
+   { type: "document", url, base: base?.version },
    (message, resolve) => {
     if (message.type === "chunk") {
-     findings.push(...message.findings);
+     for (const f of message.findings) sent.push(f);
      return false;
     }
     if (message.type === "done") {
-     resolve({
-      enabled: message.enabled,
-      hint: message.hint,
-      loaded: message.loaded,
-      counts: message.counts,
-      findings,
-     });
+     resolve(message);
      return true;
     }
     return false;
    },
    signal,
   );
-  return doc;
+  let findings = sent;
+  if (done.order) {
+   // Only differences were sent: every other row is the object this page already holds.
+   const changed = new Map<number, FindingDetail>();
+   for (const f of sent) changed.set(f.id, f);
+   findings = [];
+   for (const id of done.order) {
+    const row = changed.get(id) ?? base?.rows.get(id);
+    if (!row) throw new Error("issue list diff referenced a row this page does not hold");
+    findings.push(row);
+   }
+  }
+  if (done.version !== undefined) held = { version: done.version, rows: new Map(findings.map((f) => [f.id, f])) };
+  else held = null;
+  return { enabled: done.enabled, hint: done.hint, loaded: done.loaded, counts: done.counts, findings };
  } catch (err) {
   if (signal?.aborted) throw err;
+  held = null;
   return api<IssuesDetail>(url, { signal });
  }
 }

@@ -16,6 +16,8 @@ interface LoadRequest {
  url: string;
  limit?: number;
  taskId?: number;
+ /** The list version the page holds, so only rows that differ from it are posted. */
+ base?: number;
 }
 
 interface CancelRequest {
@@ -31,6 +33,19 @@ const scope = globalThis as unknown as {
 };
 
 const cancelled = new Set<number>();
+
+/**
+ * What the page last received, per list version, as one JSON string per row. A new document is
+ * compared against the version the page says it holds, and only new or changed rows are posted;
+ * the rest of the page's own row objects are reused. Without this every refetch of a big list
+ * structured-cloned every row to the main thread. The page names the version it holds, and a
+ * version that is no longer kept (or never existed) gets the full list, so a cancelled request
+ * or a restarted worker can only cost a full send, never a stale row. Only the last few
+ * versions are kept, so memory is bounded by a few copies of the signatures.
+ */
+const KEPT_VERSIONS = 3;
+const snapshots = new Map<number, Map<number, string>>();
+let latestVersion = 0;
 
 // Tells the page the script loaded and ran, so a worker that never starts is told apart from a slow one.
 scope.postMessage({ id: 0, type: "ready" });
@@ -82,8 +97,20 @@ async function run(message: LoadRequest): Promise<void> {
    });
    return;
   }
-  postChunks(message.id, doc.findings);
+  const sigs = new Map<number, string>();
+  for (const f of doc.findings) sigs.set(f.id, JSON.stringify(f));
+  // Ids must be unique numbers for a row to be addressed by id; anything else is sent in full.
+  const addressable = sigs.size === doc.findings.length && doc.findings.every((f) => typeof f.id === "number");
+  const before = addressable && message.base !== undefined ? snapshots.get(message.base) : undefined;
+  const send = before ? doc.findings.filter((f) => before.get(f.id) !== sigs.get(f.id)) : doc.findings;
+  postChunks(message.id, send);
   if (cancelled.has(message.id)) return;
+  let version: number | undefined;
+  if (addressable) {
+   version = ++latestVersion;
+   snapshots.set(version, sigs);
+   for (const old of [...snapshots.keys()]) if (old <= version - KEPT_VERSIONS) snapshots.delete(old);
+  }
   scope.postMessage({
    id: message.id,
    type: "done",
@@ -91,6 +118,8 @@ async function run(message: LoadRequest): Promise<void> {
    hint: doc.hint,
    loaded: doc.loaded,
    counts: doc.counts,
+   version,
+   order: before ? doc.findings.map((f) => f.id) : undefined,
   });
  } catch (err) {
   if (cancelled.has(message.id)) return;

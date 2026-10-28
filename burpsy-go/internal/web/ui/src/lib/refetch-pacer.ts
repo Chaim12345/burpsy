@@ -33,11 +33,17 @@ export function createRefetchPacer(options: { factor?: number; maxWaitMs?: numbe
    });
   }
   const started = now();
+  let ok = false;
   try {
-   return await run();
+   const value = await run();
+   ok = true;
+   return value;
   } finally {
    const finished = now();
-   lastCost = finished - started;
+   // A cancelled or failed fetch ends early and says nothing about what a real one costs, so it
+   // must not shrink the measured cost: a burst of cancel-and-restart would otherwise wait for
+   // nothing. It still counts as the last attempt, so the gap is measured from it.
+   if (ok) lastCost = finished - started;
    lastDone = finished;
   }
  };
