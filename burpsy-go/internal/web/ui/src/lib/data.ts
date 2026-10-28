@@ -170,6 +170,10 @@ export function useEventStream(): void {
   let flushTimer: number | null = null;
   let retryTimer: number | null = null;
   let closed = false;
+  // True after a dropped stream. Frames carry no ids and the server keeps no backlog, so whatever
+  // changed while disconnected is only recoverable by refetching: the first open after a drop
+  // invalidates every active query instead of waiting for an unrelated later event.
+  let dropped = false;
   const pending = new Set<string>();
 
   const flush = () => {
@@ -189,7 +193,13 @@ export function useEventStream(): void {
    if (closed) return;
    stream = new EventSource("/api/events");
 
-   stream.onopen = () => setLive(true);
+   stream.onopen = () => {
+    setLive(true);
+    if (dropped) {
+     dropped = false;
+     void client.invalidateQueries();
+    }
+   };
 
    stream.onmessage = (event) => {
     setLive(true);
@@ -208,6 +218,7 @@ export function useEventStream(): void {
    };
 
    stream.onerror = () => {
+    dropped = true;
     setLive(false);
     stream?.close();
     stream = null;
