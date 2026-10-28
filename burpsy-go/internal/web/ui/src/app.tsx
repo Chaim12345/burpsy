@@ -1569,6 +1569,10 @@ function App(): JSX.Element {
             setDragOverTool(null);
            }}
            aria-current={current ? "page" : undefined}
+           // The label span is hidden on a phone, so the tab is an icon; name it explicitly rather than
+           // leaving the title attribute as the only accessible name. With an attention signal the
+           // button's own content (label plus the sentence) is the name, so it is left alone.
+           aria-label={signal ? undefined : entry.label}
            // The count is in the tab before the tooltip is read, because a tooltip is not a
            // signal: it needs a hover, and the operator is on another page with a stalled
            // browser. The tooltip carries the sentence that explains it.
