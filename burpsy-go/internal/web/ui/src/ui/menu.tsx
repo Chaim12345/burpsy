@@ -2,6 +2,7 @@ import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
 import { BookOpen, Check, ChevronRight } from "lucide-react";
 import { docEntryLabel, openDocs, type DocTopic } from "../lib/docs";
+import { useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 
 export interface MenuAction {
@@ -177,10 +178,30 @@ export function ContextMenu({
  docTopic,
  children,
 }: {
- groups: MenuGroup[];
+ /**
+  * The menu's actions, or a function that builds them. A function runs only when the menu opens:
+  * a list with hundreds of rows (the Issues tree) would otherwise build every row's actions, and
+  * the JSX for every item, on every render, for menus nobody has opened.
+  */
+ groups: MenuGroup[] | (() => MenuGroup[]);
  docTopic: DocTopic | null;
  children: ReactNode;
 }): JSX.Element {
+ const [open, setOpen] = useState(false);
+ if (typeof own === "function") {
+  return (
+   <ContextMenuPrimitive.Root onOpenChange={setOpen}>
+    <ContextMenuPrimitive.Trigger asChild>{children}</ContextMenuPrimitive.Trigger>
+    {open ? (
+     <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.Content className="menu-content" collisionPadding={8}>
+       {renderItems(withDocs(own(), docTopic), CONTEXT_PARTS)}
+      </ContextMenuPrimitive.Content>
+     </ContextMenuPrimitive.Portal>
+    ) : null}
+   </ContextMenuPrimitive.Root>
+  );
+ }
  const groups = withDocs(own, docTopic);
  if (!hasMenuActions(groups)) return <>{children}</>;
  return (

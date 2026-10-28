@@ -689,7 +689,7 @@ export function ScannerPage(): JSX.Element {
        const leaf = row.leaf;
        return (
         <div key={row.key} data-index={virtualRow.index} ref={rowVirtualizer.measureElement} style={place}>
-         <ContextMenu groups={menuForLeaf(leaf)} docTopic="issues">
+         <ContextMenu groups={() => menuForLeaf(leaf)} docTopic="issues">
           <div
            role="treeitem"
            aria-level={3}
