@@ -32,6 +32,9 @@ const scope = globalThis as unknown as {
 
 const cancelled = new Set<number>();
 
+// Tells the page the script loaded and ran, so a worker that never starts is told apart from a slow one.
+scope.postMessage({ id: 0, type: "ready" });
+
 scope.onmessage = (event) => {
  const message = event.data;
  if (message.type === "cancel") {

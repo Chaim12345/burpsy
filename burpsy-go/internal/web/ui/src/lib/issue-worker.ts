@@ -52,6 +52,40 @@ let worker: Worker | null = null;
 let workerBroken = false;
 let nextId = 1;
 
+/**
+ * No message at all from the worker for this long means it never started or is wedged. The
+ * worker's own fetch, parse and chunk posts each reset the clock on the call that owns them, so a
+ * slow parse that keeps posting is never cut off; a worker that went silent is.
+ */
+export const WORKER_STALL_MS = 20_000;
+
+/** A worker that has not announced itself in this long never loaded (blocked, hung or silently dead). */
+export const WORKER_START_MS = 6_000;
+let workerReady = false;
+
+/** Every in-flight call's failure hook, so one worker failure settles all of them. */
+const pendingFailures = new Set<(reason: Error) => void>();
+
+function failWorker(reason: string, permanent = true): void {
+ workerReady = false;
+ // A stall may be a slow server rather than a bad worker, so it retires this worker instance and
+ // lets the next call start a fresh one; load and message errors disable workers for the session.
+ if (permanent) workerBroken = true;
+ const dead = worker;
+ worker = null;
+ dead?.terminate();
+ for (const fail of [...pendingFailures]) fail(new Error(reason));
+}
+
+/** Test seam: forget a broken worker so the next call may try one again. */
+export function resetIssueWorkerForTests(): void {
+ worker?.terminate();
+ worker = null;
+ workerBroken = false;
+ workerReady = false;
+ pendingFailures.clear();
+}
+
 function nativeFetch(): boolean {
  return typeof fetch === "function" && /\[native code\]/.test(Function.prototype.toString.call(fetch));
 }
@@ -65,14 +99,16 @@ function getWorker(): Worker | null {
  if (worker) return worker;
  try {
   worker = new Worker(new URL(WORKER_URL, window.location.origin), { type: "module" });
-  worker.addEventListener("error", () => {
-   workerBroken = true;
-   worker?.terminate();
-   worker = null;
+  workerReady = false;
+  const created = worker;
+  created.addEventListener("message", (event: MessageEvent) => {
+   if (created === worker && event.data?.type === "ready") workerReady = true;
   });
+  worker.addEventListener("error", () => failWorker("issue worker failed to load"));
+  worker.addEventListener("messageerror", () => failWorker("issue worker sent an unreadable message"));
   return worker;
  } catch {
-  workerBroken = true;
+  failWorker("issue worker could not be created");
   return null;
  }
 }
@@ -82,9 +118,26 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
  if (!current) return Promise.reject(new Error("no issue worker"));
  const id = nextId++;
  return new Promise<T>((resolve, reject) => {
+  let stall: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+   clearTimeout(stall);
+   const wait = workerReady ? WORKER_STALL_MS : WORKER_START_MS;
+   stall = setTimeout(() => {
+    if (workerReady && wait === WORKER_START_MS) {
+     arm();
+     return;
+    }
+    failWorker(workerReady ? "issue worker stopped responding" : "issue worker never started", false);
+   }, wait);
+  };
+  const onFail = (reason: Error) => {
+   cleanup();
+   reject(reason);
+  };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
    const message = event.data;
    if (!message || message.id !== id) return;
+   arm();
    if (message.type === "error") {
     cleanup();
     reject(new Error(message.message));
@@ -98,6 +151,8 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
    reject(new DOMException("aborted", "AbortError"));
   };
   const cleanup = () => {
+   clearTimeout(stall);
+   pendingFailures.delete(onFail);
    current.removeEventListener("message", onMessage);
    signal?.removeEventListener("abort", onAbort);
   };
@@ -106,6 +161,8 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
    return;
   }
   signal?.addEventListener("abort", onAbort);
+  pendingFailures.add(onFail);
+  arm();
   current.addEventListener("message", onMessage);
   current.postMessage({ id, ...body });
  });
