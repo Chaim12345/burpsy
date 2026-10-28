@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1379,7 +1380,29 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		body["findings"] = []issueFindingView{}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if brief && !countOnly && len(views) >= gzipJSONMinRows && acceptsGzip(r) {
+		// The summary is ~370 bytes a row, so a big project is megabytes of repetitive JSON on every
+		// refetch. Compressed only for this read-only list, only when the client asked and the list is
+		// big enough to matter. Nothing streams here: the document is built in memory before it is sent.
+		var raw bytes.Buffer
+		if err := json.NewEncoder(&raw).Encode(body); err == nil {
+			w.Header().Add("Vary", "Accept-Encoding")
+			w.Header().Set("Content-Encoding", "gzip")
+			zw, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
+			_, _ = zw.Write(raw.Bytes())
+			_ = zw.Close()
+			return
+		}
+	}
 	json.NewEncoder(w).Encode(body)
+}
+
+// gzipJSONMinRows is the list length below which the summary is sent as is: compressing a few
+// hundred rows costs more CPU than the bytes it saves.
+const gzipJSONMinRows = 500
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
 // handleIssueByID routes /api/issues/{id} to the triage and delete paths. It exists as its own
