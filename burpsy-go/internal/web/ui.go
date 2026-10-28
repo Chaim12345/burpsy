@@ -45,11 +45,12 @@ func uiHandler(w http.ResponseWriter, r *http.Request) {
 // 2.7 MB of text, and sending it raw on every load (no validator, no compression) was the largest
 // cost of opening the console on a phone connection.
 type uiAsset struct {
-	once sync.Once
-	raw  []byte
-	gz   []byte
-	etag string
-	err  error
+	once   sync.Once
+	raw    []byte
+	gz     []byte
+	etag   string // identity representation; the gzip form carries etagGz
+	etagGz string
+	err    error
 }
 
 var uiAssets sync.Map // embedded name -> *uiAsset
@@ -63,7 +64,10 @@ func loadUIAsset(sub fs.FS, name string) *uiAsset {
 			return
 		}
 		sum := sha256.Sum256(a.raw)
-		a.etag = `"` + hex.EncodeToString(sum[:8]) + `"`
+		tag := hex.EncodeToString(sum[:8])
+		// Different bytes on the wire need different strong validators (RFC 9110 8.8.3).
+		a.etag = `"` + tag + `"`
+		a.etagGz = `"` + tag + `-gzip"`
 		var buf bytes.Buffer
 		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 		zw.Write(a.raw)
@@ -81,16 +85,21 @@ func serveUIFile(w http.ResponseWriter, r *http.Request, sub fs.FS, name, conten
 	}
 	h := w.Header()
 	h.Set("Content-Type", contentType)
-	h.Set("ETag", a.etag)
 	// no-cache means "revalidate", not "never store": a rebuilt console is picked up on the next
 	// load, an unchanged one costs a 304.
 	h.Set("Cache-Control", "no-cache")
 	h.Add("Vary", "Accept-Encoding")
-	if r.Header.Get("If-None-Match") == a.etag {
+	gz := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+	tag := a.etag
+	if gz {
+		tag = a.etagGz
+	}
+	h.Set("ETag", tag)
+	if etagMatches(r.Header.Get("If-None-Match"), tag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+	if gz {
 		h.Set("Content-Encoding", "gzip")
 		h.Set("Content-Length", strconv.Itoa(len(a.gz)))
 		w.Write(a.gz)
@@ -98,4 +107,19 @@ func serveUIFile(w http.ResponseWriter, r *http.Request, sub fs.FS, name, conten
 	}
 	h.Set("Content-Length", strconv.Itoa(len(a.raw)))
 	w.Write(a.raw)
+}
+
+// etagMatches reports whether an If-None-Match header covers tag: "*", or any entry of the
+// comma-separated list under weak comparison (a W/ prefix is ignored, RFC 9110 13.1.2).
+func etagMatches(header, tag string) bool {
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "*" {
+			return true
+		}
+		if strings.TrimPrefix(part, "W/") == tag {
+			return true
+		}
+	}
+	return false
 }

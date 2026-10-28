@@ -31,11 +31,31 @@ func TestUIAssetsAreCompressedAndRevalidated(t *testing.T) {
 			t.Fatalf("%s: no ETag", path)
 		}
 		req2 := httptest.NewRequest(http.MethodGet, path, nil)
+		req2.Header.Set("Accept-Encoding", "gzip")
 		req2.Header.Set("If-None-Match", etag)
 		rec2 := httptest.NewRecorder()
 		uiHandler(rec2, req2)
 		if rec2.Code != http.StatusNotModified {
 			t.Fatalf("%s: revalidation got %d", path, rec2.Code)
+		}
+		// Representation-specific validators, weak tags, lists and * all revalidate.
+		for _, inm := range []string{"W/" + etag, `"nope", ` + etag, "*"} {
+			r4 := httptest.NewRequest(http.MethodGet, path, nil)
+			r4.Header.Set("Accept-Encoding", "gzip")
+			r4.Header.Set("If-None-Match", inm)
+			rec4 := httptest.NewRecorder()
+			uiHandler(rec4, r4)
+			if rec4.Code != http.StatusNotModified {
+				t.Fatalf("%s: If-None-Match %q got %d", path, inm, rec4.Code)
+			}
+		}
+		// The gzip tag must not validate the identity representation, or the reverse.
+		r5 := httptest.NewRequest(http.MethodGet, path, nil)
+		r5.Header.Set("If-None-Match", etag)
+		rec5 := httptest.NewRecorder()
+		uiHandler(rec5, r5)
+		if rec5.Code != http.StatusOK || rec5.Header().Get("ETag") == etag {
+			t.Fatalf("%s: identity response reused the gzip validator (%d, %q)", path, rec5.Code, rec5.Header().Get("ETag"))
 		}
 		// A client that does not accept gzip still gets the plain bytes.
 		rec3 := httptest.NewRecorder()
