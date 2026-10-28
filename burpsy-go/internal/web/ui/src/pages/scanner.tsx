@@ -214,6 +214,8 @@ function flattenIssueTree(groups: HostGroup[], collapsed: Record<string, boolean
  return out;
 }
 
+const NO_ISSUE_NAMES: string[] = [];
+
 export function ScannerPage(): JSX.Element {
  const { data: issues, error, isFetching, refetch } = useIssuesDetailed();
  const focusExchange = useApp((state) => state.focusExchange);
@@ -329,6 +331,13 @@ export function ScannerPage(): JSX.Element {
  }, [issues, severities, confidences, hideFalsePositives, sourceFilter, debouncedTerm]);
 
  const groups = useMemo(() => groupFindings(rows), [rows]);
+ // Only the consolidation dialog reads these, so a closed dialog must not walk every finding on
+ // each render (a scroll re-renders this page; with tens of thousands of findings that walk,
+ // a Set and a sort ran per scroll tick).
+ const issueNames = useMemo(
+  () => (consolidationOpen ? [...new Set((issues?.findings ?? []).flatMap((finding) => (finding.check_name ? [finding.check_name] : [])))].sort() : NO_ISSUE_NAMES),
+  [consolidationOpen, issues],
+ );
  const flatRows = useMemo(() => flattenIssueTree(groups, collapsed), [groups, collapsed]);
  const treeRef = useRef<HTMLDivElement>(null);
  const rowVirtualizer = useVirtualizer({
@@ -1058,7 +1067,7 @@ export function ScannerPage(): JSX.Element {
    <ConsolidationDialog
     open={consolidationOpen}
     onOpenChange={setConsolidationOpen}
-    issueNames={[...new Set((issues?.findings ?? []).flatMap((finding) => (finding.check_name ? [finding.check_name] : [])))].sort()}
+    issueNames={issueNames}
    />
   </div>
  );

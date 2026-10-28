@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, json, query } from "./api";
 import { loadIssueDocument } from "./issue-worker";
+import { createRefetchPacer } from "./refetch-pacer";
 import { useApp, type RepeaterTab } from "./store";
 import type {
  Dashboard,
@@ -382,10 +383,12 @@ export const useDashboard = () => useResource<Dashboard>(keys.dashboard, "/api/d
  */
 /** Summary rows for the tree and any other reader of the same cache entry. Parsed in the issue
  * worker when the browser has one, so opening this list is not a main-thread JSON.parse. */
+const paceIssueSummary = createRefetchPacer();
+
 export function useIssueSummary(enabled = true) {
  return useQuery({
   queryKey: [...keys.issues, "summary"],
-  queryFn: ({ signal }) => loadIssueDocument("/api/issues?summary=1", signal),
+  queryFn: ({ signal }) => paceIssueSummary(() => loadIssueDocument("/api/issues?summary=1", signal), signal),
   enabled,
  });
 }
