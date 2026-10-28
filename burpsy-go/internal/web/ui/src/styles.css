@@ -2415,6 +2415,7 @@ tbody td {
 }
 
 .detail-head {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2470,6 +2471,7 @@ tbody td {
 
 .prose {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.6;
   font-size: var(--fs-md);
   color: var(--text-soft);
@@ -3303,6 +3305,7 @@ tbody td {
   min-height: 0;
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
@@ -3373,6 +3376,7 @@ tbody td {
 
 /* The advisory prose scrolls; the request/response tabs hand their whole track to the editor. */
 .advisory-body {
+  grid-template-columns: minmax(0, 1fr);
   overflow: auto;
   scrollbar-width: thin;
   padding:var(--s3);
@@ -3582,6 +3586,19 @@ tbody td {
      own; left to the auto grid row it collapsed to a strip under the toolbar. */
   .page-fill .split-pane {
     min-height: 70vh;
+  }
+  /* The finding title is the one place its full name shows, so on a phone it wraps instead of
+     clipping at the pane edge. */
+  .detail-head-title {
+    flex-wrap: wrap;
+  }
+  .detail-head-title h2 {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .detail-head-title strong {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   /* A grid column defaults to min-content, so one wide table or toolbar widened the whole page
      past the screen and clipped everything on its right edge. */
