@@ -389,6 +389,17 @@ export function TabsContent({ className, ...props }: TabsPrimitive.TabsContentPr
  return <TabsPrimitive.Content className={cn("tabs-content", className)} {...props} />;
 }
 
+/**
+ * Default start point for a dialog: the dialog itself, not its first tabbable element. That element
+ * is the header's Close button, and focusing it opens its tooltip, which is a dismissable layer of
+ * its own - so the first Escape closed the tooltip and the dialog stayed open until a second press.
+ */
+function focusDialogItself(event: Event): void {
+ event.preventDefault();
+ const content = (event.currentTarget as HTMLElement | null) ?? null;
+ content?.focus();
+}
+
 export function Modal({
  open,
  onOpenChange,
@@ -426,7 +437,7 @@ export function Modal({
     <Dialog.Content
      className={cn("dialog-content", wide && "dialog-wide")}
      onCloseAutoFocus={onCloseAutoFocus}
-     onOpenAutoFocus={onOpenAutoFocus}
+     onOpenAutoFocus={onOpenAutoFocus ?? focusDialogItself}
     >
      <div className="dialog-head">
       <div>
