@@ -3549,6 +3549,54 @@ tbody td {
   .page-fill {
     padding:var(--s2);
   }
+  /* Header actions wrap under the title instead of widening the page past the screen. */
+  .page-header {
+    flex-wrap: wrap;
+  }
+  .page-header-text,
+  .page-actions {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* One scrolling line of controls keeps the working surface below it on screen; a wrapped
+     toolbar took half of a 390px-tall-pane before the first row. */
+  .page-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+  .page-actions > * {
+    flex: none;
+  }
+  .task-sidebar {
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* The page scrolls on a phone (main is overflow:auto), so a split pane needs a height of its
+     own; left to the auto grid row it collapsed to a strip under the toolbar. */
+  .page-fill .split-pane {
+    min-height: 70vh;
+  }
+  /* A grid column defaults to min-content, so one wide table or toolbar widened the whole page
+     past the screen and clipped everything on its right edge. */
+  .page,
+  .page-fill {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .page > *,
+  .page-fill > * {
+    min-width: 0;
+  }
+  .toolbar:has(> .filter-group) {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .toolbar:has(> .filter-group) > * {
+    flex: none;
+  }
   .page-fill {
     grid-template-rows: auto auto;
   }

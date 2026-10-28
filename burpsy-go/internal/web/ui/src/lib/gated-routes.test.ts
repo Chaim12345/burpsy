@@ -122,6 +122,7 @@ describe("no mutating call bypasses the gated client", () => {
  const ALLOWED_RAW_FETCH: Record<string, string> = {
   "src/app.tsx:/api/config/export": "GET download of the configuration",
   "src/lib/data.policy.ts:/ca.crt": "HEAD probe of the CA certificate",
+  "src/issues.worker.ts:<message.url>": "GET of /api/issues only; the worker rejects any other URL before fetching",
   "src/pages/intruder.tsx:/api/intruder/payload-files": "riskLocal upload (ungated)",
   "src/ui/clickbandit-dialog.tsx:/api/engagement/clickbandit.js": "GET of the Clickbandit script as text, not JSON",
  };

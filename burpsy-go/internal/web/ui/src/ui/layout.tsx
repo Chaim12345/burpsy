@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { Component, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
+import { Component, useEffect, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { cn } from "../lib/cn";
 import { requestSettingsSection, type SettingsSectionId } from "../lib/settings-sections";
@@ -92,6 +92,22 @@ export function RefreshButton({
  * Resizable master/detail split. `storageId` persists the drag position so an
  * operator's chosen layout survives navigation and reloads.
  */
+/** Phone-width viewports: a side-by-side split leaves each pane too narrow to read, so it stacks. */
+const NARROW_QUERY = "(max-width: 760px)";
+
+function useNarrowViewport(): boolean {
+ const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(NARROW_QUERY).matches);
+ useEffect(() => {
+  if (typeof window.matchMedia !== "function") return;
+  const media = window.matchMedia(NARROW_QUERY);
+  const update = () => setNarrow(media.matches);
+  update();
+  media.addEventListener("change", update);
+  return () => media.removeEventListener("change", update);
+ }, []);
+ return narrow;
+}
+
 export function SplitPane({
  master,
  detail,
@@ -111,23 +127,27 @@ export function SplitPane({
  minMasterSize?: string;
  className?: string;
 }): JSX.Element {
+ const narrow = useNarrowViewport();
+ const stacked = narrow && orientation === "horizontal";
+ const effective = stacked ? "vertical" : orientation;
  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-  id: `burpsy.split.${storageId}`,
+  id: `burpsy.split.${storageId}${stacked ? ".stacked" : ""}`,
   panelIds: ["master", "detail"],
   storage: localStorage,
  });
 
  return (
   <Group
-   className={cn("split-pane", `split-${orientation}`, className)}
-   orientation={orientation}
+   key={effective}
+   className={cn("split-pane", `split-${effective}`, className)}
+   orientation={effective}
    defaultLayout={defaultLayout}
    onLayoutChanged={onLayoutChanged}
   >
    <Panel id="master" defaultSize={defaultMasterSize} minSize={minMasterSize} className="split-panel">
     {master}
    </Panel>
-   <Separator className={orientation === "vertical" ? "resize-handle resize-handle-y" : "resize-handle resize-handle-x"}>
+   <Separator className={effective === "vertical" ? "resize-handle resize-handle-y" : "resize-handle resize-handle-x"}>
     <span className="resize-grip" />
    </Separator>
    <Panel id="detail" minSize="15" className="split-panel">

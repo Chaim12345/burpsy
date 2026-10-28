@@ -46,6 +46,9 @@ scope.onmessage = (event) => {
 
 async function run(message: LoadRequest): Promise<void> {
  try {
+  // The page names the URL, so the worker only ever reads the issues document: it cannot be
+  // pointed at a mutating or gated route, and it never sends a body or a confirm token.
+  if (!/^\/api\/issues(\?|$)/.test(message.url)) throw new Error("issue worker only reads /api/issues");
   const response = await fetch(message.url);
   const text = await response.text();
   if (cancelled.has(message.id)) return;
