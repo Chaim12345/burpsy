@@ -63,8 +63,12 @@ func TestIssueSummaryIsGzippedWhenLargeAndAsked(t *testing.T) {
 
 func TestIssueGzipSkipsSmallListsCountAndFullDocument(t *testing.T) {
 	small := gzipIssuesServer(5)
-	if getIssues(small, "/api/issues?summary=1", "gzip").Header().Get("Content-Encoding") != "" {
+	smallRec := getIssues(small, "/api/issues?summary=1", "gzip")
+	if smallRec.Header().Get("Content-Encoding") != "" {
 		t.Error("a small list must not be compressed")
+	}
+	if smallRec.Header().Get("Vary") == "" {
+		t.Error("the small identity variant must also say Vary: Accept-Encoding")
 	}
 	big := gzipIssuesServer(gzipJSONMinRows + 10)
 	if getIssues(big, "/api/issues?count=1", "gzip").Header().Get("Content-Encoding") != "" {

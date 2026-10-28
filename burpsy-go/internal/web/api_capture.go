@@ -1380,8 +1380,9 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		body["findings"] = []issueFindingView{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if brief && !countOnly && len(views) >= gzipJSONMinRows {
-		// Both variants of this response depend on the request's Accept-Encoding.
+	if brief && !countOnly {
+		// The representation of this response depends on Accept-Encoding and on how many rows exist, so
+		// every variant, including the small identity one, says so.
 		w.Header().Add("Vary", "Accept-Encoding")
 	}
 	if brief && !countOnly && len(views) >= gzipJSONMinRows && acceptsGzip(r) {
