@@ -273,6 +273,37 @@ function CataloguePalette({
  return <CommandPalette open={open} onOpenChange={onOpenChange} actions={all} />;
 }
 
+/**
+ * Status-bar readouts that change on every server event or stats refetch. They subscribe here, not
+ * in App, so a burst of events re-renders two spans instead of the whole shell (tabs, menus, palette).
+ */
+function StoreStats(): JSX.Element {
+ const stats = useStats();
+ return (
+  <>
+   <span>
+    <Database size={11} />
+    {stats.data ? formatBytes(stats.data.stored_bytes) : "—"} stored
+   </span>
+   <span title="The proxy listener every client points at (the -proxy address)">
+    <Network size={11} />
+    {stats.data?.proxy_bind ?? "proxy: —"}
+   </span>
+   <span>
+    <Network size={11} />
+    {formatCount(stats.data?.exchanges)} exchanges
+   </span>
+   <span>{formatCount(stats.data?.messages)} messages</span>
+  </>
+ );
+}
+
+function LastEvent(): JSX.Element {
+ const lastEventAt = useConnection((state) => state.lastEventAt);
+ const eventCount = useConnection((state) => state.eventCount);
+ return <span className="status-push">{eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}</span>;
+}
+
 function App(): JSX.Element {
  const route = useApp((state) => state.route);
  const setRoute = useApp((state) => state.setRoute);
@@ -337,7 +368,6 @@ function App(): JSX.Element {
  // single page can promise, and the palette-equivalent action it runs is the shell's too.
  usePluginHotkeys();
 
- const stats = useStats();
  const scope = useScope();
  // Whether there is a CA to hand out at all. TLS interception is off unless burpsy was started with
  // -intercept-tls, and /ca.crt answers 404 in that case — so the status bar, the menu and the
@@ -395,8 +425,6 @@ function App(): JSX.Element {
   });
  }, [project.data?.persisted, project.data?.name, renameProject]);
  const live = useConnection((state) => state.live);
- const lastEventAt = useConnection((state) => state.lastEventAt);
- const eventCount = useConnection((state) => state.eventCount);
 
  // Tool attention (burpsy-react-ui-xvo). Burp's shell owns this per tool rather than letting each
  // tool surface it on its own page, and the reason is the Proxy case below: interception holding a
@@ -1665,19 +1693,7 @@ function App(): JSX.Element {
       <span className={live ? "status-dot live" : "status-dot stale"} />
       {live ? "event stream connected" : "event stream offline"}
      </span>
-     <span>
-      <Database size={11} />
-      {stats.data ? formatBytes(stats.data.stored_bytes) : "—"} stored
-     </span>
-     <span title="The proxy listener every client points at (the -proxy address)">
-      <Network size={11} />
-      {stats.data?.proxy_bind ?? "proxy: —"}
-     </span>
-     <span>
-      <Network size={11} />
-      {formatCount(stats.data?.exchanges)} exchanges
-     </span>
-     <span>{formatCount(stats.data?.messages)} messages</span>
+     <StoreStats />
      <span>
       {scopeAllowsEverything(scope.data)
        ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}`
@@ -1694,7 +1710,7 @@ function App(): JSX.Element {
        no CA
       </span>
      )}
-     <span className="status-push">{eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}</span>
+     <LastEvent />
     </footer>
    </div>
 
