@@ -1,0 +1,10 @@
+<div id="rows">
+<form hx-post="/ui2/repeater/send" hx-target="#rows" hx-swap="outerHTML">
+  <textarea name="raw" rows="14" style="width:100%; font-family:ui-monospace,monospace" aria-label="Request to send">{{.draft}}</textarea>
+  <div style="margin:6px 0;"><button type="submit">Send</button></div>
+</form>
+{{if .result}}
+<h3>Response</h3>
+<pre>{{.result}}</pre>
+{{end}}
+</div>

@@ -1,0 +1,35 @@
+<div id="rows">
+<h3>Listeners</h3>
+{{if .listeners.listeners}}
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Bind</th><th scope="col">Bound</th><th scope="col">Redirect</th><th scope="col">Force TLS</th><th scope="col">Invisible</th></tr></thead>
+<tbody>
+{{range .listeners.listeners}}
+<tr><td>{{.id}}</td><td>{{.bind}}</td><td>{{.bound_addr}}</td><td>{{.redirect_to}}</td><td>{{.force_tls}}</td><td>{{.invisible}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No listener attached.</p>{{end}}
+<h3>Response modification options</h3>
+{{if .options.options}}
+<table>
+<tbody>
+{{range $k, $v := .options.options}}<tr><td>{{$k}}</td><td>{{if $v}}on{{else}}off{{end}}</td></tr>{{end}}
+</tbody>
+</table>
+{{if .options.counters}}<p class="meta">counters: {{range $k, $v := .options.counters}}{{$k}}={{$v}} {{end}}</p>{{end}}
+{{else}}<p class="meta">No proxy options attached.</p>{{end}}
+<h3>Match &amp; replace rules</h3>
+{{if .rules.rules}}
+<table>
+<thead><tr><th scope="col">Enabled</th><th scope="col">Dir</th><th scope="col">Type</th><th scope="col">Match</th><th scope="col">Replace</th></tr></thead>
+<tbody>
+{{range .rules.rules}}
+<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.direction}}</td><td>{{.type}}</td><td>{{.match}}</td><td>{{.replace}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No match &amp; replace rules.</p>{{end}}
+<h3>TLS passthrough</h3>
+{{if .passthrough.hosts}}<p class="meta">{{range .passthrough.hosts}}{{.}} {{end}}</p>{{else}}<p class="meta">No passthrough hosts.</p>{{end}}
+</div>

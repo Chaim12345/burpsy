@@ -1,0 +1,19 @@
+<div id="rows">
+<p class="meta">interception {{if .enabled}}ON{{else}}OFF{{end}} · wired={{.wired}} · {{.pending}} held · in-scope-only={{.in_scope_only}}</p>
+{{if .enabled}}
+<form hx-post="/ui2/intercept/disable" hx-target="#rows" hx-swap="outerHTML"><button>Disable interception</button></form>
+{{else}}
+<form hx-post="/ui2/intercept/enable" hx-target="#rows" hx-swap="outerHTML"><button>Enable interception</button></form>
+{{end}}
+<form hx-post="/ui2/intercept/forward-all" hx-target="#rows" hx-swap="outerHTML"><button>Forward all</button></form>
+<form hx-post="/ui2/intercept/drop-all" hx-target="#rows" hx-swap="outerHTML"><button>Drop all</button></form>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Dir</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Held</th><th scope="col">Len</th></tr></thead>
+<tbody>
+{{range .held}}
+<tr><td>{{.id}}</td><td>{{.direction}}</td><td>{{.host}}</td><td title="{{.path}}">{{.path}}</td>
+<td>{{if .status}}{{.status}}{{else}}—{{end}}</td><td>{{.held_ms}} ms</td><td>{{.len}}</td></tr>
+{{else}}<tr><td colspan="7" class="meta">Nothing held.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

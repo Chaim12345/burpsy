@@ -1,0 +1,23 @@
+{{define "nav"}}
+<nav aria-label="Tools">
+  <a href="/ui2/dashboard" class="{{if eq .View "dashboard"}}active{{end}}">Dashboard</a>
+  <a href="/ui2/sitemap" class="{{if eq .View "sitemap"}}active{{end}}">Site map</a>
+  <a href="/ui2/scope" class="{{if eq .View "scope"}}active{{end}}">Scope</a>
+  <a href="/ui2/scanner" class="{{if eq .View "scanner"}}active{{end}}">Scanner</a>
+  <a href="/ui2/issues" class="{{if eq .View "issues"}}active{{end}}">Issues</a>
+  <a href="/ui2/advisories" class="{{if eq .View "advisories"}}active{{end}}">Definitions</a>
+  <a href="/ui2/intercept" class="{{if eq .View "intercept"}}active{{end}}">Intercept</a>
+  <a href="/ui2/history" class="{{if eq .View "history"}}active{{end}}">History</a>
+  <a href="/ui2/ws" class="{{if eq .View "ws"}}active{{end}}">WS</a>
+  <a href="/ui2/proxy" class="{{if eq .View "proxy"}}active{{end}}">Proxy</a>
+  <a href="/ui2/repeater" class="{{if eq .View "repeater"}}active{{end}}">Repeater</a>
+  <a href="/ui2/decoder" class="{{if eq .View "decoder"}}active{{end}}">Decoder</a>
+  <a href="/ui2/comparer" class="{{if eq .View "comparer"}}active{{end}}">Comparer</a>
+  <a href="/ui2/logger" class="{{if eq .View "logger"}}active{{end}}">Logger</a>
+  <a href="/ui2/organizer" class="{{if eq .View "organizer"}}active{{end}}">Organizer</a>
+  <a href="/ui2/session" class="{{if eq .View "session"}}active{{end}}">Session</a>
+  <a href="/ui2/extensions" class="{{if eq .View "extensions"}}active{{end}}">Extensions</a>
+  <a href="/ui2/settings" class="{{if eq .View "settings"}}active{{end}}">Settings</a>
+  <a href="/" title="the original React console">old UI</a>
+</nav>
+{{end}}

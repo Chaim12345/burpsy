@@ -1,0 +1,13 @@
+<div id="rows">
+<form hx-post="/ui2/comparer/run" hx-target="#rows" hx-swap="outerHTML">
+  <div style="display:flex; gap:8px;">
+    <textarea name="a" rows="10" style="width:49%" aria-label="First buffer" placeholder="first">{{.a}}</textarea>
+    <textarea name="b" rows="10" style="width:49%" aria-label="Second buffer" placeholder="second">{{.b}}</textarea>
+  </div>
+  <div style="margin:6px 0;"><button type="submit">Compare</button></div>
+</form>
+{{if .result}}
+<h3>Diff</h3>
+<pre>{{.result}}</pre>
+{{end}}
+</div>

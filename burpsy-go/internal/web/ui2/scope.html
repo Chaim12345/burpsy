@@ -1,0 +1,17 @@
+<div id="rows">
+<p class="meta">allow_all={{.allow_all}} · drop_out_of_scope={{.drop_out_of_scope}} · drop by {{.drop_scope.mode}} · {{if .empty}}no rules{{else}}{{len .rules}} rules{{end}}</p>
+<table>
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th></tr></thead>
+<tbody>
+{{range .rules}}
+<tr class="{{if not .enabled}}meta{{end}}">
+  <td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td>
+  <td>{{if .host}}{{.host}}{{else}}*{{end}}</td>
+  <td>{{if .path}}{{.path}}{{else}}—{{end}}</td>
+  <td>{{if .port}}{{.port}}{{else}}—{{end}}</td>
+  <td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td>
+</tr>
+{{else}}<tr><td colspan="6" class="meta">No scope rules.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

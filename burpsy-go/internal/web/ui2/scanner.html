@@ -1,0 +1,28 @@
+<div id="rows">
+<h3>Scan configurations</h3>
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">Shipped</th><th scope="col">Note</th></tr></thead>
+<tbody>
+{{range .configs.configs}}
+<tr><td>{{.name}}</td><td>{{if .shipped}}shipped{{else}}custom{{end}}</td><td class="meta">{{.note}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No configurations.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Live audit</h3>
+<p class="meta">wired={{.live.wired}} enabled={{.live.enabled}} config={{.live.config}} behind={{.live.behind}}</p>
+<h3>BCheck corpus ({{.checks.active_count}} active)</h3>
+<table>
+<thead><tr><th scope="col">Check</th><th scope="col">Active</th><th scope="col">Passive</th><th scope="col">Ran</th></tr></thead>
+<tbody>
+{{range .checks.checks}}
+<tr class="{{if not .active}}meta{{end}}"><td>{{.name}}</td><td>{{if .active}}on{{else}}off{{end}}</td><td>{{if .passive}}passive{{else}}active{{end}}</td><td>{{.run_count}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No checks loaded.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Coverage</h3>
+{{if .coverage.enabled}}<p class="meta">enabled, {{.coverage.loaded}} checks loaded</p>{{else}}<p class="meta">not enabled</p>{{end}}
+<h3>Audit queue</h3>
+<p class="meta">{{.audit_items.returned}} items · queue retained={{.audit_items.queue.retained}} evicted={{.audit_items.queue.evicted}}</p>
+<h3>Engine config</h3>
+<p class="meta">max_concurrency={{.config.max_concurrency}} timeout_ms={{.config.timeout_ms}}</p>
+</div>

@@ -1,0 +1,19 @@
+<div id="rows">
+<h3>Session handling rules</h3>
+{{if .rules.wired}}
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Host</th><th scope="col">Enabled</th></tr></thead>
+<tbody>
+{{range .rules.rules}}
+<tr><td>{{.id}}</td><td>{{.type}}</td><td>{{.host}}</td><td>{{if .enabled}}on{{else}}off{{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No rules.</td></tr>{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No session coordinator wired.</p>{{end}}
+<h3>Cookie jar</h3>
+<p class="meta">{{.cookies.hint}}</p>
+<h3>Trace</h3>
+<p class="meta">recording={{.trace.enabled}} · {{len .trace.entries}} entries</p>
+<h3>Pending prompts</h3>
+<p class="meta">{{if .prompts.prompts}}{{len .prompts.prompts}} pending{{else}}none{{end}}</p>
+</div>

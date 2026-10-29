@@ -1,0 +1,21 @@
+<div id="rows">
+<p class="meta">{{.extensions.loaded}} loaded · {{.extensions.allowlisted}} allowlisted · {{.extensions.failed}} failed · {{.extensions.crashed}} crashed</p>
+<p class="meta">{{.extensions.detail}}</p>
+<table>
+<thead><tr><th scope="col">Plugin</th><th scope="col">State</th><th scope="col">Registrations</th></tr></thead>
+<tbody>
+{{range .extensions.extensions}}
+<tr><td>{{.name}}</td><td>{{.state}}</td><td>{{range .registrations}}{{.}} {{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No plugins loaded.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>JSON-RPC API</h3>
+{{if .apis.methods}}
+<table>
+<thead><tr><th scope="col">Method</th><th scope="col">Description</th></tr></thead>
+<tbody>
+{{range .apis.methods}}<tr><td>{{.method}}</td><td class="meta">{{.description}}</td></tr>{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No API methods registered.</p>{{end}}
+</div>

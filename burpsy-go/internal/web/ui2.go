@@ -24,14 +24,44 @@ var ui2FS embed.FS
 // land in these pages — auto-escaping is not optional here.
 var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"lower": strings.ToLower,
+	"until": func(n int) []int { return make([]int, n) },
 }).ParseFS(ui2FS,
 	"ui2/layout.html",
+	"ui2/nav.html",
+	"ui2/dashboard.html",
+	"ui2/sitemap.html",
+	"ui2/scope.html",
+	"ui2/intercept.html",
+	"ui2/logger.html",
+	"ui2/ws.html",
+	"ui2/proxy.html",
+	"ui2/extensions.html",
+	"ui2/scanner.html",
+	"ui2/advisories.html",
+	"ui2/organizer.html",
+	"ui2/session.html",
+	"ui2/decoder.html",
+	"ui2/comparer.html",
+	"ui2/repeater.html",
+	"ui2/settings.html",
+	"ui2/error.html",
 	"ui2/history_rows.html",
 	"ui2/history_rows_append.html",
 	"ui2/history_detail.html",
 	"ui2/issue_groups.html",
 	"ui2/issue_detail.html",
 ))
+
+// ui2Error is the model for error.html.
+type ui2Error struct{ Message string }
+
+// ui2StatusString2 renders a *int status the way rows do ("—" when nil).
+func ui2StatusString2(s *int) string {
+	if s == nil {
+		return "—"
+	}
+	return strconv.Itoa(*s)
+}
 
 // ui2Page is the per-request model for the layout wrapper.
 type ui2Page struct {

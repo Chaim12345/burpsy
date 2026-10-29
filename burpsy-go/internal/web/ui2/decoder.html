@@ -1,0 +1,18 @@
+<div id="rows">
+<form hx-post="/ui2/decoder/run" hx-target="#rows" hx-swap="outerHTML">
+  <textarea name="input" rows="8" style="width:100%" aria-label="Input buffer" placeholder="paste data here">{{.input}}</textarea>
+  <div style="display:flex; gap:6px; margin:6px 0;">
+    <select name="op" aria-label="Operation">
+      <option value="decode" {{if eq .op "decode"}}selected{{end}}>decode</option>
+      <option value="encode" {{if eq .op "encode"}}selected{{end}}>encode</option>
+      <option value="hash" {{if eq .op "hash"}}selected{{end}}>hash</option>
+    </select>
+    <input type="text" name="arg" aria-label="Operation argument (layer or algorithm)" placeholder="base64 / md5 / sha256…" value="{{.arg}}">
+    <button type="submit">Run</button>
+  </div>
+</form>
+{{if .result}}
+<h3>Result</h3>
+<pre>{{.result}}</pre>
+{{end}}
+</div>

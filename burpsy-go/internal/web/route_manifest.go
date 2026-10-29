@@ -1358,6 +1358,38 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "history",
 		summary: "the server-rendered /ui2/ console shell (htmx + SSE), served beside the React SPA at /",
 	},
+	"/ui2/advisories": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 issue-definition catalogue page",
+	},
+	"/ui2/app.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "the ui2 console's entire client-side script (SSE live-refresh + infinite-scroll cleanup), kept as a static file so html/template never parses JS",
+	},
+	"/ui2/comparer": {
+		methods: []string{"GET", "POST"}, risk: riskAsset,
+		summary: "ui2 Comparer: GET the form, POST /ui2/comparer/run diffs two buffers via /api/tools/compare",
+	},
+	"/ui2/comparer/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Comparer run: POST the two buffers, render the diff fragment",
+	},
+	"/ui2/dashboard": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 dashboard: coverage summaries, tasks, activity, events, pause state",
+	},
+	"/ui2/decoder": {
+		methods: []string{"GET", "POST"}, risk: riskAsset,
+		summary: "ui2 Decoder: GET the form, POST /ui2/decoder/run runs one decode/encode/hash layer",
+	},
+	"/ui2/decoder/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Decoder run: forwards to /api/tools/decode|encode|hash and renders the result",
+	},
+	"/ui2/extensions": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Extensions page: plugin list, state breakdown, JSON-RPC API table",
+	},
 	"/ui2/history": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 history page: server-paged rows (q/search/offset/limit), fragment when HX-Request",
@@ -1365,6 +1397,18 @@ var manifest = map[string]route{
 	"/ui2/history/{id}": {
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one exchange's request/response panes (message bytes read here, never in the list)",
+	},
+	"/ui2/htmx.min.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "vendored htmx 2.0.4 (50,917 bytes) serving as the ui2 client runtime",
+	},
+	"/ui2/intercept": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 intercept page: state, held queue, enable/disable/forward-all/drop-all actions",
+	},
+	"/ui2/intercept/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "enable",
+		summary: "ui2 intercept action (enable/disable/forward-all/drop-all): applies the change and re-renders the queue",
 	},
 	"/ui2/issues": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1374,16 +1418,52 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one finding's detail: evidence, occurrences, advisory — the pane the list omits",
 	},
-	"/ui2/app.js": {
+	"/ui2/logger": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "the ui2 console's entire client-side script (SSE live-refresh + infinite-scroll cleanup), kept as a static file so html/template never parses JS",
+		summary: "ui2 Logger page: tool-sent requests, server-paged with search and infinite scroll",
 	},
-	"/ui2/htmx.min.js": {
+	"/ui2/organizer": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "vendored htmx 2.0.4 (50,917 bytes) serving as the ui2 client runtime",
+		summary: "ui2 Organizer page: saved items and collections",
+	},
+	"/ui2/proxy": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 proxy settings page: listeners, response-modification options, match&replace, passthrough",
+	},
+	"/ui2/repeater": {
+		methods: []string{"GET", "POST"}, risk: riskAsset,
+		summary: "ui2 Repeater: GET the editor with the latest captured request, POST /ui2/repeater/send sends it",
+	},
+	"/ui2/repeater/send": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Repeater send: forwards the draft through /api/repeater/send and renders the outcome",
+	},
+	"/ui2/scanner": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Scanner page: saved configurations, BCheck corpus, coverage, live-audit state, audit queue",
+	},
+	"/ui2/scope": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Scope page: include/exclude rules, drop switches, libraries",
+	},
+	"/ui2/session": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Session page: handling rules, cookie jar, trace, pending prompts",
+	},
+	"/ui2/settings": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Settings page: project, stats, CA, pools, schedules, skills, wordlists, triage, certs, browser, events",
+	},
+	"/ui2/sitemap": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 site map page: host→path tree flattened with counts, scope dimming and issue markers",
 	},
 	"/ui2/sse.min.js": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "vendored htmx SSE extension (3,523 bytes) bridging /api/events to DOM swaps",
+	},
+	"/ui2/ws": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 WebSockets page: relayed connections and recent frames",
 	},
 }

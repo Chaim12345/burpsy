@@ -1,0 +1,18 @@
+<div id="rows">
+<p class="meta">{{.Tree.Exchanges}} exchanges · {{.Tree.Nodes}} nodes · {{.Tree.Synced}} synced</p>
+<table>
+<thead><tr><th scope="col"></th><th scope="col">Path</th><th scope="col">Exch</th><th scope="col">Subtree</th><th scope="col">Methods</th><th scope="col">Statuses</th><th scope="col">MIME</th><th scope="col">Issues</th><th scope="col">Scope</th></tr></thead>
+<tbody>
+{{range .Flat}}
+<tr class="{{if not .InScope}}meta{{end}}">
+  <td>{{if gt .Depth 0}}{{range $i := until .Depth}}·{{end}}{{end}}</td>
+  <td title="{{.Path}}">{{if .Segment}}{{.Segment}}{{else}}{{.Path}}{{end}}</td>
+  <td>{{.Exchanges}}</td><td>{{.Subtree}}</td><td>{{.Methods}}</td><td>{{.Statuses}}</td>
+  <td>{{.Mimes}}</td>
+  <td>{{if .SubtreeIssues}}<span class="sev sev-{{.Worst | lower}}">{{.Worst}}</span> {{.SubtreeIssues}}{{end}}</td>
+  <td>{{if .InScope}}in{{else}}out{{end}}</td>
+</tr>
+{{else}}<tr><td colspan="9" class="meta">Site map is empty — capture some traffic first.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

@@ -1,0 +1,28 @@
+<div id="rows">
+<h3>Project</h3>
+<p class="meta">{{.project.name}} · {{.project.database}} · persisted={{.project.persisted}}</p>
+<h3>Counters</h3>
+<p class="meta">{{.stats.exchanges}} exchanges · {{.stats.messages}} messages · {{.stats.stored_bytes}} bytes · proxy {{.stats.proxy_bind}} · web {{.stats.web_bind}} · tls_interception={{.stats.tls_interception}} · dom={{.stats.dom_engine}}</p>
+<h3>CA</h3>
+<p class="meta">{{if .ca.subject}}subject={{.ca.subject}} expires={{.ca.not_after}}{{else}}no CA{{end}}</p>
+<h3>Pools</h3>
+<p class="meta">{{.pools.count}} saved · default max_concurrent={{.pools.default.max_concurrent}} delay_ms={{.pools.default.delay_ms}}</p>
+<h3>Schedules</h3>
+<p class="meta">{{.schedules.count}} saved · fired={{.schedules.totals.fired}} failed={{.schedules.totals.failed}} missed={{.schedules.totals.missed}}</p>
+<h3>Skills</h3>
+<p class="meta">{{if .skills.configured}}{{.skills.count}} loaded{{else}}not configured{{end}}</p>
+<h3>Wordlists</h3>
+<p class="meta">{{range .wordlists.lists}}{{.name}} ({{.words}}) {{end}}</p>
+<h3>Triage (LLM second look)</h3>
+<p class="meta">enabled={{.triage.enabled}} model={{.triage.model}} configured={{.triage.configured}}</p>
+<h3>Network auth</h3>
+<p class="meta">{{if .netauth.empty}}no rules{{else}}{{len .netauth.rules}} rules{{end}} · schemes: {{range .netauth.schemes}}{{.}} {{end}}</p>
+<h3>Server certificates</h3>
+<p class="meta">{{if .certs.certificates}}{{len .certs.certificates}} recorded{{else}}none{{end}}</p>
+<h3>Browser</h3>
+<p class="meta">data dir={{.browser.browser_data_directory}} sandbox={{.browser.allow_running_without_sandbox}}</p>
+<h3>Live event stream</h3>
+<p class="meta">subscribers={{.events.subscribers}} frames={{.events.frames}} changes={{.events.changes}} merges={{.events.merges}}</p>
+<h3>Protocols</h3>
+<p class="meta">{{range .protocols.authorities}}{{.authority}} {{.http1}}/{{.http2}} {{end}}</p>
+</div>
