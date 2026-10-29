@@ -202,41 +202,7 @@ func (s *Server) handleXUIDetail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleXUIProveStream(w http.ResponseWriter, r *http.Request) {
 	s.xuiStream(w, r, func(sse *datastar.ServerSentEventGenerator, q string) error {
-		needle := strings.ToLower(q)
-		counts := map[string]int{}
-		var rows []xui.Finding
-		total := 0
-		for _, f := range s.findings.All() {
-			if s.findingIsolated(f) {
-				continue
-			}
-			v := s.findingToIssueView(f)
-			if v.FalsePositive {
-				continue
-			}
-			total++
-			name := v.CheckName
-			if v.IssueName != nil && *v.IssueName != "" {
-				name = *v.IssueName
-			}
-			sev := strings.ToLower(v.Severity)
-			counts[sev]++
-			if needle != "" && !strings.Contains(strings.ToLower(name+" "+v.Host+" "+v.Severity), needle) {
-				continue
-			}
-			rows = append(rows, xui.Finding{ID: v.ID, Severity: sev, Name: name, Host: v.Host, Seen: v.TimesSeen})
-		}
-		matched := len(rows)
-		sort.SliceStable(rows, func(i, j int) bool {
-			ri, rj := severityRankOf(xuiCap(rows[i].Severity)), severityRankOf(xuiCap(rows[j].Severity))
-			if ri != rj {
-				return ri > rj
-			}
-			return rows[i].ID > rows[j].ID
-		})
-		if len(rows) > xuiWindow {
-			rows = rows[:xuiWindow]
-		}
+		rows, counts, total, matched := s.xuiProveWindow(q)
 		var chips []xui.SevCount
 		for _, k := range []string{"critical", "high", "medium", "low", "informational"} {
 			chips = append(chips, xui.SevCount{Key: k, Label: strings.ToUpper(k), N: counts[k]})
@@ -256,6 +222,65 @@ func (s *Server) handleXUIProveStream(w http.ResponseWriter, r *http.Request) {
 		}
 		return sse.PatchElementTempl(xui.ProveRows(rows))
 	})
+}
+
+// xuiProveCand is the little a finding needs while it competes for a place in the window.
+type xuiProveCand struct {
+	f    *core.Finding
+	rank int
+}
+
+// xuiFirstHost is the host of the first occurrence whose request is still in the store, as
+// findingToIssueView reports it.
+func (s *Server) xuiFirstHost(f *core.Finding) string {
+	for _, occ := range f.Occurrences {
+		if ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request)); err == nil {
+			return ex.Host
+		}
+	}
+	return ""
+}
+
+// xuiProveWindow returns the top xuiWindow findings matching q (severity, then newest first),
+// the per-severity counts over all non-isolated, non-false-positive findings, the total of those,
+// and how many match q. It does not build the full issue view per finding: the host (an exchange
+// lookup) is resolved only for the rows shown, or per candidate when a filter needs it. Rows,
+// order, counts and labels are identical to the reference in xui_test.go.
+func (s *Server) xuiProveWindow(q string) (rows []xui.Finding, counts map[string]int, total, matched int) {
+	needle := strings.ToLower(q)
+	counts = map[string]int{}
+	var cands []xuiProveCand
+	for _, f := range s.findings.All() {
+		if s.findingIsolated(f) || f.FalsePositive {
+			continue
+		}
+		total++
+		sevName := f.EffectiveSeverity().String()
+		sev := strings.ToLower(sevName)
+		counts[sev]++
+		if needle != "" {
+			hay := strings.ToLower(f.Name + " " + s.xuiFirstHost(f) + " " + sevName)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+		}
+		cands = append(cands, xuiProveCand{f: f, rank: severityRankOf(sevName)})
+	}
+	matched = len(cands)
+	less := func(a, b xuiProveCand) bool { // a sorts before b
+		if a.rank != b.rank {
+			return a.rank > b.rank
+		}
+		return a.f.ID > b.f.ID
+	}
+	sort.Slice(cands, func(i, j int) bool { return less(cands[i], cands[j]) })
+	if len(cands) > xuiWindow {
+		cands = cands[:xuiWindow]
+	}
+	for _, c := range cands {
+		rows = append(rows, xui.Finding{ID: c.f.ID, Severity: strings.ToLower(c.f.EffectiveSeverity().String()), Name: c.f.Name, Host: s.xuiFirstHost(c.f), Seen: len(c.f.Occurrences)})
+	}
+	return rows, counts, total, matched
 }
 
 // xuiCap upper-cases the first letter of a lowercase severity name, as core.Severity.String does.

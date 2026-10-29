@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/web/xui"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -166,4 +169,70 @@ func firstPatch(body, marker string) string {
 		}
 	}
 	return ""
+}
+
+// xuiProveReference is the first implementation: it builds the full issue view for every finding.
+// The optimized xuiProveWindow must return exactly what it returns.
+func (s *Server) xuiProveReference(q string) (rows []xui.Finding, counts map[string]int, total, matched int) {
+	needle := strings.ToLower(q)
+	counts = map[string]int{}
+	for _, f := range s.findings.All() {
+		if s.findingIsolated(f) {
+			continue
+		}
+		v := s.findingToIssueView(f)
+		if v.FalsePositive {
+			continue
+		}
+		total++
+		name := v.CheckName
+		sev := strings.ToLower(v.Severity)
+		counts[sev]++
+		if needle != "" && !strings.Contains(strings.ToLower(name+" "+v.Host+" "+v.Severity), needle) {
+			continue
+		}
+		rows = append(rows, xui.Finding{ID: v.ID, Severity: sev, Name: name, Host: v.Host, Seen: v.TimesSeen})
+	}
+	matched = len(rows)
+	sort.SliceStable(rows, func(i, j int) bool {
+		ri, rj := severityRankOf(xuiCap(rows[i].Severity)), severityRankOf(xuiCap(rows[j].Severity))
+		if ri != rj {
+			return ri > rj
+		}
+		return rows[i].ID > rows[j].ID
+	})
+	if len(rows) > xuiWindow {
+		rows = rows[:xuiWindow]
+	}
+	return rows, counts, total, matched
+}
+
+func TestXUIProveWindowMatchesReference(t *testing.T) {
+	s := newTestServer()
+	sevs := []core.Severity{core.SeverityInformational, core.SeverityLow, core.SeverityMedium, core.SeverityHigh, core.SeverityCritical}
+	for i := 0; i < 700; i++ {
+		var occ []core.Occurrence
+		if i%4 != 0 { // some findings have no occurrence, so no host
+			host := fmt.Sprintf("host%d.test", i%7)
+			reqID, _ := s.store.Put([]byte(fmt.Sprintf("GET /%d HTTP/1.1\r\nHost: %s\r\n\r\n", i, host)), core.DirectionRequest)
+			ex := &core.Exchange{Host: host, Port: 80, Method: "GET", Path: fmt.Sprintf("/%d", i), Request: core.MsgPtr(reqID)}
+			s.store.AddExchange(ex)
+			occ = []core.Occurrence{{ExchangeID: ex.ID, Request: core.MsgPtr(reqID)}}
+		}
+		s.findings.Add(core.NewFinding{Name: fmt.Sprintf("Check %d kind%d", i, i%3), Severity: sevs[(i*7)%5], TaskID: 1, Occurrences: occ,
+			Target: core.FindingTarget{Host: "t.test", Port: 80, Path: fmt.Sprintf("/p%d", i)}})
+	}
+	for _, f := range s.findings.All()[:40] {
+		f.FalsePositive = true
+	}
+	for _, q := range []string{"", "high", "HOST3", "kind1", "critical", "nomatchanywhere", "check 6"} {
+		wr, wc, wt, wm := s.xuiProveReference(q)
+		gr, gc, gt, gm := s.xuiProveWindow(q)
+		if !reflect.DeepEqual(wr, gr) || !reflect.DeepEqual(wc, gc) || wt != gt || wm != gm {
+			t.Fatalf("q=%q: optimized differs from reference (rows %d vs %d, total %d vs %d, matched %d vs %d, counts %v vs %v)", q, len(gr), len(wr), gt, wt, gm, wm, gc, wc)
+		}
+		if q == "" && (wt != 660 || len(wr) != xuiWindow) {
+			t.Fatalf("fixture sanity: total=%d rows=%d", wt, len(wr))
+		}
+	}
 }
