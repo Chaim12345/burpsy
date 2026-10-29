@@ -160,3 +160,33 @@ of the chosen approach — each is one template + one handler + one manifest ent
    regex/brace context the template parser reads as non-text. Fixed by moving all client JS
    to a static `/ui2/app.js` (also a new asset route + manifest entry).
 3. **a11y**: added landmark roles, `aria-label`s, `scope=col`, `aria-live` on the detail pane.
+
+## 9. Full migration (second commit, b124f82d) — all 18 tool pages in /ui2/
+
+Every old-UI tool now has a server-rendered page under /ui2/, sharing one nav partial and the
+same SSE live-refresh: Dashboard, Site map, Scope, Intercept (+ enable/disable/forward-all/
+drop-all actions), HTTP History, Issues, WebSockets, Proxy settings (listeners, options,
+match&replace, passthrough), Repeater (editor + send through /api/repeater/send), Decoder
+(decode/encode/hash), Comparer, Logger (server-paged, infinite scroll), Organizer, Session,
+Extensions, Scanner (configs, BCheck corpus, coverage, live-audit, queue), Issue definitions,
+Settings overview. Each page reuses the existing JSON handler's own view builder server-side,
+so ui2 and the JSON API cannot drift. 24 Go tests cover every page (shell+fragment, markers,
+nav completeness, decoder md5, comparer diff, intercept actions, 405s).
+
+**UAT (agent-browser against the bench DB, all live):** all 18 pages answer 200 with the shell
+(4.6–41 KB each, 2–51 ms); nav has 19 links; dashboard shows "783 exchanges · 1829 messages ·
+13453497 bytes · suite running"; sitemap renders 190 nodes; history infinite-scroll 100→201
+rows with one live sentinel, `status=403` filter narrows 783→24, row click fills the detail
+pane and marks the row selected; decoder run returns md5("hello") correctly; comparer renders
+a diff. 17 screenshots + a 17 s walkthrough video + overview grid were emailed to
+awayt3005@proton.me via proton-cli (message in Sent, 2026-10-30).
+
+**Remaining honest gaps (old SPA still wins these):** keyboard shortcuts, row multi-select /
+send-to-tool actions, manual theme toggle, Intruder attack launch UI, Collaborator/Sequencer/
+content-discovery/DOM-auditor/authz interactive flows, and per-row edit forms (intercept edit,
+organizer notes, scope rule editor). Each is one template + one form handler + one manifest
+entry following the established pattern; the read-only surfaces are all migrated.
+
+**Pushed:** branch `ui-framework` at `b124f82d` on origin (two commits on top of 0827f083).
+Final gates: gofmt/vet/build clean, all TestUI2* (24) and MCP route tests pass; the only
+web-package failure remains the pre-existing `/api/issues/` nil-slice one confirmed on HEAD.
