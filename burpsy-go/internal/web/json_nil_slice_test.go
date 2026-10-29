@@ -104,6 +104,10 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 	nonJSONAsset := map[string]string{
 		"/":                              "<!doctype html",
 		"/api/engagement/clickbandit.js": "text/javascript",
+		"/x":                             "<!doctype html",
+		"/x/prove":                       "<!doctype html",
+		"/x/datastar.js":                 "text/javascript",
+		"/x/xui.css":                     "text/css",
 	}
 	nonJSONError := map[string]string{
 		"/api/advisories/":                   "plain-text 400/404: a type index is required",
@@ -123,12 +127,15 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/scope/check":                   "plain-text 400: url is required",
 		"/api/settings/triage":               "plain-text 503: persistence is not attached",
 		"/api/target/analyze":                "plain-text 400: host is required",
+		"/x/detail":                          "plain-text 400: an exchange id is required",
 		"/ca.crt":                            "plain-text 404: TLS interception is off in the test server",
 	}
 	// Routes that never return on empty state because they stream. Any other route that takes
 	// the two-second timeout is a hang, not a stream, and fails.
 	streaming := map[string]string{
-		"/api/events": "the SSE event feed",
+		"/api/events":     "the SSE event feed",
+		"/x/map/stream":   "the xui Map SSE stream",
+		"/x/prove/stream": "the xui Prove SSE stream",
 	}
 	// GET routes whose empty-state answer is a JSON error body, with the exact status each
 	// serves. Their bodies are walked for unjustified nulls like any other JSON - an error DTO
