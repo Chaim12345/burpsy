@@ -228,7 +228,7 @@ func (s *Server) handleXUIProveStream(w http.ResponseWriter, r *http.Request) {
 		}
 		matched := len(rows)
 		sort.SliceStable(rows, func(i, j int) bool {
-			ri, rj := severityRankOf(strings.Title(rows[i].Severity)), severityRankOf(strings.Title(rows[j].Severity))
+			ri, rj := severityRankOf(xuiCap(rows[i].Severity)), severityRankOf(xuiCap(rows[j].Severity))
 			if ri != rj {
 				return ri > rj
 			}
@@ -256,4 +256,12 @@ func (s *Server) handleXUIProveStream(w http.ResponseWriter, r *http.Request) {
 		}
 		return sse.PatchElementTempl(xui.ProveRows(rows))
 	})
+}
+
+// xuiCap upper-cases the first letter of a lowercase severity name, as core.Severity.String does.
+func xuiCap(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

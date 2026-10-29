@@ -109,7 +109,7 @@ templ MapRows(rows []Row, total int, shown int) {
 			<tr><td colspan="6" class="empty">No traffic matches.</td></tr>
 		}
 		for _, r := range rows {
-			<tr class="data" id={ "r" + strconv.FormatUint(r.ID, 10) } { attrs("data-on:click", "@get('/x/detail?id="+strconv.FormatUint(r.ID, 10)+"')")... } tabindex="0" role="button" aria-label={ r.Method + " " + r.Host + r.Path }>
+			<tr class="data" id={ "r" + strconv.FormatUint(r.ID, 10) } { attrs("data-on:click", "@get('/x/detail?id="+strconv.FormatUint(r.ID, 10)+"')", "data-on:keydown", "(evt.key==='Enter'||evt.key===' ') && (evt.preventDefault(), @get('/x/detail?id="+strconv.FormatUint(r.ID, 10)+"'))")... } tabindex="0" role="button" aria-label={ r.Method + " " + r.Host + r.Path }>
 				<td class="num">{ strconv.FormatUint(r.ID, 10) }</td>
 				<td class="m">{ r.Method }</td>
 				<td class="hide-m" style="width:22%">{ r.Host }</td>
@@ -157,7 +157,7 @@ templ ProvePage() {
 				<div id="xui-sev" class="tools sevchips"></div>
 				<div class="scroll">
 					<table>
-						<thead><tr><th class="num">#</th><th style="width:96px">Severity</th><th>Check</th><th class="hide-m" style="width:24%">Host</th><th class="st hide-m">Seen</th></tr></thead>
+						<thead><tr><th class="num">#</th><th style="width:116px">Severity</th><th>Check</th><th class="hide-m" style="width:24%">Host</th><th class="st hide-m">Seen</th></tr></thead>
 						<tbody id="xui-rows"></tbody>
 					</table>
 				</div>
