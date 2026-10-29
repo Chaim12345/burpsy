@@ -81,11 +81,11 @@ func (s *Server) handleCAExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// key and pkcs12 need the private key, which only the live engine holds.
-	if s.tlsEngine == nil {
+	if s.caEngine() == nil {
 		s.refuseCAExportWithoutCA(w)
 		return
 	}
-	cert, key, ok := s.tlsEngine.ExportCA()
+	cert, key, ok := s.caEngine().ExportCA()
 	if !ok {
 		s.refuseCAExportWithoutCA(w)
 		return

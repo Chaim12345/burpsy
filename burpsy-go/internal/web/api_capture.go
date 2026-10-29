@@ -300,15 +300,17 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		ProxyBind:   s.proxyBind,
 		WebBind:     s.webBind,
 	}
-	// caCertPEM exists iff -intercept-tls was passed
-	if s.caCertPEM != nil {
+	// interception is live-switchable (PUT /api/proxy/interception): the policy's engine says whether it is on now
+	if s.tlsPolicy != nil {
+		view.TLSInterception = s.tlsPolicy.Engine() != nil
+	} else if s.caCertPEM != nil {
 		view.TLSInterception = true
 	}
 	// "off" rather than "": a blank field is indistinguishable from a field this build does not
 	// report, and the whole point of showing this is that an operator can tell the difference.
 	view.DOMEngine = "off"
-	if s.domEngine != "" {
-		view.DOMEngine = s.domEngine
+	if l := s.domEngineLabel(); l != "" {
+		view.DOMEngine = l
 	}
 	view.DOMChecks = s.wiredScanner().DOMCapabilityConfigured()
 	json.NewEncoder(w).Encode(view)
@@ -1894,7 +1896,7 @@ func sortedUints(vs []uint16) []uint16 {
 func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	pemBytes := s.currentCACertPEM()
 	if len(pemBytes) == 0 {
-		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls", http.StatusNotFound)
+		http.Error(w, "TLS interception is not enabled, so there is no CA to trust; start with -intercept-tls or PUT /api/proxy/interception {\"enabled\": true}", http.StatusNotFound)
 		return
 	}
 	// application/x-x509-ca-cert is what browsers recognise as a CA to import. The filename matters

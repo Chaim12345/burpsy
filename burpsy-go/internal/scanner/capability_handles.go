@@ -120,7 +120,8 @@ func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
 	if p != nil {
 		s.browsers = scopedBrowsers{p, s}
 	}
-	if p != nil && s.config != nil {
+	// a switch wired with no engine yet (SwitchableBrowsers) turns nothing on: it gates nothing until set
+	if p != nil && s.config != nil && s.hasBrowsers() {
 		s.config.CheckDOM = true
 	}
 	return s
@@ -142,14 +143,14 @@ func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
 // no browser would read a render failure as "the page has no such links", which is the
 // failure mode this project exists to avoid.
 func (s *ActiveScanner) BrowserForRender(ctx context.Context) (*domexec.Browser, error) {
-	if s == nil || s.browsers == nil {
+	if !s.hasBrowsers() {
 		return nil, fmt.Errorf("no DOM execution capability is configured")
 	}
 	return s.browsers.Browser(ctx)
 }
 
 func (s *ActiveScanner) DOMCapabilityConfigured() bool {
-	return s != nil && s.browsers != nil
+	return s.hasBrowsers()
 }
 
 // WithStoredLedger installs a stored-input ledger shared across the scan. Without it, stored
@@ -236,7 +237,7 @@ func (s *ActiveScanner) CloseCapabilities() error {
 // have failed — counting "no browser is configured" as a target failure abandoned every check
 // that happened to be dispatched after a DOM one (burpsy-react-ui-<see gaps>).
 func (cc *CheckContext) Browser(ctx context.Context) (*domexec.Browser, error) {
-	if cc == nil || cc.Scanner == nil || cc.Scanner.browsers == nil {
+	if cc == nil || !cc.Scanner.hasBrowsers() {
 		return nil, fmt.Errorf("browser: no DOM execution capability is configured for this scan: %w", errCapabilityMissing)
 	}
 	return cc.Scanner.browsers.Browser(ctx)

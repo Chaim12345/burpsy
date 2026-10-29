@@ -57,6 +57,10 @@ type Server struct {
 	reissue browserReissueTokens
 	// domEngine is the -dom flag value, reported by /api/stats. Empty means no engine was named.
 	domEngine string
+	// domSwitch is the DOM engine the scanners hold, settable at runtime (PUT /api/scanner/dom);
+	// domBuild turns a -dom value into an engine for it. Both nil when the process wired none.
+	domSwitch *scanner.SwitchableBrowsers
+	domBuild  DOMEngineBuilder
 	// tlsInterception reports whether the server is configured for TLS
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
@@ -246,6 +250,8 @@ type Server struct {
 	// rather than the bytes this process started with — an operator who imports a CA and then
 	// downloads the certificate must receive the one that is actually signing.
 	tlsEngine *proxy.TlsEngine
+	// caMu guards tlsEngine, which the interception switch (PUT /api/proxy/interception) sets at runtime.
+	caMu sync.RWMutex
 	// caDir is where an imported CA is persisted, so it survives a restart. Empty means the
 	// import endpoint installs the CA for this process only and says so.
 	caDir string
@@ -559,16 +565,26 @@ func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
 // /ca.crt from the PEM it was given and refuses imports, which is the correct behaviour when TLS
 // interception is off.
 func (s *Server) WithTLSEngine(engine *proxy.TlsEngine, caDir string) *Server {
+	s.caMu.Lock()
 	s.tlsEngine = engine
+	s.caMu.Unlock()
 	s.caDir = caDir
 	return s
+}
+
+// caEngine is the CA engine, read under caMu: PUT /api/proxy/interception creates it at runtime when the
+// process started without -intercept-tls, so a handler must not read the field while the switch writes it.
+func (s *Server) caEngine() *proxy.TlsEngine {
+	s.caMu.RLock()
+	defer s.caMu.RUnlock()
+	return s.tlsEngine
 }
 
 // currentCACertPEM is the CA to serve at /ca.crt: the engine's, when there is one, because it may
 // have been replaced since startup. Falls back to the PEM passed at construction.
 func (s *Server) currentCACertPEM() []byte {
-	if s.tlsEngine != nil {
-		if live := s.tlsEngine.CertPEM(); len(live) > 0 {
+	if engine := s.caEngine(); engine != nil {
+		if live := engine.CertPEM(); len(live) > 0 {
 			return live
 		}
 	}
@@ -1275,6 +1291,8 @@ func (s *Server) setupRoutes() {
 	// Intercept (condition lists + held queue)
 	s.route("/api/intercept", s.handleIntercept)
 	s.route("/api/proxy/passthrough", s.handleTlsPassthrough)
+	s.route("/api/proxy/interception", s.handleInterception)
+	s.route("/api/scanner/dom", s.handleDOMEngine)
 	s.route("/api/proxy/options", s.handleProxyOptions)
 	s.route("/api/proxy/listener", s.handleProxyListener)
 

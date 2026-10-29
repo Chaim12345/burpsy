@@ -242,6 +242,11 @@ func (s *Server) streamTLSResponse(
 		return false
 	}
 	framing.writeTerminal(clientConn, result)
+	// A response that ends this tunnel (close-delimited, or a stream that never finished) gets its
+	// end before the record runs, not after it (client_end.go).
+	if !framing.keepAlive(result) {
+		endClientWrite(clientConn)
+	}
 
 	// The client has its bytes. Now the ordinary machinery runs on what arrived — the rules, the
 	// record, the note — with handleTLSResponse's write suppressed, because the write is the one step
@@ -464,6 +469,9 @@ func (s *Server) streamPlainResponse(
 		return
 	}
 	framing.writeTerminal(clientConn, result)
+	// The plain path serves one request per connection: the client gets its end now, not after the
+	// record's passive scan (client_end.go).
+	endClientWrite(clientConn)
 
 	completed := time.Now()
 	responseData := make([]byte, 0, len(head)+len(result.Body))

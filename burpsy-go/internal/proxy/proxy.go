@@ -115,6 +115,15 @@ func (p *TlsPolicy) WithEngine(engine *TlsEngine) {
 	p.engine = engine
 }
 
+// Engine is the engine interception signs with, nil when interception is off. Read under the lock: the
+// engine is switched at runtime (PUT /api/proxy/interception), so a connection deciding whether to
+// intercept must not read the field while the switch writes it.
+func (p *TlsPolicy) Engine() *TlsEngine {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.engine
+}
+
 // AddPassthroughPort adds a port to passthrough. Same unlock-before-write defect as WithEngine.
 func (p *TlsPolicy) AddPassthroughPort(port uint16) {
 	p.mu.Lock()
@@ -1617,7 +1626,7 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 	// host the client asked for, judged at the host level, the same name the passthrough list matches.
 	outOfScopePassthrough := s.config.tls.ApplyOutOfScope() && s.config.scope != nil &&
 		!s.config.scope.MayContainHost(certName, uint16(port), true)
-	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.engine == nil || outOfScopePassthrough {
+	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.Engine() == nil || outOfScopePassthrough {
 		s.tunnelConnection(clientConn, net.JoinHostPort(host, strconv.Itoa(int(port16))))
 		return
 	}
@@ -2210,6 +2219,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	if keepServing && !alreadyWritten {
 		if _, err := clientConn.Write(responseData); err != nil {
 			keepServing = false
+		} else if endsWithClose(method, responseData) {
+			// A close-delimited response (a salvaged short or capped body) ends the tunnel: the
+			// client gets that end now, not after the record's passive scan (client_end.go).
+			endClientWrite(clientConn)
+			keepServing = false
 		}
 	}
 
@@ -2729,6 +2743,11 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// about what a row means. See stream_response.go.
 	if !dropped && !alreadyWritten {
 		clientConn.Write(responseData)
+		// A close-delimited response ends when the connection does: end it now, not after the
+		// record's passive scan (client_end.go).
+		if endsWithClose(method, responseData) {
+			endClientWrite(clientConn)
+		}
 	}
 
 	s.record(scanner.CapturedExchange{

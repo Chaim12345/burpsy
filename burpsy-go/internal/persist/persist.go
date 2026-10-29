@@ -1018,6 +1018,12 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		// restored set, nothing can have meant it, and the row has no request. If it IS there, the
 		// column is read as naming it -- which is the conservative direction, because the alternative
 		// is asserting an absence the disk cannot support. burpsy-react-ui-wtov.
+		// The request column read back. The wtov change made Exchange.Request a pointer and dropped
+		// this assignment with the old value form, so every restored row came back with no request:
+		// history, search, the detail pane and every tool reading a row by id lost the request half
+		// of each exchange captured before a restart, while the bytes sat on disk. The 0 a
+		// request-less row persists as is resolved by core's Restore, which holds the message set.
+		ex.Request = core.MsgPtr(core.MsgId(request))
 		if response, ok := response.(int64); ok {
 			msg := core.MsgId(response)
 			ex.Response = &msg

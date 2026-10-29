@@ -98,6 +98,15 @@ func (w *domASTWalker) childScope(node ast.Node, parent *domASTScope) *domASTSco
 		s = &domASTScope{}
 		w.scopes[node] = s
 	}
+	// A node walked again from inside its own scope (a function literal reached through a call it
+	// makes, as in a jQuery-style `function $(x){ el.each = function(fn){ fn($(el[i])) } }`): the
+	// cached scope is already on the parent chain, and re-parenting it would close the chain into a
+	// cycle that lookup then walks forever. That walk is a nested activation, so it gets its own scope.
+	for p := parent; p != nil; p = p.parent {
+		if p == s {
+			return &domASTScope{parent: parent}
+		}
+	}
 	s.parent = parent
 	return s
 }

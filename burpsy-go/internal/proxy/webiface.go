@@ -102,10 +102,20 @@ func (s *Server) serveWebInterface(conn net.Conn, method, path string) {
 }
 
 func (s *Server) caCertDER() []byte {
-	if s.config.tls == nil || s.config.tls.engine == nil || s.config.tls.engine.caCert == nil {
+	if s.config.tls == nil {
 		return nil
 	}
-	return s.config.tls.engine.caCert.Raw
+	// Engine() and ExportCA() take their locks: interception is switched at runtime and the CA can be
+	// replaced (import, regenerate), so neither field is read bare.
+	engine := s.config.tls.Engine()
+	if engine == nil {
+		return nil
+	}
+	cert, _, ok := engine.ExportCA()
+	if !ok || cert == nil {
+		return nil
+	}
+	return cert.Raw
 }
 
 func (s *Server) interfacePage() string {
