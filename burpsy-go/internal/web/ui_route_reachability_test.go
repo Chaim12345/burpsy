@@ -84,6 +84,14 @@ var uiRouteExempt = map[string]string{
 	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
 		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
 		"in_scope verdict on every history row and edits the rules through /api/scope",
+	"/ui2/":             "the server-rendered /ui2/ console; the browser navigates to it by URL, the React SPA at / never fetches it, and its own pages live outside ui/src",
+	"/ui2/history":      "the ui2 history page, reached by navigating to /ui2/ or /ui2/history; the console's own history calls /api/history",
+	"/ui2/history/{id}": "the ui2 exchange detail pane, fetched by htmx inside the /ui2/ page (not from ui/src); the console's viewer calls /api/exchange/ and /api/message/",
+	"/ui2/issues":       "the ui2 issues page, reached by navigating to /ui2/issues; the console's Issues tree calls /api/issues",
+	"/ui2/issues/{id}":  "the ui2 issue detail pane, fetched by htmx inside /ui2/issues; the console's advisory pane calls /api/issues/{id}",
+	"/ui2/htmx.min.js":  "vendored htmx, requested by the browser as a script src from the /ui2/ page, not fetched from ui/src",
+	"/ui2/sse.min.js":   "vendored htmx SSE extension, requested by the browser as a script src from the /ui2/ page",
+	"/ui2/app.js":       "the ui2 console's client script, loaded as a script src from the /ui2/ page; the React SPA at / never references it",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each

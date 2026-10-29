@@ -1,0 +1,6 @@
+<h3>#{{.ID}} {{.Method}} {{.Host}}:{{.Port}}{{.Path}} → {{.Status}}</h3>
+<p class="meta">{{.Mime}} · {{.ResponseLen}} bytes · {{.DurationMs}} ms</p>
+<h3>Request</h3>
+{{if .Request}}<pre>{{.Request}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response</h3>
+<pre>{{.Response}}</pre>

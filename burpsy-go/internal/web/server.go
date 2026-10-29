@@ -1422,6 +1422,17 @@ func (s *Server) setupRoutes() {
 
 	// Scanner report export: /api/report/{json|sarif|html}
 	s.route("/api/report/{rest...}", s.handleReport)
+	// The /ui2/ console: server-rendered HTML + vendored htmx, served beside the SPA.
+	// Registered before the "/" catch-all so ServeMux's longest-match picks them; every
+	// pattern is a literal so the route-manifest AST walk covers them.
+	s.route("/ui2/", s.handleUI2)
+	s.route("/ui2/history", s.handleUI2History)
+	s.route("/ui2/history/{id}", s.handleUI2HistoryDetail)
+	s.route("/ui2/issues", s.handleUI2Issues)
+	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
+	s.route("/ui2/htmx.min.js", serveUI2Asset)
+	s.route("/ui2/sse.min.js", serveUI2Asset)
+	s.route("/ui2/app.js", serveUI2Asset)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

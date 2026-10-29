@@ -1,0 +1,17 @@
+<div id="rows">
+<p class="meta">{{.Total}} findings{{range $sev, $n := .Severity}} · <span class="sev sev-{{$sev}}">{{$sev}}</span> {{$n}}{{end}}</p>
+<table>
+<thead><tr><th scope="col">Issue</th><th scope="col">Severity</th><th scope="col">Confidence</th><th scope="col">Host</th><th scope="col">Seen</th></tr></thead>
+<tbody>
+{{range .Groups}}
+<tr hx-get="/ui2/issues/{{.FirstID}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click" class="{{if .FalsePos}}fp{{end}}">
+  <td title="{{.Name}}">{{.Name}}</td>
+  <td class="sev sev-{{.Severity | lower}}">{{.Severity}}</td>
+  <td>{{.Confidence}}</td><td>{{.Host}}</td><td>{{.Count}}×</td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="meta">No issues yet.</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>

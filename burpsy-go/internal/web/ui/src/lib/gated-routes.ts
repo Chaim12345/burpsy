@@ -197,4 +197,12 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/ws/message/{id}": false,
  "/ca.crt": false,
  "/reissue/{token...}": false,
+ "/ui2/": false,
+ "/ui2/app.js": false,
+ "/ui2/history": false,
+ "/ui2/history/{id}": false,
+ "/ui2/htmx.min.js": false,
+ "/ui2/issues": false,
+ "/ui2/issues/{id}": false,
+ "/ui2/sse.min.js": false,
 };

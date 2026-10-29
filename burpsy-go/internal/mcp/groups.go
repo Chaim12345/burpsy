@@ -518,4 +518,12 @@ var notExposed = map[string]string{
 		"egress-bearing probe execution stays operator-triggered - revisit agent exposure with the wkrc broad-coverage work",
 	"GET /api/repeater/ws-handshake-preview": "the console's live preview while the operator edits a WS handshake; " +
 		"a read-only render of state the operator already owns, with no agent edit-preview loop to serve",
+	"GET /ui2/":             "the server-rendered console shell; the operator's browser navigates to it, an agent reads state through the JSON API",
+	"GET /ui2/history":      "the ui2 history page; the JSON /api/history is the agent-facing list",
+	"GET /ui2/history/{id}": "the ui2 exchange detail pane; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
+	"GET /ui2/issues":       "the ui2 issues page; /api/issues is the agent-facing list",
+	"GET /ui2/issues/{id}":  "the ui2 issue detail pane; /api/issues/{id} is the agent-facing read",
+	"GET /ui2/htmx.min.js":  "vendored htmx served to the operator's browser; an asset, not an operation",
+	"GET /ui2/sse.min.js":   "vendored htmx SSE extension; an asset, not an operation",
+	"GET /ui2/app.js":       "the ui2 console's own client script, requested by the browser as a script src; an asset, not an operation",
 }

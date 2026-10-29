@@ -1354,4 +1354,36 @@ var manifest = map[string]route{
 		summary: "spend one one-shot re-issue token: re-send its exchange under the minted session " +
 			"variant, record the outcome, and answer with a page that names the variant",
 	},
+	"/ui2/": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "history",
+		summary: "the server-rendered /ui2/ console shell (htmx + SSE), served beside the React SPA at /",
+	},
+	"/ui2/history": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 history page: server-paged rows (q/search/offset/limit), fragment when HX-Request",
+	},
+	"/ui2/history/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one exchange's request/response panes (message bytes read here, never in the list)",
+	},
+	"/ui2/issues": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 issues page: findings grouped by issue+host, fragment when HX-Request",
+	},
+	"/ui2/issues/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one finding's detail: evidence, occurrences, advisory — the pane the list omits",
+	},
+	"/ui2/app.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "the ui2 console's entire client-side script (SSE live-refresh + infinite-scroll cleanup), kept as a static file so html/template never parses JS",
+	},
+	"/ui2/htmx.min.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "vendored htmx 2.0.4 (50,917 bytes) serving as the ui2 client runtime",
+	},
+	"/ui2/sse.min.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "vendored htmx SSE extension (3,523 bytes) bridging /api/events to DOM swaps",
+	},
 }

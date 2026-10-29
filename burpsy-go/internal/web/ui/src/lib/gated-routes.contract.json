@@ -192,7 +192,15 @@
   "/api/ws/history",
   "/api/ws/message/{id}",
   "/ca.crt",
-  "/reissue/{token...}"
+  "/reissue/{token...}",
+  "/ui2/",
+  "/ui2/app.js",
+  "/ui2/history",
+  "/ui2/history/{id}",
+  "/ui2/htmx.min.js",
+  "/ui2/issues",
+  "/ui2/issues/{id}",
+  "/ui2/sse.min.js"
  ],
  "paths": [
   {
@@ -3828,6 +3836,166 @@
   {
    "path": "/reissue/w/extra/more",
    "key": "/reissue/{token...}",
+   "gated": false
+  },
+  {
+   "path": "/ui2",
+   "key": null,
+   "gated": false
+  },
+  {
+   "path": "/ui2/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/extra",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/extra/more",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extra",
+   "key": "/ui2/history/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extra/more",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w",
+   "key": "/ui2/history/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/extra",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/extra/more",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/extra",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/extra/more",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/extra",
+   "key": "/ui2/issues/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/extra/more",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w",
+   "key": "/ui2/issues/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/extra",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/extra/more",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/extra",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/extra/more",
+   "key": "/ui2/sse.min.js",
    "gated": false
   }
  ]

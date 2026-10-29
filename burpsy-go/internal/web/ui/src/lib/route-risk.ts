@@ -196,4 +196,12 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/ws/message/{id}": "riskRead",
  "/ca.crt": "riskAsset",
  "/reissue/{token...}": "riskEgress",
+ "/ui2/": "riskAsset",
+ "/ui2/app.js": "riskAsset",
+ "/ui2/history": "riskAsset",
+ "/ui2/history/{id}": "riskAsset",
+ "/ui2/htmx.min.js": "riskAsset",
+ "/ui2/issues": "riskAsset",
+ "/ui2/issues/{id}": "riskAsset",
+ "/ui2/sse.min.js": "riskAsset",
 };
