@@ -6,7 +6,10 @@
 <title>{{.Title}}</title>
 <style>
 :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
-@media (prefers-color-scheme: dark) { :root { --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#274; } }
+html[data-theme="dark"] { color-scheme: dark; --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#274; }
+html[data-theme="light"] { color-scheme: light; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
+tr.checked { outline: 2px solid var(--accent); }
+#sel-count { margin-left: 8px; font-weight: 600; }
 * { box-sizing: border-box; }
 body { margin:0; font:13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
 header { display:flex; gap:10px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); flex-wrap:wrap; }
@@ -46,6 +49,8 @@ h3 { margin:10px 0 4px; }
 <header>
   <span class="brand">burpsy <span class="badge">ui2</span></span>
   {{template "nav" .}}
+  <span id="sel-count" class="meta" aria-live="polite"></span>
+  <button id="theme-toggle" class="btn" aria-label="Toggle light/dark theme" title="Toggle theme">◐</button>
   {{if eq .View "history"}}
   <form hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="submit, keyup changed delay:400ms from:#q" hx-push-url="true">
     <input type="search" id="q" name="q" aria-label="Filter query (burpsy DSL, e.g. host~example.com)" placeholder="filter: host~example.com path~/api" autocomplete="off">
