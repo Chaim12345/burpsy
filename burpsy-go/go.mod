@@ -6,7 +6,8 @@ require (
 	github.com/BishopFox/jsluice v0.0.0-20240110145140-0ddfab153e06
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/PuerkitoBio/goquery v1.12.0
-	github.com/andybalholm/brotli v1.2.0
+	github.com/a-h/templ v0.3.1100
+	github.com/andybalholm/brotli v1.2.7
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
@@ -17,6 +18,7 @@ require (
 	github.com/quic-go/quic-go v0.64.1
 	github.com/refraction-networking/utls v1.8.2
 	github.com/rs/zerolog v1.33.0
+	github.com/starfederation/datastar-go v1.2.2
 	github.com/vektah/gqlparser/v2 v2.5.64
 	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/zricethezav/gitleaks/v8 v8.30.1
@@ -38,6 +40,7 @@ require (
 	dario.cat/mergo v1.0.1 // indirect
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
 	github.com/BobuSumisu/aho-corasick v1.0.3 // indirect
+	github.com/CAFxX/httpcompression v0.0.9 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
@@ -56,7 +59,7 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gitleaks/go-gitdiff v0.9.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
@@ -82,8 +85,8 @@ require (
 	github.com/leaanthony/u v1.1.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mattn/go-colorable v0.1.15 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mholt/archives v0.1.5 // indirect
 	github.com/mikelolasagasti/xz v1.0.1 // indirect
 	github.com/minio/minlz v1.0.1 // indirect

@@ -51,6 +51,13 @@ import (
 // Adding an entry here is a decision that a capability is not operator-facing. If the honest reason
 // is "no UI yet", that is a gap, not an exemption — file it and leave the test red.
 var uiRouteExempt = map[string]string{
+	"/x":              "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/datastar.js":  "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/detail":       "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/map/stream":   "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/prove":        "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/prove/stream": "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
+	"/x/xui.css":      "the templ + Datastar console MVP (xui.go, xui/views.templ) is its own read-only surface; its pages and patch streams are reached from that console's own HTML (data-* attributes), not from the React console in ui/src",
 	"/api/dominvader/hit": "the DOM-auditor browser extension's service worker POSTs here, not the " +
 		"console (burpsy-react-ui-wl94); the console reads the collected hits via /api/dominvader.",
 	"/": "the console itself; the browser requests it by navigating, not by fetch. The asset paths " +

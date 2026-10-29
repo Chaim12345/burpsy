@@ -1353,4 +1353,32 @@ var manifest = map[string]route{
 		summary: "spend one one-shot re-issue token: re-send its exchange under the minted session " +
 			"variant, record the outcome, and answer with a page that names the variant",
 	},
+	"/x/datastar.js": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "xui: the vendored Datastar runtime (MIT)",
+	},
+	"/x/detail": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "xui: one exchange's request and response as an HTML patch (first 64 KB of each message)",
+	},
+	"/x/map/stream": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "xui: SSE stream of HTML patches for the Map history window (newest 300 rows, at most 4 pushes a second)",
+	},
+	"/x/prove": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "xui: the Prove findings page",
+	},
+	"/x/prove/stream": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "xui: SSE stream of HTML patches for the Prove findings window and severity counts",
+	},
+	"/x/xui.css": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "xui: stylesheet",
+	},
+	"/x": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "xui: the Map page of the templ + Datastar console MVP",
+	},
 }

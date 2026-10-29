@@ -1038,6 +1038,14 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 }
 
 func (s *Server) setupRoutes() {
+	// xui: the templ + Datastar console MVP. Read-only pages and SSE patch streams (xui.go).
+	s.route("/x", s.handleXUIMap)
+	s.route("/x/prove", s.handleXUIProve)
+	s.route("/x/map/stream", s.handleXUIMapStream)
+	s.route("/x/prove/stream", s.handleXUIProveStream)
+	s.route("/x/detail", s.handleXUIDetail)
+	s.route("/x/datastar.js", s.handleXUIAsset("datastar.js", "text/javascript; charset=utf-8"))
+	s.route("/x/xui.css", s.handleXUIAsset("xui.css", "text/css; charset=utf-8"))
 	// Capture + stats
 	s.route("/api/history", s.handleHistory)
 	// Delete items / Clear (r6li), split from /api/history so the removal carries its own

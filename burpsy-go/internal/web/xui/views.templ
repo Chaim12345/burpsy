@@ -1,0 +1,197 @@
+package xui
+
+import "strconv"
+
+type Row struct {
+	ID     uint64
+	Method string
+	Host   string
+	Path   string
+	Status string
+	Size   string
+	Time   string
+	Mime   string
+}
+
+type Finding struct {
+	ID       uint64
+	Severity string
+	Name     string
+	Host     string
+	Conf     string
+	Seen     int
+}
+
+type Message struct {
+	Label string
+	Text  string
+	Note  string
+}
+
+type Detail struct {
+	Title    string
+	Facts    []Fact
+	Messages []Message
+}
+
+type Fact struct{ K, V string }
+
+func attrs(kv ...string) templ.Attributes {
+	a := templ.Attributes{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		a[kv[i]] = kv[i+1]
+	}
+	return a
+}
+
+templ Shell(active string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>burpsy - xui (templ + Datastar MVP)</title>
+			<link rel="stylesheet" href="/x/xui.css"/>
+			<link rel="icon" href="data:,"/>
+			<script type="module" src="/x/datastar.js"></script>
+		</head>
+		<body { attrs("data-signals", "{q: '', sel: 0}")... }>
+			<header>
+				<span class="brand">b/ burpsy</span>
+				<nav aria-label="Workflow">
+					@navLink("/x", "Map", active == "map")
+					@navLink("/x/prove", "Prove", active == "prove")
+					<a href="/">Workbench</a>
+					<a href="/legacy">Legacy</a>
+				</nav>
+				<span class="spacer"></span>
+				<span id="xui-count" class="chip">-</span>
+				<span id="xui-live" class="chip">connecting</span>
+			</header>
+			{ children... }
+		</body>
+	</html>
+}
+
+templ navLink(href, label string, on bool) {
+	if on {
+		<a href={ templ.SafeURL(href) } class="active" aria-current="page">{ label }</a>
+	} else {
+		<a href={ templ.SafeURL(href) }>{ label }</a>
+	}
+}
+
+templ MapPage() {
+	@Shell("map") {
+		<main { attrs("data-init", "@get('/x/map/stream')")... }>
+			<section class="pane" aria-label="HTTP history">
+				<div class="tools">
+					<input type="text" id="xui-q" placeholder="Filter: host, path, method or status" aria-label="Filter history" { attrs("data-bind:q", "", "data-on:input__debounce.300ms", "@get('/x/map/stream')")... }/>
+				</div>
+				<div class="scroll">
+					<table>
+						<thead><tr><th class="num">#</th><th class="m">Method</th><th class="hide-m" style="width:22%">Host</th><th>Path</th><th class="st">Status</th><th class="sz hide-m">Size</th></tr></thead>
+						<tbody id="xui-rows"></tbody>
+					</table>
+				</div>
+			</section>
+			<section class="pane" aria-label="Exchange detail">
+				<div class="tools"><span class="note">Select a row to read the exact request and response.</span></div>
+				<div id="xui-detail" class="detail"></div>
+			</section>
+		</main>
+	}
+}
+
+templ MapRows(rows []Row, total int, shown int) {
+	<tbody id="xui-rows">
+		if len(rows) == 0 {
+			<tr><td colspan="6" class="empty">No traffic matches.</td></tr>
+		}
+		for _, r := range rows {
+			<tr class="data" id={ "r" + strconv.FormatUint(r.ID, 10) } { attrs("data-on:click", "@get('/x/detail?id="+strconv.FormatUint(r.ID, 10)+"')")... } tabindex="0" role="button" aria-label={ r.Method + " " + r.Host + r.Path }>
+				<td class="num">{ strconv.FormatUint(r.ID, 10) }</td>
+				<td class="m">{ r.Method }</td>
+				<td class="hide-m" style="width:22%">{ r.Host }</td>
+				<td title={ r.Path }>{ r.Path }</td>
+				<td class="st">{ r.Status }</td>
+				<td class="sz hide-m">{ r.Size }</td>
+			</tr>
+		}
+	</tbody>
+}
+
+templ Count(text string) {
+	<span id="xui-count" class="chip">{ text }</span>
+}
+
+templ Live(text string, on bool) {
+	<span id="xui-live" class={ "chip", templ.KV("live", on) }>{ text }</span>
+}
+
+templ DetailPane(d Detail) {
+	<div id="xui-detail" class="detail">
+		<h2>{ d.Title }</h2>
+		<dl>
+			for _, f := range d.Facts {
+				<div><dt class="note">{ f.K }</dt><dd style="margin:0 0 6px;overflow-wrap:anywhere">{ f.V }</dd></div>
+			}
+		</dl>
+		for _, m := range d.Messages {
+			<h3>{ m.Label }</h3>
+			if m.Note != "" {
+				<p class="note">{ m.Note }</p>
+			}
+			<pre>{ m.Text }</pre>
+		}
+	</div>
+}
+
+templ ProvePage() {
+	@Shell("prove") {
+		<main { attrs("data-init", "@get('/x/prove/stream')")... } style="grid-template-columns:minmax(0,1fr)">
+			<section class="pane" aria-label="Findings" style="grid-template-rows:auto auto minmax(0,1fr)">
+				<div class="tools">
+					<input type="text" id="xui-q" placeholder="Filter: check, host or severity" aria-label="Filter findings" { attrs("data-bind:q", "", "data-on:input__debounce.300ms", "@get('/x/prove/stream')")... }/>
+				</div>
+				<div id="xui-sev" class="tools sevchips"></div>
+				<div class="scroll">
+					<table>
+						<thead><tr><th class="num">#</th><th style="width:96px">Severity</th><th>Check</th><th class="hide-m" style="width:24%">Host</th><th class="st hide-m">Seen</th></tr></thead>
+						<tbody id="xui-rows"></tbody>
+					</table>
+				</div>
+			</section>
+		</main>
+	}
+}
+
+templ ProveRows(rows []Finding) {
+	<tbody id="xui-rows">
+		if len(rows) == 0 {
+			<tr><td colspan="5" class="empty">No findings match.</td></tr>
+		}
+		for _, f := range rows {
+			<tr class="data">
+				<td class="num">{ strconv.FormatUint(f.ID, 10) }</td>
+				<td class={ "sev", "sev-" + f.Severity }>{ f.Severity }</td>
+				<td title={ f.Name }>{ f.Name }</td>
+				<td class="hide-m" style="width:24%">{ f.Host }</td>
+				<td class="st hide-m">{ strconv.Itoa(f.Seen) }</td>
+			</tr>
+		}
+	</tbody>
+}
+
+templ SevChips(counts []SevCount) {
+	<div id="xui-sev" class="tools sevchips">
+		for _, c := range counts {
+			<span class={ "chip", "sev-" + c.Key }>{ strconv.Itoa(c.N) } { c.Label }</span>
+		}
+	</div>
+}
+
+type SevCount struct {
+	Key, Label string
+	N          int
+}
