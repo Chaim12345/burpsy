@@ -23,6 +23,22 @@ import (
 // description — and TestEveryMutatingRouteVerbDeclaresItsInput fails on one that does not, so a new
 // route cannot reach the MCP surface untyped. GET entries are optional and carry query parameters.
 var routeSchemas = map[string]opSchema{
+
+	// ---- ui2 console (server-rendered pages; form-encoded bodies, not JSON) -------------------
+	"POST /ui2/collaborator":           {raw: "application/x-www-form-urlencoded form: count"},
+	"POST /ui2/collaborator/mint":      {raw: "application/x-www-form-urlencoded form: count, optional token"},
+	"POST /ui2/comparer":               {raw: "application/x-www-form-urlencoded form: a, b"},
+	"POST /ui2/comparer/run":           {raw: "application/x-www-form-urlencoded form: a, b"},
+	"POST /ui2/decoder":                {raw: "application/x-www-form-urlencoded form: op, arg, input"},
+	"POST /ui2/decoder/run":            {raw: "application/x-www-form-urlencoded form: op, arg, input"},
+	"POST /ui2/intercept/{action}":     {raw: "no body — the action is in the path"},
+	"POST /ui2/intruder/confirm":       {raw: "application/x-www-form-urlencoded launch form"},
+	"POST /ui2/intruder/points":        {raw: "application/x-www-form-urlencoded form: msg_id, all"},
+	"POST /ui2/intruder/run":           {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/intruder/{id}/{action}": noBody,
+	"POST /ui2/repeater":               {raw: "application/x-www-form-urlencoded form: raw, optional target"},
+	"POST /ui2/repeater/send":          {raw: "application/x-www-form-urlencoded form: raw, optional target"},
+	"POST /ui2/sequencer/analyse":      {raw: "application/x-www-form-urlencoded form: tokens, encoding"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

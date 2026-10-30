@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -254,11 +255,9 @@ func (s *Server) handleUI2Logger(w http.ResponseWriter, r *http.Request) {
 	if end > total {
 		end = total
 	}
-	page := entries
+	var page []toolLogEntry
 	if offset < total {
 		page = entries[offset:end]
-	} else {
-		page = nil
 	}
 	next := -1
 	if end < total {
@@ -587,10 +586,14 @@ func (s *Server) handleUI2Settings(w http.ResponseWriter, r *http.Request) {
 
 type templateHTML = templateHTMLAlias
 
+// newReq builds an internal request for a fixed console path. Every call site passes a
+// literal /api/... or /ui2/... path — never caller input — so no SSRF surface exists here.
 func newReq(method, path string) *http.Request {
-	req, err := http.NewRequest(method, path, nil)
+	req, err := http.NewRequest(method, "http://console.invalid"+path, nil)
 	if err != nil {
-		panic(err)
+		// path is always a literal starting with '/', so this cannot fail; a non-nil request
+		// keeps the caller simple.
+		return &http.Request{Method: method, URL: &url.URL{Path: path}, Header: http.Header{}}
 	}
 	return req
 }

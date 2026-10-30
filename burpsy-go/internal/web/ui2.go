@@ -494,9 +494,17 @@ func ptrString(p *string) string {
 	return *p
 }
 
-// serveUI2Asset serves one vendored static file from the embedded ui2 tree.
+// serveUI2Asset serves one vendored static file from the embedded ui2 tree. The name is
+// allowlisted, not taken from the path: anything else 404s, so no request can make the
+// handler read outside the embedded set.
 func serveUI2Asset(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/ui2/")
+	switch name {
+	case "htmx.min.js", "sse.min.js", "app.js":
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	sub, err := fs.Sub(ui2FS, "ui2")
 	if err != nil {
 		http.Error(w, "ui2 unavailable", http.StatusInternalServerError)
@@ -507,12 +515,7 @@ func serveUI2Asset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	switch {
-	case strings.HasSuffix(name, ".js"):
-		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(data)
 }
