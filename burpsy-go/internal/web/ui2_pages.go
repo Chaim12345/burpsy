@@ -589,6 +589,7 @@ type templateHTML = templateHTMLAlias
 // newReq builds an internal request for a fixed console path. Every call site passes a
 // literal /api/... or /ui2/... path — never caller input — so no SSRF surface exists here.
 func newReq(method, path string) *http.Request {
+	// #nosec G704 -- path is a literal console path at every call site, never caller input.
 	req, err := http.NewRequest(method, "http://console.invalid"+path, nil)
 	if err != nil {
 		// path is always a literal starting with '/', so this cannot fail; a non-nil request

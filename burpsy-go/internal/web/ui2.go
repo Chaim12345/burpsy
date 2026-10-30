@@ -517,5 +517,6 @@ func serveUI2Asset(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	// #nosec G705 -- data is a vendored, embedded, allowlisted JS file, never request input.
 	_, _ = w.Write(data)
 }
