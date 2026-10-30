@@ -1,0 +1,30 @@
+<div id="rows">
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<h3>Channel</h3>
+<p class="meta">{{if .status.configured}}configured{{else}}not configured{{end}} · {{.status.hint}}</p>
+{{if .status.domain}}<p class="meta">domain: <code>{{.status.domain}}</code></p>{{end}}
+<h3>Mint payload</h3>
+<form hx-post="/ui2/collaborator/mint" hx-target="#rows" hx-swap="outerHTML">
+  <input type="number" name="count" value="{{if .count}}{{.count}}{{else}}1{{end}}" min="1" max="20" aria-label="Payloads to generate" style="width:70px">
+  <button type="submit">Generate payloads</button>
+</form>
+{{if .confirm_token}}
+<p class="meta">Minting registers a domain with the interaction server (riskEgress). Confirm:</p>
+<pre>{{.confirm_preview}}</pre>
+<form hx-post="/ui2/collaborator/mint" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="token" value="{{.confirm_token}}">
+  <input type="hidden" name="count" value="{{if .count}}{{.count}}{{else}}1{{end}}">
+  <button type="submit" style="color:#c00; font-weight:700">Confirm mint</button>
+</form>
+{{end}}
+{{if .result}}<pre>{{.result}}</pre>{{end}}
+<h3>Interactions</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Client IP</th><th scope="col">Time</th></tr></thead>
+<tbody>
+{{range .interactions.interactions}}
+<tr><td>{{.id}}</td><td>{{.type}}</td><td>{{.client_ip}}</td><td>{{.time}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No interactions recorded.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

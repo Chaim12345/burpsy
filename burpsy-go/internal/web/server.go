@@ -1453,6 +1453,16 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/repeater", s.handleUI2Repeater)
 	s.route("/ui2/repeater/send", s.handleUI2RepeaterSend)
 	s.route("/ui2/settings", s.handleUI2Settings)
+	s.route("/ui2/intruder", s.handleUI2Intruder)
+	s.route("/ui2/intruder/points", s.handleUI2IntruderPoints)
+	s.route("/ui2/intruder/confirm", s.handleUI2IntruderConfirm)
+	s.route("/ui2/intruder/run", s.handleUI2IntruderRun)
+	s.route("/ui2/intruder/{id}/results", s.handleUI2IntruderResults)
+	s.route("/ui2/intruder/{id}/{action}", s.handleUI2IntruderControl)
+	s.route("/ui2/sequencer", s.handleUI2Sequencer)
+	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
+	s.route("/ui2/collaborator", s.handleUI2Collaborator)
+	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
@@ -1474,11 +1484,6 @@ func (s *Server) setupRoutes() {
 	// reaches the authorisation check at all. In the other order a cross-site caller got a 428
 	// naming the route and the header to try — which tells an attacker probing the control exactly
 	// what to send next, and means a request from a hostile page got as far as asking for
-	// permission.
-	//
-	// s.registerConfirmationRoutes is called from here but lives in confirm_gate.go, because the
-	// mint patterns are DERIVED from the manifest and the route-manifest test refuses a
-	// non-literal HandleFunc argument in this file. The test is right to refuse it: a variable
 	// pattern is invisible to the manifest. The mint endpoints are not manifest routes — they are
 	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
 	// to keep them out of this file rather than to weaken the test.

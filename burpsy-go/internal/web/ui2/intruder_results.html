@@ -1,0 +1,14 @@
+<div id="rows">
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<p class="meta">Attack {{.task}} — sent requests (newest first):</p>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Len</th></tr></thead>
+<tbody>
+{{range .results.rows}}
+<tr hx-get="/ui2/history/{{.id}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click">
+  <td>{{.id}}</td><td>{{.method}}</td><td title="{{.path}}">{{.path}}</td>
+  <td>{{if .status}}{{.status}}{{else}}—{{end}}</td><td>{{.response_len}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No results yet.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

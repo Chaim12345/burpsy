@@ -196,6 +196,8 @@
   "/ui2/",
   "/ui2/advisories",
   "/ui2/app.js",
+  "/ui2/collaborator",
+  "/ui2/collaborator/mint",
   "/ui2/comparer",
   "/ui2/comparer/run",
   "/ui2/dashboard",
@@ -207,6 +209,12 @@
   "/ui2/htmx.min.js",
   "/ui2/intercept",
   "/ui2/intercept/{action}",
+  "/ui2/intruder",
+  "/ui2/intruder/confirm",
+  "/ui2/intruder/points",
+  "/ui2/intruder/run",
+  "/ui2/intruder/{id}/results",
+  "/ui2/intruder/{id}/{action}",
   "/ui2/issues",
   "/ui2/issues/{id}",
   "/ui2/logger",
@@ -216,6 +224,8 @@
   "/ui2/repeater/send",
   "/ui2/scanner",
   "/ui2/scope",
+  "/ui2/sequencer",
+  "/ui2/sequencer/analyse",
   "/ui2/session",
   "/ui2/settings",
   "/ui2/sitemap",
@@ -3909,6 +3919,46 @@
    "gated": false
   },
   {
+   "path": "/ui2/collaborator",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/extra",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/extra/more",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/extra",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/extra/more",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
    "path": "/ui2/comparer",
    "key": "/ui2/comparer",
    "gated": false
@@ -4139,6 +4189,126 @@
    "gated": false
   },
   {
+   "path": "/ui2/intruder",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/extra",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/extra/more",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/extra/more",
+   "key": "/ui2/intruder/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/extra",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/extra/more",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/extra",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/extra/more",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results",
+   "key": "/ui2/intruder/{id}/results",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w",
+   "key": "/ui2/intruder/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
    "path": "/ui2/issues",
    "key": "/ui2/issues",
    "gated": false
@@ -4316,6 +4486,46 @@
   {
    "path": "/ui2/scope/extra/more",
    "key": "/ui2/scope",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/extra",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/extra/more",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/extra",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/extra/more",
+   "key": "/ui2/sequencer",
    "gated": false
   },
   {

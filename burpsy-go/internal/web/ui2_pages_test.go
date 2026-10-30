@@ -30,6 +30,9 @@ var ui2Pages = []struct {
 	{"/ui2/comparer", "comparer", "Compare"},
 	{"/ui2/repeater", "repeater", "Request to send"},
 	{"/ui2/settings", "settings", "Project"},
+	{"/ui2/intruder", "intruder", "New attack"},
+	{"/ui2/sequencer", "sequencer", "Captures"},
+	{"/ui2/collaborator", "collaborator", "Channel"},
 	{"/ui2/history", "history", "#rows"},
 	{"/ui2/issues", "issues", "findings"},
 }

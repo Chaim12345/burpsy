@@ -3821,6 +3821,41 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/collaborator": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions */
+        get: operations["getUi2Collaborator"];
+        put?: never;
+        /** ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions */
+        post: operations["postUi2Collaborator"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/collaborator/mint": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Collaborator mint: without a token renders the confirm step, with one spends it on /api/collaborator/payload */
+        post: operations["postUi2CollaboratorMint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/comparer": {
         parameters: {
             query?: never;
@@ -4010,6 +4045,108 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/intruder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Intruder page: running attacks, launch form, points */
+        get: operations["getUi2Intruder"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intruder/{id}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Intruder control: pause/resume/stop one attack */
+        post: operations["postUi2IntruderByIdByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intruder/{id}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Intruder results: one attack's sent requests via /api/datasets/intruder/{task} */
+        get: operations["getUi2IntruderByIdResults"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intruder/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Intruder launch: mints a one-time confirmation for the /api/intruder/run call and renders the confirm step */
+        post: operations["postUi2IntruderConfirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intruder/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Intruder: enumerate insertion points of an exchange via /api/intruder/points */
+        post: operations["postUi2IntruderPoints"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intruder/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Intruder launch: spends the confirmation token on /api/intruder/run */
+        post: operations["postUi2IntruderRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/issues": {
         parameters: {
             query?: never;
@@ -4158,6 +4295,40 @@ export type paths = {
         get: operations["getUi2Scope"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/sequencer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Sequencer page: captures list + paste-and-analyse form */
+        get: operations["getUi2Sequencer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/sequencer/analyse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Sequencer analyse: POST the token list to /api/sequencer/analyse and render the report */
+        post: operations["postUi2SequencerAnalyse"];
         delete?: never;
         options?: never;
         head?: never;
@@ -14436,6 +14607,87 @@ export interface operations {
             };
         };
     };
+    getUi2Collaborator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2Collaborator: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2CollaboratorMint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Comparer: {
         parameters: {
             query?: never;
@@ -14791,6 +15043,173 @@ export interface operations {
             };
         };
     };
+    getUi2Intruder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2IntruderByIdByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2IntruderByIdResults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2IntruderConfirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2IntruderPoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2IntruderRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Issues: {
         parameters: {
             query?: never;
@@ -15037,6 +15456,60 @@ export interface operations {
         };
     };
     getUi2Scope: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2Sequencer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2SequencerAnalyse: {
         parameters: {
             query?: never;
             header?: never;

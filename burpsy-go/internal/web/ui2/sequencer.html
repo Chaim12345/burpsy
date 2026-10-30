@@ -1,0 +1,29 @@
+<div id="rows">
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<h3>Captures</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Location</th><th scope="col">Tokens</th><th scope="col">State</th></tr></thead>
+<tbody>
+{{range .captures.captures}}
+<tr><td>{{.id}}</td><td>{{.target}}</td><td>{{.location}}</td><td>{{.total}}</td>
+<td>{{if .capturing}}capturing{{else}}done{{end}}{{if .stop_reason}} ({{.stop_reason}}){{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No captures.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Analyse pasted tokens</h3>
+<form hx-post="/ui2/sequencer/analyse" hx-target="#rows" hx-swap="outerHTML">
+  <textarea name="tokens" rows="6" style="width:100%" aria-label="Tokens, one per line" placeholder="paste tokens, one per line">{{.tokens}}</textarea>
+  <div style="display:flex; gap:6px; margin:6px 0;">
+    <select name="encoding" aria-label="Token encoding">
+      <option value="raw" {{if eq .encoding "raw"}}selected{{end}}>raw</option>
+      <option value="hex" {{if eq .encoding "hex"}}selected{{end}}>hex</option>
+      <option value="base64" {{if eq .encoding "base64"}}selected{{end}}>base64</option>
+    </select>
+    <button type="submit">Analyse</button>
+  </div>
+</form>
+{{if .report}}
+<h3>Report</h3>
+<pre>{{.report}}</pre>
+{{end}}
+</div>

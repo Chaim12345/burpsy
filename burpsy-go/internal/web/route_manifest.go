@@ -1358,6 +1358,46 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "history",
 		summary: "the server-rendered /ui2/ console shell (htmx + SSE), served beside the React SPA at /",
 	},
+	"/ui2/collaborator": {
+		methods: []string{"GET", "POST"}, risk: riskAsset,
+		summary: "ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions",
+	},
+	"/ui2/collaborator/mint": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Collaborator mint: without a token renders the confirm step, with one spends it on /api/collaborator/payload",
+	},
+	"/ui2/intruder": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Intruder page: running attacks, launch form, points",
+	},
+	"/ui2/intruder/points": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder: enumerate insertion points of an exchange via /api/intruder/points",
+	},
+	"/ui2/intruder/confirm": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder launch: mints a one-time confirmation for the /api/intruder/run call and renders the confirm step",
+	},
+	"/ui2/intruder/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder launch: spends the confirmation token on /api/intruder/run",
+	},
+	"/ui2/intruder/{id}/results": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/results",
+		summary: "ui2 Intruder results: one attack's sent requests via /api/datasets/intruder/{task}",
+	},
+	"/ui2/intruder/{id}/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/stop",
+		summary: "ui2 Intruder control: pause/resume/stop one attack",
+	},
+	"/ui2/sequencer": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Sequencer page: captures list + paste-and-analyse form",
+	},
+	"/ui2/sequencer/analyse": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Sequencer analyse: POST the token list to /api/sequencer/analyse and render the report",
+	},
 	"/ui2/advisories": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 issue-definition catalogue page",

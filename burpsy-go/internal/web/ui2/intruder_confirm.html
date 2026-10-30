@@ -1,0 +1,14 @@
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+{{if .token}}
+<p class="meta">This launches a real attack (riskAttack). Confirm the exact call:</p>
+<pre>{{.preview}}</pre>
+<form hx-post="/ui2/intruder/run" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="token" value="{{.token}}">
+  <input type="hidden" name="msg_id" value="{{.run.msg_id}}">
+  <input type="hidden" name="target" value="{{.run.target}}">
+  <input type="hidden" name="all_points" value="on">
+  <textarea name="payloads" style="display:none">{{range .run.payloads}}{{.}}
+{{end}}</textarea>
+  <button type="submit" style="color:#c00; font-weight:700">Confirm and launch attack</button>
+</form>
+{{else}}<p class="meta">No token minted.</p>{{end}}
