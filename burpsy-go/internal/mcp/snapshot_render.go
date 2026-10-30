@@ -64,6 +64,7 @@ func snapshotUIDir() (string, error) {
 		}
 		dir = filepath.Join(filepath.Dir(file), "..", "web", "ui")
 	}
+	// #nosec G703 -- dir is BURPSY_UI_DIR or the runtime caller's own tree; need is from a fixed literal list.
 	for _, need := range []string{snapshotEntry, "src/styles.css", "node_modules"} {
 		if _, err := os.Stat(filepath.Join(dir, need)); err != nil {
 			return "", fmt.Errorf("the console UI tree at %s has no %s (set BURPSY_UI_DIR; run bun install there): %v", dir, need, err)

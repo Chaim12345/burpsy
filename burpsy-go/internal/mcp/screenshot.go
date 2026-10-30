@@ -159,9 +159,9 @@ func parseScreenshotArgs(raw json.RawMessage) (screenshotArgs, error) {
 				return a, fmt.Errorf("%s must be an integer from %d to %d", k, lo, hi)
 			}
 			if k == "width" {
-				a.width = int(n)
+				a.width = int(n) // #nosec G115 -- n is range-checked to [snapshotMinWidth, snapshotMaxWidth] above, both small ints
 			} else {
-				a.height = int(n)
+				a.height = int(n) // #nosec G115 -- same range check
 			}
 		default:
 			if screenshotContentArgs[strings.ToLower(k)] {
