@@ -136,3 +136,63 @@ func ui2Min(a, b int) int {
 	}
 	return b
 }
+
+func TestUI2DecoderRunSendsEncodingField(t *testing.T) {
+	s := newTestServer()
+	// base64 of "hello" decodes to "hello"; with the wrong field name the API's guesser
+	// path would run instead — this pins that "encoding" is what gets posted (issue #375).
+	req := httptest.NewRequest(http.MethodPost, "/ui2/decoder/run", strings.NewReader("op=decode&arg=base64&input=aGVsbG8="))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decoder run = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "map[error:") {
+		t.Errorf("error rendered as raw Go map (issue #372): %s", body[:ui2Min(200, len(body))])
+	}
+	if !strings.Contains(body, "hello") {
+		t.Errorf("decode base64 of aGVsbG8= did not yield 'hello': %s", body[:ui2Min(300, len(body))])
+	}
+}
+
+func TestUI2RepeaterSendDerivesTargetFromHostHeader(t *testing.T) {
+	s := newTestServer()
+	raw := "GET /x HTTP/1.1\r\nHost: derived.test:8080\r\n\r\n"
+	// No target field: the handler must derive derived.test:8080 from the Host header.
+	// The send will fail to dial, but the error must not be "empty target" and must be
+	// plain text, not map[error:...] (issues #370 and #372).
+	req := httptest.NewRequest(http.MethodPost, "/ui2/repeater/send", strings.NewReader("raw="+urlQueryEscape(raw)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repeater send page = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "map[") {
+		t.Errorf("error rendered as raw Go map (issue #372): %s", body[:ui2Min(200, len(body))])
+	}
+	if strings.Contains(body, "empty target") {
+		t.Errorf("target was not derived from the Host header — still 'empty target' (issue #370)")
+	}
+}
+
+func TestUI2HostFromRequest(t *testing.T) {
+	cases := map[string]string{
+		"GET /x HTTP/1.1\r\nHost: a.test:8080\r\n\r\n":               "a.test:8080",
+		"GET http://b.test:9000/p HTTP/1.1\r\nHost: ignored\r\n\r\n": "b.test:9000",
+		"GET / HTTP/1.1\r\n\r\n":                                     "",
+	}
+	for raw, want := range cases {
+		if got := ui2HostFromRequest(raw); got != want {
+			t.Errorf("ui2HostFromRequest(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+func urlQueryEscape(s string) string {
+	replacer := strings.NewReplacer("%", "%25", "&", "%26", "=", "%3D", "+", "%2B", "\r", "%0D", "\n", "%0A", " ", "%20")
+	return replacer.Replace(s)
+}

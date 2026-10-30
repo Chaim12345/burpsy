@@ -33,6 +33,17 @@ document.body.addEventListener('click', function (e) {
   document.querySelectorAll('#rows-body tr.selected').forEach(function (r) { r.classList.remove('selected'); });
   tr.classList.add('selected');
 });
+
+// ---- Mobile nav (burger toggles the wrapped nav below 600px) ----
+(function () {
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'nav-burger') {
+      var h = document.querySelector('header');
+      var open = h.classList.toggle('nav-open');
+      e.target.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+  });
+})();
 // ---- Theme (persisted, prefers-color-scheme default) ----
 (function () {
   var KEY = 'burpsy.ui2.theme';

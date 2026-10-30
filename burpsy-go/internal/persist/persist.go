@@ -1017,7 +1017,12 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		// does not say which it was. So a restored row is asked which: if message 0 is not in the
 		// restored set, nothing can have meant it, and the row has no request. If it IS there, the
 		// column is read as naming it -- which is the conservative direction, because the alternative
-		// is asserting an absence the disk cannot support. burpsy-react-ui-wtov.
+		// The request column read back. It is NOT NULL, so a request-less row persists as 0 —
+		// which is also real message id 0. The disambiguation the wtov comment above describes
+		// happens in core's Restore, which holds the whole message set: a 0 that names no
+		// restored message can only have meant "no request". Here the column is read as naming
+		// its message (the conservative direction when message 0 IS present).
+		ex.Request = core.MsgPtr(core.MsgId(request))
 		if response, ok := response.(int64); ok {
 			msg := core.MsgId(response)
 			ex.Response = &msg

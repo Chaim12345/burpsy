@@ -1,8 +1,10 @@
 <div id="rows">
 <form hx-post="/ui2/repeater/send" hx-target="#rows" hx-swap="outerHTML">
+  <input type="text" name="target" aria-label="Target host[:port] (defaults to the request's Host header)" placeholder="target host[:port] — optional" value="{{.target}}" style="width:100%; margin-bottom:6px">
   <textarea name="raw" rows="14" style="width:100%; font-family:ui-monospace,monospace" aria-label="Request to send">{{.draft}}</textarea>
   <div style="margin:6px 0;"><button type="submit">Send</button></div>
 </form>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .result}}
 <h3>Response</h3>
 <pre>{{.result}}</pre>

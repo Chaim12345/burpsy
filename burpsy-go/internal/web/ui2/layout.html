@@ -43,11 +43,30 @@ pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); border:1
 h3 { margin:10px 0 4px; }
 .badge { background:var(--sel); border-radius:10px; padding:1px 8px; font-size:11px; }
 .fp { color:var(--muted); text-decoration:line-through; }
+#nav-burger { display:none; }
+@media (max-width: 640px) {
+  header nav { display:none; }
+  header.nav-open nav { display:flex; position:absolute; top:100%; left:0; right:0; background:var(--bg); border-bottom:1px solid var(--line); padding:6px; z-index:10; max-height:60vh; overflow-y:auto; }
+  main.split { display:block; }
+  main.split #list { width:100%; border-right:none; max-height:55vh; }
+  main.split #detail { width:100%; }
+  #nav-burger { display:inline-block; }
+  table { table-layout:fixed; }
+  th, td { max-width:none; }
+  header { padding:6px 8px; gap:6px; }
+  header form { margin-left:0; width:100%; }
+  header form input { flex:1; min-width:0; }
+  #list { overflow-x:hidden; }
+  body { overflow-x:hidden; }
+  #rows-body td:nth-child(1), #rows-body td:nth-child(8),
+  #rows thead th:nth-child(1), #rows thead th:nth-child(8) { display:none; }
+}
 </style>
 </head>
 <body>
 <header>
   <span class="brand">burpsy <span class="badge">ui2</span></span>
+  <button id="nav-burger" class="btn" aria-label="Open navigation menu" aria-expanded="false">☰</button>
   {{template "nav" .}}
   <span id="sel-count" class="meta" aria-live="polite"></span>
   <button id="theme-toggle" class="btn" aria-label="Toggle light/dark theme" title="Toggle theme">◐</button>

@@ -11,6 +11,7 @@
     <button type="submit">Run</button>
   </div>
 </form>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .result}}
 <h3>Result</h3>
 <pre>{{.result}}</pre>

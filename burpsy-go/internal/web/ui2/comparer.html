@@ -6,6 +6,7 @@
   </div>
   <div style="margin:6px 0;"><button type="submit">Compare</button></div>
 </form>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .result}}
 <h3>Diff</h3>
 <pre>{{.result}}</pre>

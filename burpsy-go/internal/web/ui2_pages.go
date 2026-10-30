@@ -432,10 +432,10 @@ func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
 	switch op {
 	case "decode":
 		path = "/api/tools/decode"
-		body["op"] = arg
+		body["encoding"] = arg // toolsDecodeReq reads "encoding"; "op" would fall into the guesser
 	case "encode":
 		path = "/api/tools/encode"
-		body["op"] = arg
+		body["encoding"] = arg // toolsEncodeReq reads "encoding"
 	case "hash":
 		path = "/api/tools/hash"
 		body["algorithm"] = arg
@@ -444,18 +444,9 @@ func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload, _ := ui2Marshal(body)
-	req := newReq(http.MethodPost, path)
-	req.Header.Set("Content-Type", "application/json")
-	req.Body = ioNopCloser(strings.NewReader(string(payload)))
-	rec := newRecorder()
-	s.mux.ServeHTTP(rec, req)
-	var result any
-	if rec.Code == http.StatusOK {
-		_ = ui2DecodeJSON(rec.Body.Bytes(), &result)
-	} else {
-		result = map[string]any{"error": rec.Body.String()}
-	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": result, "op": op, "arg": arg, "input": input}))
+	result, errText := s.ui2APIResult(http.MethodPost, path, body)
+	_ = payload
+	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": result, "error": errText, "op": op, "arg": arg, "input": input}))
 }
 
 // handleUI2Comparer serves GET /ui2/comparer (form) and POST /ui2/comparer/run.
@@ -471,19 +462,8 @@ func (s *Server) handleUI2ComparerRun(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	a := r.PostFormValue("a")
 	b := r.PostFormValue("b")
-	payload, _ := ui2Marshal(map[string]string{"a": a, "b": b})
-	req := newReq(http.MethodPost, "/api/tools/compare")
-	req.Header.Set("Content-Type", "application/json")
-	req.Body = ioNopCloser(strings.NewReader(string(payload)))
-	rec := newRecorder()
-	s.mux.ServeHTTP(rec, req)
-	var result any
-	if rec.Code == http.StatusOK {
-		_ = ui2DecodeJSON(rec.Body.Bytes(), &result)
-	} else {
-		result = map[string]any{"error": rec.Body.String()}
-	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": result, "a": a, "b": b}))
+	result, errText := s.ui2APIResult(http.MethodPost, "/api/tools/compare", map[string]string{"a": a, "b": b})
+	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": result, "error": errText, "a": a, "b": b}))
 }
 
 // ---- Repeater --------------------------------------------------------------------------------
@@ -510,19 +490,68 @@ func (s *Server) handleUI2Repeater(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUI2RepeaterSend(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	raw := r.PostFormValue("raw")
-	payload, _ := ui2Marshal(map[string]string{"raw": raw})
-	req := newReq(http.MethodPost, "/api/repeater/send")
-	req.Header.Set("Content-Type", "application/json")
-	req.Body = ioNopCloser(strings.NewReader(string(payload)))
+	target := r.PostFormValue("target")
+	if target == "" {
+		// /api/repeater/send requires a target; the ui2 form's field is optional, so derive it
+		// from the request's own Host header (absolute-form request lines also work).
+		target = ui2HostFromRequest(raw)
+	}
+	if target == "" {
+		ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{
+			"draft": raw, "result": nil,
+			"error": "no target: the request carries no Host header and no target was given",
+		}))
+		return
+	}
+	result, errText := s.ui2APIResult(http.MethodPost, "/api/repeater/send", map[string]string{"target": target, "request": raw})
+	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{
+		"draft": raw, "result": result, "error": errText, "target": target,
+	}))
+}
+
+// ui2HostFromRequest extracts the target authority from a raw request: an absolute-form
+// request line wins, else the Host header.
+func ui2HostFromRequest(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) >= 2 && strings.Contains(fields[1], "://") {
+		rest := fields[1][strings.Index(fields[1], "://")+3:]
+		if j := strings.IndexAny(rest, "/?"); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+	for _, line := range strings.Split(raw, "\r\n") {
+		if len(line) > 5 && strings.EqualFold(line[:5], "host:") {
+			return strings.TrimSpace(line[5:])
+		}
+	}
+	return ""
+}
+
+// ui2APIResult calls one internal JSON API through the mux and returns either the decoded
+// body or a plain-text error string. Returning a string (not map[string]any{"error":…}) is
+// what keeps templates from printing Go map syntax like "map[error:empty target]".
+func (s *Server) ui2APIResult(method, path string, payload any) (any, string) {
+	var body ioReadCloser
+	if payload != nil {
+		b, _ := ui2Marshal(payload)
+		body = ioNopCloser(strings.NewReader(string(b)))
+	}
+	req := newReq(method, path)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+		req.Body = body
+	}
 	rec := newRecorder()
 	s.mux.ServeHTTP(rec, req)
-	var result any
-	if rec.Code == http.StatusOK {
-		_ = ui2DecodeJSON(rec.Body.Bytes(), &result)
-	} else {
-		result = map[string]any{"error": rec.Body.String()}
+	if rec.Code != http.StatusOK {
+		return nil, strings.TrimSpace(rec.Body.String())
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{"draft": raw, "result": result}))
+	var result any
+	if err := ui2DecodeJSON(rec.Body.Bytes(), &result); err != nil {
+		return nil, "unreadable response: " + err.Error()
+	}
+	return result, ""
 }
 
 // ---- Settings overview -----------------------------------------------------------------------
