@@ -153,6 +153,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/proxy/options":                 "plain-text 503: no proxy option set attached",
 		"/api/proxy/passthrough":             "plain-text 503: no TLS policy attached",
 		"/api/repeater/ws-handshake-preview": "plain-text 400: socket or target is required",
+		"/api/issues/":                       "plain-text 400: an issue id is required",
 		"/api/report/{rest...}":              "plain-text 404: a report kind is required",
 		"/api/scanner/checks/source":         "plain-text 503: no scanner attached",
 		"/api/scanner/config":                "plain-text 503: no scanner configured",

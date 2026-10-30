@@ -45,5 +45,5 @@ func serveUIFile(w http.ResponseWriter, sub fs.FS, name string) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Write(data)
+	_, _ = w.Write(data)
 }

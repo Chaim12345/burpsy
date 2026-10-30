@@ -1422,7 +1422,7 @@ func (s *Server) handleIssueGet(w http.ResponseWriter, idStr string) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.findingToIssueView(f))
+	_ = json.NewEncoder(w).Encode(s.findingToIssueView(f))
 }
 
 // issueTriageReq is the request body handleIssueTriage decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
