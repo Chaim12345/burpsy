@@ -199,10 +199,16 @@ type sessionRuleDto struct {
 	// nothing checked means the rule applies to no request at all — dtoToRule refuses that rather
 	// than silently widening it back to every tool, which is the reading that would let a
 	// restriction the operator deliberately stated be quietly dropped.
-	ScopeTools  *[]string        `json:"scope_tools,omitempty"`
-	Steps       []sessionStepDto `json:"steps"`
-	Validity    json.RawMessage  `json:"validity"`
-	MaxAttempts *int             `json:"max_attempts,omitempty"`
+	ScopeTools *[]string `json:"scope_tools,omitempty"`
+	// ExpectedBase is the compare-and-update precondition (burpsy-react-ui ui2 session rules):
+	// when stated on a PUT, the change applies only while the stored rule still digests to it
+	// (session.RuleDigest). A stale base answers 409 instead of clobbering the newer change.
+	// Absent keeps the historical unconditional PUT. It is wire-only - dtoToRule never reads it,
+	// so it is never part of the stored rule it guards.
+	ExpectedBase string           `json:"expected_base,omitempty"`
+	Steps        []sessionStepDto `json:"steps"`
+	Validity     json.RawMessage  `json:"validity"`
+	MaxAttempts  *int             `json:"max_attempts,omitempty"`
 	// Actions is the rule's ordered action list — Burp's rule shape (burpsy-react-ui-ayi), and the
 	// list the executor actually runs.
 	//
@@ -957,9 +963,23 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 		}
 		// "The rule is gone" and "the edit is not a valid rule" are different answers, so they get
 		// different codes rather than one generic failure.
-		if err := s.sessionCoordinator.UpdateRule(session.RuleID(id), rule); err != nil {
+		var updateErr error
+		if dto.ExpectedBase != "" {
+			// Compare-and-update: the precondition is checked and the swap made in one
+			// coordinator lock hold (session.UpdateRuleIfUnchanged), so a concurrent edit
+			// cannot slip between the two. The digest rides inside the signed body the ui2
+			// confirmation token binds, so the operator approved this exact precondition.
+			updateErr = s.sessionCoordinator.UpdateRuleIfUnchanged(session.RuleID(id), dto.ExpectedBase, rule)
+		} else {
+			updateErr = s.sessionCoordinator.UpdateRule(session.RuleID(id), rule)
+		}
+		if err := updateErr; err != nil {
 			if errors.Is(err, session.ErrNoSuchRule) {
 				http.Error(w, "Rule not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, session.ErrRuleChanged) {
+				http.Error(w, "The rule changed since this change was prepared; re-read it and try again", http.StatusConflict)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -969,6 +989,28 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"rule": ruleToDto(s.sessionCoordinator.Rule(session.RuleID(id)))})
 	case http.MethodDelete:
+		// expected_base carries the same compare-and-update precondition PUT takes in its body,
+		// on the query because a DELETE has none: the gate's token binds the canonical query, so
+		// the operator's confirmation covers this exact base. Absent keeps the legacy
+		// unconditional remove. The check-and-delete runs in one coordinator lock hold
+		// (session.DeleteRuleIfUnchanged) - a pre-check here would be a window, not a guard.
+		if base := r.URL.Query().Get("expected_base"); base != "" {
+			if err := s.sessionCoordinator.DeleteRuleIfUnchanged(session.RuleID(id), base); err != nil {
+				if errors.Is(err, session.ErrNoSuchRule) {
+					http.Error(w, "Rule not found", http.StatusNotFound)
+					return
+				}
+				if errors.Is(err, session.ErrRuleChanged) {
+					http.Error(w, "The rule changed since this change was prepared; re-read it and try again", http.StatusConflict)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			s.persistSessionRules()
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if s.sessionCoordinator.Rule(session.RuleID(id)) == nil {
 			http.Error(w, "Rule not found", http.StatusNotFound)
 			return

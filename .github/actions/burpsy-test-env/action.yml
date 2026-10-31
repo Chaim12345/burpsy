@@ -124,3 +124,21 @@ runs:
       if: inputs.tools == 'true' && (steps.plan.outputs.run || 'true') == 'true'
       shell: bash
       run: scripts/ci-install-tools.sh
+
+    # The mcp snapshot tests (test rest shard) render the console's own message section: bun
+    # bundles ui/src/snapshot/message-snapshot.tsx and the stylesheet, headless Chrome rasterises
+    # the page. Without bun on PATH the test fails "no bun on this machine" (run 41056451138, job
+    # 124065155991). The snapshot path also requires the UI's node_modules, so bun install runs
+    # here too — pinned bun (the same commit and version the ui job pins, so the bundle matches
+    # what the freshness check verifies) and --frozen-lockfile like every other bun install.
+    - name: Set up bun (for the console snapshot tests)
+      if: inputs.tools == 'true' && (steps.plan.outputs.run || 'true') == 'true'
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version: 1.4.2
+
+    - name: Install the console UI dependencies (bun)
+      if: inputs.tools == 'true' && (steps.plan.outputs.run || 'true') == 'true'
+      shell: bash
+      working-directory: burpsy-go/internal/web/ui
+      run: bun install --frozen-lockfile

@@ -44,8 +44,14 @@ type Server struct {
 	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
 	serverCerts *servercerts.Store
 	store       *core.TrafficStore
-	scope       *core.Scope
-	logger      *zap.Logger
+	// exchangeSnapshots counts full-history ExchangeBriefs snapshots built for finding
+	// resolution; tests assert expensive paths skip it when there is nothing to resolve.
+	exchangeSnapshots atomic.Int64
+	// exchangeSnapshotBriefs counts briefs copied across those snapshots: the targeted
+	// snapshot must stay proportional to referenced exchanges, not to history size.
+	exchangeSnapshotBriefs atomic.Int64
+	scope                  *core.Scope
+	logger                 *zap.Logger
 	// proxyBind and webBind are the -proxy and -web flag values the binary was
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
@@ -82,7 +88,26 @@ type Server struct {
 	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
 	// /confirm suffix and so the patterns do not enter the route manifest's remit.
 	confirmMux http.Handler
-	sender     *sender.Sender
+	// ui2Mints holds the collaborator mint calls a ui2 operator has reviewed but not yet confirmed
+	// (ui2_attack_pages.go, handleUI2CollaboratorMint): the confirm form carries only the id, so
+	// the call that runs is the call the preview showed, not whatever fields a re-submitted form
+	// happens to carry. A sync.Map because LoadAndDelete makes single-use atomic, and the zero
+	// value is ready — a Server built by struct literal in a test has a working store.
+	ui2Mints sync.Map
+	// ui2TriageReviews holds the minted triage-settings PUT bodies a ui2 operator has reviewed
+	// but not yet confirmed (the gate's own store is digest-only, so the bytes live here for the
+	// review sheet and the verbatim dispatch). Same single-use LoadAndDelete semantics as
+	// ui2Mints, bounded by ui2TriageReviewCap, expiring with ConfirmTTL.
+	ui2TriageReviews     sync.Map
+	ui2CollectionReviews sync.Map
+	ui2WorkflowReviews   sync.Map
+	ui2AnnotateReviews   sync.Map
+	// ui2SessionRuleReviews holds the minted session-rule calls (add/toggle/edit/remove) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
+	// by ui2SessionRuleReviewCap, expiring with ConfirmTTL.
+	ui2SessionRuleReviews sync.Map
+	sender                *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -113,6 +138,9 @@ type Server struct {
 	repeaterH2         *sender.H2Sessions
 	repeaterH2Once     sync.Once
 	sessionCoordinator *session.Coordinator
+	// scopeHookInstalled makes the scope-watch install in followLive one-time: the scope keeps
+	// a handler list, not a single slot, and followLive re-runs on every With*.
+	scopeHookInstalled bool
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
 	// seam, and the answer arrives here from the console's modal. Constructed in NewServer like
@@ -385,6 +413,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 // is not worth an unsubscribe protocol.
 func (s *Server) followLive() {
 	s.findings.OnChange(func() { s.live.notify(changeIssues) })
+	s.matchReplace.OnChange(func() { s.live.notify(changeProxy) })
 	// Installed here for the same reason as the hooks around it: it is a single slot on a store that
 	// a With* may have just replaced, so it has to follow the store rather than the constructor. It
 	// tells the finding store which catalog rows dedup per host rather than per path, knowledge that
@@ -395,6 +424,24 @@ func (s *Server) followLive() {
 	s.domInvader.OnChange(func() { s.live.notify(changeDomInvader) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
+	// Session movement the ui2 Session page renders — rule edits, jar writes and absorbs that
+	// change a jar's content, and the opt-in tracer's flips and entries — announces on the same
+	// session kind the pending-prompt registry already uses (941c6dd wired the consumer), so the
+	// open page follows every section of what it shows. Installed here, not in
+	// WithSessionCoordinator, because the hook is a single slot that must follow the store: the
+	// server's default coordinator announces too, and a With* replacement gets the hook on the
+	// new instance. Silence rules (unchanged rule PUT, no-op move, repeated identical
+	// Set-Cookie) live in internal/session/onchange.go.
+	s.sessionCoordinator.OnChange(func() { s.live.notify(changeSession) })
+	// Scope edits from any surface - this page, the React console, the API - announce on their
+	// own kind so the open Scope page follows them. The core watcher fires after the scope's
+	// locks and filters edits that change nothing. Installed once: unlike the single-slot
+	// hooks above, the scope keeps a handler LIST, and followLive re-runs on every With*, so an
+	// unguarded install would stack a duplicate notification per replacement.
+	if s.scope != nil && !s.scopeHookInstalled {
+		s.scopeHookInstalled = true
+		s.scope.OnChange(func(core.ScopeChange) { s.live.notify(changeScope) })
+	}
 }
 
 // WithLogger sets the logger.
@@ -514,6 +561,11 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 // attached rather than pretending to manage one.
 func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 	s.tlsPolicy = policy
+	if policy != nil {
+		// The policy announces its own passthrough-list movement (an add, a removal, an
+		// auto-add after a failed negotiation); the console's part is only to carry it.
+		policy.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -523,6 +575,12 @@ func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 // would do nothing — the same honesty WithTlsPolicy's nil state holds.
 func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 	s.proxyOptions = options
+	if options != nil {
+		// The option set announces its own movement (a flipped flag, a moved counter); the
+		// console's part is only to carry it. Single slot on the Options side, so a replaced
+		// set needs this re-run - the same follow-the-store rule followLive documents.
+		options.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -531,6 +589,15 @@ func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 // listener is attached rather than an address nothing serves.
 func (s *Server) WithProxyServer(server *proxy.Server) *Server {
 	s.proxyServer = server
+	if server != nil {
+		// Listener movement (add, remove, rebind, a spec-changing update) announces on the
+		// same proxy kind as the option panel: the Proxy page is one view over both.
+		server.OnListenersChange(func() { s.live.notify(changeProxy) })
+		// The store's OnWsChange announces captured frames; a socket's open and close are not
+		// frames, so without this the WS view's live refresh never saw a connection leave the
+		// live registry and its Live cell went stale the moment the socket closed.
+		server.OnWsLiveChange(func() { s.live.notify(changeWS) })
+	}
 	return s
 }
 
@@ -973,6 +1040,7 @@ func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	sc.AttachAbsorptionSource(session.SourceIntruder)
 	sc.AttachAbsorptionSource(session.SourceScanner)
 	s.installSuiteScopePredicate()
+	s.followLive()
 	// A rule's "Invoke an extension" action is wired here, beside the scope predicate and for the
 	// same reason: the seam has match sites inside internal/session where no host is in reach, and a
 	// rule that named an extension must not be reachable from one call path and refused from
@@ -1018,6 +1086,11 @@ func (s *Server) installSuiteScopePredicate() {
 // WithMatchReplace sets the match/replace rule set.
 func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
 	s.matchReplace = mr
+	if mr != nil {
+		// The rule set announces its own movement (a rule added, a replacement set that
+		// differs); single slot on its side, so a replaced set needs this re-run.
+		mr.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -1422,6 +1495,64 @@ func (s *Server) setupRoutes() {
 
 	// Scanner report export: /api/report/{json|sarif|html}
 	s.route("/api/report/{rest...}", s.handleReport)
+	// The /ui2/ console: server-rendered HTML + vendored htmx, served beside the SPA.
+	// Registered before the "/" catch-all so ServeMux's longest-match picks them; every
+	// pattern is a literal so the route-manifest AST walk covers them.
+	s.route("/ui2/", s.handleUI2)
+	s.route("/ui2/history", s.handleUI2History)
+	s.route("/ui2/history/{id}", s.handleUI2HistoryDetail)
+	s.route("/ui2/issues", s.handleUI2Issues)
+	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
+	s.route("/ui2/advisories/{typeIndex}", s.handleUI2AdvisoryDetail)
+	s.route("/ui2/htmx.min.js", serveUI2Asset)
+	s.route("/ui2/sse.min.js", serveUI2Asset)
+	s.route("/ui2/app.js", serveUI2Asset)
+	s.route("/ui2/dashboard", s.handleUI2Dashboard)
+	s.route("/ui2/sitemap", s.handleUI2Sitemap)
+	s.route("/ui2/scope", s.handleUI2Scope)
+	s.route("/ui2/scope/confirm", s.handleUI2ScopeConfirm)
+	s.route("/ui2/scope/run", s.handleUI2ScopeRun)
+	s.route("/ui2/intercept", s.handleUI2Intercept)
+	s.route("/ui2/intercept/{action}", s.handleUI2InterceptAction)
+	s.route("/ui2/logger", s.handleUI2Logger)
+	s.route("/ui2/logger/{action}", s.handleUI2LoggerAction)
+	s.route("/ui2/ws", s.handleUI2WS)
+	s.route("/ui2/proxy", s.handleUI2Proxy)
+	s.route("/ui2/extensions", s.handleUI2Extensions)
+	s.route("/ui2/scanner", s.handleUI2Scanner)
+	s.route("/ui2/scanner/launch", s.handleUI2ScannerLaunch)
+	s.route("/ui2/scanner/run", s.handleUI2ScannerRun)
+	s.route("/ui2/scanner/crawl-launch", s.handleUI2ScannerCrawlLaunch)
+	s.route("/ui2/scanner/crawl-run", s.handleUI2ScannerCrawlRun)
+	s.route("/ui2/scanner/crawl-watch", s.handleUI2ScannerCrawlWatch)
+	s.route("/ui2/scanner/config-confirm", s.handleUI2ScannerConfigConfirm)
+	s.route("/ui2/scanner/config-run", s.handleUI2ScannerConfigRun)
+	s.route("/ui2/advisories", s.handleUI2Advisories)
+	s.route("/ui2/organizer", s.handleUI2Organizer)
+	s.route("/ui2/organizer/collections/{action}", s.handleUI2OrganizerCollections)
+	s.route("/ui2/organizer/status/{action}", s.handleUI2OrganizerStatus)
+	s.route("/ui2/organizer/annotate/{action}", s.handleUI2OrganizerAnnotate)
+	s.route("/ui2/session", s.handleUI2Session)
+	s.route("/ui2/session/rules/{action}", s.handleUI2SessionRules)
+	s.route("/ui2/decoder", s.handleUI2Decoder)
+	s.route("/ui2/decoder/run", s.handleUI2DecoderRun)
+	s.route("/ui2/comparer", s.handleUI2Comparer)
+	s.route("/ui2/comparer/run", s.handleUI2ComparerRun)
+	s.route("/ui2/repeater", s.handleUI2Repeater)
+	s.route("/ui2/repeater/send", s.handleUI2RepeaterSend)
+	s.route("/ui2/settings", s.handleUI2Settings)
+	s.route("/ui2/intruder", s.handleUI2Intruder)
+	s.route("/ui2/intruder/points", s.handleUI2IntruderPoints)
+	s.route("/ui2/intruder/confirm", s.handleUI2IntruderConfirm)
+	s.route("/ui2/intruder/run", s.handleUI2IntruderRun)
+	s.route("/ui2/intruder/{id}/results", s.handleUI2IntruderResults)
+	s.route("/ui2/intruder/{id}/{action}", s.handleUI2IntruderControl)
+	s.route("/ui2/sequencer", s.handleUI2Sequencer)
+	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
+	s.route("/ui2/sequencer/capture/{action}", s.handleUI2SequencerCapture)
+	s.route("/ui2/settings/triage/{action}", s.handleUI2SettingsTriage)
+	s.route("/ui2/collaborator", s.handleUI2Collaborator)
+	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
@@ -1443,11 +1574,6 @@ func (s *Server) setupRoutes() {
 	// reaches the authorisation check at all. In the other order a cross-site caller got a 428
 	// naming the route and the header to try — which tells an attacker probing the control exactly
 	// what to send next, and means a request from a hostile page got as far as asking for
-	// permission.
-	//
-	// s.registerConfirmationRoutes is called from here but lives in confirm_gate.go, because the
-	// mint patterns are DERIVED from the manifest and the route-manifest test refuses a
-	// non-literal HandleFunc argument in this file. The test is right to refuse it: a variable
 	// pattern is invisible to the manifest. The mint endpoints are not manifest routes — they are
 	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
 	// to keep them out of this file rather than to weaken the test.

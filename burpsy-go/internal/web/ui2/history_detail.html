@@ -1,0 +1,20 @@
+<h3>#{{.ID}} {{.Method}} {{.Host}}:{{.Port}}{{.Path}} → {{.Status}}</h3>
+<p class="meta">{{.Mime}} · {{.ResponseLen}} bytes · {{.DurationMs}} ms</p>
+<h3>Request
+  <span class="pane-toggle">
+    {{if .ReqPretty}}<span class="pt-on">Pretty</span>{{else}}<a class="btn" href="/ui2/history/{{.ID}}?view_req=pretty{{if not .RespPretty}}&view_resp=raw{{end}}" hx-get="/ui2/history/{{.ID}}?view_req=pretty{{if not .RespPretty}}&view_resp=raw{{end}}" hx-target="#detail" hx-swap="innerHTML">Pretty</a>{{end}}
+    {{if .ReqPretty}}<a class="btn" href="/ui2/history/{{.ID}}?view_req=raw{{if not .RespPretty}}&view_resp=raw{{end}}" hx-get="/ui2/history/{{.ID}}?view_req=raw{{if not .RespPretty}}&view_resp=raw{{end}}" hx-target="#detail" hx-swap="innerHTML">Raw</a>{{else}}<span class="pt-on">Raw</span>{{end}}
+  </span>
+  {{if .ReqPane.Kind}}<span class="badge">{{.ReqPane.Kind}}</span>{{end}}
+</h3>
+{{if .ReqPane.Note}}<p class="meta" role="note">{{.ReqPane.Note}}</p>{{end}}
+{{if .Request}}<pre class="msg">{{.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response
+  <span class="pane-toggle">
+    {{if .RespPretty}}<span class="pt-on">Pretty</span>{{else}}<a class="btn" href="/ui2/history/{{.ID}}?view_resp=pretty{{if not .ReqPretty}}&view_req=raw{{end}}" hx-get="/ui2/history/{{.ID}}?view_resp=pretty{{if not .ReqPretty}}&view_req=raw{{end}}" hx-target="#detail" hx-swap="innerHTML">Pretty</a>{{end}}
+    {{if .RespPretty}}<a class="btn" href="/ui2/history/{{.ID}}?view_resp=raw{{if not .ReqPretty}}&view_req=raw{{end}}" hx-get="/ui2/history/{{.ID}}?view_resp=raw{{if not .ReqPretty}}&view_req=raw{{end}}" hx-target="#detail" hx-swap="innerHTML">Raw</a>{{else}}<span class="pt-on">Raw</span>{{end}}
+  </span>
+  {{if .RespPane.Kind}}<span class="badge">{{.RespPane.Kind}}</span>{{end}}
+</h3>
+{{if .RespPane.Note}}<p class="meta" role="note">{{.RespPane.Note}}</p>{{end}}
+<pre class="msg">{{.RespPane.Highlighted}}</pre>

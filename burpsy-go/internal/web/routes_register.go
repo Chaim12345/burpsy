@@ -52,9 +52,18 @@ func (s *Server) route(pattern string, h http.HandlerFunc) {
 		panic("web: route " + pattern + " has no manifest entry")
 	}
 	declared := make(map[string]bool, len(spec.methods))
+	handler := h
+	if strings.HasPrefix(pattern, "/ui2/") {
+		// ui2 pages can carry session material (the cookie jar renders values verbatim), so
+		// the browser must never store a copy of one.
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
+			h(w, r)
+		}
+	}
 	for _, method := range spec.methods {
 		declared[method] = true
-		s.mux.HandleFunc(method+" "+pattern, h)
+		s.mux.HandleFunc(method+" "+pattern, handler)
 	}
 	for _, method := range routeVerbs {
 		if declared[method] {

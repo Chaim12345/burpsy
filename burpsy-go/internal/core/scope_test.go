@@ -223,7 +223,7 @@ func TestDisablingAnIncludeRuleTakesItsHostsOutOfScope(t *testing.T) {
 		t.Fatal("setup: the host should be in scope before the rule is disabled")
 	}
 
-	if !s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, false) {
+	if s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, nil, false) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled should report that the rule was found and disabled")
 	}
 	if s.Contains("example.test", 80, "/", false) {
@@ -234,7 +234,7 @@ func TestDisablingAnIncludeRuleTakesItsHostsOutOfScope(t *testing.T) {
 	}
 
 	// Toggling back is the point of the switch — the rule comes back exactly as it was.
-	if !s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, true) {
+	if s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, nil, true) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled should report that the rule was found and re-enabled")
 	}
 	if !s.Contains("example.test", 80, "/", false) {
@@ -259,7 +259,7 @@ func TestDisablingAnExcludeRuleLetsItsHostsBackIn(t *testing.T) {
 		t.Fatal("setup: the excluded host should be out of scope while the exclude is active")
 	}
 
-	if !s.SetRuleEnabled(ScopeExclude, "secret.example.test", nil, nil, false) {
+	if s.SetRuleEnabled(ScopeExclude, "secret.example.test", nil, nil, nil, false) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled should report that the exclude was found and disabled")
 	}
 	if !s.Contains("secret.example.test", 80, "/", false) {
@@ -278,7 +278,7 @@ func TestMayContainHostSeesADisabledRuleTheSameWayContainsDoes(t *testing.T) {
 		t.Fatal("setup: the host should pass the pre-filter before the rule is disabled")
 	}
 
-	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, false)
+	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, nil, false)
 	if s.MayContainHost("example.test", 80, false) {
 		t.Error("MayContainHost admitted a host whose only include rule is disabled — the pre-filter and Contains disagree")
 	}
@@ -297,7 +297,7 @@ func TestSetRuleEnabledMatchesTheTupleExactly(t *testing.T) {
 	s.Add(pathScoped)
 
 	// Disable the path-scoped one only.
-	if !s.SetRuleEnabled(ScopeInclude, "shop.test", pathScoped.PathPrefix, nil, false) {
+	if s.SetRuleEnabled(ScopeInclude, "shop.test", pathScoped.PathPrefix, nil, nil, false) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled should have found the path-scoped rule")
 	}
 	rules := s.Rules()
@@ -309,10 +309,10 @@ func TestSetRuleEnabledMatchesTheTupleExactly(t *testing.T) {
 	}
 
 	// A tuple no rule carries misses rather than editing something else.
-	if s.SetRuleEnabled(ScopeInclude, "shop.test", nil, nil, true) && !s.Rules()[0].Enabled {
+	if s.SetRuleEnabled(ScopeInclude, "shop.test", nil, nil, nil, true) == ScopeMatchDone && !s.Rules()[0].Enabled {
 		t.Error("the miss path reported success")
 	}
-	if s.SetRuleEnabled(ScopeExclude, "shop.test", nil, nil, false) {
+	if s.SetRuleEnabled(ScopeExclude, "shop.test", nil, nil, nil, false) == ScopeMatchDone {
 		t.Error("toggling an exclude that does not exist should report no match")
 	}
 }

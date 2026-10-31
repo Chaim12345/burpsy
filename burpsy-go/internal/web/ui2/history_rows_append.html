@@ -1,0 +1,10 @@
+{{range .Rows}}<tr hx-get="/ui2/history/{{.ID}}" hx-target="#detail" hx-swap="innerHTML" hx-push-url="false"
+    hx-trigger="click" data-id="{{.ID}}">
+  <td>{{.ID}}</td><td>{{.Method}}</td><td>{{.Host}}:{{.Port}}</td><td title="{{.Path}}">{{.Path}}</td>
+  <td>{{.Status}}</td><td>{{.Mime}}</td><td>{{.ResponseLen}}</td><td>{{.DurationMs}} ms</td>
+</tr>
+{{end}}
+{{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="8" class="meta"
+     hx-get="/ui2/history" hx-vals='{"offset": {{.NextOffset}}, "limit": {{.Limit}}, "q": "{{.Q}}", "search": "{{.Search}}"}'
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
+{{end}}

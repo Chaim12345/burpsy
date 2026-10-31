@@ -1,0 +1,42 @@
+<div id="rows">
+<p class="meta">interception {{if .enabled}}ON{{else}}OFF{{end}} · wired={{.wired}} · {{.pending}} held · in-scope-only={{.in_scope_only}}</p>
+{{if .enabled}}
+<form hx-post="/ui2/intercept/disable" hx-target="#rows" hx-swap="outerHTML"><button>Disable interception</button></form>
+{{else}}
+<form hx-post="/ui2/intercept/enable" hx-target="#rows" hx-swap="outerHTML"><button>Enable interception</button></form>
+{{end}}
+<form hx-post="/ui2/intercept/forward-all" hx-target="#rows" hx-swap="outerHTML"><button>Forward all</button></form>
+<form hx-post="/ui2/intercept/drop-all" hx-target="#rows" hx-swap="outerHTML"><button>Drop all</button></form>
+{{if .rules_requests}}<p class="meta">Request rules {{if .rules_requests.active}}ON{{else}}OFF{{end}} · {{.rules_requests.count}} stored{{if .rules_requests.unconditional}} · empty list holds every request{{end}}{{if not .rules_requests.active}} · holds nothing while off{{end}}</p>
+<form hx-post="/ui2/intercept/rules-requests-{{if .rules_requests.active}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML"><button>Turn request rules {{if .rules_requests.active}}off{{else}}on{{end}}</button></form>{{end}}
+{{if .rules_responses}}<p class="meta">Response rules {{if .rules_responses.active}}ON{{else}}OFF{{end}} · {{.rules_responses.count}} stored{{if .rules_responses.unconditional}} · empty list holds every response{{end}}{{if not .rules_responses.active}} · holds nothing while off{{end}}</p>
+<form hx-post="/ui2/intercept/rules-responses-{{if .rules_responses.active}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML"><button>Turn response rules {{if .rules_responses.active}}off{{else}}on{{end}}</button></form>{{end}}
+{{if .rules_websocket_to_server}}<p class="meta">WebSocket-to-server rules {{if .rules_websocket_to_server.active}}ON{{else}}OFF{{end}} · {{.rules_websocket_to_server.count}} stored{{if .rules_websocket_to_server.unconditional}} · empty list holds every client-to-server message{{end}}{{if not .rules_websocket_to_server.active}} · holds nothing while off{{end}}</p>
+<form hx-post="/ui2/intercept/rules-websocket_to_server-{{if .rules_websocket_to_server.active}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML"><button>Turn WebSocket-to-server rules {{if .rules_websocket_to_server.active}}off{{else}}on{{end}}</button></form>{{end}}
+{{if .rules_websocket_to_client}}<p class="meta">WebSocket-to-client rules {{if .rules_websocket_to_client.active}}ON{{else}}OFF{{end}} · {{.rules_websocket_to_client.count}} stored{{if .rules_websocket_to_client.unconditional}} · empty list holds every server-to-client message{{end}}{{if not .rules_websocket_to_client.active}} · holds nothing while off{{end}}</p>
+<form hx-post="/ui2/intercept/rules-websocket_to_client-{{if .rules_websocket_to_client.active}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML"><button>Turn WebSocket-to-client rules {{if .rules_websocket_to_client.active}}off{{else}}on{{end}}</button></form>{{end}}
+<p class="meta">Toggling a rule list keeps its stored rules. Editing the rules themselves stays in the console. A held WebSocket message pauses its direction of the connection until you forward or drop it; control frames (ping, pong, close) and compressed frames are never held.</p>
+<p class="meta phone-hint">A cut-off table cell expands in place when tapped; tap it again to collapse.</p>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Dir</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Held</th><th scope="col">Len</th></tr></thead>
+<tbody>
+{{range .held}}
+<tr><td>{{.id}}</td><td>{{.direction}}{{if .opcode}} · {{.opcode}}{{end}}</td><td>{{.host}}</td><td title="{{.path}}">{{.path}}</td>
+<td>{{if .status}}{{.status}}{{else}}—{{end}}</td><td>{{.held_ms}} ms</td><td>{{.len}}</td></tr>
+{{else}}<tr><td colspan="7" class="meta">Nothing held.</td></tr>{{end}}
+</tbody>
+</table>
+{{range .held}}
+{{if .raw_editable}}<details class="held-editor"><summary>View / edit #{{.id}} — {{.direction}}{{if .opcode}} · {{.opcode}}{{end}} {{.host}}{{.path}}</summary>
+<form hx-post="/ui2/intercept/forward-{{.id}}" hx-target="#rows" hx-swap="outerHTML">
+<textarea name="raw" rows="12" spellcheck="false" style="width:100%;box-sizing:border-box">{{.raw}}</textarea>
+{{if .opcode}}{{else}}<label><input type="checkbox" name="fix_content_length" value="on" checked> Fix Content-Length</label>{{end}}
+<button>Forward</button>
+</form>
+<form hx-post="/ui2/intercept/drop-{{.id}}" hx-target="#rows" hx-swap="outerHTML"><button>Drop</button></form>
+{{if .opcode}}<p class="meta">A WebSocket {{.opcode}} message: the payload above is the whole message — there are no headers and no Content-Length to fix. Line breaks are shown and sent as LF, and the message goes out as a {{.opcode}} message (the opcode is preserved, so editing a printable binary message here stays binary on the wire). For arbitrary bytes, including CR line breaks, use the console's base64 editor.</p>{{else}}<p class="meta">Header lines go out with CRLF endings; the body keeps the line endings shown. For byte-exact edits to binary or CR-significant bodies, use the console's base64 editor. Fix Content-Length rewrites that header to match the body: the bytes on the wire change even when nothing else is edited, though the exchange is not marked user-edited.</p>{{end}}
+</details>{{else}}<div class="held-editor"><p class="meta">#{{.id}} — {{.direction}}{{if .opcode}} · {{.opcode}}{{end}} {{.host}}{{.path}} — not safe to edit here: this message carries bytes a browser editor would corrupt (non-UTF-8 or NUL). Forward untouched, or use the console's base64 editor for exact bytes.</p>
+<form hx-post="/ui2/intercept/forward-{{.id}}" hx-target="#rows" hx-swap="outerHTML"><button>Forward</button></form>
+<form hx-post="/ui2/intercept/drop-{{.id}}" hx-target="#rows" hx-swap="outerHTML"><button>Drop</button></form></div>{{end}}
+{{end}}
+</div>

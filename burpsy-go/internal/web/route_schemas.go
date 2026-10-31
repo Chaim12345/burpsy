@@ -23,6 +23,36 @@ import (
 // description — and TestEveryMutatingRouteVerbDeclaresItsInput fails on one that does not, so a new
 // route cannot reach the MCP surface untyped. GET entries are optional and carry query parameters.
 var routeSchemas = map[string]opSchema{
+
+	// ---- ui2 console (server-rendered pages; form-encoded bodies, not JSON) -------------------
+	"POST /ui2/collaborator/mint":              {raw: "application/x-www-form-urlencoded form: count to preview, or mint_id to spend the held call"},
+	"POST /ui2/comparer":                       {raw: "application/x-www-form-urlencoded form: a, b"},
+	"POST /ui2/comparer/run":                   {raw: "application/x-www-form-urlencoded form: a, b"},
+	"POST /ui2/decoder":                        {raw: "application/x-www-form-urlencoded form: op, arg, input"},
+	"POST /ui2/decoder/run":                    {raw: "application/x-www-form-urlencoded form: op, arg, input"},
+	"POST /ui2/intercept/{action}":             {raw: "no body — the action is in the path"},
+	"POST /ui2/scope/confirm":                  {raw: "application/x-www-form-urlencoded: scope_action rule-add takes kind/pattern/path/port/protocol; rule-toggle/rule-remove take the row tuple; drop-switch takes enabled"},
+	"POST /ui2/scope/run":                      {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/logger/{action}":                {raw: "application/x-www-form-urlencoded: capture-<tool>-on/off takes search carryover; filter-set takes status/term/regex/case/negate/scope_only/mime"},
+	"POST /ui2/intruder/confirm":               {raw: "application/x-www-form-urlencoded launch form"},
+	"POST /ui2/intruder/points":                {raw: "application/x-www-form-urlencoded form: msg_id, all"},
+	"POST /ui2/intruder/run":                   {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/scanner/launch":                 {raw: "application/x-www-form-urlencoded launch form"},
+	"POST /ui2/scanner/run":                    {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/scanner/crawl-launch":           {raw: "application/x-www-form-urlencoded crawl form"},
+	"POST /ui2/scanner/crawl-run":              {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/scanner/config-confirm":         {raw: "application/x-www-form-urlencoded configuration form"},
+	"POST /ui2/scanner/config-run":             {raw: "application/x-www-form-urlencoded reviewed patch + one-time confirm token"},
+	"POST /ui2/intruder/{id}/{action}":         noBody,
+	"POST /ui2/repeater":                       {raw: "application/x-www-form-urlencoded form: raw, optional target"},
+	"POST /ui2/repeater/send":                  {raw: "application/x-www-form-urlencoded form: raw, optional target"},
+	"POST /ui2/sequencer/analyse":              {raw: "application/x-www-form-urlencoded form: tokens, encoding"},
+	"POST /ui2/sequencer/capture/{action}":     {raw: "application/x-www-form-urlencoded form + one-time confirm token (confirm/run); empty body (pause/resume/stop)"},
+	"POST /ui2/settings/triage/{action}":       {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
+	"POST /ui2/organizer/collections/{action}": {raw: "application/x-www-form-urlencoded collection form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/organizer/status/{action}":      {raw: "application/x-www-form-urlencoded workflow status form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/organizer/annotate/{action}":    {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/session/rules/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{
@@ -92,7 +122,11 @@ var routeSchemas = map[string]opSchema{
 		// CONFIRMED (code read): historyGet encodes []*ExchangeView.
 		response: typeOf[[]*ExchangeView](),
 	},
-	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
+	"GET /api/issues": {query: []queryParam{
+		{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"},
+		{name: "summary", kind: "boolean", desc: "list rows without detail, remediation, evidence or the catalogue advisory; GET /api/issues/{id} returns the full row"},
+		{name: "count", kind: "boolean", desc: "severity counts and an empty findings array, for the shell badge that is mounted on every page"},
+	}},
 	"GET /api/message/{id}": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},

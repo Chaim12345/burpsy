@@ -1,0 +1,21 @@
+<div id="rows">
+<h3>Connections</h3>
+<p class="meta phone-hint">A cut-off table cell expands in place when tapped; tap it again to collapse.</p>
+<table>
+<thead><tr><th scope="col">Exchange</th><th scope="col">URL</th><th scope="col">Live</th></tr></thead>
+<tbody>
+{{range .connections}}
+<tr><td>{{.exchange}}</td><td>{{if .tls}}wss{{else}}ws{{end}}://{{.host}}:{{.port}}{{.path}}</td><td>{{if .live}}live{{else}}—{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No WebSocket connections relayed.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Frames</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Conn</th><th scope="col">Dir</th><th scope="col">Opcode</th><th scope="col">Len</th></tr></thead>
+<tbody>
+{{range .history.rows}}
+<tr><td>{{.id}}</td><td>{{.exchange}}</td><td>{{.direction}}</td><td>{{.opcode}}</td><td>{{.len}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No frames.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

@@ -99,7 +99,7 @@ func TestAToggleNotifiesEvenThoughTheRuleCountDoesNotChange(t *testing.T) {
 	// The identity is EXACT — kind, pattern, path prefix, port — because RemoveScoped's doc comment
 	// says why: deleting or toggling the wrong scope rule silently changes the authorised surface.
 	// Turn the EXCLUDE off. The rule count stays at 2; the answer changes.
-	if !scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, false) {
+	if scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, nil, false) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled did not find the rule it was given")
 	}
 	if scope.Contains("a.test", 80, "/admin/x", false) != true {
@@ -158,7 +158,7 @@ func TestAMutationThatChangesNothingDoesNotNotify(t *testing.T) {
 	if scope.ReplaceScoped(ScopeInclude, "nope.test", nil, nil, nil, NewScopeRule(ScopeInclude, "x")) {
 		t.Error("ReplaceScoped claimed to replace a rule that is not there")
 	}
-	if scope.SetRuleEnabled(ScopeInclude, "nope.test", nil, nil, false) {
+	if scope.SetRuleEnabled(ScopeInclude, "nope.test", nil, nil, nil, false) == ScopeMatchDone {
 		t.Error("SetRuleEnabled claimed to toggle a rule that is not there")
 	}
 	if got := rec.count(); got != 0 {
@@ -334,7 +334,7 @@ func TestAHandlerMayReadTheScopeFromAToggleNotification(t *testing.T) {
 
 	prefix := "/admin"
 	scope.Add(NewScopeRuleWithPath(ScopeExclude, "a.test", prefix))
-	if !scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, false) {
+	if scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, nil, false) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled did not find the rule it was given")
 	}
 	<-done
@@ -359,11 +359,53 @@ func TestAToggleToTheValueAlreadySetIsNotToldAsAChange(t *testing.T) {
 	rec := &recorded{}
 	defer scope.OnChange(rec.add)()
 
-	if !scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, true) {
+	if scope.SetRuleEnabled(ScopeExclude, "a.test", &prefix, nil, nil, true) != ScopeMatchDone {
 		t.Fatal("SetRuleEnabled did not find the rule it was given")
 	}
 	if got := rec.count(); got != 0 {
 		t.Errorf("setting a rule to the value it already holds delivered %d changes, want 0 — a "+
 			"subscriber woken by a no-op re-reads its cache for a decision nobody made", got)
+	}
+}
+
+// The drop switch and the custom drop scope announce like every other mutation - the Scope
+// page renders both - and identical re-sets stay silent, the toggle discipline.
+func TestDropSwitchAndDropScopeNotifyOnRealChangeOnly(t *testing.T) {
+	scope := NewScope()
+	rec := &recorded{}
+	defer scope.OnChange(rec.add)()
+
+	scope.SetDropOutOfScope(true)
+	scope.SetDropOutOfScope(true) // re-affirming the value it holds changes no answer: silent
+	scope.SetDropOutOfScope(false)
+	if rec.count() != 2 {
+		t.Fatalf("drop switch flips recorded %d changes, want 2 (on, off; the re-affirm is silent)", rec.count())
+	}
+	for i, c := range rec.seen() {
+		if c.Operation != "drop_switch" {
+			t.Errorf("change %d operation = %q, want drop_switch", i, c.Operation)
+		}
+	}
+
+	custom := NewScope()
+	custom.AddInclude("drop.test")
+	scope.SetDropScope(custom, true)
+	if rec.count() != 3 {
+		t.Fatalf("installing a custom drop scope recorded %d changes, want 3", rec.count())
+	}
+	if got := rec.seen()[2].Operation; got != "drop_scope" {
+		t.Errorf("change 2 operation = %q, want drop_scope", got)
+	}
+	// An identical reinstall (same rules, same mode, fresh object) changes no answer: silent.
+	clone := NewScope()
+	clone.AddInclude("drop.test")
+	scope.SetDropScope(clone, true)
+	if rec.count() != 3 {
+		t.Errorf("identical drop-scope reinstall announced; count = %d, want 3", rec.count())
+	}
+	// Clearing it is a change.
+	scope.SetDropScope(nil, false)
+	if rec.count() != 4 {
+		t.Errorf("clearing the custom drop scope did not announce; count = %d, want 4", rec.count())
 	}
 }

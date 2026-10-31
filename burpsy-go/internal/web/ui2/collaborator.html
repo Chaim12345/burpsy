@@ -1,0 +1,41 @@
+<div id="rows">
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<h3>Channel</h3>
+<p class="meta">{{if .status.configured}}configured{{else}}not configured{{end}} · {{.status.hint}}</p>
+{{if .status.domain}}<p class="meta">domain: <code>{{.status.domain}}</code></p>{{end}}
+<h3>Mint payload</h3>
+<form hx-post="/ui2/collaborator/mint" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <input type="number" name="count" value="{{if .count}}{{.count}}{{else}}1{{end}}" min="1" max="20" aria-label="Payloads to generate" style="width:70px">
+  <button type="submit">Generate payloads</button>
+</form>
+{{if .confirm_pending}}
+<p class="meta">Minting registers a domain with the interaction server (riskEgress). Review the exact call — confirming runs the call the server held when this preview rendered (single-use, 60s), not re-read form fields:</p>
+<pre>{{.confirm_preview}}</pre>
+<form hx-post="/ui2/collaborator/mint" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="mint_id" value="{{.mint_id}}">
+  <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm mint</button>
+</form>
+{{end}}
+{{if .confirm_error}}<p class="meta" role="alert" style="color:#c00">{{.confirm_error}}</p>{{end}}
+{{if .mint_error}}<p class="meta" role="alert" style="color:#c00">{{.mint_error}}</p>{{end}}
+{{if .minted}}
+<div class="mint-result">
+  <p class="meta">Minted {{len .minted.addresses}} payload(s) on <code>{{.minted.domain}}</code> · marker <code>{{.minted.marker}}</code> — the leading label attributes a callback to this batch.</p>
+  {{range .minted.addresses}}
+  <div class="mint-addr">
+    <code class="mint-addr-text">{{.}}</code>
+    <button type="button" class="btn copy-btn" data-copy="{{.}}">Copy</button>
+  </div>
+  {{end}}
+</div>
+{{end}}
+<h3>Interactions</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Client IP</th><th scope="col">Time</th></tr></thead>
+<tbody>
+{{range .interactions.rows}}
+<tr><td>{{.interaction_id}}</td><td>{{.type}}{{if .q_type}} {{.q_type}}{{end}}</td><td>{{.client_ip}}</td><td>{{ms .at_ms}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No interactions recorded.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

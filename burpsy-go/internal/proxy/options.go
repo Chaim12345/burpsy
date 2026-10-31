@@ -365,6 +365,13 @@ type Options struct {
 	dechunked              atomic.Uint64
 	modifiedUnrecorded     atomic.Uint64
 	droppedOutOfScope      atomic.Uint64
+
+	// onChange holds the lifecycle-style signal installed by OnChange: one call after a flag
+	// flips or a counter actually moves, so the console's live stream can announce the panel
+	// instead of waiting for a manual refresh. atomic.Value because the writers are the
+	// per-message hot paths above. Nothing calls it while unset - Load returns a nil
+	// interface and the type assert fails, which keeps the no-listener path allocation-free.
+	onChange atomic.Value
 }
 
 // NewOptions returns an option set with every rule off.
@@ -403,7 +410,11 @@ func (o *Options) Set(key OptionKey, on bool) error {
 	if _, ok := o.flags[key]; !ok {
 		return fmt.Errorf("%w %q", ErrUnknownOption, key)
 	}
+	if o.flags[key] == on {
+		return nil
+	}
 	o.flags[key] = on
+	o.noteChange()
 	return nil
 }
 
@@ -447,6 +458,29 @@ func (o *Options) Counters() Counters {
 	}
 }
 
+// OnChange installs the signal called after the visible state moves: a flag flipped by Set, or
+// a counter incremented on the relay paths. Single slot, mirroring the other stores' hooks.
+// The caller is the web server's live hub; the hook runs synchronously on the hot path, so it
+// must stay as cheap as the hub's atomic increment it feeds.
+func (o *Options) OnChange(fn func()) {
+	o.onChange.Store(fn)
+}
+
+// noteChange invokes the installed hook, if any.
+func (o *Options) noteChange() {
+	if fn, ok := o.onChange.Load().(func()); ok {
+		fn()
+	}
+}
+
+// bump counts one occurrence and announces it. Every counter write goes through here rather
+// than a bare Add, because a tally the panel cannot hear about is a tally that reads stale
+// until someone reloads.
+func (o *Options) bump(c *atomic.Uint64) {
+	c.Add(1)
+	o.noteChange()
+}
+
 // NoteUnrecordedModification records that one response the rules rewrote will not appear
 // in history, because scope excluded the exchange.
 //
@@ -459,7 +493,7 @@ func (o *Options) NoteUnrecordedModification() {
 	if o == nil {
 		return
 	}
-	o.modifiedUnrecorded.Add(1)
+	o.bump(&o.modifiedUnrecorded)
 }
 
 // NoteOutOfScopeDrop records that one exchange was forwarded but not stored,
@@ -472,7 +506,7 @@ func (o *Options) NoteOutOfScopeDrop() {
 	if o == nil {
 		return
 	}
-	o.droppedOutOfScope.Add(1)
+	o.bump(&o.droppedOutOfScope)
 }
 
 // NoteRelayedHTTP2 records that one HTTP/2 response went past without the response
@@ -489,7 +523,7 @@ func (o *Options) NoteRelayedHTTP2() {
 	if o == nil {
 		return
 	}
-	o.relayedHTTP2.Add(1)
+	o.bump(&o.relayedHTTP2)
 }
 
 // ---- request direction ---------------------------------------------------------
@@ -512,7 +546,7 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 	}
 	if o.Get(OptStripAcceptEncoding) {
 		if stripped, removed := removeHeader(out, "Accept-Encoding"); removed {
-			o.acceptEncodingStripped.Add(1)
+			o.bump(&o.acceptEncodingStripped)
 			out = stripped
 		}
 	}
@@ -532,7 +566,7 @@ func (o *Options) ApplyRequest(raw []byte) []byte {
 func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
-		o.skippedUnframed.Add(1)
+		o.bump(&o.skippedUnframed)
 		return raw, false
 	}
 	encoding, _ := httputil.HeaderValueExact(head, "Content-Encoding")
@@ -546,8 +580,8 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		// A chain of encodings, or one with no decoder here. Counted twice on purpose:
 		// SkippedCompressed keeps its meaning as "a compressed message no rule reached", and the
 		// narrower counter says the switch was on and could not help.
-		o.skippedCompressed.Add(1)
-		o.skippedUnsupportedEnc.Add(1)
+		o.bump(&o.skippedCompressed)
+		o.bump(&o.skippedUnsupportedEnc)
 		return raw, false
 	}
 
@@ -559,7 +593,7 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 		// `size CRLF data CRLF` to gzip decodes the size prefix as payload.
 		decoded, dok := httputil.Dechunk(body)
 		if !dok {
-			o.skippedUnframed.Add(1)
+			o.bump(&o.skippedUnframed)
 			return raw, false
 		}
 		compressed = decoded
@@ -567,14 +601,14 @@ func (o *Options) unpack(raw []byte, counter *atomic.Uint64) ([]byte, bool) {
 
 	plain, err := httputil.DecodeBody(encoding, compressed)
 	if err != nil {
-		o.skippedCompressed.Add(1)
-		o.skippedUnsupportedEnc.Add(1)
+		o.bump(&o.skippedCompressed)
+		o.bump(&o.skippedUnsupportedEnc)
 		return raw, false
 	}
 	if chunked {
-		o.dechunked.Add(1)
+		o.bump(&o.dechunked)
 	}
-	counter.Add(1)
+	o.bump(counter)
 	// Content-Encoding goes, because the body is no longer encoded and leaving the header would tell
 	// the recipient to decompress plaintext. rebuild drops Content-Length and Transfer-Encoding and
 	// writes the new length.
@@ -622,8 +656,8 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		// Counted like any other response rewrite, so the panel's Modified total agrees with history.
 		// A response the rules already rewrote was counted there and is not counted twice.
 		if !bytes.Equal(out, ruled) && bytes.Equal(ruled, raw) {
-			o.considered.Add(1)
-			o.modified.Add(1)
+			o.bump(&o.considered)
+			o.bump(&o.modified)
 		}
 	}
 	return out
@@ -682,11 +716,11 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 	if !any && !unpacking && !cookieStrip {
 		return raw
 	}
-	o.considered.Add(1)
+	o.bump(&o.considered)
 
 	head, body, sep, ok := httputil.SplitHeadBody(raw)
 	if !ok {
-		o.skippedUnframed.Add(1)
+		o.bump(&o.skippedUnframed)
 		return raw
 	}
 	if encoding, _ := httputil.HeaderValueExact(head, "Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
@@ -700,7 +734,7 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		// response as on any other. The strip is the only change that can survive these skips,
 		// because it is the only one that does not depend on reading the body.
 		if !unpacking {
-			o.skippedCompressed.Add(1)
+			o.bump(&o.skippedCompressed)
 			return o.headOnlyResult(raw, head, sep, body, cookieStrip)
 		}
 		unpacked, uok := o.unpack(raw, &o.unpackedResponses)
@@ -715,7 +749,7 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		raw = unpacked
 		head, body, sep, ok = httputil.SplitHeadBody(raw)
 		if !ok {
-			o.skippedUnframed.Add(1)
+			o.bump(&o.skippedUnframed)
 			return raw
 		}
 		if !any {
@@ -724,10 +758,10 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 			// really did change. The cookie-flag strip rides along on the decompressed head, which is
 			// the head the browser actually receives.
 			if head, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
-				o.modified.Add(1)
+				o.bump(&o.modified)
 				return concatMessage(head, sep, body)
 			}
-			o.modified.Add(1)
+			o.bump(&o.modified)
 			return raw
 		}
 	}
@@ -746,16 +780,16 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		// nothing to do: no Content-Encoding to unpack, no Secure flag to strip. Counted
 		// unchanged rather than silent, on the same principle as every other no-op here.
 		if headChanged {
-			o.modified.Add(1)
+			o.bump(&o.modified)
 			return concatMessage(head, sep, body)
 		}
-		o.unchanged.Add(1)
+		o.bump(&o.unchanged)
 		return raw
 	}
 	if !isHTMLResponse(head) {
-		o.skippedNotHTML.Add(1)
+		o.bump(&o.skippedNotHTML)
 		if headChanged {
-			o.modified.Add(1)
+			o.bump(&o.modified)
 			return concatMessage(head, sep, body)
 		}
 		return raw
@@ -767,13 +801,13 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 	if chunked {
 		decoded, ok := httputil.Dechunk(body)
 		if !ok {
-			o.skippedUnframed.Add(1)
+			o.bump(&o.skippedUnframed)
 			// The body rules are out, but the head rule is not: it never needed the body. A
 			// strip that already happened must survive this skip, exactly as it survives the
 			// not-HTML one above — the two skips differ in what they could read, not in
 			// whether the cookie flag is still there to remove.
 			if headChanged {
-				o.modified.Add(1)
+				o.bump(&o.modified)
 				return concatMessage(head, sep, body)
 			}
 			return raw
@@ -821,16 +855,16 @@ func (o *Options) applyResponseRules(raw []byte) []byte {
 		// Every other skip path already offered the head its change first; this one and the
 		// unparseable-chunking one are the two that did not.
 		if headChanged {
-			o.modified.Add(1)
+			o.bump(&o.modified)
 			return concatMessage(head, sep, body)
 		}
-		o.unchanged.Add(1)
+		o.bump(&o.unchanged)
 		return raw
 	}
 	if chunked {
-		o.dechunked.Add(1)
+		o.bump(&o.dechunked)
 	}
-	o.modified.Add(1)
+	o.bump(&o.modified)
 	// wasEncoded false: any Content-Encoding was already removed by the unpack step above, so there is
 	// none left to drop and claiming otherwise here would hide where it happened.
 	return rebuild(head, sep, out, chunked, false)
@@ -1016,7 +1050,7 @@ func stripSecureCookieAttributes(head []byte, enabled bool) ([]byte, bool) {
 // changed, so no framing decision is made on its behalf.
 func (o *Options) headOnlyResult(raw, head, sep, body []byte, cookieStrip bool) []byte {
 	if newHead, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
-		o.modified.Add(1)
+		o.bump(&o.modified)
 		return concatMessage(newHead, sep, body)
 	}
 	return raw

@@ -1294,6 +1294,80 @@ func (ts *TrafficStore) ExchangeByRequest(id MsgId) (*Exchange, error) {
 	return nil, fmt.Errorf("no exchange has request message %d", id)
 }
 
+// ExchangeBrief is the exchange fields an issue list needs, copied so the caller can use them
+// after the store lock is released.
+//
+// A listing used to call ExchangeByRequest and GetExchange once per occurrence, taking and dropping
+// the lock each time. At a few thousand findings that is a few thousand lock round-trips on the
+// store the proxy is also writing, and it is paid again on every issues event because the console
+// refetches the list. One copy of these fields is the same answer.
+type ExchangeBrief struct {
+	ID       ExchangeID
+	Host     string
+	Path     string
+	Isolated bool
+	// Response is a copy of the id, not the exchange's pointer, so a later edit of the live
+	// exchange cannot change a brief the caller is still encoding.
+	Response *MsgId
+}
+
+// ExchangeBriefs copies host, path and isolation for every live exchange, keyed both by exchange
+// id and by request message id. Deleted rows are absent from both maps.
+func (ts *TrafficStore) ExchangeBriefs() (byRequest map[MsgId]ExchangeBrief, byID map[ExchangeID]ExchangeBrief) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	byID = make(map[ExchangeID]ExchangeBrief, len(ts.exchanges))
+	byRequest = make(map[MsgId]ExchangeBrief, len(ts.byRequest))
+	for _, ex := range ts.exchanges {
+		if ex == nil || ts.deleted[ex.ID] {
+			continue
+		}
+		b := ExchangeBrief{ID: ex.ID, Host: ex.Host, Path: ex.Path, Isolated: ex.Source.Isolated()}
+		if ex.Response != nil {
+			id := *ex.Response
+			b.Response = &id
+		}
+		byID[ex.ID] = b
+		if ex.Request != nil {
+			byRequest[*ex.Request] = b
+		}
+	}
+	return byRequest, byID
+}
+
+// ExchangeBriefsFor is the targeted form of ExchangeBriefs: one read lock, only the briefs the
+// caller named. An issues view over a large history references a handful of exchanges per
+// finding, so it asks for those instead of copying a map entry for every live exchange. Unknown
+// or deleted ids are simply absent from the maps, exactly as in the full snapshot.
+func (ts *TrafficStore) ExchangeBriefsFor(reqs []MsgId, ids []ExchangeID) (byRequest map[MsgId]ExchangeBrief, byID map[ExchangeID]ExchangeBrief) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	byRequest = make(map[MsgId]ExchangeBrief, len(reqs))
+	byID = make(map[ExchangeID]ExchangeBrief, len(ids))
+	brief := func(ex *Exchange) ExchangeBrief {
+		b := ExchangeBrief{ID: ex.ID, Host: ex.Host, Path: ex.Path, Isolated: ex.Source.Isolated()}
+		if ex.Response != nil {
+			id := *ex.Response
+			b.Response = &id
+		}
+		return b
+	}
+	for _, id := range ids {
+		if uint64(id) >= uint64(len(ts.exchanges)) || ts.deleted[id] {
+			continue
+		}
+		if ex := ts.exchanges[id]; ex != nil {
+			byID[ex.ID] = brief(ex)
+		}
+	}
+	for _, req := range reqs {
+		if ex := ts.byRequest[req]; ex != nil && !ts.deleted[ex.ID] {
+			byRequest[req] = brief(ex)
+		}
+	}
+	return byRequest, byID
+}
+
 // PriorExchange returns the most recent exchange against the same origin+path that was added
 // before the given exchange, for a second-order check to compare against.
 //

@@ -40,8 +40,9 @@ import { useApp } from "../lib/store";
 import { HIGHLIGHTS, highlightName, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
-import { decodedMarker, messageReading, type MessageReading } from "../lib/message-decoded";
-import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
+import { messageReading, type MessageReading } from "../lib/message-decoded";
+import { availableVariants, variantMessageId, type MessageVariant } from "../ui/variant-picker";
+import { decodeStripShows, MessageDecodeStrip, ReadingPane } from "../ui/message-reading-pane";
 import { Inspector } from "../ui/inspector";
 import { useCommandHandler } from "../lib/commands";
 import { confirmDialog, promptDialog } from "../lib/dialogs";
@@ -1151,12 +1152,8 @@ export function HistoryPage(): JSX.Element {
  const responseReading = response.data ? messageReading(response.data, responseRaw) : undefined;
 
  // The two panes, built once and placed by whichever layout is active, so the readings and the
- // file names cannot drift between the combined and split arrangements.
- //
- // The picker is wrapped *only* when there is something to compare. That keeps the common case's
- // DOM exactly what it was — no extra element in the editor grid, no new chance of a layout
- // regression on the rows that have nothing to show — and it is also what makes the wrapper's
- // presence meaningful rather than decorative.
+ // file names cannot drift between the combined and split arrangements. ReadingPane and
+ // MessageDecodeStrip are shared with the burpsy_message_screenshot snapshot (src/snapshot).
  const renderPane = (
   label: string,
   options: MessageVariant[],
@@ -1164,60 +1161,15 @@ export function HistoryPage(): JSX.Element {
   onChange: (next: MessageVariant) => void,
   editor: JSX.Element,
   decode?: JSX.Element | null,
- ): JSX.Element =>
-  options.length < 2 && !decode ? (
-   editor
-  ) : (
-   <div className="reading-pane">
-    {options.length < 2 ? null : <VariantPicker label={label} options={options} value={value} onChange={onChange} />}
-    {decode}
-    {editor}
-   </div>
-  );
+ ): JSX.Element => <ReadingPane label={label} options={options} value={value} onChange={onChange} editor={editor} decode={decode} />;
 
- // The strip over a pane whose message declared a Content-Encoding (burpsy-react-ui-qpfy). Nothing
- // for a message with no encoding, so the common case keeps the editor grid's DOM as it was. A
- // decoded pane says so in words — the head above the body still reads Content-Encoding: gzip and
- // a compressed Content-Length, and without the marker the pane would look like the wire.
  const decodeStrip = (
   label: string,
   reading: MessageReading | undefined,
   preferRaw: boolean,
   setPreferRaw: (next: boolean) => void,
- ): JSX.Element | null => {
-  if (!reading || (!reading.encoding && !reading.decodeError && !reading.canDecode)) return null;
-  if (reading.decodeError) {
-   return (
-    <div className="decode-strip" role="status">
-     <Badge tone="warn">not decoded</Badge>
-     <span className="cell-dim">
-      {/* The encoding is named unless the server's reason already names it ("no decoder for
-          Content-Encoding \"br\""), so the sentence does not say it twice. */}
-      {label} body{reading.encoding && !reading.decodeError.includes(reading.encoding) ? ` (Content-Encoding: ${reading.encoding})` : ""}{" "}
-      could not be decoded: {reading.decodeError}. Showing the bytes as captured.
-     </span>
-    </div>
-   );
-  }
-  if (!reading.canDecode) return null;
-  return (
-   <div className="decode-strip" role="status">
-    {reading.decoded ? (
-     <Badge
-      tone="info"
-      title="The body is shown decompressed; the headers are as captured. Sends and resends always use the captured bytes."
-     >
-      {decodedMarker(reading.encoding)}
-     </Badge>
-    ) : (
-     <Badge tone="neutral">raw bytes as captured (Content-Encoding: {reading.encoding ?? "unknown"})</Badge>
-    )}
-    <Button variant="outline" size="small" onClick={() => setPreferRaw(!preferRaw)}>
-     {reading.decoded ? "Show captured bytes" : "Show decoded body"}
-    </Button>
-   </div>
-  );
- };
+ ): JSX.Element | null =>
+  decodeStripShows(reading) ? <MessageDecodeStrip label={label} reading={reading} preferRaw={preferRaw} setPreferRaw={setPreferRaw} /> : null;
 
  // Gated on a selection because the panes are built on every render while the detail block renders
  // only when something is selected, and actions.menu wants a row.

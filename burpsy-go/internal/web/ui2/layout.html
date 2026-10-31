@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>
+:root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
+html[data-theme="dark"] { color-scheme: dark; --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#274; }
+html[data-theme="light"] { color-scheme: light; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
+tr.checked { outline: 2px solid var(--accent); }
+#sel-count { margin-left: 8px; font-weight: 600; }
+* { box-sizing: border-box; }
+body { margin:0; font:13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+header { display:flex; gap:10px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); flex-wrap:wrap; z-index:20; /* above sticky th: both are positioned, auto z would stack the later-in-DOM th over the bar and its open nav menu */ }
+header .brand { font-weight:700; }
+header nav { display:flex; gap:2px; flex-wrap:wrap; }
+header nav a { color:var(--fg); text-decoration:none; padding:3px 8px; border-radius:6px; white-space:nowrap; }
+header nav a.active { background:var(--sel); }
+header form { display:flex; gap:6px; margin-left:auto; }
+input[type=search], input[type=text], textarea { padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+button, .btn { padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; text-decoration:none; display:inline-block; }
+main { display:block; height:calc(100vh - 45px); overflow-y:auto; }
+main.split { display:flex; }
+main.split #list { width:60%; overflow-y:auto; border-right:1px solid var(--line); }
+main.split #detail { width:40%; overflow-y:auto; padding:10px 14px; }
+#detail { display:none; }
+main.split #detail { display:block; }
+#detail { width:40%; overflow-y:auto; padding:10px 14px; }
+table { border-collapse:collapse; width:100%; }
+table.scope-t tr.scope-sd { display:none; }
+/* Long digests in confirm previews and detail rows wrap instead of clipping
+   horizontally off a phone viewport. */
+.brk { overflow-wrap:anywhere; word-break:break-word; }
+th, td { text-align:left; padding:3px 8px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:340px; }
+.organizer-items th, .organizer-items td { white-space:normal; overflow-wrap:anywhere; text-overflow:clip; padding:3px 5px; }
+@media (max-width:640px) {
+ .organizer-items thead { display:none; }
+ .organizer-items, .organizer-items tbody, .organizer-items tr { display:block; }
+ .organizer-items tr { border-bottom:2px solid var(--line); padding:6px 8px; }
+ .organizer-items td { display:grid; grid-template-columns:110px minmax(0,1fr); max-width:none; border:0; }
+ .organizer-items td::before { content:attr(data-label); color:var(--muted); font-weight:600; }
+}
+th { position:sticky; top:0; background:var(--bg); color:var(--muted); font-weight:600; }
+tbody tr { cursor:pointer; }
+tbody tr:hover { background:var(--line); }
+tbody tr.selected { background:var(--sel); box-shadow:inset 3px 0 0 var(--accent); }
+.sev { font-weight:700; text-transform:uppercase; font-size:11px; }
+.sev-high, .sev-critical { color:#c00; }
+.sev-medium { color:#a60; }
+.sev-low { color:#06c; }
+.sev-informational, .sev-info { color:var(--muted); }
+.meta { color:var(--muted); font-size:12px; padding:6px 14px; }
+pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; font:12px/1.4 ui-monospace, monospace; max-height:45vh; overflow:auto; }
+h3 { margin:10px 0 4px; }
+.badge { background:var(--sel); border-radius:10px; padding:1px 8px; font-size:11px; }
+.fp { color:var(--muted); text-decoration:line-through; }
+.mint-result { margin:8px 14px; }
+.mint-addr { display:flex; gap:8px; align-items:flex-start; margin:4px 0; }
+.mint-addr-text { flex:1; word-break:break-all; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:12px/1.4 ui-monospace, monospace; user-select:all; }
+.mint-addr .copy-btn { flex:none; }
+/* Syntax highlighting (server-rendered tokens; colors follow the theme vars) */
+.hl-method, .hl-kw { color:#a06; font-weight:600; }
+.hl-path, .hl-tag { color:#06c; }
+.hl-ver { color:var(--muted); }
+.hl-status { color:#080; font-weight:600; }
+.hl-hdr, .hl-key, .hl-attr { color:#07a; }
+.hl-str { color:#a40; }
+.hl-num { color:#70a; }
+.hl-punct { color:var(--muted); }
+.hl-com { color:#690; font-style:italic; }
+.pane-toggle { margin-left:8px; font-weight:400; font-size:12px; }
+.pane-toggle .pt-on { padding:4px 10px; border:1px solid var(--accent); border-radius:6px; color:var(--accent); }
+h3 .badge { vertical-align:middle; }
+pre.msg { tab-size:4; }
+#nav-burger { display:none; }
+.phone-hint { display:none; }
+/* The per-row edit panel lives in the last table cell. Opened in place it is squeezed to one
+   character per line on a phone and runs off the right edge on desktop (the row of fields is
+   wider than the viewport), and an overlay anchored to the cell loses hit-testing to the rows
+   below it. Instead the open panel docks as a bottom sheet: fixed to the viewport (the table's
+   layout and stacking cannot clip or cover it), capped in height and scrollable so the
+   keyboard or a short viewport cannot hide its controls. The close control only collapses it. */
+table.scope-t details.scope-edit[open] form {
+  position:fixed; left:8px; right:8px; bottom:8px; top:auto;
+  max-height:70vh; overflow-y:auto;
+  background:#fff; border:1px solid #888; border-radius:8px; padding:10px; z-index:70;
+  box-shadow:0 -2px 14px rgba(0,0,0,.3); white-space:normal; text-align:left;
+}
+@media (min-width: 641px) {
+  table.scope-t details.scope-edit[open] form { left:auto; right:16px; width:min(680px, calc(100vw - 32px)); }
+}
+
+@media (max-width: 640px) {
+  header nav { display:none; }
+  header.nav-open nav { display:flex; position:absolute; top:100%; left:0; right:0; background:var(--bg); border-bottom:1px solid var(--line); padding:6px; z-index:10; max-height:60vh; overflow-y:auto; }
+  main.split { display:block; }
+  main.split #list { width:100%; border-right:none; max-height:55vh; }
+  main.split #detail { width:100%; }
+  #nav-burger { display:inline-block; }
+  table { table-layout:fixed; }
+  th, td { max-width:none; }
+  header { padding:6px 8px; gap:6px; }
+  header form { margin-left:0; width:100%; }
+  header form input { flex:1; min-width:0; }
+  #list { overflow-x:hidden; }
+  body { overflow-x:hidden; }
+  /* Wide traffic tables (History, Logger - class wide-t) cull their edge columns on a phone.
+     Heading and body must hide together and only on those tables: the old #rows-wide rule hit
+     every fragment's thead inside #rows, so pages like WebSockets lost their first TH while the
+     TD stayed, shifting every label one column left. */
+  table.wide-t td:nth-child(1), table.wide-t th:nth-child(1),
+  table.wide-t td:nth-child(8), table.wide-t th:nth-child(8) { display:none; }
+  /* ...but the lazy-load sentinel is not column content: its single colspan cell also matches
+     nth-child(1), and culled to zero size its intersect trigger can never fire on a phone. */
+  table.wide-t tr.sentinel-row td { display:table-cell; }
+  /* Scope table: on a phone the Path and Protocol columns drop out and the per-row action
+     buttons wrap inside their cell, so Remove stays reachable instead of clipping off-screen. */
+  table.scope-t td:nth-child(4), table.scope-t th:nth-child(4),
+  table.scope-t td:nth-child(6), table.scope-t th:nth-child(6) { display:none; }
+  /* Fixed table layout sizes columns from the header row, so the action column gets an
+     explicit width: wide enough for each control on one line, while Host truncates by design. */
+  table.scope-t th:last-child { width:112px; }
+  table.scope-t td.sa { white-space:normal; position:relative; }
+
+  /* Buttons and the edit summary are controls, not text to wrap: keep each on one line even
+     when tap-to-expand selects the row (cell-x would otherwise break them one char per line). */
+  table.scope-t td.sa button, table.scope-t td.sa summary { white-space:nowrap; }
+  table.scope-t td.sa.cell-x { word-break:normal; }
+  table.scope-t tr.scope-sd { display:table-row; }
+  /* Session rules table: same phone treatment as scope-t (caught live in UAT - at 390px the
+     inline toggle form overlapped the remove button and made it untappable). The Tools and
+     action-label columns drop out; the per-row controls stack one per line so every one stays
+     inside the cell's tap area. */
+  table.rules-t td:nth-child(4), table.rules-t th:nth-child(4),
+  table.rules-t td:nth-child(5), table.rules-t th:nth-child(5) { display:none; }
+  table.rules-t th:last-child { width:120px; }
+  table.rules-t td.sa { white-space:normal; position:relative; }
+  table.rules-t td.sa form { display:block; margin:2px 0; }
+  table.rules-t td.sa button, table.rules-t td.sa summary { white-space:nowrap; }
+
+  /* Tap-to-expand: a truncated cell expands in place so its full content wraps
+     visibly; tapping it again collapses. */
+  tbody tr.selected td { cursor:zoom-in; }
+  td.cell-x { white-space:normal; word-break:break-all; overflow:visible; cursor:zoom-out; }
+  thead th.cell-x { white-space:normal; overflow-wrap:break-word; overflow:visible; cursor:zoom-out; }
+  thead th[tabindex] { cursor:zoom-in; }
+  .phone-hint { display:block; }
+}
+
+#livepill { position:fixed; left:50%; bottom:16px; transform:translateX(-50%); background:#222; color:#eee;
+  padding:8px 12px; border-radius:6px; z-index:80; font-size:14px; display:flex; gap:10px; align-items:center;
+  box-shadow:0 2px 8px rgba(0,0,0,.3); max-width:calc(100vw - 24px); }
+#livepill button { font:inherit; }
+#livepill.livepill-top { top:16px; bottom:auto; }
+#busybadge { margin-left:8px; }
+#notice { margin:6px 12px; padding:6px 10px; border:1px solid var(--line); border-left:3px solid #c60;
+  font-size:14px; }
+#notice:empty { display:none; }
+@media (max-width:560px) {
+  #livepill { left:12px; right:12px; transform:none; flex-wrap:wrap; }
+  #livepill span { flex:1 1 100%; }
+}
+
+/* Action editors live outside the fixed-width rules table: every field remains readable. */
+#session-action-editors { max-width:900px; margin:14px 0; }
+#session-action-editors details { margin:12px 0; }
+#session-action-editors fieldset { min-width:0; margin:10px 0; padding:10px; }
+#session-action-editors legend { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+#session-action-editors input, #session-action-editors select, #session-action-editors textarea { max-width:100%; box-sizing:border-box; }
+#session-action-editors label { display:inline-block; max-width:100%; }
+#session-action-editors button { white-space:normal; margin:3px 0; }
+</style>
+</head>
+<body data-view="{{.View}}">
+<header>
+  <span class="brand">burpsy <span class="badge">ui2</span></span>
+  <button id="nav-burger" class="btn" aria-label="Open navigation menu" aria-expanded="false">☰</button>
+  {{template "nav" .}}
+  <span id="sel-count" class="meta" aria-live="polite"></span>
+  <span id="busybadge" class="meta" hidden>working&hellip;</span>
+  <button id="theme-toggle" class="btn" aria-label="Toggle light/dark theme" title="Toggle theme">◐</button>
+  {{if eq .View "history"}}
+  <form hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="submit, keyup changed delay:400ms from:#q" hx-push-url="true">
+    <input type="search" id="q" name="q" aria-label="Filter query (burpsy DSL, e.g. host~example.com)" placeholder="filter: host~example.com path~/api" autocomplete="off">
+    <input type="search" name="search" aria-label="Search rows" placeholder="search…" autocomplete="off"
+      hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="keyup changed delay:400ms" hx-include="#q" hx-push-url="true">
+    <noscript><button>Filter</button></noscript>
+  </form>
+  {{end}}
+</header>
+<div id="notice" role="status" aria-live="polite"></div>
+<main class="{{if or (eq .View "history") (eq .View "issues") (eq .View "intruder") (eq .View "advisories")}}split{{end}}">
+  <div id="list" role="region" aria-label="Rows">
+    {{.Body}}
+  </div>
+  <div id="detail" role="region" aria-label="Selected item detail" aria-live="polite">{{if eq .View "history"}}<p class="meta">Select a row to see its request and response.</p>{{end}}</div>
+</main>
+<script src="/ui2/htmx.min.js"></script>
+<script src="/ui2/app.js"></script>
+</body>
+</html>

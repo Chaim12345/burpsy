@@ -64,7 +64,7 @@ func TestDropOutOfScopeKeepsExcludesWinning(t *testing.T) {
 func TestDropOutOfScopeHonoursDisabledIncludes(t *testing.T) {
 	s := NewScope()
 	s.Add(NewScopeRule(ScopeInclude, "example.test"))
-	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, false)
+	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, nil, false)
 	s.SetDropOutOfScope(true)
 	if s.AuthoriseRequest("example.test", 80, "/", false) {
 		t.Error("a disabled include must not authorise its host while the drop switch is on")
@@ -125,7 +125,7 @@ func TestMayContainHostIsUnchangedByTheDropSwitch(t *testing.T) {
 	}
 
 	// And a disabled include cannot pass the pre-filter, exactly as in Contains.
-	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, false)
+	s.SetRuleEnabled(ScopeInclude, "example.test", nil, nil, nil, false)
 	if s.MayContainHost("example.test", 80, false) {
 		t.Error("a disabled include must not pass the pre-filter — MayContainHost must keep agreeing with Contains")
 	}

@@ -124,7 +124,8 @@ describe("no mutating call bypasses the gated client", () => {
   "src/lib/data.policy.ts:/ca.crt": "HEAD probe of the CA certificate",
   "src/pages/intruder.tsx:/api/intruder/payload-files": "riskLocal upload (ungated)",
   "src/ui/clickbandit-dialog.tsx:/api/engagement/clickbandit.js": "GET of the Clickbandit script as text, not JSON",
- };
+  "src/issues.worker.ts:<message.url>": "GET of /api/issues/{id} inside the module worker; the URL is a read route built by lib/data.ts",
+};
  function sources(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
    const path = join(dir, name);

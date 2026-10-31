@@ -192,7 +192,62 @@
   "/api/ws/history",
   "/api/ws/message/{id}",
   "/ca.crt",
-  "/reissue/{token...}"
+  "/reissue/{token...}",
+  "/ui2/",
+  "/ui2/advisories",
+  "/ui2/advisories/{typeIndex}",
+  "/ui2/app.js",
+  "/ui2/collaborator",
+  "/ui2/collaborator/mint",
+  "/ui2/comparer",
+  "/ui2/comparer/run",
+  "/ui2/dashboard",
+  "/ui2/decoder",
+  "/ui2/decoder/run",
+  "/ui2/extensions",
+  "/ui2/history",
+  "/ui2/history/{id}",
+  "/ui2/htmx.min.js",
+  "/ui2/intercept",
+  "/ui2/intercept/{action}",
+  "/ui2/intruder",
+  "/ui2/intruder/confirm",
+  "/ui2/intruder/points",
+  "/ui2/intruder/run",
+  "/ui2/intruder/{id}/results",
+  "/ui2/intruder/{id}/{action}",
+  "/ui2/issues",
+  "/ui2/issues/{id}",
+  "/ui2/logger",
+  "/ui2/logger/{action}",
+  "/ui2/organizer",
+  "/ui2/organizer/annotate/{action}",
+  "/ui2/organizer/collections/{action}",
+  "/ui2/organizer/status/{action}",
+  "/ui2/proxy",
+  "/ui2/repeater",
+  "/ui2/repeater/send",
+  "/ui2/scanner",
+  "/ui2/scanner/config-confirm",
+  "/ui2/scanner/config-run",
+  "/ui2/scanner/crawl-launch",
+  "/ui2/scanner/crawl-run",
+  "/ui2/scanner/crawl-watch",
+  "/ui2/scanner/launch",
+  "/ui2/scanner/run",
+  "/ui2/scope",
+  "/ui2/scope/confirm",
+  "/ui2/scope/run",
+  "/ui2/sequencer",
+  "/ui2/sequencer/analyse",
+  "/ui2/sequencer/capture/{action}",
+  "/ui2/session",
+  "/ui2/session/rules/{action}",
+  "/ui2/settings",
+  "/ui2/settings/triage/{action}",
+  "/ui2/sitemap",
+  "/ui2/sse.min.js",
+  "/ui2/ws"
  ],
  "paths": [
   {
@@ -3828,6 +3883,1106 @@
   {
    "path": "/reissue/w/extra/more",
    "key": "/reissue/{token...}",
+   "gated": false
+  },
+  {
+   "path": "/ui2",
+   "key": null,
+   "gated": false
+  },
+  {
+   "path": "/ui2/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/extra",
+   "key": "/ui2/advisories/{typeIndex}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/extra/more",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/w",
+   "key": "/ui2/advisories/{typeIndex}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/w/",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/w/extra",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/advisories/w/extra/more",
+   "key": "/ui2/advisories",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/extra",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/app.js/extra/more",
+   "key": "/ui2/app.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/extra",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/extra/more",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/extra",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/mint/extra/more",
+   "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer",
+   "key": "/ui2/comparer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/",
+   "key": "/ui2/comparer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/extra",
+   "key": "/ui2/comparer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/extra/more",
+   "key": "/ui2/comparer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/run",
+   "key": "/ui2/comparer/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/run/",
+   "key": "/ui2/comparer/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/run/extra",
+   "key": "/ui2/comparer/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/comparer/run/extra/more",
+   "key": "/ui2/comparer/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/extra",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder",
+   "key": "/ui2/decoder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/",
+   "key": "/ui2/decoder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/extra",
+   "key": "/ui2/decoder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/extra/more",
+   "key": "/ui2/decoder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/run",
+   "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/run/",
+   "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/run/extra",
+   "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/decoder/run/extra/more",
+   "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions",
+   "key": "/ui2/extensions",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/",
+   "key": "/ui2/extensions",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/extra",
+   "key": "/ui2/extensions",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/extra/more",
+   "key": "/ui2/extensions",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extra",
+   "key": "/ui2/history/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extra/more",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w",
+   "key": "/ui2/history/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/extra",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/w/extra/more",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/extra",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/htmx.min.js/extra/more",
+   "key": "/ui2/htmx.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/extra",
+   "key": "/ui2/intercept/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/extra/more",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/w",
+   "key": "/ui2/intercept/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/w/",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/w/extra",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/w/extra/more",
+   "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/extra",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/confirm/extra/more",
+   "key": "/ui2/intruder/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/extra/more",
+   "key": "/ui2/intruder/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/extra",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/points/extra/more",
+   "key": "/ui2/intruder/points",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/extra",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/run/extra/more",
+   "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results",
+   "key": "/ui2/intruder/{id}/results",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/results/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w",
+   "key": "/ui2/intruder/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/w/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/extra",
+   "key": "/ui2/issues/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/extra/more",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w",
+   "key": "/ui2/issues/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/extra",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/w/extra/more",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/extra",
+   "key": "/ui2/logger/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/extra/more",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/w",
+   "key": "/ui2/logger/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/w/",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/w/extra",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/w/extra/more",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/annotate/w",
+   "key": "/ui2/organizer/annotate/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/annotate/w/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/annotate/w/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/annotate/w/extra/more",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/collections/w",
+   "key": "/ui2/organizer/collections/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/collections/w/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/collections/w/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/collections/w/extra/more",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/extra/more",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/status/w",
+   "key": "/ui2/organizer/status/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/status/w/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/status/w/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/status/w/extra/more",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy",
+   "key": "/ui2/proxy",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/",
+   "key": "/ui2/proxy",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/extra",
+   "key": "/ui2/proxy",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/extra/more",
+   "key": "/ui2/proxy",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/extra",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/extra/more",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send",
+   "key": "/ui2/repeater/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send/",
+   "key": "/ui2/repeater/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send/extra",
+   "key": "/ui2/repeater/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send/extra/more",
+   "key": "/ui2/repeater/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner",
+   "key": "/ui2/scanner",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/",
+   "key": "/ui2/scanner",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-confirm",
+   "key": "/ui2/scanner/config-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-confirm/",
+   "key": "/ui2/scanner/config-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-confirm/extra",
+   "key": "/ui2/scanner/config-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-confirm/extra/more",
+   "key": "/ui2/scanner/config-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-run",
+   "key": "/ui2/scanner/config-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-run/",
+   "key": "/ui2/scanner/config-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-run/extra",
+   "key": "/ui2/scanner/config-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config-run/extra/more",
+   "key": "/ui2/scanner/config-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-launch",
+   "key": "/ui2/scanner/crawl-launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-launch/",
+   "key": "/ui2/scanner/crawl-launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-launch/extra",
+   "key": "/ui2/scanner/crawl-launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-launch/extra/more",
+   "key": "/ui2/scanner/crawl-launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-run",
+   "key": "/ui2/scanner/crawl-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-run/",
+   "key": "/ui2/scanner/crawl-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-run/extra",
+   "key": "/ui2/scanner/crawl-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-run/extra/more",
+   "key": "/ui2/scanner/crawl-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-watch",
+   "key": "/ui2/scanner/crawl-watch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-watch/",
+   "key": "/ui2/scanner/crawl-watch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-watch/extra",
+   "key": "/ui2/scanner/crawl-watch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/crawl-watch/extra/more",
+   "key": "/ui2/scanner/crawl-watch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/extra",
+   "key": "/ui2/scanner",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/extra/more",
+   "key": "/ui2/scanner",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/launch",
+   "key": "/ui2/scanner/launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/launch/",
+   "key": "/ui2/scanner/launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/launch/extra",
+   "key": "/ui2/scanner/launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/launch/extra/more",
+   "key": "/ui2/scanner/launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/run",
+   "key": "/ui2/scanner/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/run/",
+   "key": "/ui2/scanner/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/run/extra",
+   "key": "/ui2/scanner/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/run/extra/more",
+   "key": "/ui2/scanner/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope",
+   "key": "/ui2/scope",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/",
+   "key": "/ui2/scope",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/confirm",
+   "key": "/ui2/scope/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/confirm/",
+   "key": "/ui2/scope/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/confirm/extra",
+   "key": "/ui2/scope/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/confirm/extra/more",
+   "key": "/ui2/scope/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/extra",
+   "key": "/ui2/scope",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/extra/more",
+   "key": "/ui2/scope",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/run",
+   "key": "/ui2/scope/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/run/",
+   "key": "/ui2/scope/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/run/extra",
+   "key": "/ui2/scope/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scope/run/extra/more",
+   "key": "/ui2/scope/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/extra",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/analyse/extra/more",
+   "key": "/ui2/sequencer/analyse",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/capture/w",
+   "key": "/ui2/sequencer/capture/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/capture/w/",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/capture/w/extra",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/capture/w/extra/more",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/extra",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/extra/more",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/extra",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/extra/more",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/rules/w",
+   "key": "/ui2/session/rules/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/rules/w/",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/rules/w/extra",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/rules/w/extra/more",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/extra",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/extra/more",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/triage/w",
+   "key": "/ui2/settings/triage/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/triage/w/",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/triage/w/extra",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/triage/w/extra/more",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/extra",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/extra/more",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/extra",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sse.min.js/extra/more",
+   "key": "/ui2/sse.min.js",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/extra",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/extra/more",
+   "key": "/ui2/ws",
    "gated": false
   }
  ]

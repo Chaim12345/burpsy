@@ -1757,13 +1757,33 @@ func (s *Server) resolveCrawlConfig(name string) (string, []string, error) {
 	}
 	doc, found := s.savedScanConfigDocument(name)
 	if !found {
-		return "", nil, &unknownConfigError{Name: name, Known: s.knownConfigNames()}
+		return "", nil, &unknownConfigError{Name: name, Known: s.knownCrawlConfigNames()}
 	}
 	cfg, err := crawler.ParseBurpCrawlConfig(doc)
 	if err != nil {
 		return "", nil, err
 	}
 	return name, append(cfg.UnrepresentableKeys, sectionPrefixes(cfg.UnknownSections)...), nil
+}
+
+// knownCrawlConfigNames is every name a CRAWL can run under: the saved library configurations,
+// which are stored as full Burp documents and so carry their crawler halves. The shipped presets
+// exist here only as audit-half transcriptions (scanner.BuiltInConfig), so a crawl that named one
+// could only run under settings the preset never stated - the refusal lists what a crawl can
+// actually use, and the crawl launch form offers the same set.
+func (s *Server) knownCrawlConfigNames() []string {
+	if s.persist == nil {
+		return nil
+	}
+	entries, err := s.persist.LoadScanConfigLibraries()
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	return names
 }
 
 // crawlLimitsFromConfig reads the crawler half of a named configuration and returns the limits it

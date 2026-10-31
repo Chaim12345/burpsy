@@ -321,14 +321,31 @@ func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn,
 		defer s.wsLive.remove(live)
 	}
 
+	// One direction ending must end the relay — the contract above is "until either side
+	// closes". Without this a dead client left the server-to-client goroutine blocked reading an
+	// upstream that never learned the client was gone (nothing had closed or half-closed it),
+	// wg.Wait never returned, and the connection stayed in the live registry forever: the
+	// console's Live cell read live on a corpse, and both sockets leaked with it. Closing both
+	// conns unblocks the surviving direction's read, which then returns with no fault.
+	var killOnce sync.Once
+	kill := func() {
+		killOnce.Do(func() {
+			_ = clientConn.Close()
+			_ = upstreamConn.Close()
+		})
+	}
+	defer kill()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	s.spawn(func() {
 		defer wg.Done()
+		defer kill()
 		faults[0] = s.wsDirectionSink(exchangeID, clientReader, toServer, true, peer, capture, &stats)
 	}, clientConn, upstreamConn)
 	s.spawn(func() {
 		defer wg.Done()
+		defer kill()
 		faults[1] = s.wsDirectionSink(exchangeID, upstreamReader, toClient, false, peer, capture, &stats)
 	}, clientConn, upstreamConn)
 	wg.Wait()

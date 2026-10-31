@@ -166,8 +166,8 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 	for _, r := range manifest {
 		byRoute[r.Pattern] = r
 	}
-	if len(listed.Tools) != len(manifest)+2 {
-		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm and task-status tools",
+	if len(listed.Tools) != len(manifest)+3 {
+		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm, task-status and screenshot tools",
 			len(listed.Tools), len(manifest))
 	}
 
@@ -178,7 +178,7 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 			t.Fatalf("two tools are named %q; an MCP tool name is an address and has to name one tool", tl.Name)
 		}
 		names[tl.Name] = true
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 
@@ -288,6 +288,58 @@ func TestToolsListMarksExactlyTheConfirmationWorthyRoutes(t *testing.T) {
 	}
 	if flagged != len(gated) {
 		t.Fatalf("%d tools are marked confirmation-worthy, want %d", flagged, len(gated))
+	}
+}
+
+// ---- hint honesty ----------------------------------------------------------------------------
+
+// The routes surface lists every manifest pattern, including the /ui2/* POST routes classed
+// riskAsset. The class hints describe the usual call; a route that answers a mutating verb is not
+// read-only or idempotent, whatever its class says. Before annotationsForRoute derived the two
+// hints from the verb set, the ui2 capture toggles were published as readOnlyHint=true here.
+func TestTheRouteSurfacePublishesMutatingRoutesAsMutating(t *testing.T) {
+	_, base := newConsole(t)
+	replies := ask(t, base, rpcRequest(t, 1, "tools/list", nil))
+	var listed toolList
+	if err := json.Unmarshal(replies[0].Result, &listed); err != nil {
+		t.Fatalf("decoding tools/list: %v", err)
+	}
+	routes := map[string]web.MCPRouteInfo{}
+	for _, r := range web.MCPRoutes() {
+		routes[r.Pattern] = r
+	}
+	seenMutatingUi2 := false
+	seenReadOnlyGet := false
+	for _, tl := range listed.Tools {
+		route, _ := tl.Annotations["route"].(string)
+		r, ok := routes[route]
+		if !ok {
+			continue
+		}
+		mutating := len(mutatingMethods(r.Methods)) > 0
+		readOnly, _ := tl.Annotations["readOnlyHint"].(bool)
+		idempotent, _ := tl.Annotations["idempotentHint"].(bool)
+		if mutating && (readOnly || idempotent) {
+			t.Fatalf("tool %q (%s) answers %v and is published readOnlyHint=%v idempotentHint=%v", tl.Name, route, r.Methods, readOnly, idempotent)
+		}
+		if mutating && route == "/ui2/sequencer/capture/{action}" {
+			seenMutatingUi2 = true
+		}
+		if !mutating && readOnly && idempotent {
+			seenReadOnlyGet = true
+		}
+		// destructive and the confirmation flag stay class-derived even on a mutating route.
+		if route == "/api/tools/log" {
+			if tl.Annotations["destructiveHint"] != true || tl.Annotations["requiresConfirmation"] != true {
+				t.Fatalf("tool %q (%s) lost its class hints: %v", tl.Name, route, tl.Annotations)
+			}
+		}
+	}
+	if !seenMutatingUi2 {
+		t.Fatal("no /ui2/sequencer/capture/{action} tool listed; this test cannot mean anything")
+	}
+	if !seenReadOnlyGet {
+		t.Fatal("no GET-only read-only tool listed; the read half of the contract is untestable")
 	}
 }
 
