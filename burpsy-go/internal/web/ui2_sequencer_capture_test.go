@@ -165,3 +165,44 @@ func TestUI2SequencerCaptureFlow(t *testing.T) {
 		t.Errorf("controls still shown after the stop")
 	}
 }
+
+// The start form's counts are operator inputs: a value the uint64->int conversion cannot
+// represent faithfully must be refused with the field named, never silently clamped into a
+// body the review gate then mints as if the operator had asked for it. Empty stays absent
+// (the API's own validation decides what 0 means); garbage and over-ceiling are refused.
+func TestUI2SequencerCaptureRefusesCountsItCannotMean(t *testing.T) {
+	host, port, hits := tokenServer(t, func(n int) string {
+		return fmt.Sprintf("Set-Cookie: SESSIONID=tok-%d\r\n", n)
+	})
+	s := captureServer(t, host, port)
+	target := fmt.Sprintf("%s:%d", host, port)
+	raw := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\n\r\n", target)
+	base := url.Values{
+		"target": {target}, "protocol": {"http"}, "count": {"12"}, "delay_ms": {"5"},
+		"kind": {"cookie"}, "name": {"SESSIONID"}, "request": {raw},
+	}
+	for _, tc := range []struct{ name, field, value, want string }{
+		{"over the conversion ceiling", "count", "1048577", "count must be at most 1048576"},
+		{"unparseable", "count", "abc", "count must be a whole number"},
+		{"negative", "threads", "-1", "threads must be a whole number"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			form := url.Values{}
+			for k, v := range base {
+				form[k] = v
+			}
+			form.Set(tc.field, tc.value)
+			rec := postUI2Form(t, s, "/ui2/sequencer/capture/confirm", form)
+			body := rec.Body.String()
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("refusal missing %q: %s", tc.want, body[:ui2Min(400, len(body))])
+			}
+			if strings.Contains(body, "Review before starting:") {
+				t.Errorf("an invalid %s still minted a review token", tc.field)
+			}
+		})
+	}
+	if *hits != 0 {
+		t.Errorf("refused confirms still sent %d requests", *hits)
+	}
+}

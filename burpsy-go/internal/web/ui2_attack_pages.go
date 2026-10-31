@@ -338,16 +338,24 @@ func ui2Atoi(s string) uint64 {
 	return n
 }
 
-// ui2AtoiInt parses a form count as int with an explicit ceiling so the uint64->int
-// conversion cannot wrap (G115). Anything past the ceiling clamps; the API's own
-// validation still applies to the clamped value.
-func ui2AtoiInt(s string) int {
+// ui2ParseCount parses an operator-entered form count. An unparseable value or one past
+// the ceiling is refused with the field named, never silently clamped into a body the
+// review gate would then mint as if the operator had asked for it. The ceiling keeps the
+// uint64->int conversion wrap-free (G115); an empty field means "absent" and the API's
+// own validation decides what 0 means there.
+func ui2ParseCount(field, s string) (int, string) {
 	const ceiling = 1 << 20
-	n, _ := strconv.ParseUint(s, 10, 64)
-	if n > ceiling {
-		return ceiling
+	if s == "" {
+		return 0, ""
 	}
-	return int(n) //nolint:gosec // bounded by the ceiling above
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, field + " must be a whole number"
+	}
+	if n > ceiling {
+		return 0, fmt.Sprintf("%s must be at most %d", field, ceiling)
+	}
+	return int(n), ""
 }
 
 // ---- Sequencer -------------------------------------------------------------------------------
@@ -385,7 +393,16 @@ func (s *Server) ui2SequencerModel() map[string]any {
 // ui2SequencerCapturePayload builds the /api/sequencer/capture body from the start form.
 // Zero-value count/delay/threads are left for the API's own defaults and validation to
 // report, so the reviewed body is exactly what the operator typed.
-func ui2SequencerCapturePayload(r *http.Request) map[string]any {
+func ui2SequencerCapturePayload(r *http.Request) (map[string]any, string) {
+	count, errText := ui2ParseCount("count", r.PostFormValue("count"))
+	delay, err := ui2ParseCount("delay_ms", r.PostFormValue("delay_ms"))
+	if errText == "" {
+		errText = err
+	}
+	threads, err := ui2ParseCount("threads", r.PostFormValue("threads"))
+	if errText == "" {
+		errText = err
+	}
 	loc := map[string]any{"kind": r.PostFormValue("kind")}
 	if n := r.PostFormValue("name"); n != "" {
 		loc["name"] = n
@@ -399,11 +416,11 @@ func ui2SequencerCapturePayload(r *http.Request) map[string]any {
 		// The textarea round-trips line endings as lone LF; the head must be CRLF on the
 		// wire or many servers never answer (the repeater's ui2RestoreHeaderNewlines).
 		"request":  ui2RestoreHeaderNewlines(r.PostFormValue("request")),
-		"count":    ui2AtoiInt(r.PostFormValue("count")),
-		"delay_ms": ui2AtoiInt(r.PostFormValue("delay_ms")),
-		"threads":  ui2AtoiInt(r.PostFormValue("threads")),
+		"count":    count,
+		"delay_ms": delay,
+		"threads":  threads,
 		"location": loc,
-	}
+	}, errText
 }
 
 // handleUI2SequencerCapture serves POST /ui2/sequencer/capture/{action}. "confirm" mints the
@@ -415,7 +432,13 @@ func (s *Server) handleUI2SequencerCapture(w http.ResponseWriter, r *http.Reques
 	_ = r.ParseForm()
 	switch r.PathValue("action") {
 	case "confirm":
-		payload := ui2SequencerCapturePayload(r)
+		payload, errText := ui2SequencerCapturePayload(r)
+		if errText != "" {
+			model := s.ui2SequencerModel()
+			model["error"] = errText
+			ui2Fragment(w, r, "burpsy /ui2/ — Sequencer", "sequencer", ui2Exec("sequencer.html", model))
+			return
+		}
 		body, _ := ui2Marshal(payload)
 		token, preview, errText := s.ui2MintConfirm("/api/sequencer/capture", http.MethodPost, "/api/sequencer/capture", body)
 		model := map[string]any{
@@ -435,10 +458,14 @@ func (s *Server) handleUI2SequencerCapture(w http.ResponseWriter, r *http.Reques
 		// No dispatch at all without a token: spending a confirmation on a body the operator
 		// never reviewed is the failure this branch exists to prevent.
 		var errText string
-		if r.PostFormValue("token") == "" {
+		payload, valErr := ui2SequencerCapturePayload(r)
+		switch {
+		case valErr != "":
+			errText = valErr
+		case r.PostFormValue("token") == "":
 			errText = "no confirmation token: review the capture first"
-		} else {
-			_, errText = s.ui2DispatchConfirmed(http.MethodPost, "/api/sequencer/capture", ui2SequencerCapturePayload(r), r.PostFormValue("token"))
+		default:
+			_, errText = s.ui2DispatchConfirmed(http.MethodPost, "/api/sequencer/capture", payload, r.PostFormValue("token"))
 		}
 		// The model is built after the dispatch, not before: the operator just started a
 		// capture and the response is the first place they look for its row.
