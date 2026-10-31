@@ -212,7 +212,9 @@ func highlightJSON(s string) template.HTML {
 				if s[j] == '\\' {
 					j++
 				}
-				j++
+				if j < n { // a trailing lone backslash consumes no second byte
+					j++
+				}
 			}
 			if j < n {
 				j++
@@ -477,7 +479,9 @@ func scanJSString(s string, i int) int {
 		if s[j] == '\\' {
 			j++
 		}
-		j++
+		if j < len(s) { // a trailing lone backslash consumes no second byte
+			j++
+		}
 	}
 	if j < len(s) {
 		j++
@@ -578,7 +582,9 @@ func highlightCSS(s string) template.HTML {
 				if s[j] == '\\' {
 					j++
 				}
-				j++
+				if j < n { // a trailing lone backslash consumes no second byte
+					j++
+				}
 			}
 			if j < n {
 				j++
@@ -693,7 +699,9 @@ func formatCSS(s string) string {
 				if s[j] == '\\' {
 					j++
 				}
-				j++
+				if j < n { // a trailing lone backslash consumes no second byte
+					j++
+				}
 			}
 			if j < n {
 				j++
