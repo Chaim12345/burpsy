@@ -580,7 +580,7 @@ export function ScannerPage(): JSX.Element {
      title="Filter findings"
      value={term}
      onChange={(event) => setTerm(event.target.value)}
-     placeholder="Filter by check, issue, host or detail"
+     placeholder="Filter by check, issue or host"
     />
     {/* The source facet (burpsy-react-ui-exiu). "Manual" means nothing tracked it — a recording a
         person added, or a result imported from elsewhere — which is a different claim from "a run
