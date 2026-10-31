@@ -122,6 +122,10 @@ func (s *Server) ui2TriageConfirm(w http.ResponseWriter, r *http.Request) {
 		model := map[string]any{"error": msg}
 		ui2Fragment(w, r, "burpsy /ui2/ — Settings", "settings", ui2Exec("settings_triage_confirm.html", model))
 	}
+	if s.persist == nil {
+		fail("this instance has no project database, so triage settings cannot be saved; start burpsy with -db to persist the project")
+		return
+	}
 	enabled := r.PostFormValue("enabled") != ""
 	baseURL := strings.TrimSpace(r.PostFormValue("base_url"))
 	model := strings.TrimSpace(r.PostFormValue("model"))
@@ -217,6 +221,10 @@ func (s *Server) ui2TriageRun(w http.ResponseWriter, r *http.Request) {
 	fail := func(msg string) {
 		model := map[string]any{"error": msg}
 		ui2Fragment(w, r, "burpsy /ui2/ — Settings", "settings", ui2Exec("settings_triage_confirm.html", model))
+	}
+	if s.persist == nil {
+		fail("this instance has no project database, so triage settings cannot be saved; start burpsy with -db to persist the project")
+		return
 	}
 	id := r.PostFormValue("review_id")
 	token := r.PostFormValue("token")

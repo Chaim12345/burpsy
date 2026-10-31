@@ -16,6 +16,7 @@
 <h3>Triage (LLM second look)</h3>
 <p class="meta">enabled={{.triage.enabled}} model={{.triage.model}} configured={{.triage.configured}}</p>
 <details><summary>Edit triage settings</summary>
+{{if .triage.needs_project}}<p class="meta">This instance has no project database, so triage settings cannot be saved; start burpsy with -db to persist the project.</p>{{else}}
 <form hx-post="/ui2/settings/triage/confirm" hx-target="#rows" hx-swap="outerHTML">
 <p><label><input type="checkbox" name="enabled" value="1"{{if .triage.enabled}} checked{{end}}> Enabled (the second-look pass only runs when enabled AND a base URL is set)</label></p>
 <p><label>Base URL <input type="text" name="base_url" value="{{.triage.base_url}}" placeholder="https://llm.example/v1" size="34"></label></p>
@@ -24,7 +25,7 @@
 <p><label><input type="checkbox" name="allow_key_forward" value="1"> I understand: with the key field left blank and the base URL changed, the stored key will be sent to the NEW base URL</label></p>
 <p><button>Review and save</button></p>
 </form>
-</details>
+{{end}}</details>
 <h3>Network auth</h3>
 <p class="meta">{{if .netauth.empty}}no rules{{else}}{{len .netauth.rules}} rules{{end}} · schemes: {{range .netauth.schemes}}{{.}} {{end}}</p>
 <h3>Server certificates</h3>

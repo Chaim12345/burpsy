@@ -431,3 +431,28 @@ func TestUI2SettingsTriageTamperedBodyGets428(t *testing.T) {
 		t.Errorf("a tampered body was written to the store")
 	}
 }
+
+// Without a project database the console must refuse triage writes cleanly and the settings
+// page must not offer the form: a nil-persist panic is a 500, not a reviewable answer.
+func Test_ui2settings_triage_without_project_refuses_cleanly_and_disables_form(t *testing.T) {
+	s := newTestServer() // no -db: persist is nil
+	rec := ui2PostTriage(t, s, "confirm", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "no project database") {
+		t.Errorf("confirm without a project must render the no-database refusal, got %d: %.200s", rec.Code, rec.Body.String())
+	}
+	run := ui2PostTriage(t, s, "run", url.Values{"review_id": {"x"}, "token": {"y"}})
+	if run.Code != http.StatusOK || !strings.Contains(run.Body.String(), "no project database") {
+		t.Errorf("run without a project must render the no-database refusal, got %d: %.200s", run.Code, run.Body.String())
+	}
+	page := get(t, s, "/ui2/settings")
+	if page.Code != http.StatusOK {
+		t.Fatalf("settings page without a project answered %d", page.Code)
+	}
+	body := page.Body.String()
+	if !strings.Contains(body, "no project database") {
+		t.Errorf("settings page without a project does not say why triage is unavailable")
+	}
+	if strings.Contains(body, `hx-post="/ui2/settings/triage/confirm"`) {
+		t.Errorf("settings page without a project still offers the triage edit form")
+	}
+}
