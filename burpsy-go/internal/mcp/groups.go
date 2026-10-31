@@ -560,6 +560,7 @@ var notExposed = map[string]string{
 	"GET /ui2/organizer":                       "ui2 Organizer page; /api/tools/organizer is the agent-facing read",
 	"POST /ui2/organizer/annotate/{action}":    "ui2 Organizer annotation review and apply steps (minted one-time confirmation); /api/tools/organizer/* are the agent-facing controls",
 	"POST /ui2/organizer/collections/{action}": "ui2 Organizer collection review and apply steps (minted one-time confirmation); /api/tools/organizer/collections are the agent-facing controls",
+	"POST /ui2/organizer/items/{action}":       "ui2 Organizer item move/copy/delete review and apply steps (minted one-time confirmation); /api/tools/organizer/* are the agent-facing controls",
 	"POST /ui2/organizer/status/{action}":      "ui2 Organizer workflow-status review and apply steps (minted one-time confirmation); /api/tools/organizer/* are the agent-facing controls",
 	"GET /ui2/session":                         "ui2 Session page; the /api/session/* routes are the agent-facing surface",
 	"POST /ui2/session/rules/{action}":         "ui2 Session rule editing steps (minted one-time confirmation); /api/session/rules are the agent-facing controls",

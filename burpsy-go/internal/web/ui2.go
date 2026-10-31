@@ -59,6 +59,7 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"ui2/organizer_confirm.html",
 	"ui2/organizer_status_confirm.html",
 	"ui2/organizer_annotate_confirm.html",
+	"ui2/organizer_item_confirm.html",
 	"ui2/session.html",
 	"ui2/session_confirm.html",
 	"ui2/decoder.html",

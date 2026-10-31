@@ -52,6 +52,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/organizer/collections/{action}": {raw: "application/x-www-form-urlencoded collection form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/status/{action}":      {raw: "application/x-www-form-urlencoded workflow status form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/annotate/{action}":    {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/organizer/items/{action}":       {raw: "application/x-www-form-urlencoded item move/copy/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/session/rules/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {

@@ -226,6 +226,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/ui2/organizer": "riskAsset",
  "/ui2/organizer/annotate/{action}": "riskAsset",
  "/ui2/organizer/collections/{action}": "riskAsset",
+ "/ui2/organizer/items/{action}": "riskAsset",
  "/ui2/organizer/status/{action}": "riskAsset",
  "/ui2/proxy": "riskAsset",
  "/ui2/repeater": "riskAsset",

@@ -102,6 +102,7 @@ type Server struct {
 	ui2CollectionReviews sync.Map
 	ui2WorkflowReviews   sync.Map
 	ui2AnnotateReviews   sync.Map
+	ui2ItemReviews       sync.Map
 	// ui2SessionRuleReviews holds the minted session-rule calls (add/toggle/edit/remove) a ui2
 	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
 	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
@@ -1532,6 +1533,7 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/organizer/collections/{action}", s.handleUI2OrganizerCollections)
 	s.route("/ui2/organizer/status/{action}", s.handleUI2OrganizerStatus)
 	s.route("/ui2/organizer/annotate/{action}", s.handleUI2OrganizerAnnotate)
+	s.route("/ui2/organizer/items/{action}", s.handleUI2OrganizerItems)
 	s.route("/ui2/session", s.handleUI2Session)
 	s.route("/ui2/session/rules/{action}", s.handleUI2SessionRules)
 	s.route("/ui2/decoder", s.handleUI2Decoder)

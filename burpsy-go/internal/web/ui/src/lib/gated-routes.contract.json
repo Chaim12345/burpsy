@@ -223,6 +223,7 @@
   "/ui2/organizer",
   "/ui2/organizer/annotate/{action}",
   "/ui2/organizer/collections/{action}",
+  "/ui2/organizer/items/{action}",
   "/ui2/organizer/status/{action}",
   "/ui2/proxy",
   "/ui2/repeater",
@@ -4482,6 +4483,26 @@
   },
   {
    "path": "/ui2/organizer/extra/more",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/items/w",
+   "key": "/ui2/organizer/items/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/items/w/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/items/w/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/items/w/extra/more",
    "key": "/ui2/organizer",
    "gated": false
   },

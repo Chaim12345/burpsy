@@ -4248,6 +4248,74 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/organizer/annotate/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 item annotation review and one-time snapshot-checked install */
+        post: operations["postUi2OrganizerAnnotateByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/organizer/collections/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 collection create and name/note review and one-time install */
+        post: operations["postUi2OrganizerCollectionsByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/organizer/items/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 item move/copy/delete review and one-time snapshot-checked install */
+        post: operations["postUi2OrganizerItemsByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/organizer/status/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 workflow status review and one-time snapshot-checked install */
+        post: operations["postUi2OrganizerStatusByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/proxy": {
         parameters: {
             query?: never;
@@ -12058,6 +12126,8 @@ export interface operations {
                     action?: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope" | "library_save" | "library_load" | "library_delete";
                     drop_rules?: Record<string, never>[];
                     enabled?: boolean;
+                    expected_library?: string;
+                    expected_rules?: string;
                     /**
                      * @description the rule kind, for remove and toggle
                      * @enum {string}
@@ -15614,6 +15684,138 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2OrganizerAnnotateByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2OrganizerCollectionsByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2OrganizerItemsByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2OrganizerStatusByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

@@ -1494,6 +1494,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 item annotation review and one-time snapshot-checked install",
 	},
+	"/ui2/organizer/items/{action}": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 item move/copy/delete review and one-time snapshot-checked install",
+	},
 	"/ui2/organizer": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Organizer page: saved items and collections",

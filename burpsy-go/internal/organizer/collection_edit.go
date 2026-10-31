@@ -14,7 +14,7 @@ func ValidateCollectionText(name, note string) error {
 		return fmt.Errorf("a collection needs a nonblank name")
 	}
 	if strings.EqualFold(strings.TrimSpace(name), "Inbox") {
-		return fmt.Errorf("Inbox is reserved for the display-only inbox")
+		return fmt.Errorf("inbox is reserved for the display-only inbox")
 	}
 	if len(name) > CollectionNameLimit {
 		return fmt.Errorf("collection name exceeds 120 UTF-8 bytes")

@@ -227,6 +227,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/ui2/organizer": false,
  "/ui2/organizer/annotate/{action}": false,
  "/ui2/organizer/collections/{action}": false,
+ "/ui2/organizer/items/{action}": false,
  "/ui2/organizer/status/{action}": false,
  "/ui2/proxy": false,
  "/ui2/repeater": false,

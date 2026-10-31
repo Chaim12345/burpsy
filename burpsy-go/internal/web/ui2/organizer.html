@@ -47,15 +47,30 @@
 <p>Title (at most 512 UTF-8 bytes, kept verbatim)<br><input type="text" name="title" value="{{.item.Title}}" style="max-width:100%"></p>
 <p>Note (at most 4096 UTF-8 bytes, kept verbatim)<br><textarea name="note" rows="3" style="max-width:100%">{{.item.Note}}</textarea></p>
 <fieldset><legend>Choose a highlight (current: {{.item.Highlight}})</legend>
-<label><input type="radio" name="highlight" value="none" required> None</label><br>
-<label><input type="radio" name="highlight" value="red"> Red</label><br>
-<label><input type="radio" name="highlight" value="orange"> Orange</label><br>
-<label><input type="radio" name="highlight" value="yellow"> Yellow</label><br>
-<label><input type="radio" name="highlight" value="green"> Green</label><br>
-<label><input type="radio" name="highlight" value="cyan"> Cyan</label><br>
-<label><input type="radio" name="highlight" value="blue"> Blue</label><br>
-<label><input type="radio" name="highlight" value="pink"> Pink</label><br>
-<label><input type="radio" name="highlight" value="magenta"> Magenta</label><br>
-<label><input type="radio" name="highlight" value="gray"> Gray</label>
+<label><input type="radio" name="highlight" value="none"{{if eq .item.Highlight "none"}} checked{{end}} required> None</label><br>
+<label><input type="radio" name="highlight" value="red"{{if eq .item.Highlight "red"}} checked{{end}}> Red</label><br>
+<label><input type="radio" name="highlight" value="orange"{{if eq .item.Highlight "orange"}} checked{{end}}> Orange</label><br>
+<label><input type="radio" name="highlight" value="yellow"{{if eq .item.Highlight "yellow"}} checked{{end}}> Yellow</label><br>
+<label><input type="radio" name="highlight" value="green"{{if eq .item.Highlight "green"}} checked{{end}}> Green</label><br>
+<label><input type="radio" name="highlight" value="cyan"{{if eq .item.Highlight "cyan"}} checked{{end}}> Cyan</label><br>
+<label><input type="radio" name="highlight" value="blue"{{if eq .item.Highlight "blue"}} checked{{end}}> Blue</label><br>
+<label><input type="radio" name="highlight" value="pink"{{if eq .item.Highlight "pink"}} checked{{end}}> Pink</label><br>
+<label><input type="radio" name="highlight" value="magenta"{{if eq .item.Highlight "magenta"}} checked{{end}}> Magenta</label><br>
+<label><input type="radio" name="highlight" value="gray"{{if eq .item.Highlight "gray"}} checked{{end}}> Gray</label>
 </fieldset><button>Review annotations</button></form></details>
+{{end}}
+<h3>Item operations</h3>
+<p class="meta">Move or copy a saved item into a collection, or delete a saved item. Deleting removes only the saved item; its exchange and history stay. No request is sent.</p>
+{{range .items}}
+<details class="collection-edit"><summary>Move, copy or delete item #{{.item.ID}}</summary>
+<p style="overflow-wrap:anywhere">{{if .item.Title}}{{.item.Title}}{{else}}(blank title){{end}} · current collection: {{.collection_name}}</p>
+<form hx-post="/ui2/organizer/items/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.workflow_base}}">
+<fieldset><legend>Choose a destination (current: {{.collection_name}})</legend>
+<label><input type="radio" name="collection_id" value="0" required> Inbox</label><br>
+{{range $.collections}}<label><input type="radio" name="collection_id" value="{{.id}}"> {{.name}}</label><br>{{end}}
+</fieldset><button name="op" value="move">Review move</button> <button name="op" value="copy">Review copy</button></form>
+<form hx-post="/ui2/organizer/items/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="delete"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.workflow_base}}"><input type="hidden" name="collection_id" value="">
+<button>Review delete</button></form></details>
 {{end}}</div>
