@@ -811,7 +811,15 @@ func (s *Server) ui2LoggerView(search string, limit, offset int, filterNote stri
 		Entries: page, Total: resp.Total, Matched: total, Offset: offset, Limit: limit,
 		NextOffset: next, Search: search, HasMore: next >= 0, Counts: resp.Counts, Capturing: resp.Capturing,
 		CaptureRows: captureRows, Filter: fv, FilterNote: filterNote,
+		HxVals: ui2LoggerHxVals(next, limit, search),
 	}
+}
+
+// ui2LoggerHxVals is the sentinel row's hx-vals payload: JSON with the search string properly
+// encoded, so any operator text round-trips into the next page request.
+func ui2LoggerHxVals(next, limit int, search string) string {
+	b, _ := json.Marshal(map[string]any{"offset": next, "limit": limit, "search": search})
+	return string(b)
 }
 
 // handleUI2LoggerAction serves POST /ui2/logger/{action}. Every mutation is a two-step review:
@@ -940,14 +948,17 @@ type ui2LoggerCaptureRow struct {
 }
 
 type ui2LoggerModel struct {
-	Entries     []toolLogEntry
-	Total       int
-	Matched     int
-	Offset      int
-	Limit       int
-	NextOffset  int
-	Search      string
-	HasMore     bool
+	Entries    []toolLogEntry
+	Total      int
+	Matched    int
+	Offset     int
+	Limit      int
+	NextOffset int
+	Search     string
+	HasMore    bool
+	// HxVals is the sentinel row's hx-vals attribute, precomputed as JSON: quoting the search
+	// string inline broke the attribute's JSON whenever it contained a double quote.
+	HxVals      string
 	Counts      map[string]int
 	Capturing   map[string]bool
 	CaptureRows []ui2LoggerCaptureRow
@@ -1546,16 +1557,24 @@ func (s *Server) handleUI2RepeaterSend(w http.ResponseWriter, r *http.Request) {
 }
 
 // ui2HostFromRequest extracts the target authority from a raw request: an absolute-form
-// request line wins, else the Host header. Line endings are normalised first: an htmx form
-// post delivers the textarea's value with LF newlines, not the CRLF a raw request file has.
+// request line wins, else the Host header. The scheme is kept on an absolute-form answer:
+// targetParts reads it for TLS and the default port, and dropping it sent https request
+// lines as plain http to port 80. Line endings are normalised first: an htmx form post
+// delivers the textarea's value with LF newlines, not the CRLF a raw request file has.
 func ui2HostFromRequest(raw string) string {
 	fields := strings.Fields(raw)
 	if len(fields) >= 2 && strings.Contains(fields[1], "://") {
-		rest := fields[1][strings.Index(fields[1], "://")+3:]
-		if j := strings.IndexAny(rest, "/?"); j >= 0 {
-			return rest[:j]
+		scheme := fields[1][:strings.Index(fields[1], "://")+3]
+		rest := fields[1][len(scheme):]
+		// http is the default the parsers assume anyway, so only https is carried through;
+		// anything else stays stripped and gets refused downstream as before.
+		if !strings.EqualFold(scheme, "https://") {
+			scheme = ""
 		}
-		return rest
+		if j := strings.IndexAny(rest, "/?"); j >= 0 {
+			return scheme + rest[:j]
+		}
+		return scheme + rest
 	}
 	norm := strings.ReplaceAll(raw, "\r\n", "\n")
 	for _, line := range strings.Split(norm, "\n") {

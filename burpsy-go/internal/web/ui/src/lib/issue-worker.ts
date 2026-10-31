@@ -97,8 +97,16 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
    cleanup();
    reject(new DOMException("aborted", "AbortError"));
   };
+  // A worker that errors (missing script, CSP, module parse failure) never posts a message:
+  // without this the call would pend forever and the documented direct-fetch fallback would
+  // never fire. Reject so callers fall back, matching the "never a blank Issues page" contract.
+  const onError = () => {
+   cleanup();
+   reject(new Error("issue worker failed"));
+  };
   const cleanup = () => {
    current.removeEventListener("message", onMessage);
+   current.removeEventListener("error", onError);
    signal?.removeEventListener("abort", onAbort);
   };
   if (signal?.aborted) {
@@ -107,6 +115,7 @@ function callWorker<T>(body: Record<string, unknown>, take: (message: WorkerMess
   }
   signal?.addEventListener("abort", onAbort);
   current.addEventListener("message", onMessage);
+  current.addEventListener("error", onError);
   current.postMessage({ id, ...body });
  });
 }

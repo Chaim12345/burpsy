@@ -1,5 +1,5 @@
 <div id="rows">
-<p class="meta">interception {{if .enabled}}ON{{else}}OFF{{end}} · wired={{.wired}} · {{.pending}} held · in-scope-only={{.in_scope_only}}</p>
+<p class="meta" id="intercept-state" data-on="{{if .enabled}}true{{else}}false{{end}}">interception {{if .enabled}}ON{{else}}OFF{{end}} · wired={{.wired}} · {{.pending}} held · in-scope-only={{.in_scope_only}}</p>
 {{if .enabled}}
 <form hx-post="/ui2/intercept/disable" hx-target="#rows" hx-swap="outerHTML"><button>Disable interception</button></form>
 {{else}}

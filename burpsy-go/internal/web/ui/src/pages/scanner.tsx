@@ -322,7 +322,8 @@ export function ScannerPage(): JSX.Element {
     .filter((f) => !hideFalsePositives || !f.false_positive)
     .filter((f) => {
      if (!needle) return true;
-     const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host} ${f.detail ?? ""}`.toLowerCase();
+     // Summary rows carry no detail text (the detail pane loads it per finding), so searching it would never match.
+     const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host}`.toLowerCase();
      return haystack.includes(needle);
     })
   );

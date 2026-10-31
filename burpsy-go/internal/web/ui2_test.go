@@ -82,7 +82,7 @@ func TestUI2HistorySearchAndPagingAreServerSide(t *testing.T) {
 	if got := strings.Count(body, "<tr hx-get"); got != 10 {
 		t.Errorf("limit=10 rendered %d rows, want 10", got)
 	}
-	if !strings.Contains(body, `"offset": 10`) {
+	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `data-offset="10"`) {
 		t.Errorf("no infinite-scroll sentinel for offset 10 in: %s", body)
 	}
 	// last page: offset=25 limit=10 -> 5 rows, no sentinel
@@ -91,7 +91,7 @@ func TestUI2HistorySearchAndPagingAreServerSide(t *testing.T) {
 	if got := strings.Count(body, "<tr hx-get"); got != 5 {
 		t.Errorf("offset=25 limit=10 rendered %d rows, want 5", got)
 	}
-	if strings.Contains(body, `"offset": 30`) {
+	if strings.Contains(body, `class="sentinel-row"`) {
 		t.Errorf("last page must not carry a sentinel")
 	}
 }
@@ -115,7 +115,7 @@ func TestUI2HistoryAppendFragmentIsRowsOnly(t *testing.T) {
 	if got := strings.Count(body, "<tr hx-get"); got != 10 {
 		t.Errorf("append carried %d rows, want 10", got)
 	}
-	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `"offset": 20`) {
+	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `data-offset="20"`) {
 		t.Errorf("append must carry the next sentinel pointing at offset 20")
 	}
 }

@@ -617,9 +617,9 @@ document.addEventListener('click', function (e) {
       return;
     }
     if (e.altKey && e.key.toLowerCase() === 't') {
-      var on = document.querySelector('#rows .meta');
-      var enable = on && /interception OFF/.test(on.textContent);
-      fetch('/ui2/intercept/' + (enable ? 'enable' : 'disable'), { method: 'POST' }).then(function () {
+      var st = document.getElementById('intercept-state');
+      if (!st) { location.href = '/ui2/intercept'; e.preventDefault(); return; }
+      fetch('/ui2/intercept/' + (st.dataset.on === 'true' ? 'disable' : 'enable'), { method: 'POST' }).then(function () {
         htmx.ajax('GET', '/ui2/intercept', { target: '#rows', swap: 'outerHTML' });
       });
       e.preventDefault(); return;

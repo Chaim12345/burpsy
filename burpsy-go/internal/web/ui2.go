@@ -2,11 +2,12 @@ package web
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
-	"net/url"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +32,7 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	// where html/template applies no contextual URL escaping and a raw NUL in the
 	// attribute value would reach the browser and be replaced with U+FFFD.
 	"urlquery": url.QueryEscape,
-	"until": func(n int) []int { return make([]int, n) },
+	"until":    func(n int) []int { return make([]int, n) },
 	// ms renders an epoch-millis JSON number (decoded as float64) as a wall-clock time;
 	// unknown shapes render empty rather than a bogus zero date.
 	"ms": func(v any) string {
@@ -180,6 +181,10 @@ type ui2HistoryRows struct {
 	Q          string
 	Search     string
 	HasMore    bool
+	// HxVals is the sentinel row's hx-vals attribute, precomputed as JSON: quoting the filter
+	// and search strings inline broke the attribute's JSON (and dropped the filter from the
+	// next page) whenever they contained a double quote.
+	HxVals string
 }
 
 // handleUI2 is the /ui2/ subtree root: the shell page with the history view embedded.
@@ -247,6 +252,7 @@ func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryR
 			return ui2HistoryRows{
 				Rows: nil, Total: len(exchanges), Matched: 0, Offset: 0, Limit: p.Limit,
 				NextOffset: -1, Q: p.Q, Search: p.Search, HasMore: false,
+				HxVals: ui2HistoryHxVals(-1, p),
 			}
 		}
 		filter = f
@@ -303,7 +309,15 @@ func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryR
 	return ui2HistoryRows{
 		Rows: rows, Total: len(exchanges), Matched: total, Offset: p.Offset, Limit: p.Limit,
 		NextOffset: next, Q: p.Q, Search: p.Search, HasMore: next >= 0,
+		HxVals: ui2HistoryHxVals(next, p),
 	}
+}
+
+// ui2HistoryHxVals is the sentinel row's hx-vals payload: JSON with the filter and search
+// strings properly encoded, so any operator text round-trips into the next page request.
+func ui2HistoryHxVals(next int, p ui2HistoryParams) string {
+	b, _ := json.Marshal(map[string]any{"offset": next, "limit": p.Limit, "q": p.Q, "search": p.Search})
+	return string(b)
 }
 
 // renderUI2HistoryRowsAppend renders just the <tr> elements for one page plus the next

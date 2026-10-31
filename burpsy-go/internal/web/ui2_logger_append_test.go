@@ -34,7 +34,7 @@ func TestUI2LoggerAppendFragmentIsRowsOnly(t *testing.T) {
 	if got := strings.Count(body, "<tr><td>"); got != 10 {
 		t.Errorf("append carried %d entry rows, want 10", got)
 	}
-	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `"offset": 20`) {
+	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `data-offset="20"`) {
 		t.Errorf("append must carry the next sentinel pointing at offset 20")
 	}
 
