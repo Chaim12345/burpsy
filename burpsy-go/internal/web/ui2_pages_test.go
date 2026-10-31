@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -1067,6 +1068,50 @@ func TestUI2LoggerCaptureRunKeepsTheGate(t *testing.T) {
 	rec4 := ui2LoggerAction(t, s, "capture-run", "token="+token2+"&tool=proxy&on=false&search=")
 	if !strings.Contains(rec4.Body.String(), "Capture unchanged") {
 		t.Errorf("replayed token did not refuse visibly")
+	}
+}
+
+// A filter spend whose rebuilt body differs from the reviewed one is refused and burns the token:
+// the hidden fields ARE the payload, so tampering them is tampering the call the digest binds.
+func TestUI2LoggerFilterRunRefusesTamperedFields(t *testing.T) {
+	s := newTestServer()
+	token, _ := ui2LoggerReview(t, s, "filter-set", "term=keepme&search=")
+	// Tampered hidden field: reviewed term=keepme, submitted term=other.
+	rec := ui2LoggerAction(t, s, "filter-run", "token="+token+"&term=other&search=")
+	if !strings.Contains(rec.Body.String(), "Filter not applied") {
+		t.Errorf("tampered filter spend did not refuse visibly")
+	}
+	// The reviewed filter was never applied.
+	api := httptest.NewRecorder()
+	s.mux.ServeHTTP(api, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
+	if strings.Contains(api.Body.String(), "keepme") || strings.Contains(api.Body.String(), "other") {
+		t.Errorf("a tampered spend changed the filter: %s", api.Body.String()[:ui2Min(300, api.Body.Len())])
+	}
+	// The burn is real: even the exact reviewed fields are refused with the spent token.
+	rec2 := ui2LoggerAction(t, s, "filter-run", "token="+token+"&term=keepme&search=")
+	if !strings.Contains(rec2.Body.String(), "Filter not applied") {
+		t.Errorf("burned filter token spend did not refuse visibly")
+	}
+}
+
+// An expired logger confirmation refuses at the spend and changes nothing.
+func TestUI2LoggerFilterRunRefusesExpiredToken(t *testing.T) {
+	s := newTestServer()
+	token, _ := ui2LoggerReview(t, s, "filter-set", "term=keepme&search=")
+	// Age it past the TTL rather than sleeping: the test asserts the bound, not the wait.
+	s.confirms.mu.Lock()
+	e := s.confirms.tokens[token]
+	e.expires = time.Now().Add(-time.Second)
+	s.confirms.tokens[token] = e
+	s.confirms.mu.Unlock()
+	rec := ui2LoggerAction(t, s, "filter-run", "token="+token+"&term=keepme&search=")
+	if !strings.Contains(rec.Body.String(), "Filter not applied") {
+		t.Errorf("expired filter spend did not refuse visibly")
+	}
+	api := httptest.NewRecorder()
+	s.mux.ServeHTTP(api, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
+	if strings.Contains(api.Body.String(), "keepme") {
+		t.Errorf("an expired token applied the filter")
 	}
 }
 
