@@ -1,4 +1,31 @@
 <div id="rows">
+<h3>Launch an audit</h3>
+<p class="meta">Audits one captured exchange with active probes. Review step first - nothing launches on the first click.</p>
+<form hx-post="/ui2/scanner/launch" hx-target="#launch" hx-swap="innerHTML">
+<label>Exchange ID <input type="text" name="exchange_id" inputmode="numeric" size="8"></label>
+<label>Configuration <select name="config"><option value="">server default</option>{{range .configs.configs}}<option value="{{.name}}">{{.name}}</option>{{end}}</select></label>
+<button>Review launch</button>
+</form>
+<div id="launch"></div>
+<h3>Launch a crawl</h3>
+<p class="meta">Crawls from one or more seed URLs inside the engagement scope and stores what it finds in the site map. Review step first - nothing launches on the first click.</p>
+<form hx-post="/ui2/scanner/crawl-launch" hx-target="#crawllaunch" hx-swap="innerHTML">
+<label>Seed URL(s) <input type="text" name="seeds" size="34" placeholder="http://target.example/"></label>
+<label>Configuration <select name="config"><option value="">server default</option>{{range .configs.configs}}{{if not .shipped}}<option value="{{.name}}">{{.name}}</option>{{end}}{{end}}</select></label>
+<button>Review crawl</button>
+<p class="meta">A crawl can run under the server default or a configuration saved in your library below; the shipped presets configure audits, so the audit launch above lists them and this one does not.</p>
+</form>
+<div id="crawllaunch"></div>
+{{if .crawl_error}}<p class="meta">Crawl failed: {{.crawl_error}}</p>{{end}}
+{{if .crawl_result}}<h3>Crawl accepted</h3>
+<p class="meta">task {{.crawl_result.task_id}} · kind {{.crawl_result.kind}} · state {{.crawl_result.state}} · {{len .crawl_result.seeds}} seed(s){{if .crawl_result.config_name}} · configuration {{.crawl_result.config_name}}{{end}}{{if .crawl_result.out_of_scope_seeds}} · {{len .crawl_result.out_of_scope_seeds}} seed(s) refused by scope{{end}}</p>
+<form hx-get="/ui2/scanner/crawl-watch" hx-target="#crawlwatch" hx-swap="outerHTML">
+<input type="hidden" name="task" value="{{.crawl_result.task_id}}">
+<button>watch this crawl</button></form>
+<div id="crawlwatch"></div>{{end}}
+{{if .audit_error}}<p class="meta">Launch failed: {{.audit_error}}</p>{{end}}
+{{if .audit_result}}<h3>Audit outcome</h3>
+<p class="meta">{{.audit_result.summary}}{{if .audit_result.config_name}} · configuration {{.audit_result.config_name}}{{end}}{{if .audit_result.outcome.error}} · refused: {{.audit_result.outcome.error}}{{end}}</p>{{end}}
 <h3>Scan configurations</h3>
 <table>
 <thead><tr><th scope="col">Name</th><th scope="col">Shipped</th><th scope="col">Note</th></tr></thead>
@@ -23,6 +50,22 @@
 {{if .coverage.enabled}}<p class="meta">enabled, {{.coverage.loaded}} checks loaded</p>{{else}}<p class="meta">not enabled</p>{{end}}
 <h3>Audit queue</h3>
 <p class="meta">{{.audit_items.returned}} items · queue retained={{.audit_items.queue.retained}} evicted={{.audit_items.queue.evicted}}</p>
-<h3>Engine config</h3>
-<p class="meta">max_concurrency={{.config.max_concurrency}} timeout_ms={{.config.timeout_ms}}</p>
+<h3>Engine and check families</h3>
+<p class="meta">max_concurrency={{.config.max_concurrency}} (console-managed) · the switches and timeouts below are the running audit configuration. Changes go through a review step naming each one; the confirmation is one-time.</p>
+{{if .config_applied}}<p class="meta">Configuration applied; the running engine now uses it.</p>{{end}}
+{{if .config_error}}<p class="meta">Not applied: {{.config_error}}</p>{{end}}
+<form hx-post="/ui2/scanner/config-confirm" hx-target="#configconfirm" hx-swap="innerHTML">
+<label>timeout_ms <input type="text" name="timeout_ms" inputmode="numeric" size="7" value="{{.config.timeout_ms}}"></label>
+<label>probe_timeout_ms <input type="text" name="probe_timeout_ms" inputmode="numeric" size="7" value="{{.config.probe_timeout_ms}}"></label>
+<table>
+<thead><tr><th scope="col">Check family</th><th scope="col">On</th></tr></thead>
+<tbody>
+{{range .scan_config_rows}}
+<tr><td>{{.label}}</td><td><input type="checkbox" name="{{.key}}"{{if .on}} checked{{end}}></td></tr>
+{{end}}
+</tbody>
+</table>
+<button>Review configuration changes</button>
+</form>
+<div id="configconfirm"></div>
 </div>

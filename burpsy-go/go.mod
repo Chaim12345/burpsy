@@ -17,6 +17,8 @@ require (
 	github.com/quic-go/quic-go v0.64.1
 	github.com/refraction-networking/utls v1.8.2
 	github.com/rs/zerolog v1.33.0
+	github.com/tdewolff/minify/v2 v2.24.24
+	github.com/tdewolff/parse/v2 v2.8.20
 	github.com/vektah/gqlparser/v2 v2.5.64
 	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/zricethezav/gitleaks/v8 v8.30.1
@@ -56,7 +58,7 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/gitleaks/go-gitdiff v0.9.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect

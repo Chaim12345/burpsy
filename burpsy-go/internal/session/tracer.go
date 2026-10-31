@@ -103,7 +103,12 @@ func (c *Coordinator) SetTracerEnabled(on bool) {
 	if c == nil {
 		return
 	}
+	// Only an actual flip is movement: re-affirming the current state re-renders nothing.
+	if c.tracer.enabled() == on {
+		return
+	}
 	c.tracer.setEnabled(on)
+	c.noteChange()
 }
 
 // TracerEnabled reports whether the tracer is recording.
@@ -141,6 +146,10 @@ func (c *Coordinator) recordTrace(tool string, original MacroStep, id RuleID, ru
 		Kind:    recoveryKindName(out.Kind),
 		Actions: out.Actions,
 	})
+	// Each recorded entry is movement the page renders (its count and listing). This cannot
+	// feed back on itself: the page's own refresh is a direct web-UI GET, never an
+	// engine-handled request, so no refresh can record a trace entry.
+	c.noteChange()
 }
 
 // recoveryKindName spells one outcome kind for the trace's wire. Named here rather than a

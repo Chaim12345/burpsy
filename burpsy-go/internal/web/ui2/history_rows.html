@@ -1,6 +1,6 @@
 <div id="rows">
 <p class="meta">{{.Matched}} of {{.Total}} rows{{if .Q}} · filter <code>{{.Q}}</code>{{end}}{{if .Search}} · search <code>{{.Search}}</code>{{end}} · page {{.Offset}}–{{if .HasMore}}{{.NextOffset}}{{else}}{{.Matched}}{{end}}</p>
-<table>
+<table class="wide-t">
 <thead><tr><th scope="col">#</th><th scope="col">Method</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">MIME</th><th scope="col">Length</th><th scope="col">Time</th></tr></thead>
 <tbody id="rows-body">
 {{range .Rows}}
@@ -15,7 +15,7 @@
 {{if .HasMore}}
 <tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="8" class="meta"
      hx-get="/ui2/history" hx-vals='{"offset": {{.NextOffset}}, "limit": {{.Limit}}, "q": "{{.Q}}", "search": "{{.Search}}"}'
-     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="revealed" hx-push-url="false">loading more…</td></tr>
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
 {{end}}
 </tbody>
 </table>

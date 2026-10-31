@@ -1,17 +1,124 @@
 <div id="rows">
 <h3>Session handling rules</h3>
+{{if .note}}<p class="meta" id="session-note"><strong>{{.note}}</strong></p>{{end}}
 {{if .rules.wired}}
-<table>
-<thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Host</th><th scope="col">Enabled</th></tr></thead>
+<div id="session-rule-controls">
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_op" value="add">
+<p class="meta">Add rule: name <input type="text" name="name" size="20" required><br>
+action (a choice you must tick - nothing is created with an implicit default):<br>
+<label><input type="radio" name="action" value="add_cookies_from_jar" required> add cookies from the session jar</label>
+<label><input type="radio" name="action" value="set_cookie"> set a cookie</label>
+<label><input type="radio" name="action" value="set_header"> set a header</label>
+<label><input type="radio" name="action" value="set_param"> set a parameter</label>
+<label><input type="radio" name="action" value="replace"> replace matching part of the request</label>
+<label><input type="radio" name="action" value="run_script"> run a pre-request script</label>
+<label><input type="radio" name="action" value="prompt_for_browser_recovery"> prompt for in-browser session recovery</label><br>
+<span class="kind-fields" data-kind="set_cookie" hidden>cookie name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled></span>
+<span class="kind-fields" data-kind="set_header" hidden>header name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled></span>
+<span class="kind-fields" data-kind="set_param" hidden>parameter name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled> where <select name="action_in" disabled><option value="" selected>wherever it already is (the query string for a new parameter)</option><option value="query">the query string</option><option value="body">the form body</option></select></span>
+<span class="kind-fields" data-kind="replace" hidden>match <input type="text" name="action_match" size="16" disabled> replacement <input type="text" name="action_replacement" size="16" disabled> <label><input type="checkbox" name="action_regex" value="1" disabled> match is a regular expression</label></span>
+<span class="kind-fields" data-kind="run_script" hidden><br>script<br><textarea name="action_script" rows="4" cols="48" disabled></textarea></span>
+tools {{range .rules.tools}}<label><input type="checkbox" name="tools" value="{{.}}">{{.}}</label> {{end}}
+<button type="submit">review new rule</button><br>
+New rules are created turned off and change no traffic until turned on, which is its own reviewed step. Ticking no tools means the rule applies to every tool. A value may name a macro-extracted placeholder only when the rule's own macro extracts it - a page-created rule has no macro, so a placeholder is refused here. Macro, validity and extension fields stay in the console. Existing rules offer ordered action-list controls below.</p>
+</form>
+</div>
+<table class="rules-t">
+<thead><tr><th scope="col">ID</th><th scope="col">Name</th><th scope="col">Enabled</th><th scope="col">Tools</th><th scope="col">Actions</th><th scope="col"></th></tr></thead>
 <tbody>
-{{range .rules.rules}}
-<tr><td>{{.id}}</td><td>{{.type}}</td><td>{{.host}}</td><td>{{if .enabled}}on{{else}}off{{end}}</td></tr>
-{{else}}<tr><td colspan="4" class="meta">No rules.</td></tr>{{end}}
+{{range .rules.rules}}{{$rule := .}}
+<tr class="{{if not .enabled}}meta{{end}}"><td>{{.id}}</td><td>{{.name}}</td><td>{{if .enabled}}on{{else}}off{{end}}</td>
+<td>{{if .scope_tools}}{{range .scope_tools}}{{.}} {{end}}{{else}}every tool{{end}}</td>
+<td>{{range .actions}}{{.label}}; {{end}}</td>
+<td class="sa"><form style="display:inline" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="rule_op" value="toggle">
+  <input type="hidden" name="rule_id" value="{{.id}}">
+  <input type="hidden" name="target_enabled" value="{{if .enabled}}false{{else}}true{{end}}">
+  <button type="submit">turn {{if .enabled}}off{{else}}on{{end}}</button></form>
+<form style="display:inline" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="rule_op" value="remove">
+  <input type="hidden" name="rule_id" value="{{.id}}">
+  <button type="submit">remove</button></form>
+<details class="scope-edit"><summary class="meta">edit</summary>
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="rule_op" value="edit">
+  <input type="hidden" name="rule_id" value="{{.id}}">
+  <p class="meta">name <input type="text" name="name" size="20" value="{{.name}}" required></p>
+  <p class="meta">tools:
+  <label><input type="radio" name="tools_mode" value="all" {{if eq .tools_mode "all"}}checked{{end}}> every tool</label>
+  <label><input type="radio" name="tools_mode" value="selected" {{if eq .tools_mode "selected"}}checked{{end}}> only:</label>
+  {{range .tools_checks}}<label><input type="checkbox" name="tools" value="{{.name}}" {{if .checked}}checked{{end}}>{{.name}}</label> {{end}}</p>
+  <p class="meta">The edit keeps everything this form does not show (macro steps, actions, validity, other scope). It applies only if the rule has not changed since you review it.</p>
+  <button type="submit">review edit</button></form></details>
+</td></tr>
+{{else}}<tr><td colspan="6" class="meta">No rules.</td></tr>{{end}}
 </tbody>
 </table>
+<div id="session-action-editors">{{range .rules.rules}}{{$rule := .}}<details class="scope-edit"><summary class="meta">actions for rule {{.id}}: {{.name}}</summary>
+<p class="meta">Ordered action list. Rule stays {{if .enabled}}ON: edits change matching traffic immediately{{else}}OFF{{end}}. Supported actions have separately reviewed enabled and stop switches. Disabled actions are skipped, including their stop flag. A reached enabled stop action prevents later actions, even if it changes nothing. Macro, validity, extension and unfamiliar-field actions are label-only; moving or removing them still changes execution. Removing the last action is refused.</p>
+{{range .action_rows}}
+<fieldset><legend>{{.position}}. {{.label}}</legend>
+<p class="meta">enabled={{.enabled}}; stop={{.stop}}</p>
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_id" value="{{$rule.id}}"><input type="hidden" name="form_base" value="{{$rule.action_base}}"><input type="hidden" name="action_index" value="{{.index}}">
+{{if .up}}<button name="rule_op" value="action_up">review move up</button>{{end}}
+{{if .down}}<button name="rule_op" value="action_down">review move down</button>{{end}}
+{{if .removable}}<button name="rule_op" value="action_remove">review remove action</button>{{end}}</form>
+{{if .editable}}
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_op" value="{{if .enabled}}action_disable{{else}}action_enable{{end}}"><input type="hidden" name="rule_id" value="{{$rule.id}}"><input type="hidden" name="form_base" value="{{$rule.action_base}}"><input type="hidden" name="action_index" value="{{.index}}">
+<button>review {{if .enabled}}disable{{else}}enable{{end}} action</button></form>
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_op" value="{{if .stop}}action_stop_off{{else}}action_stop_on{{end}}"><input type="hidden" name="rule_id" value="{{$rule.id}}"><input type="hidden" name="form_base" value="{{$rule.action_base}}"><input type="hidden" name="action_index" value="{{.index}}">
+<button>review stop {{if .stop}}off{{else}}on{{end}}</button></form>
+{{if or (eq .kind "set_cookie") (eq .kind "set_header") (eq .kind "set_param") (eq .kind "replace") (eq .kind "run_script")}}
+<form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_op" value="action_edit"><input type="hidden" name="rule_id" value="{{$rule.id}}"><input type="hidden" name="form_base" value="{{$rule.action_base}}"><input type="hidden" name="action_index" value="{{.index}}">
+{{if or (eq .kind "set_cookie") (eq .kind "set_header") (eq .kind "set_param")}}
+<label>name <input name="action_name" value="{{.name}}" required></label><br>
+<label>value <select name="action_value_mode"><option value="keep">keep stored value (not shown)</option><option value="replace">replace</option><option value="clear">clear to empty</option></select><input name="action_value" value="" autocomplete="off"></label>
+{{if eq .kind "set_param"}}<label>where <select name="action_in"><option value="" {{if eq .in ""}}selected{{end}}>wherever it already is</option><option value="query" {{if eq .in "query"}}selected{{end}}>query string</option><option value="body" {{if eq .in "body"}}selected{{end}}>form body</option></select></label>{{end}}
+{{end}}
+{{if eq .kind "replace"}}
+<label>match <select name="action_match_mode"><option value="keep">keep stored match (not shown)</option><option value="replace">replace</option></select><input name="action_match" value="" autocomplete="off"></label><br>
+<label>replacement <select name="action_replacement_mode"><option value="keep">keep stored replacement (not shown)</option><option value="replace">replace</option><option value="clear">clear to empty</option></select><input name="action_replacement" value="" autocomplete="off"></label><br>
+<label><input type="checkbox" name="action_regex" value="1" {{if .regex}}checked{{end}}> regular expression</label>
+{{end}}
+{{if eq .kind "run_script"}}<label>script <select name="action_script_mode"><option value="keep">keep stored script (not shown)</option><option value="replace">replace</option></select><br><textarea name="action_script" rows="4" cols="28" autocomplete="off"></textarea></label>{{end}}
+<p class="meta">Keep submits no new content. Replace uses the entered content. Clear is available only where the engine accepts empty content. Stored content is never prefilled.</p><button>review action edit</button></form>
+{{else}}<p class="meta">This action has no fields to edit.</p>{{end}}
+{{else}}<p class="meta">Label-only: edit its fields in the console. Move/remove above acts on the entire action and its branches.</p>{{end}}
+</fieldset>{{end}}
+<form class="session-action-append" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="rule_op" value="action_append"><input type="hidden" name="rule_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.action_base}}">
+<p class="meta">Append an enabled action at the end (stop off):</p>action (a choice you must tick - nothing is created with an implicit default):<br>
+<label><input type="radio" name="action" value="add_cookies_from_jar" required> add cookies from the session jar</label>
+<label><input type="radio" name="action" value="set_cookie"> set a cookie</label>
+<label><input type="radio" name="action" value="set_header"> set a header</label>
+<label><input type="radio" name="action" value="set_param"> set a parameter</label>
+<label><input type="radio" name="action" value="replace"> replace matching part of the request</label>
+<label><input type="radio" name="action" value="run_script"> run a pre-request script</label>
+<label><input type="radio" name="action" value="prompt_for_browser_recovery"> prompt for in-browser session recovery</label><br>
+<span class="kind-fields" data-kind="set_cookie" hidden>cookie name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled></span>
+<span class="kind-fields" data-kind="set_header" hidden>header name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled></span>
+<span class="kind-fields" data-kind="set_param" hidden>parameter name <input type="text" name="action_name" size="16" disabled> value <input type="text" name="action_value" size="20" disabled> where <select name="action_in" disabled><option value="" selected>wherever it already is (the query string for a new parameter)</option><option value="query">the query string</option><option value="body">the form body</option></select></span>
+<span class="kind-fields" data-kind="replace" hidden>match <input type="text" name="action_match" size="16" disabled> replacement <input type="text" name="action_replacement" size="16" disabled> <label><input type="checkbox" name="action_regex" value="1" disabled> match is a regular expression</label></span>
+<span class="kind-fields" data-kind="run_script" hidden><br>script<br><textarea name="action_script" rows="4" cols="48" disabled></textarea></span>
+
+<button>review append action</button></form>
+</details>{{end}}</div>
 {{else}}<p class="meta">No session coordinator wired.</p>{{end}}
 <h3>Cookie jar</h3>
-<p class="meta">{{.cookies.hint}}</p>
+{{if .cookies.hint}}<p class="meta">{{.cookies.hint}}</p>{{end}}
+{{if .cookies.cookies}}
+<table>
+<thead><tr><th scope="col">Host</th><th scope="col">Name</th><th scope="col">Value</th><th scope="col">Path</th><th scope="col">Expires</th></tr></thead>
+<tbody>
+{{range $authority := .cookies.cookies}}{{range .cookies}}<tr><td>{{$authority.host}}</td><td>{{.name}}</td><td>{{.value}}</td><td>{{.path}}</td><td>{{if .expires}}{{.expires}}{{else}}session{{end}}</td></tr>{{end}}{{end}}
+</tbody>
+</table>
+{{end}}
 <h3>Trace</h3>
 <p class="meta">recording={{.trace.enabled}} · {{len .trace.entries}} entries</p>
 <h3>Pending prompts</h3>

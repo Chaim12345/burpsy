@@ -1,5 +1,5 @@
 {{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .points}}
-<p class="meta">{{len .points}} insertion points in exchange {{.msg_id}}:</p>
+<p class="meta">{{len .points}} insertion points in message {{.msg_id}}:</p>
 {{range $i, $p := .points}}<span class="badge">#{{$i}} {{$p.type}} {{$p.base_value}}</span> {{end}}
 {{else}}<p class="meta">No points.</p>{{end}}

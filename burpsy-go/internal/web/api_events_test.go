@@ -14,7 +14,11 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intercept"
+	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/proxy"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
+	"go.uber.org/zap"
 )
 
 // ---- LIVE-01: the UI is told what changed, it does not ask ---------------------------------------
@@ -287,6 +291,8 @@ func TestEveryChangeSourceAnnouncesItsOwnKind(t *testing.T) {
 		t.Fatalf("arm the intercept request list: %v", err)
 	}
 	exchange := addTraffic(t, store, "ws.test", "GET", "/socket")
+	sessionCoord := session.NewCoordinator(zap.NewNop())
+	s.WithSessionCoordinator(sessionCoord)
 
 	// Subscribed after the arming above, so the table starts from silence.
 	sub, unsubscribe := s.live.subscribe()
@@ -325,6 +331,51 @@ func TestEveryChangeSourceAnnouncesItsOwnKind(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("POST /api/tools/organizer: status = %d (%s)", rec.Code, rec.Body.String())
 			}
+		}},
+		{"a proxy option flipped", changeProxy, func() {
+			o := proxy.NewOptions()
+			s.WithProxyOptions(o)
+			if err := o.Set(proxy.OptStripAcceptEncoding, true); err != nil {
+				t.Fatalf("Set strip_accept_encoding: %v", err)
+			}
+		}},
+		{"a match and replace rule added", changeProxy, func() {
+			r, err := matchreplace.NewRule(matchreplace.TargetRequestBody, matchreplace.CategoryLiteral, "live", "x", "test")
+			if err != nil {
+				t.Fatalf("NewRule: %v", err)
+			}
+			s.matchReplace.AddRule(r)
+		}},
+		{"a passthrough host added", changeProxy, func() {
+			if s.tlsPolicy == nil {
+				s.WithTlsPolicy(proxy.NewTlsPolicy())
+			}
+			s.tlsPolicy.AddPassthrough("live.test")
+		}},
+		{"a session rule added", changeSession, func() {
+			rule := session.NewSessionRule("live-rule", []string{"live.test"}, nil)
+			rule.Actions = []*session.Action{{Kind: session.ActionSetHeader, Enabled: true, Name: "x-test", Value: "1"}}
+			if _, err := sessionCoord.AddRule(rule); err != nil {
+				t.Fatalf("AddRule: %v", err)
+			}
+		}},
+		{"a session cookie set", changeSession, func() {
+			sessionCoord.SetCookie("live.test", 443, true, "sid", "synthetic")
+		}},
+		{"a scope rule added", changeScope, func() {
+			s.scope.AddInclude("live-scope.test")
+		}},
+		{"the drop switch thrown", changeScope, func() {
+			s.scope.SetDropOutOfScope(true)
+		}},
+		{"a proxy counter moved", changeProxy, func() {
+			o := proxy.NewOptions()
+			s.WithProxyOptions(o)
+			if err := o.Set(proxy.OptRemoveAllJavaScript, true); err != nil {
+				t.Fatalf("Set remove_all_javascript: %v", err)
+			}
+			takeWithin(t, s.live, sub, changeProxy, 5*time.Second) // drain the Set's own frame
+			o.ApplyResponse([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 31\r\n\r\n<script>x</script><p>k</p>"))
 		}},
 	}
 	for _, tc := range cases {
@@ -384,5 +435,77 @@ func TestEventStatsReportSubscribersAndWhatWasAnnounced(t *testing.T) {
 	if stats.Frames == 0 || stats.Changes < 3 {
 		t.Errorf("frames = %d, changes = %d, want at least 1 frame standing for at least the 3 captures — "+
 			"a stream that has stopped pushing must not look like a quiet system", stats.Frames, stats.Changes)
+	}
+}
+
+// A finding that arrives after the dashboard's history-driven refresh must still reach an idle
+// dashboard. The Coverage rows (Issues, Passive checks, Live audit) are finding-derived, so the
+// frame that carries them is changeIssues — announced here through the same findings store call
+// the scanners and the hand-record route use. Unrelated movement (a websocket frame) must
+// announce neither history nor issues, or an idle dashboard would be refetched by traffic its
+// rows do not read. The consumer branch that routes the frame to the view is pinned in
+// TestUI2LiveListWiring.
+func TestDashboardSeesAFindingArrivingAfterHistory(t *testing.T) {
+	s, store := liveTestServer()
+	sub, unsubscribe := s.live.subscribe()
+	defer unsubscribe()
+
+	// The history refresh the finding arrives after: proxied traffic moves the counters line.
+	addTraffic(t, store, "live.test", "GET", "/one")
+	takeWithin(t, s.live, sub, changeHistory, 5*time.Second)
+
+	// Idle again, then the finding lands — on its own kind, not folded into history.
+	s.findings.Add(core.NewFinding{Name: "passive finding"})
+	if got := takeWithin(t, s.live, sub, changeIssues, 5*time.Second); got == 0 {
+		t.Errorf("a finding arriving after history announced 0 changes of kind %q", changeIssues)
+	}
+
+	// Unrelated movement must not refetch the idle dashboard: a websocket frame announces ws only.
+	exchange := addTraffic(t, store, "ws.test", "GET", "/socket")
+	takeWithin(t, s.live, sub, changeHistory, 5*time.Second) // drain the socket exchange itself
+	addWsMessage(store, exchange.ID, true, core.WsOpcodeText, "hello", 1000)
+	sawWS := false
+	deadline := time.After(5 * time.Second)
+	for !sawWS {
+		select {
+		case <-sub.signal:
+			for _, frame := range s.live.take(sub) {
+				switch frame.Kind {
+				case changeWS.String():
+					sawWS = true
+				case changeHistory.String(), changeIssues.String():
+					t.Errorf("a websocket frame also announced %q — an idle dashboard would be refetched by unrelated movement", frame.Kind)
+				}
+			}
+		case <-deadline:
+			t.Fatalf("the websocket frame never announced %q", changeWS)
+		}
+	}
+}
+
+// The coordinator the server constructs for itself (no WithSessionCoordinator call) must
+// announce too: the hook installs in followLive, which runs at construction and follows every
+// With* replacement, so a server that never replaces its coordinator still announces session
+// movement. Regression for the wiring gap where the hook lived only in WithSessionCoordinator.
+func TestDefaultSessionCoordinatorAnnounces(t *testing.T) {
+	s, _ := liveTestServer()
+	sub, unsubscribe := s.live.subscribe()
+	defer unsubscribe()
+	s.sessionCoordinator.SetTracerEnabled(true)
+	takeWithin(t, s.live, sub, changeSession, 5*time.Second)
+}
+
+// A scope edit announces exactly once even after followLive re-runs: the scope keeps a handler
+// LIST (not the single slot the other components expose), so an install on every With* would
+// stack a duplicate notification per replacement. The one-time guard in followLive is what
+// keeps this at one.
+func TestScopeEditAnnouncesOnceAfterFollowLiveReruns(t *testing.T) {
+	s, _ := liveTestServer()
+	s.WithIntercept(intercept.NewEngine())
+	sub, unsubscribe := s.live.subscribe()
+	defer unsubscribe()
+	s.scope.AddInclude("once.test")
+	if got := takeWithin(t, s.live, sub, changeScope, 5*time.Second); got != 1 {
+		t.Errorf("one scope edit announced %d times, want 1", got)
 	}
 }

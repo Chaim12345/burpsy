@@ -9,6 +9,7 @@
   <td class="sev sev-{{.Severity | lower}}">{{.Severity}}</td>
   <td>{{.Confidence}}</td><td>{{.Host}}</td><td>{{.Count}}×</td>
 </tr>
+{{if gt (len .IDs) 1}}<tr class="meta"><td colspan="5">{{len .IDs}} findings in this group: {{range .IDs}}<a href="/ui2/issues/{{.}}" hx-get="/ui2/issues/{{.}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click consume">#{{.}}</a> {{end}}</td></tr>{{end}}
 {{else}}
 <tr><td colspan="5" class="meta">No issues yet.</td></tr>
 {{end}}

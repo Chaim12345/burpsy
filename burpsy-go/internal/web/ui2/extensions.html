@@ -12,9 +12,9 @@
 <h3>JSON-RPC API</h3>
 {{if .apis.methods}}
 <table>
-<thead><tr><th scope="col">Method</th><th scope="col">Description</th></tr></thead>
+<thead><tr><th scope="col">Method</th><th scope="col">Call</th></tr></thead>
 <tbody>
-{{range .apis.methods}}<tr><td>{{.method}}</td><td class="meta">{{.description}}</td></tr>{{end}}
+{{range .apis.methods}}<tr><td>{{.name}}</td><td class="meta">{{.direction}} · {{.call}}{{if .params}}<br><code>{{.params}}</code>{{end}}{{if .result}}<br>&rarr; <code>{{.result}}</code>{{end}}</td></tr>{{end}}
 </tbody>
 </table>
 {{else}}<p class="meta">No API methods registered.</p>{{end}}

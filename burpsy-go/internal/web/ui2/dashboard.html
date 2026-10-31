@@ -6,7 +6,7 @@
 <tbody>
 {{range .Summaries}}
 <tr><td>{{.Label}}</td><td>{{.Breakdown.Found}}</td><td>{{.Breakdown.Skipped}}</td>
-<td class="meta">{{range $k, $v := .Breakdown.By}}{{$k}}={{$v}} {{end}}</td></tr>
+<td class="meta">{{range .Reasons}}{{.Detail}} ({{.Count}}) {{end}}</td></tr>
 {{else}}<tr><td colspan="4" class="meta">Nothing yet.</td></tr>{{end}}
 </tbody>
 </table>
@@ -15,7 +15,7 @@
 <thead><tr><th scope="col">ID</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
 <tbody>
 {{range .Tasks}}
-<tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.Target}}</td><td>{{.Status}}</td><td class="meta">{{.Note}}</td></tr>
+<tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.Target}}</td><td>{{.State}}</td><td class="meta">{{.Note}}</td></tr>
 {{else}}<tr><td colspan="5" class="meta">No tasks.</td></tr>{{end}}
 </tbody>
 </table>

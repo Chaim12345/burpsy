@@ -1,6 +1,37 @@
 <div id="rows">
+<div id="capture">
+<p class="meta">Capture - recording per tool. Turning a tool off means its next requests are sent and deliberately not recorded; the not-captured counters keep the count honest.</p>
+{{range .CaptureRows}}<p class="meta"><strong>{{.Tool}}</strong> {{if .On}}on{{else}}off{{end}}{{if .Uncaptured}} &middot; {{.Uncaptured}} not captured{{end}}
+<form style="display:inline" hx-post="/ui2/logger/capture-{{.Tool}}-{{if .On}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="search" value="{{$.Search}}">
+<button type="submit">turn {{.Tool}} {{if .On}}off{{else}}on{{end}}</button></form></p>
+{{end}}</div>
+<div id="filter">
+<p class="meta">Capture filter - decides what gets recorded. Rows it refuses are not recorded; the filtered counter keeps the count honest.{{if .Filter.FilteredTotal}} {{.Filter.FilteredTotal}} filtered so far.{{end}}</p>
+{{if .FilterNote}}<p class="meta"><strong>Filter not applied: {{.FilterNote}}</strong></p>{{end}}
+<p class="meta">Now: {{if .Filter.Active}}{{.Filter.Summary}}{{else}}no capture filter - every captured request is recorded{{end}}</p>
+<form hx-post="/ui2/logger/filter-set" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="search" value="{{$.Search}}">
+<p class="meta">status
+<label><input type="checkbox" name="status" value="2"{{if .Filter.S2}} checked{{end}}> 2xx</label>
+<label><input type="checkbox" name="status" value="3"{{if .Filter.S3}} checked{{end}}> 3xx</label>
+<label><input type="checkbox" name="status" value="4"{{if .Filter.S4}} checked{{end}}> 4xx</label>
+<label><input type="checkbox" name="status" value="5"{{if .Filter.S5}} checked{{end}}> 5xx</label></p>
+<p class="meta">term <input type="text" name="term" value="{{.Filter.Term}}" size="14">
+<label><input type="checkbox" name="regex"{{if .Filter.Regex}} checked{{end}}> regex</label>
+<label><input type="checkbox" name="case"{{if .Filter.Case}} checked{{end}}> case-sensitive</label>
+<label><input type="checkbox" name="negate"{{if .Filter.Negate}} checked{{end}}> negated</label>
+<label><input type="checkbox" name="scope_only"{{if .Filter.ScopeOnly}} checked{{end}}> in scope only</label></p>
+<p class="meta">exclude MIME <input type="text" name="mime" value="{{.Filter.MimeJoined}}" size="20" placeholder="image/*, text/css">
+<button type="submit">apply capture filter</button></p>
+</form>
+{{if .Filter.Active}}<form hx-post="/ui2/logger/filter-clear" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="search" value="{{$.Search}}">
+<p class="meta"><button type="submit">clear capture filter</button></p>
+</form>{{end}}
+</div>
 <p class="meta">{{.Matched}} of {{.Total}} entries{{if .Search}} · search <code>{{.Search}}</code>{{end}}</p>
-<table>
+<table class="wide-t">
 <thead><tr><th scope="col">Tool</th><th scope="col">Method</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Len</th><th scope="col">ms</th></tr></thead>
 <tbody id="rows-body">
 {{range .Entries}}
@@ -10,7 +41,7 @@
 {{else}}<tr><td colspan="7" class="meta">Logger is empty.</td></tr>{{end}}
 {{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="7" class="meta"
      hx-get="/ui2/logger" hx-vals='{"offset": {{.NextOffset}}, "limit": {{.Limit}}, "search": "{{.Search}}"}'
-     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="revealed" hx-push-url="false">loading more…</td></tr>
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
 {{end}}
 </tbody>
 </table>

@@ -13,7 +13,7 @@
 </form>
 {{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .result}}
-<h3>Result</h3>
-<pre>{{.result}}</pre>
+<h3>Result{{if .meta}} <span class="badge">{{.meta}}</span>{{end}}</h3>
+<pre class="msg">{{.result}}</pre>
 {{end}}
 </div>

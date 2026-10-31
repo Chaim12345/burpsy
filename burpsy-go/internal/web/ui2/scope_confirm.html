@@ -1,0 +1,60 @@
+<div id="srows" data-review="1">
+{{if .error}}<p class="meta"><strong>Not applied: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/scope" hx-get="/ui2/scope" hx-target="#srows" hx-swap="outerHTML">back to scope</a></p>{{else}}
+<p><strong>Review before applying:</strong> <span class="meta brk">{{.preview}}</span></p>
+<p class="meta">Scope decides where the proxy and every tool may send traffic, and the change persists. This confirmation is one-time and covers exactly the call above.</p>
+{{if .lib_action}}
+<div class="library-review">
+{{if eq .lib_action "load"}}
+<p><strong>Load library "{{.name}}"</strong>: replaces the current rules with the stored list below. If either side changes after this review, the call is refused rather than applied to content you did not see.</p>
+<p class="meta"><strong>{{.lib_policy}}</strong></p>
+<p class="meta">The out-of-scope drop switch and any custom drop scope are NOT changed by a load.</p>
+<p class="meta">Stored rules to be loaded ({{len .lib_rules}}):</p>
+<table class="scope-t">
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th></tr></thead>
+<tbody>{{range .lib_rules}}<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td><td>{{.host}}</td><td>{{if .path}}{{.path}}{{else}}—{{end}}</td><td>{{if .port}}{{.port}}{{else}}—{{end}}</td><td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td></tr><tr class="meta scope-sd"><td colspan="6">path: {{if .path}}{{.path}}{{else}}any{{end}} &middot; protocol: {{if .protocol}}{{.protocol}}{{else}}any (http and https){{end}}</td></tr>{{else}}<tr><td colspan="6" class="meta">No rules stored.</td></tr>{{end}}</tbody>
+</table>
+<details><summary class="meta">The {{len .lib_discarded}} current rules this load discards</summary>
+<table class="scope-t">
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th></tr></thead>
+<tbody>{{range .lib_discarded}}<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td><td>{{.host}}</td><td>{{if .path}}{{.path}}{{else}}—{{end}}</td><td>{{if .port}}{{.port}}{{else}}—{{end}}</td><td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td></tr><tr class="meta scope-sd"><td colspan="6">path: {{if .path}}{{.path}}{{else}}any{{end}} &middot; protocol: {{if .protocol}}{{.protocol}}{{else}}any (http and https){{end}}</td></tr>{{else}}<tr><td colspan="6" class="meta">The current scope has no rules; the load discards nothing.</td></tr>{{end}}</tbody>
+</table></details>
+{{else if eq .lib_action "save"}}
+<p><strong>Save the current rules as library "{{.name}}"</strong>{{if .lib_replaces}}, REPLACING the saved library of that name{{else}} (a new library){{end}}. If either the current rules or the saved library change after this review, the call is refused rather than applied to content you did not see.</p>
+<p class="meta">This does not change the live scope; it photographs the {{len .lib_rules}} rules below, disabled ones included as disabled.</p>
+<table class="scope-t">
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th></tr></thead>
+<tbody>{{range .lib_rules}}<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td><td>{{.host}}</td><td>{{if .path}}{{.path}}{{else}}—{{end}}</td><td>{{if .port}}{{.port}}{{else}}—{{end}}</td><td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td></tr><tr class="meta scope-sd"><td colspan="6">path: {{if .path}}{{.path}}{{else}}any{{end}} &middot; protocol: {{if .protocol}}{{.protocol}}{{else}}any (http and https){{end}}</td></tr>{{else}}<tr><td colspan="6" class="meta">The current scope has no rules; the library would hold an empty list (loading it later would empty the scope, and an empty scope allows everything).</td></tr>{{end}}</tbody>
+</table>
+{{else if eq .lib_action "delete"}}
+<p><strong>Delete library "{{.name}}"</strong>: removes the stored list below. If the saved library changes after this review, the call is refused rather than deleting content you did not see. The live scope is NOT changed.</p>
+<table class="scope-t">
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th></tr></thead>
+<tbody>{{range .lib_rules}}<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td><td>{{.host}}</td><td>{{if .path}}{{.path}}{{else}}—{{end}}</td><td>{{if .port}}{{.port}}{{else}}—{{end}}</td><td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td></tr><tr class="meta scope-sd"><td colspan="6">path: {{if .path}}{{.path}}{{else}}any{{end}} &middot; protocol: {{if .protocol}}{{.protocol}}{{else}}any (http and https){{end}}</td></tr>{{else}}<tr><td colspan="6" class="meta">No rules stored.</td></tr>{{end}}</tbody>
+</table>
+{{end}}
+<p class="meta">Known credential carriers in URLs (userinfo, secret-named query or fragment values) show as «redacted»; all other text is shown exactly as stored.</p>
+</div>
+{{end}}
+<form hx-post="/ui2/scope/run" hx-target="#srows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="scope_action" value="{{.scope_action}}">
+<input type="hidden" name="kind" value="{{.kind}}">
+<input type="hidden" name="pattern" value="{{.pattern}}">
+<input type="hidden" name="path" value="{{.path}}">
+<input type="hidden" name="port" value="{{.port}}">
+<input type="hidden" name="protocol" value="{{.protocol}}">
+<input type="hidden" name="enabled" value="{{.enabled}}">
+<input type="hidden" name="old_kind" value="{{.old_kind}}">
+<input type="hidden" name="old_pattern" value="{{.old_pattern}}">
+<input type="hidden" name="old_path" value="{{.old_path}}">
+<input type="hidden" name="old_port" value="{{.old_port}}">
+<input type="hidden" name="old_protocol" value="{{.old_protocol}}">
+<input type="hidden" name="name" value="{{.name}}">
+<input type="hidden" name="expected_library" value="{{.expected_library}}">
+<input type="hidden" name="expected_rules" value="{{.expected_rules}}">
+<button>Confirm and apply</button>
+</form>
+<p class="meta"><a href="/ui2/scope" hx-get="/ui2/scope" hx-target="#srows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

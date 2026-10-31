@@ -6,5 +6,5 @@
 {{end}}
 {{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="8" class="meta"
      hx-get="/ui2/history" hx-vals='{"offset": {{.NextOffset}}, "limit": {{.Limit}}, "q": "{{.Q}}", "search": "{{.Search}}"}'
-     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="revealed" hx-push-url="false">loading more…</td></tr>
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
 {{end}}

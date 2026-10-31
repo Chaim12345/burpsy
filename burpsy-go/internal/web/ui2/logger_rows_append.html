@@ -1,0 +1,9 @@
+{{range .Entries}}<tr><td>{{.Tool}}</td><td>{{.Method}}</td><td>{{.Host}}:{{.Port}}</td><td title="{{.Path}}">{{.Path}}</td>
+<td>{{if .Status}}{{.Status}}{{else}}—{{end}}</td>
+<td>{{if .ResponseLen}}{{.ResponseLen}}{{else}}—{{end}}</td>
+<td>{{.DurationMs}}</td></tr>
+{{end}}
+{{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="7" class="meta"
+     hx-get="/ui2/logger" hx-vals='{"offset": {{.NextOffset}}, "limit": {{.Limit}}, "search": "{{.Search}}"}'
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
+{{end}}

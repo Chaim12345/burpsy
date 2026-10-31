@@ -1026,6 +1026,74 @@ func intruderLimitStatus(err error) int {
 // from the standing settings: MaxHops is an anti-loop bound, not a policy choice an attack gets
 // to relax, because the same chain-following code a single Repeater send uses now runs once per
 // attempt, and a bigger budget here is a bigger budget for every one of a 200,000-request attack.
+// recordIntruderExchanges joins an attack's stored detail-row requests (and the exemplar
+// responses the engine kept, one per bucket) into Exchange rows for the intruder/{task_id}
+// dataset. Attempts past DetailLimit have no stored request and no row; guard refusals and
+// failed sends have no response, and a row that never reached the network is still a request
+// the attack sent. Reads finish before the capture hold is taken: Get takes the store's read
+// lock, which the hold's writer-side gate must never wait behind itself.
+func (s *Server) recordIntruderExchanges(taskID uint64, report *intruder.AttackReport, host string, port uint16, tls bool) {
+	exs := make([]*core.Exchange, 0, len(report.Attempts))
+	attempts := make([]*intruder.Attempt, 0, len(report.Attempts))
+	for i := range report.Attempts {
+		a := &report.Attempts[i]
+		if a.RequestID == nil {
+			continue
+		}
+		reqID := core.MsgId(*a.RequestID)
+		ex := &core.Exchange{
+			Request:     core.MsgPtr(reqID),
+			Host:        host,
+			Port:        port,
+			TLS:         tls,
+			Source:      core.SourceIntruder,
+			TaskID:      taskID,
+			ResponseLen: a.ResponseLen,
+		}
+		if msg, err := s.store.Get(reqID); err == nil {
+			if p, ok := requestTarget(msg.Raw()); ok {
+				ex.Method, ex.Path = p[0], p[1]
+			}
+		}
+		if a.Status != nil {
+			st := uint16(*a.Status)
+			ex.Status = &st
+		}
+		if a.ResponseID != nil {
+			respID := core.MsgId(*a.ResponseID)
+			ex.Response = &respID
+		}
+		exs = append(exs, ex)
+		attempts = append(attempts, a)
+	}
+	if len(exs) == 0 {
+		return
+	}
+	hold := s.store.HoldCapture()
+	for _, ex := range exs {
+		hold.AddExchange(ex)
+	}
+	hold.Release()
+
+	// Mirror the Repeater send path: every stored attack exchange is a Logger row as well,
+	// linked to the id the store just assigned so Logger's message viewer resolves the row's
+	// bytes. Record runs the capture gate and capture filter itself, so an operator who
+	// unchecked Intruder on Logger's capture axis (or narrowed the filter) loses these rows
+	// the same way they lose Repeater's, with the loss counted on Uncaptured/Filtered rather
+	// than hidden. HTTP history stays untouched: its exclusion of tool-originated exchanges
+	// stands on the exchange Source, which this does not change.
+	for i, ex := range exs {
+		a := attempts[i]
+		respLen := ex.ResponseLen
+		var durMs uint64
+		if a.DurationMS > 0 {
+			durMs = uint64(a.DurationMS)
+		}
+		s.toolLog.Record(toollog.ToolIntruder, host, port, tls, ex.Method, ex.Path, intOrZero(ex.Status),
+			&respLen, durMs, "", &ex.ID)
+	}
+}
+
 func intruderRedirectPolicy(mode *string, standing sender.RedirectSettings) (sender.RedirectSettings, error) {
 	if mode == nil || *mode == "" {
 		return standing, nil
@@ -1067,6 +1135,11 @@ type BucketExample struct {
 // kept attempt (keyed by ordinal in Examples — see BucketExample), and the honest per-set
 // counting (what was capped, truncated, skipped or dropped).
 type RunView struct {
+	// TaskID is the dashboard task this attack ran as — the id its results page
+	// (/ui2/intruder/{id}/results, /api/datasets/intruder/{id}) is keyed by. The attack's
+	// registry entry is removed the moment this response is written, so without it a caller
+	// whose attack has finished has no handle on its results.
+	TaskID      uint64                `json:"task_id"`
 	Report      intruder.AttackReport `json:"report"`
 	Examples    []BucketExample       `json:"examples"`
 	PayloadSets []intruder.PayloadSet `json:"payload_sets"`
@@ -1661,6 +1734,12 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// after every adjustment above, so the pool can never hold more sockets than the attack can use.
 	sendPlan.startPool(attack.Limits.MaxInFlight)
 	report := intruder.Run(attack, send, record)
+	// Link what the attack sent into Exchange rows keyed by this task. The requests (and each
+	// bucket's exemplar response) are already in the store via RequestFn and record, but nothing
+	// ever joined them into exchanges with Source=intruder and this task's id — so
+	// /api/datasets/intruder/{task} and the /ui2/intruder/{id}/results page were always empty
+	// after a real attack, however it went. The ids are reused; no byte is written twice.
+	s.recordIntruderExchanges(task.ID(), report, host, port, tls)
 	task.Advance(uint64(report.Sent + report.Failed))
 	// Stop, not Finish, for an attack that was halted. A stopped run reported as done is a report over
 	// an unknown prefix of the payload set presented as a complete answer — dash.Task.Complete()
@@ -1752,6 +1831,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
+		TaskID:              task.ID(),
 		Report:              *report,
 		Examples:            examples,
 		PayloadSets:         resolved,

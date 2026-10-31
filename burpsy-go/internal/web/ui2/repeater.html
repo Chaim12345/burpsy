@@ -6,7 +6,10 @@
 </form>
 {{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
 {{if .result}}
-<h3>Response</h3>
-<pre>{{.result}}</pre>
+<h3>Response
+  <span class="badge">{{index .result "duration_ms"}} ms</span>
+  <a class="btn" href="/ui2/history/{{index .result "exchange_id"}}">stored exchange #{{index .result "exchange_id"}}</a>
+</h3>
+<pre class="msg">{{index .result "response"}}</pre>
 {{end}}
 </div>

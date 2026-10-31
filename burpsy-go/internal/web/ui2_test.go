@@ -128,7 +128,8 @@ func TestUI2HistoryDetailRendersRequestAndResponse(t *testing.T) {
 		t.Fatalf("detail = %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"GET /detail", "X-Marker: abc", "hello", "d.test"} {
+	// The pane renders token-colored spans, so check the visible pieces, not one raw run.
+	for _, want := range []string{`hl-method">GET`, `hl-path">/detail`, `hl-hdr">X-Marker:`, " abc", "hello", "d.test"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail pane missing %q", want)
 		}

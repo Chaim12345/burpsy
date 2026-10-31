@@ -4,8 +4,8 @@
 <thead><tr><th scope="col">Type</th><th scope="col">Name</th><th scope="col">Severity</th></tr></thead>
 <tbody>
 {{range .advisories}}
-<tr hx-get="/api/advisories/{{.type_index}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click" hx-headers='{"Accept":"application/json"}'>
-<td>{{.type_index}}</td><td>{{.name}}</td><td class="sev sev-{{.severity | lower}}">{{.severity}}</td></tr>
+<tr hx-get="/ui2/advisories/{{.type_index}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click">
+<td>{{.type_index}}</td><td>{{.name}}{{if .shadowed}} <span class="meta">· shared index - tap shows the definition that owns {{.type_index}}</span>{{end}}</td><td class="sev sev-{{.typical_severity | lower}}">{{.typical_severity}}</td></tr>
 {{else}}<tr><td colspan="3" class="meta">Catalogue not loaded.</td></tr>{{end}}
 </tbody>
 </table>

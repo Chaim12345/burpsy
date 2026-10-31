@@ -11,7 +11,10 @@
 package persist
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1746,6 +1749,176 @@ func (s *Store) DeleteScopeLibrary(name string) (deleted bool, err error) {
 		return false, fmt.Errorf("delete scope library %q: %w", name, err)
 	}
 	return n > 0, nil
+}
+
+// ScopeLibraryAbsent is the expected-content token a reviewed call carries when
+// the state the operator reviewed was "no library with this name exists". It is
+// a literal rather than the digest of an empty document because absence is not
+// a document: hashing one would make "no such library" and "a library holding
+// an empty list" share an expected value, and a save reviewed as creating could
+// then overwrite an empty library without a word.
+const ScopeLibraryAbsent = "absent"
+
+// scopeLibraryContentDigest hashes the exact stored bytes of a library
+// document. Run-side enforcement re-reads and re-hashes the same column, so
+// the comparison is raw-bytes-to-raw-bytes: no serialisation shape has to be
+// agreed for the check to hold.
+func scopeLibraryContentDigest(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+// LoadScopeLibraryWithDigest reads one library and the digest of its exact
+// stored bytes in a single SELECT. The digest is what a confirmed load or
+// delete binds: the review rendered this content, and the call refuses to run
+// against anything else. The found/err split is LoadScopeLibrary's, for the
+// same reason: a missing name is a typo, an unreadable document is data loss,
+// and neither may become an empty rule list (an empty core.Scope is
+// default-allow).
+func (s *Store) LoadScopeLibraryWithDigest(name string) (rules []ScopeLibraryRule, digest string, found bool, err error) {
+	if s == nil || s.db == nil {
+		return nil, "", false, errors.New("no database is open, so there is no scope library to read")
+	}
+	name = strings.TrimSpace(name)
+	var body string
+	switch err := s.db.QueryRow(`SELECT rules_json FROM scope_libraries WHERE name = ?`, name).Scan(&body); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, "", false, nil
+	case err != nil:
+		return nil, "", false, fmt.Errorf("read scope library %q: %w", name, err)
+	}
+	var parsed []ScopeLibraryRule
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, "", true, fmt.Errorf("scope library %q cannot be read: %w", name, err)
+	}
+	return parsed, scopeLibraryContentDigest([]byte(body)), true, nil
+}
+
+// SaveScopeLibraryIfUnchanged is SaveScopeLibrary with a content precondition:
+// the write lands only when the library's current stored bytes still hash to
+// expected (ScopeLibraryAbsent for "there was no such library"). A mismatch is
+// conflict=true with no write — the operator reviewed one document, and what
+// is on disk now is another, so overwriting it would delete work the review
+// never showed.
+//
+// The check and the write are one BEGIN IMMEDIATE transaction on a single
+// RESERVED connection (db.Conn), not separate db calls: the pool hands each
+// Exec whichever connection is free, so a check on one connection and a write
+// on another would leave the same gap the digest exists to close — and with a
+// reserved connection no unrelated statement can slip into the transaction
+// between BEGIN and COMMIT. IMMEDIATE takes the write lock at the start, so a
+// concurrent writer cannot land between the SELECT and the INSERT either.
+func (s *Store) SaveScopeLibraryIfUnchanged(name string, rules []*core.ScopeRule, expected string) (replaced bool, conflict bool, err error) {
+	if s == nil || s.db == nil {
+		return false, false, errors.New("no database is open, so there is nowhere to save a scope library")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, false, errors.New("a scope library needs a name, so it can be found again")
+	}
+	body, err := json.Marshal(scopeLibraryRules(rules))
+	if err != nil {
+		return false, false, fmt.Errorf("serialise scope library %q: %w", name, err)
+	}
+	// The package's other methods take no context; the transaction needs one, so
+	// it is backgrounded here rather than changing every signature in the file.
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("reserve a connection for the scope library save: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return false, false, fmt.Errorf("begin the scope library save: %w", err)
+	}
+	rollback := func() { _, _ = conn.ExecContext(ctx, `ROLLBACK`) }
+	var existing string
+	var found bool
+	switch err := conn.QueryRowContext(ctx, `SELECT rules_json FROM scope_libraries WHERE name = ?`, name).Scan(&existing); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		rollback()
+		return false, false, fmt.Errorf("look up scope library %q: %w", name, err)
+	default:
+		found = true
+	}
+	got := ScopeLibraryAbsent
+	if found {
+		got = scopeLibraryContentDigest([]byte(existing))
+	}
+	if got != expected {
+		rollback()
+		return false, true, nil
+	}
+	if _, err := conn.ExecContext(ctx,
+		`INSERT OR REPLACE INTO scope_libraries (name, rules_json, saved_at) VALUES (?, ?, ?)`,
+		name, string(body), time.Now().UnixMilli()); err != nil {
+		rollback()
+		return false, false, fmt.Errorf("save scope library %q: %w", name, err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		rollback()
+		return false, false, fmt.Errorf("commit the scope library save %q: %w", name, err)
+	}
+	return found, false, nil
+}
+
+// DeleteScopeLibraryIfUnchanged is DeleteScopeLibrary with the same content
+// precondition: the delete lands only when the stored bytes still hash to
+// expected. A library replaced since the review is not deleted (conflict=true)
+// — the operator confirmed removing one document, and what is stored now is
+// another. A name that is gone entirely is not a conflict when the review
+// expected content: it is still a change since the review, so it reports
+// conflict; with expected == ScopeLibraryAbsent it is the ordinary not-found
+// (deleted=false) the 404 already names.
+func (s *Store) DeleteScopeLibraryIfUnchanged(name string, expected string) (deleted bool, conflict bool, err error) {
+	if s == nil || s.db == nil {
+		return false, false, errors.New("no database is open, so there is no scope library to delete")
+	}
+	name = strings.TrimSpace(name)
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, false, fmt.Errorf("reserve a connection for the scope library delete: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return false, false, fmt.Errorf("begin the scope library delete: %w", err)
+	}
+	rollback := func() { _, _ = conn.ExecContext(ctx, `ROLLBACK`) }
+	var existing string
+	var found bool
+	switch err := conn.QueryRowContext(ctx, `SELECT rules_json FROM scope_libraries WHERE name = ?`, name).Scan(&existing); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		rollback()
+		return false, false, fmt.Errorf("look up scope library %q: %w", name, err)
+	default:
+		found = true
+	}
+	got := ScopeLibraryAbsent
+	if found {
+		got = scopeLibraryContentDigest([]byte(existing))
+	}
+	if got != expected {
+		rollback()
+		return false, true, nil
+	}
+	if !found {
+		// expected was ScopeLibraryAbsent and there is still nothing: the state the
+		// review showed is the state on disk, there is just nothing to remove.
+		rollback()
+		return false, false, nil
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM scope_libraries WHERE name = ?`, name); err != nil {
+		rollback()
+		return false, false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		rollback()
+		return false, false, fmt.Errorf("commit the scope library delete %q: %w", name, err)
+	}
+	return true, false, nil
 }
 
 // ---- Scan configuration library -----------------------------------------------------------------

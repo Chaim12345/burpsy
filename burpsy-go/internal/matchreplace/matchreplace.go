@@ -176,15 +176,69 @@ type RuleSet struct {
 	// because it is written from the proxy's per-message path and read only when someone
 	// opens the panel.
 	scopeSkipped atomic.Uint64
+
+	// onChange holds the signal installed by OnChange: one call after the rendered rule
+	// table actually moves.
+	onChange atomic.Value
 }
 
 func NewRuleSet() *RuleSet { return &RuleSet{} }
 
-// SetRules replaces the entire rule set (atomic from the caller's perspective).
+// SetRules replaces the entire rule set (atomic from the caller's perspective). A
+// replacement whose rules read identical to the current ones announces nothing: the panel
+// refreshes on real movement only.
 func (rs *RuleSet) SetRules(rules []*Rule) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
+	changed := !rulesEqual(rs.rules, rules)
 	rs.rules = rules
+	rs.mu.Unlock()
+	if changed {
+		rs.noteChange()
+	}
+}
+
+// rulesEqual compares two rule sets by what the panel renders: the toggles and the match and
+// replace texts, with the compiled pattern compared by its source, not its pointer - a rule
+// decoded twice from the same JSON is the same rule.
+func rulesEqual(a, b []*Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ra, rb := a[i], b[i]
+		if (ra == nil) != (rb == nil) {
+			return false
+		}
+		if ra == nil {
+			continue
+		}
+		if ra.Enabled != rb.Enabled || ra.Target != rb.Target || ra.Category != rb.Category ||
+			ra.StringMatch != rb.StringMatch || ra.StringReplace != rb.StringReplace ||
+			ra.Comment != rb.Comment {
+			return false
+		}
+		if (ra.re == nil) != (rb.re == nil) {
+			return false
+		}
+		if ra.re != nil && ra.re.String() != rb.re.String() {
+			return false
+		}
+	}
+	return true
+}
+
+// OnChange installs the signal called after the rule set visibly moves: a rule added, or a
+// replacement set that differs. Single slot, mirroring proxy.Options.OnChange; the hook runs
+// synchronously on the caller's path, so it must stay as cheap as the hub increment it feeds.
+func (rs *RuleSet) OnChange(fn func()) {
+	rs.onChange.Store(fn)
+}
+
+// noteChange invokes the installed hook, if any.
+func (rs *RuleSet) noteChange() {
+	if fn, ok := rs.onChange.Load().(func()); ok {
+		fn()
+	}
 }
 
 // SetUpdateContentLength controls whether the request/response Content-Length header is
@@ -264,8 +318,9 @@ func (rs *RuleSet) ScopeSkipped() uint64 {
 // AddRule appends a rule.
 func (rs *RuleSet) AddRule(r *Rule) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	rs.rules = append(rs.rules, r)
+	rs.mu.Unlock()
+	rs.noteChange()
 }
 
 // Rules returns a snapshot of the current rules.

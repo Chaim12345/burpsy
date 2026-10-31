@@ -1,5 +1,6 @@
 <div id="rows">
 <p class="meta">{{if .error}}<span role="alert" style="color:#c00">{{.error}}</span>{{end}}</p>
+{{if .launched_task}}<p class="meta">Attack finished — <a class="btn" href="/ui2/intruder/{{.launched_task}}/results">view results</a></p>{{end}}
 <h3>Running attacks</h3>
 <table>
 <thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Planned</th><th scope="col">Sent</th><th scope="col">Failed</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
@@ -24,16 +25,15 @@
 </tbody>
 </table>
 <h3>New attack</h3>
-<form hx-post="/ui2/intruder/points" hx-target="#points-out" hx-swap="innerHTML">
-  <p class="meta">Base exchange: #{{.base_exchange}}</p>
-  <input type="hidden" name="msg_id" value="{{if .base_request}}{{/* request message id is resolved server-side */}}{{end}}">
-  <input type="hidden" name="msg_id" value="{{.base_exchange}}">
+<form hx-post="/ui2/intruder/points" method="post" hx-target="#points-out" hx-swap="innerHTML">
+  <p class="meta">Base exchange: #{{.base_exchange}} (request message {{.base_msgid}})</p>
+  <input type="hidden" name="msg_id" value="{{.base_msgid}}">
   <label><input type="checkbox" name="all" checked> all insertion points</label>
   <button type="submit">List points</button>
 </form>
 <div id="points-out"></div>
-<form hx-post="/ui2/intruder/confirm" hx-target="#confirm-out" hx-swap="innerHTML" style="margin-top:10px">
-  <input type="hidden" name="msg_id" value="{{.base_exchange}}">
+<form hx-post="/ui2/intruder/confirm" method="post" hx-target="#confirm-out" hx-swap="innerHTML" style="margin-top:10px">
+  <input type="hidden" name="msg_id" value="{{.base_msgid}}">
   <input type="text" name="target" placeholder="target host[:port] (default: base request's Host)" style="width:100%">
   <textarea name="payloads" rows="5" style="width:100%" placeholder="one payload per line" aria-label="Payloads, one per line"></textarea>
   <div>

@@ -131,6 +131,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/proxy":                     "<!doctype html",
 		"/ui2/repeater":                  "<!doctype html",
 		"/ui2/scanner":                   "<!doctype html",
+		"/ui2/scanner/crawl-watch":       "<!doctype html",
 		"/ui2/scope":                     "<!doctype html",
 		"/ui2/session":                   "<!doctype html",
 		"/ui2/settings":                  "<!doctype html",

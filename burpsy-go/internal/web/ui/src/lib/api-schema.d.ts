@@ -3804,6 +3804,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/advisories/{typeIndex}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 one catalogue definition's detail as an HTML fragment for the Definitions pane */
+        get: operations["getUi2AdvisoriesByTypeIndex"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/app.js": {
         parameters: {
             query?: never;
@@ -3828,11 +3845,10 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions */
+        /** ui2 Collaborator page: channel status, minted payloads, interactions */
         get: operations["getUi2Collaborator"];
         put?: never;
-        /** ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions */
-        post: operations["postUi2Collaborator"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3848,7 +3864,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** ui2 Collaborator mint: without a token renders the confirm step, with one spends it on /api/collaborator/payload */
+        /** ui2 Collaborator mint, two steps: the first POST holds the exact /api/collaborator/payload call server-side and renders it for review; the second spends that held call by id (single-use, 60s) */
         post: operations["postUi2CollaboratorMint"];
         delete?: never;
         options?: never;
@@ -4018,7 +4034,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** ui2 intercept page: state, held queue, enable/disable/forward-all/drop-all actions */
+        /** ui2 intercept page: state, held queue with per-item view/edit/forward/drop, enable/disable/forward-all/drop-all actions */
         get: operations["getUi2Intercept"];
         put?: never;
         post?: never;
@@ -4037,7 +4053,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** ui2 intercept action (enable/disable/forward-all/drop-all): applies the change and re-renders the queue */
+        /** ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}): applies the change — forwarding the held message with the operator's edits when the raw field is present — and re-renders the queue */
         post: operations["postUi2InterceptByAction"];
         delete?: never;
         options?: never;
@@ -4198,6 +4214,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/logger/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Logger capture controls: capture-<tool>-on/off flips one tool's recording via /api/tools/log and re-renders the page */
+        post: operations["postUi2LoggerByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/organizer": {
         parameters: {
             query?: never;
@@ -4284,6 +4317,125 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/scanner/config-confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner configuration: diffs the form against the live engine configuration, mints a one-time confirmation for the exact PUT /api/scanner/config patch, and renders the review step naming each change */
+        post: operations["postUi2ScannerConfigConfirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/config-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner configuration: spends the confirmation token on the reviewed PUT /api/scanner/config patch and renders the outcome */
+        post: operations["postUi2ScannerConfigRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/crawl-launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner crawl launch: mints a one-time confirmation for the /api/crawl call and renders the review step */
+        post: operations["postUi2ScannerCrawlLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/crawl-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner crawl launch: spends the confirmation token on /api/crawl and renders the accepted task or the refusal */
+        post: operations["postUi2ScannerCrawlRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/crawl-watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Scanner crawl watch: the refresh-on-demand view of one retained crawl (state, phase, fetches) - the page checks only when asked, nothing polls */
+        get: operations["getUi2ScannerCrawlWatch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner launch: mints a one-time confirmation for the /api/scanner/audit call and renders the review step */
+        post: operations["postUi2ScannerLaunch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scanner/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scanner launch: spends the confirmation token on /api/scanner/audit and renders the audit outcome */
+        post: operations["postUi2ScannerRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/scope": {
         parameters: {
             query?: never;
@@ -4295,6 +4447,40 @@ export type paths = {
         get: operations["getUi2Scope"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scope/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scope editing: mints a one-time confirmation for the exact /api/scope call (rule add/toggle/remove or the out-of-scope drop switch) and renders the review step - the first click never changes scope */
+        post: operations["postUi2ScopeConfirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/scope/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Scope editing: spends the confirmation token on the exact /api/scope call reviewed and re-renders the rules; scope decides where senders may reach and persists */
+        post: operations["postUi2ScopeRun"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4335,6 +4521,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/sequencer/capture/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Sequencer capture: confirm mints the one-time review for the exact POST /api/sequencer/capture call, run spends it, pause/resume/stop drive a running capture */
+        post: operations["postUi2SequencerCaptureByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/session": {
         parameters: {
             query?: never;
@@ -4352,6 +4555,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/session/rules/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Session rules editing: confirm mints the one-time review for the exact add/toggle/edit/remove call (held server-side, dispatched verbatim), run spends it */
+        post: operations["postUi2SessionRulesByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/settings": {
         parameters: {
             query?: never;
@@ -4363,6 +4583,23 @@ export type paths = {
         get: operations["getUi2Settings"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/settings/triage/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Settings triage editing: confirm mints the one-time review for the exact PUT /api/settings/triage call (the API key is held server-side, never rendered), run spends it */
+        post: operations["postUi2SettingsTriageByAction"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4455,6 +4692,7 @@ export interface operations {
                     "application/json": {
                         advisories?: {
                             name?: string;
+                            shadowed?: boolean;
                             type_index?: string;
                             typical_severity?: string;
                         }[];
@@ -5420,6 +5658,7 @@ export interface operations {
                                 value?: string;
                             }[];
                             enabled?: boolean;
+                            expected_base?: string;
                             id?: number;
                             max_attempts?: number;
                             name?: string;
@@ -5546,6 +5785,7 @@ export interface operations {
                             value?: string;
                         }[];
                         enabled?: boolean;
+                        expected_base?: string;
                         id?: number;
                         max_attempts?: number;
                         name?: string;
@@ -12461,6 +12701,7 @@ export interface operations {
                         value?: string;
                     }[];
                     enabled?: boolean;
+                    expected_base?: string;
                     id?: number;
                     max_attempts?: number;
                     name?: string;
@@ -12561,6 +12802,7 @@ export interface operations {
                         value?: string;
                     }[];
                     enabled?: boolean;
+                    expected_base?: string;
                     id?: number;
                     max_attempts?: number;
                     name?: string;
@@ -14580,6 +14822,35 @@ export interface operations {
             };
         };
     };
+    getUi2AdvisoriesByTypeIndex: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                typeIndex: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2AppJs: {
         parameters: {
             query?: never;
@@ -14615,37 +14886,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description JSON result; no verified shape is declared for this route yet */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    postUi2Collaborator: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": unknown;
-            };
-        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
@@ -15333,6 +15573,39 @@ export interface operations {
             };
         };
     };
+    postUi2LoggerByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Organizer: {
         parameters: {
             query?: never;
@@ -15503,6 +15776,219 @@ export interface operations {
             };
         };
     };
+    postUi2ScannerConfigConfirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScannerConfigRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScannerCrawlLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScannerCrawlRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2ScannerCrawlWatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScannerLaunch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScannerRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Scope: {
         parameters: {
             query?: never;
@@ -15511,6 +15997,68 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScopeConfirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2ScopeRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {
@@ -15588,6 +16136,39 @@ export interface operations {
             };
         };
     };
+    postUi2SequencerCaptureByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Session: {
         parameters: {
             query?: never;
@@ -15615,6 +16196,39 @@ export interface operations {
             };
         };
     };
+    postUi2SessionRulesByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Settings: {
         parameters: {
             query?: never;
@@ -15623,6 +16237,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2SettingsTriageByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

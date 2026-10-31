@@ -1359,12 +1359,12 @@ var manifest = map[string]route{
 		summary: "the server-rendered /ui2/ console shell (htmx + SSE), served beside the React SPA at /",
 	},
 	"/ui2/collaborator": {
-		methods: []string{"GET", "POST"}, risk: riskAsset,
-		summary: "ui2 Collaborator page: channel status, payload mint (confirm-gated), interactions",
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Collaborator page: channel status, minted payloads, interactions",
 	},
 	"/ui2/collaborator/mint": {
 		methods: []string{"POST"}, risk: riskAsset,
-		summary: "ui2 Collaborator mint: without a token renders the confirm step, with one spends it on /api/collaborator/payload",
+		summary: "ui2 Collaborator mint, two steps: the first POST holds the exact /api/collaborator/payload call server-side and renders it for review; the second spends that held call by id (single-use, 60s)",
 	},
 	"/ui2/intruder": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1397,6 +1397,22 @@ var manifest = map[string]route{
 	"/ui2/sequencer/analyse": {
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Sequencer analyse: POST the token list to /api/sequencer/analyse and render the report",
+	},
+	"/ui2/sequencer/capture/{action}": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Sequencer capture: confirm mints the one-time review for the exact " +
+			"POST /api/sequencer/capture call, run spends it, pause/resume/stop drive a running capture",
+	},
+	"/ui2/settings/triage/{action}": {
+		// riskAsset like the other ui2 console routes: the route is the console's own surface,
+		// not an unattended-caller API. The credential class belongs to the PUT it reviews -
+		// /api/settings/triage - and this route reaches that PUT only through a minted one-time
+		// token. Marking THIS route credential would gate the review page itself, which is the
+		// confirmation the operator is supposed to see (caught live: the gate answered the
+		// browser's confirm POST with a 428 mint challenge).
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Settings triage editing: confirm mints the one-time review for the exact " +
+			"PUT /api/settings/triage call (the API key is held server-side, never rendered), run spends it",
 	},
 	"/ui2/advisories": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1444,11 +1460,11 @@ var manifest = map[string]route{
 	},
 	"/ui2/intercept": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 intercept page: state, held queue, enable/disable/forward-all/drop-all actions",
+		summary: "ui2 intercept page: state, held queue with per-item view/edit/forward/drop, enable/disable/forward-all/drop-all actions",
 	},
 	"/ui2/intercept/{action}": {
 		methods: []string{"POST"}, risk: riskAsset, subPath: "enable",
-		summary: "ui2 intercept action (enable/disable/forward-all/drop-all): applies the change and re-renders the queue",
+		summary: "ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}): applies the change — forwarding the held message with the operator's edits when the raw field is present — and re-renders the queue",
 	},
 	"/ui2/issues": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1458,9 +1474,25 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one finding's detail: evidence, occurrences, advisory — the pane the list omits",
 	},
+	"/ui2/advisories/{typeIndex}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one catalogue definition's detail as an HTML fragment for the Definitions pane",
+	},
 	"/ui2/logger": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Logger page: tool-sent requests, server-paged with search and infinite scroll",
+	},
+	"/ui2/organizer/collections/{action}": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 collection create and name/note review and one-time install",
+	},
+	"/ui2/organizer/status/{action}": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 workflow status review and one-time snapshot-checked install",
+	},
+	"/ui2/organizer/annotate/{action}": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 item annotation review and one-time snapshot-checked install",
 	},
 	"/ui2/organizer": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1478,9 +1510,49 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Repeater send: forwards the draft through /api/repeater/send and renders the outcome",
 	},
+	"/ui2/logger/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "capture-repeater-off",
+		summary: "ui2 Logger capture controls: capture-<tool>-on/off flips one tool's recording via /api/tools/log and re-renders the page",
+	},
 	"/ui2/scanner": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Scanner page: saved configurations, BCheck corpus, coverage, live-audit state, audit queue",
+	},
+	"/ui2/scanner/launch": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner launch: mints a one-time confirmation for the /api/scanner/audit call and renders the review step",
+	},
+	"/ui2/scanner/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner launch: spends the confirmation token on /api/scanner/audit and renders the audit outcome",
+	},
+	"/ui2/scanner/crawl-launch": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner crawl launch: mints a one-time confirmation for the /api/crawl call and renders the review step",
+	},
+	"/ui2/scanner/crawl-run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner crawl launch: spends the confirmation token on /api/crawl and renders the accepted task or the refusal",
+	},
+	"/ui2/scanner/crawl-watch": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Scanner crawl watch: the refresh-on-demand view of one retained crawl (state, phase, fetches) - the page checks only when asked, nothing polls",
+	},
+	"/ui2/scanner/config-confirm": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner configuration: diffs the form against the live engine configuration, mints a one-time confirmation for the exact PUT /api/scanner/config patch, and renders the review step naming each change",
+	},
+	"/ui2/scanner/config-run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner configuration: spends the confirmation token on the reviewed PUT /api/scanner/config patch and renders the outcome",
+	},
+	"/ui2/scope/confirm": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scope editing: mints a one-time confirmation for the exact /api/scope call (rule add/toggle/remove or the out-of-scope drop switch) and renders the review step - the first click never changes scope",
+	},
+	"/ui2/scope/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scope editing: spends the confirmation token on the exact /api/scope call reviewed and re-renders the rules; scope decides where senders may reach and persists",
 	},
 	"/ui2/scope": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1489,6 +1561,15 @@ var manifest = map[string]route{
 	"/ui2/session": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Session page: handling rules, cookie jar, trace, pending prompts",
+	},
+	"/ui2/session/rules/{action}": {
+		// riskAsset for the same reason as the triage review route: the credential class
+		// belongs to the /api/session/rules calls this reviews, and it reaches them only
+		// through a minted one-time token. Gating the review page itself would be the gate
+		// answering its own confirmation prompt with a 428 challenge.
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Session rules editing: confirm mints the one-time review for the exact " +
+			"add/toggle/edit/remove call (held server-side, dispatched verbatim), run spends it",
 	},
 	"/ui2/settings": {
 		methods: []string{"GET"}, risk: riskAsset,

@@ -1,12 +1,61 @@
 <div id="rows">
-<p class="meta">{{len .items}} items · {{len .collections}} collections</p>
-<table>
-<thead><tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">Status</th><th scope="col">Note</th><th scope="col">Exchange</th></tr></thead>
-<tbody>
+{{if .note}}<p id="organizer-note" role="status"><strong>{{.note}}</strong></p>{{end}}
+<p class="meta">{{len .items}} items · {{len .collections}} named collections. Collection changes do not move or delete saved items.</p>
+<h3>Collections</h3>
+<p><strong>Inbox</strong> · {{.inbox_count}} items (display-only, collection 0)</p>
+{{range .collections}}
+<section style="overflow-wrap:anywhere"><h4>{{.name}} <span class="meta">#{{.id}} · {{.count}} items</span></h4>
+<p class="meta" style="white-space:pre-wrap;overflow-wrap:anywhere">{{.note}}</p>
+<details class="collection-edit"><summary>Edit collection #{{.id}}</summary>
+<form hx-post="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="edit"><input type="hidden" name="collection_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.base}}">
+<p><label>Name (up to 120 UTF-8 bytes) <input name="name" value="{{.name}}" required style="max-width:100%;box-sizing:border-box"></label></p>
+<p><label>Note (up to 4096 UTF-8 bytes)<br><textarea name="note" rows="3" style="width:100%;box-sizing:border-box">{{.note}}</textarea></label></p>
+<button>Review collection edit</button></form></details></section>
+{{else}}<p class="meta">No named collections yet.</p>{{end}}
+<details class="collection-edit"><summary>Create collection</summary>
+<form hx-post="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="create"><p><label>Name (up to 120 UTF-8 bytes; Inbox is reserved) <input name="name" required style="max-width:100%;box-sizing:border-box"></label></p>
+<button>Review new collection</button></form></details>
+<h3>Saved items</h3>
+<table class="organizer-items"><thead><tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">HTTP status</th><th scope="col">Workflow status</th><th scope="col">Note</th><th scope="col">Exchange</th><th scope="col">Collection</th></tr></thead><tbody>
+{{range .items}}<tr><td data-label="ID">{{.item.ID}}</td><td data-label="Title">{{.item.Title}}</td><td data-label="HTTP status">{{if .item.Status}}{{.item.Status}}{{else}}unavailable{{end}}</td><td data-label="Workflow status">{{.workflow}}</td><td data-label="Note">{{.item.Note}}</td><td data-label="Exchange">#{{.item.Exchange}}</td><td data-label="Collection">{{.collection_name}}</td></tr>
+{{else}}<tr><td colspan="7" class="meta">Organizer is empty.</td></tr>{{end}}
+</tbody></table>
+<h3>Workflow status editors</h3>
+<p class="meta">Workflow status is your saved decision, not an HTTP response code. Saved items remain editable when their traffic is unavailable.</p>
 {{range .items}}
-<tr><td>{{.id}}</td><td>{{.title}}</td><td>{{.status}}</td><td class="meta">{{.note}}</td>
-<td>{{if .exchange}}#{{.exchange}}{{else}}—{{end}}</td></tr>
-{{else}}<tr><td colspan="5" class="meta">Organizer is empty.</td></tr>{{end}}
-</tbody>
-</table>
-</div>
+<details class="collection-edit"><summary>Change workflow status for item #{{.item.ID}}</summary>
+<p style="overflow-wrap:anywhere">{{.item.Title}} · current workflow status: {{.workflow}}</p>
+<form hx-post="/ui2/organizer/status/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="status"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.workflow_base}}">
+<fieldset><legend>Choose a workflow status</legend>
+<label><input type="radio" name="status" value="new" required> New</label><br>
+<label><input type="radio" name="status" value="in_progress"> In progress</label><br>
+<label><input type="radio" name="status" value="postponed"> Postponed</label><br>
+<label><input type="radio" name="status" value="done"> Done</label><br>
+<label><input type="radio" name="status" value="ignored"> Ignored</label>
+</fieldset><button>Review workflow status</button></form></details>
+{{end}}
+<h3>Annotation editors</h3>
+<p class="meta">Annotations are your saved labels on an item; editing them never sends traffic. Saved items remain editable when their traffic is unavailable.</p>
+{{range .items}}
+<details class="collection-edit"><summary>Edit annotations for item #{{.item.ID}}</summary>
+<p style="overflow-wrap:anywhere">{{if .item.Title}}{{.item.Title}}{{else}}(blank title){{end}} · current highlight: {{.item.Highlight}}</p>
+<form hx-post="/ui2/organizer/annotate/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="annotate"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.workflow_base}}">
+<p>Title (at most 512 UTF-8 bytes, kept verbatim)<br><input type="text" name="title" value="{{.item.Title}}" style="max-width:100%"></p>
+<p>Note (at most 4096 UTF-8 bytes, kept verbatim)<br><textarea name="note" rows="3" style="max-width:100%">{{.item.Note}}</textarea></p>
+<fieldset><legend>Choose a highlight (current: {{.item.Highlight}})</legend>
+<label><input type="radio" name="highlight" value="none" required> None</label><br>
+<label><input type="radio" name="highlight" value="red"> Red</label><br>
+<label><input type="radio" name="highlight" value="orange"> Orange</label><br>
+<label><input type="radio" name="highlight" value="yellow"> Yellow</label><br>
+<label><input type="radio" name="highlight" value="green"> Green</label><br>
+<label><input type="radio" name="highlight" value="cyan"> Cyan</label><br>
+<label><input type="radio" name="highlight" value="blue"> Blue</label><br>
+<label><input type="radio" name="highlight" value="pink"> Pink</label><br>
+<label><input type="radio" name="highlight" value="magenta"> Magenta</label><br>
+<label><input type="radio" name="highlight" value="gray"> Gray</label>
+</fieldset><button>Review annotations</button></form></details>
+{{end}}</div>

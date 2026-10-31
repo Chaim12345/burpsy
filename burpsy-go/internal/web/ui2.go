@@ -2,11 +2,13 @@ package web
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 )
@@ -25,21 +27,40 @@ var ui2FS embed.FS
 var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"lower": strings.ToLower,
 	"until": func(n int) []int { return make([]int, n) },
+	// ms renders an epoch-millis JSON number (decoded as float64) as a wall-clock time;
+	// unknown shapes render empty rather than a bogus zero date.
+	"ms": func(v any) string {
+		f, ok := v.(float64)
+		if !ok {
+			return ""
+		}
+		return time.UnixMilli(int64(f)).Format("2006-01-02 15:04:05")
+	},
 }).ParseFS(ui2FS,
 	"ui2/layout.html",
 	"ui2/nav.html",
 	"ui2/dashboard.html",
 	"ui2/sitemap.html",
 	"ui2/scope.html",
+	"ui2/scope_confirm.html",
 	"ui2/intercept.html",
 	"ui2/logger.html",
+	"ui2/logger_rows_append.html",
 	"ui2/ws.html",
 	"ui2/proxy.html",
 	"ui2/extensions.html",
 	"ui2/scanner.html",
+	"ui2/crawl_launch.html",
+	"ui2/crawl_watch.html",
+	"ui2/scanner_config_confirm.html",
+	"ui2/scanner_launch.html",
 	"ui2/advisories.html",
 	"ui2/organizer.html",
+	"ui2/organizer_confirm.html",
+	"ui2/organizer_status_confirm.html",
+	"ui2/organizer_annotate_confirm.html",
 	"ui2/session.html",
+	"ui2/session_confirm.html",
 	"ui2/decoder.html",
 	"ui2/comparer.html",
 	"ui2/repeater.html",
@@ -50,12 +71,15 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"ui2/intruder_confirm.html",
 	"ui2/intruder_results.html",
 	"ui2/sequencer.html",
+	"ui2/sequencer_confirm.html",
+	"ui2/settings_triage_confirm.html",
 	"ui2/collaborator.html",
 	"ui2/history_rows.html",
 	"ui2/history_rows_append.html",
 	"ui2/history_detail.html",
 	"ui2/issue_groups.html",
 	"ui2/issue_detail.html",
+	"ui2/advisory_detail.html",
 ))
 
 // ui2Error is the model for error.html.
@@ -316,6 +340,13 @@ func (s *Server) handleUI2HistoryDetail(w http.ResponseWriter, r *http.Request) 
 			model.Response = string(msg.Raw())
 		}
 	}
+	// Pretty/Raw reading toggle, per pane. Pretty is the default reading; Raw is the exact
+	// recorded bytes. The toggle only changes THIS rendering — the store is never written
+	// and the bytes the repeater would re-send are untouched.
+	model.ReqPretty = r.URL.Query().Get("view_req") != "raw"
+	model.RespPretty = r.URL.Query().Get("view_resp") != "raw"
+	model.ReqPane = renderMessagePane(model.Request, true, model.ReqPretty)
+	model.RespPane = renderMessagePane(model.Response, false, model.RespPretty)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ui2Templates.ExecuteTemplate(w, "history_detail.html", model); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
@@ -352,6 +383,12 @@ type ui2Detail struct {
 	DurationMs  uint64
 	Request     string
 	Response    string
+	// Rendered panes + view state for the Pretty/Raw reading toggle. The strings stay:
+	// the raw view renders exactly them, and tests read them straight.
+	ReqPane    ui2PaneView
+	RespPane   ui2PaneView
+	ReqPretty  bool
+	RespPretty bool
 }
 
 // ui2IssueGroup is one grouped issue (same issue name + host) for the issues tree.
@@ -394,7 +431,12 @@ func (s *Server) handleUI2Issues(w http.ResponseWriter, r *http.Request) {
 // Evidence lives one click deep (the detail route), so the list payload stays flat.
 func (s *Server) renderUI2Issues() template.HTML {
 	findings := s.findings.All()
-	idx := s.exchangeIndex()
+	// Same skip as handleIssues: no findings means no occurrence resolution, so the
+	// whole-history snapshot would be built for an empty render.
+	var idx exchangeIndex
+	if len(findings) > 0 {
+		idx = s.exchangeIndexFor(findings)
+	}
 	type key struct{ name, host string }
 	order := make([]key, 0, len(findings))
 	groups := map[key]*ui2IssueGroup{}
@@ -447,7 +489,7 @@ func (s *Server) handleUI2IssueDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Issue not found", http.StatusNotFound)
 		return
 	}
-	idx := s.exchangeIndex()
+	idx := s.exchangeIndexFor([]*core.Finding{f})
 	v := s.issueView(f, &idx, false)
 	model := ui2IssueDetail{
 		ID: v.ID, CheckName: v.CheckName, Severity: v.Severity, Confidence: v.Confidence,
@@ -462,6 +504,67 @@ func (s *Server) handleUI2IssueDetail(w http.ResponseWriter, r *http.Request) {
 	if err := ui2Templates.ExecuteTemplate(w, "issue_detail.html", model); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 	}
+}
+
+// handleUI2AdvisoryDetail serves GET /ui2/advisories/{typeIndex}: one catalogue definition
+// rendered as an HTML fragment for the detail pane. The JSON /api/advisories/{typeIndex} shape
+// stays the API contract; this route is the console's rendering of it. Paragraphs come from
+// advisory.PlainParagraphs (plain text, auto-escaped) — never the raw catalogue HTML.
+func (s *Server) handleUI2AdvisoryDetail(w http.ResponseWriter, r *http.Request) {
+	segment := r.PathValue("typeIndex")
+	index, err := strconv.ParseUint(segment, 16, 32)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Type index %q is not a hexadecimal issue type index", segment),
+			http.StatusNotFound)
+		return
+	}
+	if s.advisories == nil {
+		http.Error(w, "No issue-definition catalogue is loaded", http.StatusNotFound)
+		return
+	}
+	def, ok := s.advisories.ByIndex(int(index))
+	if !ok {
+		http.Error(w, fmt.Sprintf("No issue definition with type index %s", segment), http.StatusNotFound)
+		return
+	}
+	v := advisoryDetailView(def)
+	model := ui2AdvisoryDetail{
+		TypeIndex:   v.TypeIndex,
+		Name:        v.Name,
+		Severity:    v.TypicalSeverity,
+		Description: v.DescriptionParagraphs,
+		Remediation: v.RemediationParagraphs,
+	}
+	// Disclose index collisions: a tap on a shadowed row lands here, and the pane's
+	// identity must name the shadow rather than let the row's name stand for this detail.
+	for _, d := range s.advisories.ShadowedByIndex() {
+		if d.TypeIndex == int(index) {
+			model.Shadows = append(model.Shadows, d.Name)
+		}
+	}
+	for _, ref := range v.References {
+		model.References = append(model.References, ui2AdvisoryLink{Title: ref.Title, URL: ref.URL})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "advisory_detail.html", model); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// ui2AdvisoryDetail is the model for one catalogue definition's detail pane.
+type ui2AdvisoryDetail struct {
+	TypeIndex   string
+	Name        string
+	Severity    string
+	Description []string
+	Remediation []string
+	References  []ui2AdvisoryLink
+	Shadows     []string
+}
+
+type ui2AdvisoryLink struct {
+	Title string
+	URL   string
 }
 
 // ui2IssueDetail is the model for one issue's detail pane.
