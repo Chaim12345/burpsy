@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -811,14 +810,70 @@ func (s *Server) ui2LoggerView(search string, limit, offset int, filterNote stri
 	}
 }
 
-// handleUI2LoggerAction serves POST /ui2/logger/{action}: capture-<tool>-on/off flips one
-// tool's recording through the API and re-renders the fragment. Turning capture off means the
-// tool's next requests are sent and deliberately not recorded, so the page says so next to the
-// button and the not-captured counters keep the count honest.
+// handleUI2LoggerAction serves POST /ui2/logger/{action}. Every mutation is a two-step review:
+// capture-<tool>-on/off, filter-set and filter-clear MINT a one-time confirmation for the exact
+// /api/tools/log call and answer with a review sheet, and capture-run/filter-run SPEND it through
+// the guarded path. The first click never dispatches: /api/tools/log is riskDestructive (turning
+// capture off means requests are sent and deliberately not recorded; the filter decides what gets
+// recorded at all), and dispatching it straight on s.mux bypassed the confirmation gate entirely.
 func (s *Server) handleUI2LoggerAction(w http.ResponseWriter, r *http.Request) {
 	action := r.PathValue("action")
-	if action == "filter-set" || action == "filter-clear" {
-		s.ui2LoggerFilterSet(w, r, action == "filter-clear")
+	_ = r.ParseForm()
+	search := strings.TrimSpace(r.PostFormValue("search"))
+	writeView := func(note string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(ui2Exec("logger.html", s.ui2LoggerView(search, 100, 0, note))))
+	}
+	writeReview := func(model map[string]any) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(ui2Exec("logger_confirm.html", model)))
+	}
+	switch action {
+	case "capture-run":
+		// No dispatch at all without a token: toggling capture on a body the operator never
+		// reviewed is the bypass this review exists to close.
+		var errText string
+		if r.PostFormValue("token") == "" {
+			errText = "no confirmation token, review the change first"
+		} else {
+			payload := map[string]any{"tool": r.PostFormValue("tool"), "on": r.PostFormValue("on") == "true"}
+			_, errText = s.ui2DispatchConfirmed(http.MethodPost, "/api/tools/log", payload, r.PostFormValue("token"))
+		}
+		model := s.ui2LoggerView(search, 100, 0, "")
+		model.Note = errText
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(ui2Exec("logger.html", model)))
+		return
+	case "filter-run":
+		if r.PostFormValue("token") == "" {
+			writeView("filter unchanged: no confirmation token, review the change first")
+			return
+		}
+		fv, errText := ui2LoggerFilterForm(r, r.PostFormValue("clear") == "1")
+		if errText != "" {
+			writeView(errText)
+			return
+		}
+		_, errText = s.ui2DispatchConfirmed(http.MethodPost, "/api/tools/log", map[string]any{"filter": fv}, r.PostFormValue("token"))
+		writeView(errText)
+		return
+	case "filter-set", "filter-clear":
+		clear := action == "filter-clear"
+		fv, errText := ui2LoggerFilterForm(r, clear)
+		if errText != "" {
+			writeView(errText)
+			return
+		}
+		body, _ := ui2Marshal(map[string]any{"filter": fv})
+		token, preview, errText := s.ui2MintConfirm("/api/tools/log", http.MethodPost, "/api/tools/log", body)
+		writeReview(map[string]any{
+			"kind": "filter", "clear": clear, "token": token, "preview": preview, "error": errText,
+			"full_body": string(body), "search": search,
+			"status": r.PostForm["status"], "term": r.PostFormValue("term"),
+			"regex": r.PostFormValue("regex"), "case": r.PostFormValue("case"),
+			"negate": r.PostFormValue("negate"), "scope_only": r.PostFormValue("scope_only"),
+			"mime": r.PostFormValue("mime"),
+		})
 		return
 	}
 	tool, state, ok := strings.Cut(strings.TrimPrefix(action, "capture-"), "-")
@@ -830,73 +885,48 @@ func (s *Server) handleUI2LoggerAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown logger action", http.StatusBadRequest)
 		return
 	}
+	// First click: mint the one-time review for the exact toggle call. Nothing is dispatched.
 	body, _ := ui2Marshal(map[string]any{"tool": tool, "on": state == "on"})
-	req := newReq(http.MethodPost, "/api/tools/log")
-	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	rec := newRecorder()
-	s.mux.ServeHTTP(rec, req)
-	if rec.Code >= 400 {
-		http.Error(w, rec.Body.String(), rec.Code)
-		return
-	}
-	_ = r.ParseForm()
-	search := strings.TrimSpace(r.PostFormValue("search"))
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(ui2Exec("logger.html", s.ui2LoggerView(search, 100, 0, ""))))
+	token, preview, errText := s.ui2MintConfirm("/api/tools/log", http.MethodPost, "/api/tools/log", body)
+	writeReview(map[string]any{
+		"kind": "capture", "token": token, "preview": preview, "error": errText,
+		"full_body": string(body), "tool": tool, "on": state == "on", "search": search,
+	})
 }
 
-// ui2LoggerFilterSet applies or clears the capture filter through the API and re-renders the
-// fragment. The filter decides what gets RECORDED: a row it refuses is not kept and the filtered
-// counter advances, so the page says that next to the form rather than presenting it as a view
-// filter. An invalid filter (a bad regex, a bad MIME pattern) is refused by the API with its
-// reason, and the page carries that reason unchanged with the filter left as it was.
-func (s *Server) ui2LoggerFilterSet(w http.ResponseWriter, r *http.Request, clear bool) {
-	_ = r.ParseForm()
-	search := strings.TrimSpace(r.PostFormValue("search"))
-	fv := map[string]any{}
-	if !clear {
-		var status []int
-		for _, v := range r.PostForm["status"] {
-			n, err := strconv.Atoi(v)
-			if err != nil || n < 2 || n > 5 {
-				http.Error(w, "status classes are 2, 3, 4 and 5", http.StatusBadRequest)
-				return
-			}
-			status = append(status, n)
+// ui2LoggerFilterForm parses the capture-filter form into the exact filter value the API binds.
+// The mint and the spend both call it, so the body the operator reviews is byte-for-byte the body
+// the token spends. An invalid class is refused with its reason before anything is minted.
+func ui2LoggerFilterForm(r *http.Request, clear bool) (map[string]any, string) {
+	if clear {
+		return map[string]any{}, ""
+	}
+	var status []int
+	for _, v := range r.PostForm["status"] {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 2 || n > 5 {
+			return nil, "status classes are 2, 3, 4 and 5"
 		}
-		if status == nil {
-			status = []int{}
-		}
-		var mime []string
-		for _, piece := range strings.Split(r.PostFormValue("mime"), ",") {
-			if p := strings.TrimSpace(piece); p != "" {
-				mime = append(mime, p)
-			}
-		}
-		fv = map[string]any{
-			"status":         status,
-			"term":           strings.TrimSpace(r.PostFormValue("term")),
-			"regex":          r.PostFormValue("regex") != "",
-			"case_sensitive": r.PostFormValue("case") != "",
-			"negate":         r.PostFormValue("negate") != "",
-			"scope_only":     r.PostFormValue("scope_only") != "",
-			"mime":           mime,
+		status = append(status, n)
+	}
+	if status == nil {
+		status = []int{}
+	}
+	var mime []string
+	for _, piece := range strings.Split(r.PostFormValue("mime"), ",") {
+		if p := strings.TrimSpace(piece); p != "" {
+			mime = append(mime, p)
 		}
 	}
-	body, _ := ui2Marshal(map[string]any{"filter": fv})
-	req := newReq(http.MethodPost, "/api/tools/log")
-	req.Header.Set("Content-Type", "application/json")
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	rec := newRecorder()
-	s.mux.ServeHTTP(rec, req)
-	note := ""
-	if rec.Code >= 400 {
-		// The API refused the filter; it stays as it was, and the page says why.
-		note = strings.TrimSpace(rec.Body.String())
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(ui2Exec("logger.html", s.ui2LoggerView(search, 100, 0, note))))
+	return map[string]any{
+		"status":         status,
+		"term":           strings.TrimSpace(r.PostFormValue("term")),
+		"regex":          r.PostFormValue("regex") != "",
+		"case_sensitive": r.PostFormValue("case") != "",
+		"negate":         r.PostFormValue("negate") != "",
+		"scope_only":     r.PostFormValue("scope_only") != "",
+		"mime":           mime,
+	}, ""
 }
 
 type ui2LoggerCaptureRow struct {
@@ -919,6 +949,9 @@ type ui2LoggerModel struct {
 	CaptureRows []ui2LoggerCaptureRow
 	Filter      ui2LoggerFilterView
 	FilterNote  string
+	// Note is a capture-toggle refusal ("capture unchanged: ...") rendered next to the toggles;
+	// kept apart from FilterNote so the page never blames the filter for a capture refusal.
+	Note string
 }
 
 // ui2LoggerFilterView is the capture filter prepared for the template: the echo of what the

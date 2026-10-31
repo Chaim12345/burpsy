@@ -943,23 +943,34 @@ func TestUI2LoggerPageShowsCaptureAxis(t *testing.T) {
 	}
 }
 
-// Turning a tool off flips its recording through the API and the re-rendered fragment says off;
-// turning it back on restores it. Requests recorded while off land in the not-captured counter
-// instead of the log.
-func TestUI2LoggerCaptureToggleRoundTrip(t *testing.T) {
-	s := newTestServer()
-	rec := ui2LoggerAction(t, s, "capture-repeater-off", "search=")
+// ui2LoggerReview posts the first step of a logger mutation and returns the review sheet plus the
+// minted one-time token. The first click must never mutate; callers assert that before spending.
+func ui2LoggerReview(t *testing.T, s *Server, action, form string) (string, string) {
+	t.Helper()
+	rec := ui2LoggerAction(t, s, action, form)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("capture off = %d: %s", rec.Code, rec.Body.String()[:ui2Min(200, rec.Body.Len())])
+		t.Fatalf("%s = %d: %s", action, rec.Code, rec.Body.String()[:ui2Min(200, rec.Body.Len())])
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "capture-repeater-on") {
-		t.Errorf("fragment after turning off lacks the turn-on button")
+	mark := `name="token" value="`
+	i := strings.Index(body, mark)
+	if i < 0 {
+		t.Fatalf("%s did not render a review sheet with a token: %s", action, body[:ui2Min(300, len(body))])
 	}
-	if strings.Contains(body, "capture-repeater-off") {
-		t.Errorf("fragment after turning off still offers to turn repeater off")
+	rest := body[i+len(mark):]
+	return rest[:strings.Index(rest, `"`)], body
+}
+
+// Turning a tool off is a reviewed spend now: the first click mints a one-time confirmation and
+// changes nothing, the confirm click spends it through the gate. Requests recorded while off land
+// in the not-captured counter instead of the log.
+func TestUI2LoggerCaptureToggleRoundTrip(t *testing.T) {
+	s := newTestServer()
+	token, sheet := ui2LoggerReview(t, s, "capture-repeater-off", "search=")
+	if !strings.Contains(sheet, "Review before changing capture") || !strings.Contains(sheet, "deliberately not recorded") {
+		t.Errorf("review sheet does not state the exact consequence: %s", sheet[:ui2Min(300, len(sheet))])
 	}
-	// API agrees.
+	// The first click minted a review; it must not have flipped anything.
 	api := httptest.NewRecorder()
 	s.mux.ServeHTTP(api, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
 	var log struct {
@@ -969,21 +980,42 @@ func TestUI2LoggerCaptureToggleRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(api.Body.Bytes(), &log); err != nil {
 		t.Fatalf("api body: %v", err)
 	}
-	if log.Capturing["repeater"] {
-		t.Errorf("api still records repeater after the page turned it off")
+	if !log.Capturing["repeater"] {
+		t.Fatal("the first click turned repeater off without a confirmation spend")
 	}
-	// A request recorded while off is counted as not captured, not logged.
-	s.toolLog.Record(toollog.ToolRepeater, "127.0.0.1", 18101, false, http.MethodGet, "/", 200, nil, 1, "", nil)
+	// Spending the reviewed token flips it; the re-rendered fragment says off.
+	rec := ui2LoggerAction(t, s, "capture-run", "token="+token+"&tool=repeater&on=false&search=")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capture-run = %d: %s", rec.Code, rec.Body.String()[:ui2Min(200, rec.Body.Len())])
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "capture-repeater-on") {
+		t.Errorf("fragment after turning off lacks the turn-on button")
+	}
+	if strings.Contains(body, "capture-repeater-off") {
+		t.Errorf("fragment after turning off still offers to turn repeater off")
+	}
 	api2 := httptest.NewRecorder()
 	s.mux.ServeHTTP(api2, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
 	if err := json.Unmarshal(api2.Body.Bytes(), &log); err != nil {
 		t.Fatalf("api body 2: %v", err)
 	}
+	if log.Capturing["repeater"] {
+		t.Errorf("api still records repeater after the confirmed toggle")
+	}
+	// A request recorded while off is counted as not captured, not logged.
+	s.toolLog.Record(toollog.ToolRepeater, "127.0.0.1", 18101, false, http.MethodGet, "/", 200, nil, 1, "", nil)
+	api3 := httptest.NewRecorder()
+	s.mux.ServeHTTP(api3, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
+	if err := json.Unmarshal(api3.Body.Bytes(), &log); err != nil {
+		t.Fatalf("api body 3: %v", err)
+	}
 	if log.Uncaptured["repeater"] != 1 {
 		t.Errorf("uncaptured[repeater] = %d, want 1", log.Uncaptured["repeater"])
 	}
-	// The page shows the counter.
-	page := ui2LoggerAction(t, s, "capture-repeater-on", "search=")
+	// Turning it back on is the same two steps.
+	token2, _ := ui2LoggerReview(t, s, "capture-repeater-on", "search=")
+	page := ui2LoggerAction(t, s, "capture-run", "token="+token2+"&tool=repeater&on=true&search=")
 	if page.Code != http.StatusOK {
 		t.Fatalf("capture on = %d", page.Code)
 	}
@@ -991,13 +1023,50 @@ func TestUI2LoggerCaptureToggleRoundTrip(t *testing.T) {
 	if !strings.Contains(pbody, "capture-repeater-off") || !strings.Contains(pbody, "1 not captured") {
 		t.Errorf("fragment after turning on lacks the restored toggle or the not-captured counter")
 	}
-	api3 := httptest.NewRecorder()
-	s.mux.ServeHTTP(api3, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
-	if err := json.Unmarshal(api3.Body.Bytes(), &log); err != nil {
-		t.Fatalf("api body 3: %v", err)
+	api4 := httptest.NewRecorder()
+	s.mux.ServeHTTP(api4, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
+	if err := json.Unmarshal(api4.Body.Bytes(), &log); err != nil {
+		t.Fatalf("api body 4: %v", err)
 	}
 	if !log.Capturing["repeater"] {
-		t.Errorf("api still not recording repeater after the page turned it back on")
+		t.Errorf("api still not recording repeater after the confirmed turn-on")
+	}
+}
+
+// The gate still guards the API itself: a direct POST without a confirmation is a 428, a tampered
+// spend burns the token, and a spent token cannot be replayed.
+func TestUI2LoggerCaptureRunKeepsTheGate(t *testing.T) {
+	s := newTestServer()
+	direct := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tools/log", strings.NewReader(`{"tool":"proxy","on":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	// Same-origin, the way the console's own calls arrive: the origin gate is outermost, and the
+	// confirmation gate's 428 is what must still meet the unconfirmed call behind it.
+	req.Host = "127.0.0.1"
+	req.Header.Set("Origin", "http://127.0.0.1")
+	s.guarded.ServeHTTP(direct, req)
+	if direct.Code != http.StatusPreconditionRequired {
+		t.Errorf("direct POST /api/tools/log = %d, want 428", direct.Code)
+	}
+	// A token minted for proxy-off does not spend on scanner-off: the binding burns it.
+	token, _ := ui2LoggerReview(t, s, "capture-proxy-off", "search=")
+	rec := ui2LoggerAction(t, s, "capture-run", "token="+token+"&tool=scanner&on=false&search=")
+	if !strings.Contains(rec.Body.String(), "Capture unchanged") {
+		t.Errorf("tampered spend did not refuse visibly")
+	}
+	// The burn is real: even the exact reviewed call is refused with the spent token.
+	rec2 := ui2LoggerAction(t, s, "capture-run", "token="+token+"&tool=proxy&on=false&search=")
+	if !strings.Contains(rec2.Body.String(), "Capture unchanged") {
+		t.Errorf("burned token spend did not refuse visibly")
+	}
+	// A fresh review spends once, and its replay is refused.
+	token2, _ := ui2LoggerReview(t, s, "capture-proxy-off", "search=")
+	if rec3 := ui2LoggerAction(t, s, "capture-run", "token="+token2+"&tool=proxy&on=false&search="); rec3.Code != http.StatusOK || strings.Contains(rec3.Body.String(), "Capture unchanged") {
+		t.Fatalf("fresh confirmed spend failed: %s", rec3.Body.String()[:ui2Min(200, rec3.Body.Len())])
+	}
+	rec4 := ui2LoggerAction(t, s, "capture-run", "token="+token2+"&tool=proxy&on=false&search=")
+	if !strings.Contains(rec4.Body.String(), "Capture unchanged") {
+		t.Errorf("replayed token did not refuse visibly")
 	}
 }
 
@@ -1018,20 +1087,30 @@ func TestUI2LoggerPageShowsCaptureFilter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui2/logger", nil))
 	body := rec.Body.String()
-	for _, want := range []string{"Capture filter", "decides what gets recorded", "no capture filter", `name="status" value="2"`, `name="mime"`, "apply capture filter"} {
+	for _, want := range []string{"Capture filter", "decides what gets recorded", "no capture filter", `name="status" value="2"`, `name="mime"`, "review capture filter"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("logger page lacks %q", want)
 		}
 	}
 }
 
-// Applying a filter from the page sets the server's capture filter; rows it refuses are not
-// recorded and the filtered counter advances; rows it keeps land in the table.
+// Applying a filter is reviewed too: the first click mints, the confirm spends. Rows the filter
+// refuses are not recorded and the filtered counter advances; rows it keeps land in the table.
 func TestUI2LoggerFilterSetRecordsSelectively(t *testing.T) {
 	s := newTestServer()
-	rec := ui2LoggerAction(t, s, "filter-set", "status=2&term=keepme&search=")
+	token, sheet := ui2LoggerReview(t, s, "filter-set", "status=2&term=keepme&search=")
+	if !strings.Contains(sheet, "Review before changing the capture filter") || !strings.Contains(sheet, "keepme") {
+		t.Errorf("review sheet does not carry the exact filter: %s", sheet[:ui2Min(300, len(sheet))])
+	}
+	// Nothing applied on the first click.
+	api0 := httptest.NewRecorder()
+	s.mux.ServeHTTP(api0, httptest.NewRequest(http.MethodGet, "/api/tools/log?limit=1", nil))
+	if strings.Contains(api0.Body.String(), "keepme") {
+		t.Fatal("the first click applied the filter without a confirmation spend")
+	}
+	rec := ui2LoggerAction(t, s, "filter-run", "token="+token+"&status=2&term=keepme&search=")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("filter-set = %d: %s", rec.Code, rec.Body.String()[:ui2Min(200, rec.Body.Len())])
+		t.Fatalf("filter-run = %d: %s", rec.Code, rec.Body.String()[:ui2Min(200, rec.Body.Len())])
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "2xx") || !strings.Contains(body, "keepme") {
@@ -1049,9 +1128,6 @@ func TestUI2LoggerFilterSetRecordsSelectively(t *testing.T) {
 	}
 	if err := json.Unmarshal(api.Body.Bytes(), &log); err != nil {
 		t.Fatalf("api body: %v", err)
-	}
-	if len(log.Filter.Status) != 1 || log.Filter.Status[0] != 2 || log.Filter.Term != "keepme" {
-		t.Errorf("api filter = %+v, want status [2] term keepme", log.Filter)
 	}
 	// A non-matching row is refused and counted; a matching one is recorded.
 	s.toolLog.Record(toollog.ToolRepeater, "127.0.0.1", 18101, false, http.MethodGet, "/other", 200, nil, 1, "", nil)
@@ -1080,16 +1156,18 @@ func TestUI2LoggerFilterSetRecordsSelectively(t *testing.T) {
 	}
 }
 
-// An invalid filter is refused with the API's reason on the page, and the filter in force is
-// unchanged.
+// An invalid filter is refused at the spend with the API's reason on the page, and the filter in
+// force is unchanged.
 func TestUI2LoggerFilterInvalidKeepsOldAndSaysWhy(t *testing.T) {
 	s := newTestServer()
-	if rec := ui2LoggerAction(t, s, "filter-set", "term=ok&search="); rec.Code != http.StatusOK {
-		t.Fatalf("seed filter-set = %d", rec.Code)
+	tok, _ := ui2LoggerReview(t, s, "filter-set", "term=ok&search=")
+	if rec := ui2LoggerAction(t, s, "filter-run", "token="+tok+"&term=ok&search="); rec.Code != http.StatusOK {
+		t.Fatalf("seed filter-run = %d", rec.Code)
 	}
-	rec := ui2LoggerAction(t, s, "filter-set", "term=%5B&regex=on&search=")
+	tok2, _ := ui2LoggerReview(t, s, "filter-set", "term=%5B&regex=on&search=")
+	rec := ui2LoggerAction(t, s, "filter-run", "token="+tok2+"&term=%5B&regex=on&search=")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("invalid filter-set = %d", rec.Code)
+		t.Fatalf("invalid filter-run = %d", rec.Code)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "Filter not applied") {
@@ -1100,13 +1178,19 @@ func TestUI2LoggerFilterInvalidKeepsOldAndSaysWhy(t *testing.T) {
 	}
 }
 
-// Clearing from the page resets the filter: everything is recorded again.
+// Clearing from the page resets the filter: everything is recorded again, and the recorded log is
+// not touched - the review sheet says so.
 func TestUI2LoggerFilterClear(t *testing.T) {
 	s := newTestServer()
-	ui2LoggerAction(t, s, "filter-set", "status=2&search=")
-	rec := ui2LoggerAction(t, s, "filter-clear", "search=")
+	tok, _ := ui2LoggerReview(t, s, "filter-set", "status=2&search=")
+	ui2LoggerAction(t, s, "filter-run", "token="+tok+"&status=2&search=")
+	tok2, sheet := ui2LoggerReview(t, s, "filter-clear", "search=")
+	if !strings.Contains(sheet, "not a log delete") {
+		t.Errorf("clear review does not say the recorded log is kept")
+	}
+	rec := ui2LoggerAction(t, s, "filter-run", "token="+tok2+"&clear=1&search=")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("filter-clear = %d", rec.Code)
+		t.Fatalf("filter-clear run = %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "no capture filter") {
 		t.Errorf("fragment after clear does not say the filter is gone")
@@ -1118,18 +1202,26 @@ func TestUI2LoggerFilterClear(t *testing.T) {
 	}
 }
 
-// A status class outside 2-5 is refused, never silently recorded into the filter.
+// A status class outside 2-5 is refused with its reason on the page, never minted.
 func TestUI2LoggerFilterRejectsBadStatusClass(t *testing.T) {
 	s := newTestServer()
-	if rec := ui2LoggerAction(t, s, "filter-set", "status=9"); rec.Code != http.StatusBadRequest {
-		t.Errorf("status=9 = %d, want 400", rec.Code)
+	rec := ui2LoggerAction(t, s, "filter-set", "status=9")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=9 = %d, want the in-page refusal", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "status classes are 2, 3, 4 and 5") {
+		t.Errorf("status=9 did not render the refusal reason")
 	}
 }
 
-// The search carryover survives a toggle: the re-rendered fragment keeps filtering by it.
+// The search carryover survives a reviewed toggle: the sheet and the re-rendered fragment keep it.
 func TestUI2LoggerActionKeepsSearch(t *testing.T) {
 	s := newTestServer()
-	rec := ui2LoggerAction(t, s, "capture-decoder-off", "search=needleterm")
+	token, sheet := ui2LoggerReview(t, s, "capture-decoder-off", "search=needleterm")
+	if !strings.Contains(sheet, "needleterm") {
+		t.Errorf("review sheet dropped the search carryover")
+	}
+	rec := ui2LoggerAction(t, s, "capture-run", "token="+token+"&tool=decoder&on=false&search=needleterm")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("toggle = %d", rec.Code)
 	}

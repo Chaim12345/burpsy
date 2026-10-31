@@ -72,6 +72,7 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"ui2/intruder_results.html",
 	"ui2/sequencer.html",
 	"ui2/sequencer_confirm.html",
+	"ui2/logger_confirm.html",
 	"ui2/settings_triage_confirm.html",
 	"ui2/collaborator.html",
 	"ui2/history_rows.html",
