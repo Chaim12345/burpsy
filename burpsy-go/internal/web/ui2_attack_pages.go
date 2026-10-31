@@ -338,6 +338,18 @@ func ui2Atoi(s string) uint64 {
 	return n
 }
 
+// ui2AtoiInt parses a form count as int with an explicit ceiling so the uint64->int
+// conversion cannot wrap (G115). Anything past the ceiling clamps; the API's own
+// validation still applies to the clamped value.
+func ui2AtoiInt(s string) int {
+	const ceiling = 1 << 20
+	n, _ := strconv.ParseUint(s, 10, 64)
+	if n > ceiling {
+		return ceiling
+	}
+	return int(n) //nolint:gosec // bounded by the ceiling above
+}
+
 // ---- Sequencer -------------------------------------------------------------------------------
 
 // handleUI2Sequencer serves GET /ui2/sequencer: captures list + analyse form.
@@ -387,9 +399,9 @@ func ui2SequencerCapturePayload(r *http.Request) map[string]any {
 		// The textarea round-trips line endings as lone LF; the head must be CRLF on the
 		// wire or many servers never answer (the repeater's ui2RestoreHeaderNewlines).
 		"request":  ui2RestoreHeaderNewlines(r.PostFormValue("request")),
-		"count":    int(ui2Atoi(r.PostFormValue("count"))),
-		"delay_ms": int(ui2Atoi(r.PostFormValue("delay_ms"))),
-		"threads":  int(ui2Atoi(r.PostFormValue("threads"))),
+		"count":    ui2AtoiInt(r.PostFormValue("count")),
+		"delay_ms": ui2AtoiInt(r.PostFormValue("delay_ms")),
+		"threads":  ui2AtoiInt(r.PostFormValue("threads")),
 		"location": loc,
 	}
 }

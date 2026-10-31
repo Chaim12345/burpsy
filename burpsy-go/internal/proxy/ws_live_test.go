@@ -132,7 +132,9 @@ func openLiveWsWith(t *testing.T, engine *intercept.Engine) *liveWsFixture {
 		"Host: " + net.JoinHostPort(host, strconv.Itoa(int(port))) + "\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
-	client.Write([]byte(req))
+	if _, err := client.Write([]byte(req)); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
 	cr := bufio.NewReader(client)
 	client.SetReadDeadline(time.Now().Add(5 * time.Second))
 	for {
@@ -230,7 +232,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 	mask := [4]byte{1, 2, 3, 4}
 	whole := core.EncodeWsFrame(core.WsOpcodeText, []byte("0123456789abcdef"), &mask)
 	half := len(whole) - 8
-	f.client.Write(whole[:half])
+	_, _ = f.client.Write(whole[:half])
 	// Let the relay pass the first half on.
 	got := make([]byte, half)
 	for read := 0; read < half; {
@@ -248,7 +250,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 
 	// The client finishes its frame; the origin sees exactly that frame, uncorrupted, and the
 	// stream is at a boundary again, so the next injection goes through.
-	f.client.Write(whole[half:])
+	_, _ = f.client.Write(whole[half:])
 	rest := make([]byte, len(whole)-half)
 	for read := 0; read < len(rest); {
 		n, err := f.origin.Read(rest[read:])
@@ -356,7 +358,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAHalfHeader(t *testing.T) {
 
 	mask := [4]byte{1, 2, 3, 4}
 	whole := core.EncodeWsFrame(core.WsOpcodeText, []byte("hello"), &mask)
-	f.client.Write(whole[:3]) // two header bytes and one mask byte
+	_, _ = f.client.Write(whole[:3]) // two header bytes and one mask byte
 	got := make([]byte, 3)
 	for read := 0; read < 3; {
 		n, err := f.origin.Read(got[read:])
@@ -368,7 +370,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAHalfHeader(t *testing.T) {
 	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsMidMessage) {
 		t.Fatalf("inject into a half-read header: %v, want ErrWsMidMessage", err)
 	}
-	f.client.Write(whole[3:])
+	_, _ = f.client.Write(whole[3:])
 	rest := make([]byte, len(whole)-3)
 	for read := 0; read < len(rest); {
 		n, err := f.origin.Read(rest[read:])
@@ -460,7 +462,9 @@ func TestWsLiveChangeHookFiresOnOpenAndClose(t *testing.T) {
 		"Host: " + net.JoinHostPort(host, strconv.Itoa(int(port))) + "\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
-	client.Write([]byte(req))
+	if _, err := client.Write([]byte(req)); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
 	cr := bufio.NewReader(client)
 	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
 	for {

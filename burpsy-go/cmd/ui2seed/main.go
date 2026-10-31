@@ -82,15 +82,15 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 		time.Sleep(300 * time.Millisecond)
 		req, _ := http.NewRequest(http.MethodPut, "http://127.0.0.1:18099/api/tools/rules", bytes.NewReader([]byte(`{"rules":[{"rule_type":"request_header","enabled":true,"string_match":"secret-cookie-marker","string_replace":"redacted-marker"}]}`)))
 		req.Header.Set("Content-Type", "application/json")
-		if resp, err := http.DefaultClient.Do(req); err == nil {
-			resp.Body.Close()
+		if resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req); err == nil {
+			_ = resp.Body.Close()
 		} else {
 			fmt.Println("rules put:", err)
 		}
 		post := func(path string, body map[string]any) {
 			b, _ := json.Marshal(body)
-			if resp, err := http.Post("http://127.0.0.1:18099"+path, "application/json", bytes.NewReader(b)); err == nil {
-				resp.Body.Close()
+			if resp, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://127.0.0.1:18099"+path, "application/json", bytes.NewReader(b)); err == nil {
+				_ = resp.Body.Close()
 			} else {
 				fmt.Println("seed post", path, err)
 			}

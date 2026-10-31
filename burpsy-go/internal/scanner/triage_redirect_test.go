@@ -107,7 +107,8 @@ func TestTriageRedirectKeyPolicyHTTPSDowngrade(t *testing.T) {
 	// Sanity: the TLS client really verified the test CA (tlsSrv.Client() trusts only it), so a
 	// default-config client must fail - otherwise the downgrade observation above would not be
 	// about a verified-TLS origin.
-	if _, err := (&http.Client{}).Get(tlsSrv.URL + "/start"); err == nil {
+	if res, err := (&http.Client{}).Get(tlsSrv.URL + "/start"); err == nil {
+		_ = res.Body.Close()
 		t.Errorf("default client unexpectedly trusted the test CA - the downgrade pin proves nothing")
 	}
 }

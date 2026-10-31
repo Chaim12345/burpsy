@@ -1055,8 +1055,8 @@ func (s *Server) recordIntruderExchanges(taskID uint64, report *intruder.AttackR
 				ex.Method, ex.Path = p[0], p[1]
 			}
 		}
-		if a.Status != nil {
-			st := uint16(*a.Status)
+		if a.Status != nil && *a.Status >= 0 && *a.Status <= 65535 {
+			st := uint16(*a.Status) //nolint:gosec // bounded by the range check above
 			ex.Status = &st
 		}
 		if a.ResponseID != nil {
