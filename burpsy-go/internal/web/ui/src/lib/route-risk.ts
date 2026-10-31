@@ -252,6 +252,8 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/ui2/settings/write/{area}": "riskAsset",
  "/ui2/settings/write/{area}/{action}": "riskAsset",
  "/ui2/sitemap": "riskAsset",
+ "/ui2/sitemap/repeater": "riskRead",
+ "/ui2/sitemap/scope/{action}": "riskAsset",
  "/ui2/sse.min.js": "riskAsset",
  "/ui2/ws": "riskAsset",
 };

@@ -104,6 +104,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/collaborator/mint":              "ui2 Collaborator mint button inside the /ui2/ page; the console calls /api/collaborator/payload",
 	"/ui2/dashboard":                      "ui2 dashboard page, navigated to by URL; /api/dashboard is what the console calls",
 	"/ui2/sitemap":                        "ui2 site map page; the console's Target tab calls /api/sitemap",
+	"/ui2/sitemap/scope/{action}":         "ui2 site-map row action (add to scope), fired by the row's htmx form inside the /ui2/sitemap page; the React console's Target tab has its own scope calls",
+	"/ui2/sitemap/repeater":               "ui2 site-map row action (send to Repeater), a plain link inside the /ui2/sitemap page; the React console seeds Repeater from its own rows",
 	"/ui2/scope":                          "ui2 scope page; the console's Scope tab calls /api/scope",
 	"/ui2/intercept":                      "ui2 intercept page; the console's Intercept tab calls /api/intercept",
 	"/ui2/intercept/{action}":             "ui2 intercept action, fired by htmx buttons inside the /ui2/ page; the console's own buttons call /api/intercept/*",

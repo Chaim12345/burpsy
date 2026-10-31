@@ -1565,6 +1565,14 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Scanner configuration: spends the confirmation token on the reviewed PUT /api/scanner/config patch and renders the outcome",
 	},
+	"/ui2/sitemap/scope/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Site map: two-step add-to-scope - confirm resolves the row's node from the live tree and mints a one-time confirmation for the exact /api/scope include rule, run spends it; the change persists and neither step sends traffic",
+	},
+	"/ui2/sitemap/repeater": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "ui2 Site map: loads the newest stored request under one row into the Repeater editor as an editable draft - reads the store and sends nothing; the send stays on the Repeater page's own path",
+	},
 	"/ui2/scope/confirm": {
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Scope editing: mints a one-time confirmation for the exact /api/scope call (rule add/toggle/remove or the out-of-scope drop switch) and renders the review step - the first click never changes scope",

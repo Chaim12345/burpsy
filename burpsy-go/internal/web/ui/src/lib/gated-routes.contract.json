@@ -249,6 +249,8 @@
   "/ui2/settings/write/{area}",
   "/ui2/settings/write/{area}/{action}",
   "/ui2/sitemap",
+  "/ui2/sitemap/repeater",
+  "/ui2/sitemap/scope/{action}",
   "/ui2/sse.min.js",
   "/ui2/ws"
  ],
@@ -5005,6 +5007,46 @@
   },
   {
    "path": "/ui2/sitemap/extra/more",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/repeater",
+   "key": "/ui2/sitemap/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/repeater/",
+   "key": "/ui2/sitemap/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/repeater/extra",
+   "key": "/ui2/sitemap/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/repeater/extra/more",
+   "key": "/ui2/sitemap/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/scope/w",
+   "key": "/ui2/sitemap/scope/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/scope/w/",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/scope/w/extra",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/scope/w/extra/more",
    "key": "/ui2/sitemap",
    "gated": false
   },

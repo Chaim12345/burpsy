@@ -1516,6 +1516,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/app.js", serveUI2Asset)
 	s.route("/ui2/dashboard", s.handleUI2Dashboard)
 	s.route("/ui2/sitemap", s.handleUI2Sitemap)
+	s.route("/ui2/sitemap/scope/{action}", s.handleUI2SitemapScope)
+	s.route("/ui2/sitemap/repeater", s.handleUI2SitemapRepeater)
 	s.route("/ui2/scope", s.handleUI2Scope)
 	s.route("/ui2/scope/confirm", s.handleUI2ScopeConfirm)
 	s.route("/ui2/scope/run", s.handleUI2ScopeRun)

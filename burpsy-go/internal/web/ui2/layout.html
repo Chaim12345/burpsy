@@ -127,6 +127,19 @@ table.scope-t details.scope-edit[open] form {
      when tap-to-expand selects the row (cell-x would otherwise break them one char per line). */
   table.scope-t td.sa button, table.scope-t td.sa summary { white-space:nowrap; }
   table.scope-t td.sa.cell-x { word-break:normal; }
+  /* Site map: ten columns cannot fit a phone, so the count/detail columns (Exch, Subtree,
+     Methods, Statuses, MIME, Issues) drop out and depth/Path/Scope/Actions remain. Without
+     this the fixed-layout cells overlap and the Actions links intercept each other's taps
+     (QA D1-phone-1). The counts stay one tap away on desktop-width. */
+  table.sitemap-t td:nth-child(3), table.sitemap-t th:nth-child(3),
+  table.sitemap-t td:nth-child(4), table.sitemap-t th:nth-child(4),
+  table.sitemap-t td:nth-child(5), table.sitemap-t th:nth-child(5),
+  table.sitemap-t td:nth-child(6), table.sitemap-t th:nth-child(6),
+  table.sitemap-t td:nth-child(7), table.sitemap-t th:nth-child(7),
+  table.sitemap-t td:nth-child(8), table.sitemap-t th:nth-child(8) { display:none; }
+  table.sitemap-t th:last-child { width:120px; }
+  table.sitemap-t td:last-child { white-space:normal; }
+  table.sitemap-t td:last-child .btn { white-space:nowrap; }
   table.scope-t tr.scope-sd { display:table-row; }
   /* Session rules table: same phone treatment as scope-t (caught live in UAT - at 390px the
      inline toggle form overlapped the remove button and made it untappable). The Tools and

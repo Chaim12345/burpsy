@@ -133,6 +133,10 @@ type ui2SitemapNode struct {
 type ui2SitemapModel struct {
 	Tree sitemapTreeResp
 	Flat []ui2SitemapNode
+	// Note and Done are the row-action outcome lines (ui2_sitemap_actions.go): a refusal the
+	// operator must read, and the landed fact. Both empty on the plain page render.
+	Note string
+	Done string
 }
 
 func flattenSitemap(nodes []sitemapNodeView, depth int, out *[]ui2SitemapNode) []ui2SitemapNode {

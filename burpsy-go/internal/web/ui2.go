@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"net/url"
 	"io/fs"
 	"net/http"
 	"strconv"
@@ -26,6 +27,10 @@ var ui2FS embed.FS
 // land in these pages — auto-escaping is not optional here.
 var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"lower": strings.ToLower,
+	// urlquery percent-encodes a site-map node key for a non-URL attribute (hx-post),
+	// where html/template applies no contextual URL escaping and a raw NUL in the
+	// attribute value would reach the browser and be replaced with U+FFFD.
+	"urlquery": url.QueryEscape,
 	"until": func(n int) []int { return make([]int, n) },
 	// ms renders an epoch-millis JSON number (decoded as float64) as a wall-clock time;
 	// unknown shapes render empty rather than a bogus zero date.
@@ -41,6 +46,7 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 	"ui2/nav.html",
 	"ui2/dashboard.html",
 	"ui2/sitemap.html",
+	"ui2/sitemap_action_confirm.html",
 	"ui2/scope.html",
 	"ui2/scope_confirm.html",
 	"ui2/intercept.html",

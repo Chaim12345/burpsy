@@ -556,6 +556,8 @@ var notExposed = map[string]string{
 	"POST /ui2/scanner/crawl-run":              "ui2 crawl launch dispatch (spends the confirmation); /api/crawl is the agent-facing crawl",
 	"POST /ui2/scanner/config-confirm":         "ui2 Scanner configuration review step (mints a one-time confirmation); /api/scanner/config is the agent-facing control",
 	"POST /ui2/scanner/config-run":             "ui2 Scanner configuration apply step (spends the confirmation); /api/scanner/config is the agent-facing control",
+	"POST /ui2/sitemap/scope/{action}":         "ui2 Site-map add-to-scope review/apply steps (mint then spend); the JSON /api/scope route is the agent-facing control",
+	"GET /ui2/sitemap/repeater":                "ui2 Site-map send-to-Repeater draft page; the agent-facing Repeater control is /api/repeater/send",
 	"GET /ui2/advisories":                      "ui2 issue-definitions page; /api/advisories is the agent-facing read",
 	"GET /ui2/organizer":                       "ui2 Organizer page; /api/tools/organizer is the agent-facing read",
 	"POST /ui2/organizer/annotate/{action}":    "ui2 Organizer annotation review and apply steps (minted one-time confirmation); /api/tools/organizer/* are the agent-facing controls",
