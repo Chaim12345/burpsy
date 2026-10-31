@@ -542,3 +542,30 @@ func Test_ui2settings_fragments_render_on_bare_servers(t *testing.T) {
 		}
 	}
 }
+
+// A failed proxy-view read must degrade the review copy honestly: name the default as
+// unreadable, never guess "direct" (an empty Default on a successful read is the only direct).
+func Test_ui2settings_proxy_read_failure_states_unavailable_never_direct(t *testing.T) {
+	s := &Server{mux: http.NewServeMux()} // no routes: the /api/network/proxy read fails
+	form := func(v url.Values) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/ui2/settings/write/proxy/confirm", strings.NewReader(v.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return r
+	}
+	rm, msg := ui2ParseProxyRuleCall(s, form(url.Values{"op": {"remove"}, "pattern": {"example.test"}}))
+	if msg != "" {
+		t.Fatalf("rule remove parse refused: %s", msg)
+	}
+	if len(rm.consequences) != 1 || !strings.Contains(rm.consequences[0], "could not be read") ||
+		strings.Contains(rm.consequences[0], "(direct)") {
+		t.Errorf("rule-remove copy on read failure must say unreadable, not guess direct: %v", rm.consequences)
+	}
+	def, msg := ui2ParseProxyDefaultCall(s, form(url.Values{"op": {"set"}, "default": {"direct"}}))
+	if msg != "" {
+		t.Fatalf("default set parse refused: %s", msg)
+	}
+	if len(def.consequences) != 1 || !strings.Contains(def.consequences[0], "could not be read") ||
+		strings.Contains(def.consequences[0], "default (direct)") {
+		t.Errorf("default-set copy on read failure must say unreadable, not guess direct: %v", def.consequences)
+	}
+}

@@ -1399,7 +1399,7 @@ var manifest = map[string]route{
 		summary: "ui2 Sequencer analyse: POST the token list to /api/sequencer/analyse and render the report",
 	},
 	"/ui2/sequencer/capture/{action}": {
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 Sequencer capture: confirm mints the one-time review for the exact " +
 			"POST /api/sequencer/capture call, run spends it, pause/resume/stop drive a running capture",
 	},
@@ -1410,7 +1410,7 @@ var manifest = map[string]route{
 		// token. Marking THIS route credential would gate the review page itself, which is the
 		// confirmation the operator is supposed to see (caught live: the gate answered the
 		// browser's confirm POST with a 428 mint challenge).
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 Settings triage editing: confirm mints the one-time review for the exact " +
 			"PUT /api/settings/triage call (the API key is held server-side, never rendered), run spends it",
 	},
@@ -1423,8 +1423,11 @@ var manifest = map[string]route{
 		// riskAsset like the other ui2 console routes: the gated class belongs to the API call the
 		// review mints, and this route reaches it only through a minted one-time token.
 		methods: []string{"POST"}, risk: riskAsset, subPath: "proxy-rule/confirm",
-		summary: "ui2 Settings write controls: confirm mints the one-time review for the exact " +
-			"gated API call (held server-side, dispatched verbatim), run spends it",
+		summary: "ui2 Settings write controls: confirm holds the exact API call server-side and " +
+			"run dispatches it verbatim, single-use. Two mechanisms by call class: pool writes are " +
+			"gated riskScope calls a review mints a gate token for (dispatched through " +
+			"/api/pools/confirm); passthrough, proxy and backup are ungated riskLocal calls held " +
+			"as one-time local reviews (dispatched through the mux)",
 	},
 	"/ui2/advisories": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1495,19 +1498,19 @@ var manifest = map[string]route{
 		summary: "ui2 Logger page: tool-sent requests, server-paged with search and infinite scroll",
 	},
 	"/ui2/organizer/collections/{action}": {
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 collection create and name/note review and one-time install",
 	},
 	"/ui2/organizer/status/{action}": {
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 workflow status review and one-time snapshot-checked install",
 	},
 	"/ui2/organizer/annotate/{action}": {
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 item annotation review and one-time snapshot-checked install",
 	},
 	"/ui2/organizer/items/{action}": {
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 item move/copy/delete review and one-time snapshot-checked install",
 	},
 	"/ui2/organizer": {
@@ -1583,7 +1586,7 @@ var manifest = map[string]route{
 		// belongs to the /api/session/rules calls this reviews, and it reaches them only
 		// through a minted one-time token. Gating the review page itself would be the gate
 		// answering its own confirmation prompt with a 428 challenge.
-		methods: []string{"POST"}, risk: riskAsset,
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 Session rules editing: confirm mints the one-time review for the exact " +
 			"add/toggle/edit/remove call (held server-side, dispatched verbatim), run spends it",
 	},

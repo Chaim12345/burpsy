@@ -4700,7 +4700,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** ui2 Settings write controls: confirm mints the one-time review for the exact gated API call (held server-side, dispatched verbatim), run spends it */
+        /** ui2 Settings write controls: confirm holds the exact API call server-side and run dispatches it verbatim, single-use. Two mechanisms by call class: pool writes are gated riskScope calls a review mints a gate token for (dispatched through /api/pools/confirm); passthrough, proxy and backup are ungated riskLocal calls held as one-time local reviews (dispatched through the mux) */
         post: operations["postUi2SettingsWriteByAreaByAction"];
         delete?: never;
         options?: never;
