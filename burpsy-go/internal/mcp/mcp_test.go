@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -930,5 +931,68 @@ func TestAThirdCollisionIsNumberedRatherThanDuplicated(t *testing.T) {
 	got = uniqueToolName(web.MCPRouteInfo{Pattern: "/api-x/"}, used)
 	if got != "api_x_subtree" {
 		t.Fatalf("the subtree half of a collision became %q, want api_x_subtree", got)
+	}
+}
+
+// Only must bind tools/call, not just tools/list: callTool resolves through byName, so pruning
+// the published list alone left every hidden tool executable (caught live: Only=[api_history]
+// answered tools/call api_sitemap with HTTP 200). The keep-set (Only + the always-stay pair)
+// now filters byName too, so a hidden call is an unknown tool and the console sees zero hits.
+func TestAnOnlyHiddenToolIsNotCallable(t *testing.T) {
+	var hits int32
+	console := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(console.Close)
+
+	replies := askWith(t, Options{BaseURL: console.URL, Surface: SurfaceRoutes, Only: []string{"api_history"}},
+		rpcRequest(t, 1, "tools/list", nil),
+		rpcRequest(t, 2, "tools/call", map[string]any{"name": "api_sitemap"}),
+		rpcRequest(t, 3, "tools/call", map[string]any{"name": "burpsy_task_status", "arguments": map[string]any{}}))
+	// Replies and async notifications share the stream, so match by id, never by position.
+	byID := map[int]rpcReply{}
+	for _, r := range replies {
+		var id int
+		if json.Unmarshal(r.ID, &id) == nil {
+			byID[id] = r
+		}
+	}
+	if len(byID) != 3 {
+		t.Fatalf("expected replies to ids 1-3, got %v", func() []int {
+			ids := []int{}
+			for id := range byID {
+				ids = append(ids, id)
+			}
+			return ids
+		}())
+	}
+	var listed toolList
+	if err := json.Unmarshal(byID[1].Result, &listed); err != nil {
+		t.Fatalf("decoding tools/list: %v", err)
+	}
+	seenHistory, seenSitemap := false, false
+	for _, tl := range listed.Tools {
+		seenHistory = seenHistory || tl.Name == "api_history"
+		seenSitemap = seenSitemap || tl.Name == "api_sitemap"
+	}
+	if !seenHistory || seenSitemap {
+		t.Fatalf("Only=[api_history] must list api_history and hide api_sitemap: %+v", listed.Tools)
+	}
+	if byID[2].Error == nil {
+		var res callResult
+		_ = json.Unmarshal(byID[2].Result, &res)
+		t.Fatalf("a hidden tool answered tools/call instead of an unknown-tool error: %.200s", textOf(res))
+	}
+	if !strings.Contains(byID[2].Error.Message, "no tool named") {
+		t.Fatalf("hidden call must read as an unknown tool, got: %s", byID[2].Error.Message)
+	}
+	// The always-stay pair survives the keep-set at dispatch too, not only in the list.
+	if byID[3].Error != nil {
+		t.Fatalf("burpsy_task_status must stay callable under Only: %v", byID[3].Error)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("hidden and status calls must never reach the console, got %d hit(s)", got)
 	}
 }

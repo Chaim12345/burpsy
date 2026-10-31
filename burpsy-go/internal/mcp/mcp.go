@@ -318,6 +318,15 @@ func New(opts Options) (*Server, error) {
 			}
 		}
 		tools = kept
+		// The keep-set must bind tools/call too, not just tools/list: callTool resolves
+		// through byName, so pruning only the published list left every hidden tool
+		// callable (caught live: Only=[api_history] still executed api_sitemap). The
+		// always-stay pair (burpsy_confirm, burpsy_task_status) is in keep above.
+		for name := range s.byName {
+			if !keep[name] {
+				delete(s.byName, name)
+			}
+		}
 	}
 	s.tools = tools
 	return s, nil
