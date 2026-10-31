@@ -227,10 +227,22 @@ func describeRoute(r web.MCPRouteInfo) string {
 // exactly the drift between a published safety claim and the enforced one that the risk taxonomy
 // exists to prevent. The extra keys are for hosts that want to gate on burpsy's own vocabulary —
 // MCP's four booleans cannot express "widens scope" or "hands out a credential".
+// annotationsForRoute carries the route's risk class and MCP's four standard hints. The hints
+// come from the manifest's risk class, with the same verb derivation the grouped surface applies:
+// a route that answers a mutating verb is not read-only or idempotent, whatever its class says —
+// the class hints describe the route's usual call, the verb set decides what a caller can do. This
+// is what keeps the opt-in routes surface honest about the /ui2/* POST routes classed riskAsset:
+// the grouped surface never lists them, so only this view could ever publish them as reads.
 func annotationsForRoute(r web.MCPRouteInfo) map[string]any {
+	readOnly := hasHint(r.Hints, "READ_ONLY")
+	idempotent := hasHint(r.Hints, "IDEMPOTENT")
+	if len(mutatingMethods(r.Methods)) > 0 {
+		readOnly = false
+		idempotent = false
+	}
 	return map[string]any{
-		"readOnlyHint":         hasHint(r.Hints, "READ_ONLY"),
-		"idempotentHint":       hasHint(r.Hints, "IDEMPOTENT"),
+		"readOnlyHint":         readOnly,
+		"idempotentHint":       idempotent,
 		"destructiveHint":      hasHint(r.Hints, "DESTRUCTIVE"),
 		"openWorldHint":        hasHint(r.Hints, "OPEN_WORLD"),
 		"riskClass":            r.Risk,
@@ -502,25 +514,26 @@ func describeGrouped(g groupSpec, ops []op) string {
 // annotationsForGrouped carries the shared risk class and MCP's four standard hints.
 //
 // The hints come from the manifest's risk class exactly as for a route tool, with one derivation on
-// top: readOnlyHint is false for a tool that can PUT, PATCH or DELETE, whatever its class says. That
-// is not a re-judgement of the class — a verb that replaces or removes state is not read-only by
-// definition. It was written for DELETE /api/history, which the manifest classed riskRead until
-// burpsy-react-ui-gf68 moved it to its own riskDestructive pattern; it stays as the backstop for
-// the next mutating verb that lands under a read class.
+// top: readOnlyHint and idempotentHint are false for a tool that can mutate, whatever its class
+// says. That is not a re-judgement of the class — a verb that can change state is not read-only or
+// idempotent by definition. It was written for DELETE /api/history, which the manifest classed
+// riskRead until burpsy-react-ui-gf68 moved it to its own riskDestructive pattern; it stays as the
+// backstop for the next mutating verb that lands under a read class.
 func annotationsForGrouped(g groupSpec, ops []op) map[string]any {
 	r := ops[0].route
 	readOnly := hasHint(r.Hints, "READ_ONLY")
+	idempotent := hasHint(r.Hints, "IDEMPOTENT")
 	names := make([]string, 0, len(ops))
 	for _, o := range ops {
 		names = append(names, o.name)
-		switch o.method {
-		case http.MethodPut, http.MethodPatch, http.MethodDelete:
+		if web.MCPMethodMutates(o.method) {
 			readOnly = false
+			idempotent = false
 		}
 	}
 	return map[string]any{
 		"readOnlyHint":         readOnly,
-		"idempotentHint":       hasHint(r.Hints, "IDEMPOTENT"),
+		"idempotentHint":       idempotent,
 		"destructiveHint":      hasHint(r.Hints, "DESTRUCTIVE"),
 		"openWorldHint":        hasHint(r.Hints, "OPEN_WORLD"),
 		"riskClass":            r.Risk,

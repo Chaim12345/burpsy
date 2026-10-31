@@ -46,6 +46,7 @@ type groupedTool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 	Annotations struct {
 		ReadOnly             bool     `json:"readOnlyHint"`
+		Idempotent           bool     `json:"idempotentHint"`
 		RiskClass            string   `json:"riskClass"`
 		RequiresConfirmation bool     `json:"requiresConfirmation"`
 		Group                string   `json:"group"`
@@ -187,11 +188,11 @@ func TestNoGroupedToolSpansTwoRiskClasses(t *testing.T) {
 				t.Fatalf("tool %q does not describe %s with the manifest's summary", tl.Name, o)
 			}
 		}
-		// A tool that can replace or remove state is not read-only, whatever its class.
+		// A tool that can mutate state is not read-only or idempotent, whatever its class.
 		for _, o := range tl.Annotations.Operations {
 			verb, _, _ := strings.Cut(o, " ")
-			if (verb == "PUT" || verb == "PATCH" || verb == "DELETE") && tl.Annotations.ReadOnly {
-				t.Fatalf("tool %q can %s and is published readOnlyHint=true", tl.Name, o)
+			if web.MCPMethodMutates(verb) && (tl.Annotations.ReadOnly || tl.Annotations.Idempotent) {
+				t.Fatalf("tool %q can %s and is published readOnlyHint=%v idempotentHint=%v", tl.Name, o, tl.Annotations.ReadOnly, tl.Annotations.Idempotent)
 			}
 		}
 	}
