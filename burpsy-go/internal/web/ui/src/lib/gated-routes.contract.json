@@ -246,6 +246,8 @@
   "/ui2/session/rules/{action}",
   "/ui2/settings",
   "/ui2/settings/triage/{action}",
+  "/ui2/settings/write/{area}",
+  "/ui2/settings/write/{area}/{action}",
   "/ui2/sitemap",
   "/ui2/sse.min.js",
   "/ui2/ws"
@@ -4943,6 +4945,46 @@
   },
   {
    "path": "/ui2/settings/triage/w/extra/more",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w",
+   "key": "/ui2/settings/write/{area}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/extra",
+   "key": "/ui2/settings/write/{area}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/extra/more",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/w",
+   "key": "/ui2/settings/write/{area}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/w/",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/w/extra",
+   "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/settings/write/w/w/extra/more",
    "key": "/ui2/settings",
    "gated": false
   },

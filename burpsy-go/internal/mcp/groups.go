@@ -572,9 +572,12 @@ var notExposed = map[string]string{
 	"GET /ui2/repeater":                        "ui2 Repeater editor; /api/repeater/send is the agent-facing send",
 	"POST /ui2/repeater/send":                  "ui2 Repeater send button; /api/repeater/send is the agent-facing send",
 	"GET /ui2/settings":                        "ui2 Settings page; the /api/* routes it summarises are the agent-facing reads",
-	"POST /ui2/intercept/{action}":             "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",
-	"POST /ui2/logger/{action}":                "ui2 Logger capture toggles (POST); the JSON /api/tools/log route is the agent-facing control",
-	"POST /ui2/decoder":                        "ui2 Decoder form submit; the JSON /api/tools/* routes are the agent-facing transforms",
-	"POST /ui2/comparer":                       "ui2 Comparer form submit; /api/tools/compare is the agent-facing diff",
-	"POST /ui2/repeater":                       "ui2 Repeater form submit; /api/repeater/send is the agent-facing send",
+	"GET /ui2/settings/write/{area}":           "a ui2 Settings write section fragment the operator's browser loads into the page; the /api/* routes it reads are the agent-facing surface",
+	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +
+		"/api/* routes a review mints (the gated ones through their own /confirm endpoints)",
+	"POST /ui2/intercept/{action}": "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",
+	"POST /ui2/logger/{action}":    "ui2 Logger capture toggles (POST); the JSON /api/tools/log route is the agent-facing control",
+	"POST /ui2/decoder":            "ui2 Decoder form submit; the JSON /api/tools/* routes are the agent-facing transforms",
+	"POST /ui2/comparer":           "ui2 Comparer form submit; /api/tools/compare is the agent-facing diff",
+	"POST /ui2/repeater":           "ui2 Repeater form submit; /api/repeater/send is the agent-facing send",
 }

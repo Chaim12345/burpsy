@@ -108,7 +108,13 @@ type Server struct {
 	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
 	// by ui2SessionRuleReviewCap, expiring with ConfirmTTL.
 	ui2SessionRuleReviews sync.Map
-	sender                *sender.Sender
+	// ui2SettingsWriteReviews holds the minted settings write calls (TLS passthrough, upstream
+	// proxy rules and default, backup config, pools) a ui2 operator has reviewed but not yet
+	// confirmed: the exact method, path, query and bytes the run step dispatches verbatim, plus
+	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
+	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
+	ui2SettingsWriteReviews sync.Map
+	sender                  *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1553,6 +1559,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
 	s.route("/ui2/sequencer/capture/{action}", s.handleUI2SequencerCapture)
 	s.route("/ui2/settings/triage/{action}", s.handleUI2SettingsTriage)
+	s.route("/ui2/settings/write/{area}", s.handleUI2SettingsWriteFragment)
+	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
 	s.route("/ui2/collaborator", s.handleUI2Collaborator)
 	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
 

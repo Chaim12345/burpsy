@@ -250,6 +250,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/ui2/session/rules/{action}": false,
  "/ui2/settings": false,
  "/ui2/settings/triage/{action}": false,
+ "/ui2/settings/write/{area}": false,
+ "/ui2/settings/write/{area}/{action}": false,
  "/ui2/sitemap": false,
  "/ui2/sse.min.js": false,
  "/ui2/ws": false,

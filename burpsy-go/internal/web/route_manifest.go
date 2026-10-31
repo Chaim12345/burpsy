@@ -1414,6 +1414,18 @@ var manifest = map[string]route{
 		summary: "ui2 Settings triage editing: confirm mints the one-time review for the exact " +
 			"PUT /api/settings/triage call (the API key is held server-side, never rendered), run spends it",
 	},
+	"/ui2/settings/write/{area}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "proxy",
+		summary: "ui2 Settings write sections (TLS passthrough, upstream proxy, automatic backup, " +
+			"resource pools) loaded into the settings page",
+	},
+	"/ui2/settings/write/{area}/{action}": {
+		// riskAsset like the other ui2 console routes: the gated class belongs to the API call the
+		// review mints, and this route reaches it only through a minted one-time token.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "proxy-rule/confirm",
+		summary: "ui2 Settings write controls: confirm mints the one-time review for the exact " +
+			"gated API call (held server-side, dispatched verbatim), run spends it",
+	},
 	"/ui2/advisories": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 issue-definition catalogue page",

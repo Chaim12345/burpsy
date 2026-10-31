@@ -31,6 +31,14 @@
 <p class="meta">{{if .certs.certificates}}{{len .certs.certificates}} recorded{{else}}none{{end}}</p>
 <h3>Browser</h3>
 <p class="meta">data dir={{.browser.browser_data_directory}} sandbox={{.browser.allow_running_without_sandbox}}</p>
+<h3>Upstream proxy</h3>
+<div id="settings-proxy" hx-get="/ui2/settings/write/proxy" hx-trigger="load" hx-target="#settings-proxy" hx-swap="outerHTML"><p class="meta">loading…</p></div>
+<h3>TLS passthrough</h3>
+<div id="settings-passthrough" hx-get="/ui2/settings/write/passthrough" hx-trigger="load" hx-target="#settings-passthrough" hx-swap="outerHTML"><p class="meta">loading…</p></div>
+<h3>Automatic backup</h3>
+<div id="settings-backup" hx-get="/ui2/settings/write/backup" hx-trigger="load" hx-target="#settings-backup" hx-swap="outerHTML"><p class="meta">loading…</p></div>
+<h3>Resource pools (manage)</h3>
+<div id="settings-pools" hx-get="/ui2/settings/write/pools" hx-trigger="load" hx-target="#settings-pools" hx-swap="outerHTML"><p class="meta">loading…</p></div>
 <h3>Live event stream</h3>
 <p class="meta">subscribers={{.events.subscribers}} frames={{.events.frames}} changes={{.events.changes}} merges={{.events.merges}}</p>
 <h3>Protocols</h3>

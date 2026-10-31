@@ -4674,6 +4674,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/settings/write/{area}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Settings write sections (TLS passthrough, upstream proxy, automatic backup, resource pools) loaded into the settings page */
+        get: operations["getUi2SettingsWriteByArea"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/settings/write/{area}/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 Settings write controls: confirm mints the one-time review for the exact gated API call (held server-side, dispatched verbatim), run spends it */
+        post: operations["postUi2SettingsWriteByAreaByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/sitemap": {
         parameters: {
             query?: never;
@@ -16464,6 +16498,69 @@ export interface operations {
             header?: never;
             path: {
                 action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2SettingsWriteByArea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                area: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2SettingsWriteByAreaByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+                area: string;
             };
             cookie?: never;
         };
