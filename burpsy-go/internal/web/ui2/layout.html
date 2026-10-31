@@ -138,8 +138,12 @@ table.scope-t details.scope-edit[open] form {
   table.sitemap-t td:nth-child(7), table.sitemap-t th:nth-child(7),
   table.sitemap-t td:nth-child(8), table.sitemap-t th:nth-child(8) { display:none; }
   table.sitemap-t th:last-child { width:120px; }
+  /* The Actions links wrap inside their 120px column rather than overflow it: a nowrap
+     "Send to Repeater" is ~132px and body overflow-x:hidden clips the label off-screen
+     with no scroll escape (QA residual after the tap fix). Two short lines beat a clipped
+     button - the full label stays visible and the tap target only gets taller. */
   table.sitemap-t td:last-child { white-space:normal; }
-  table.sitemap-t td:last-child .btn { white-space:nowrap; }
+  table.sitemap-t td:last-child .btn { white-space:normal; display:block; }
   table.scope-t tr.scope-sd { display:table-row; }
   /* Session rules table: same phone treatment as scope-t (caught live in UAT - at 390px the
      inline toggle form overlapped the remove button and made it untappable). The Tools and

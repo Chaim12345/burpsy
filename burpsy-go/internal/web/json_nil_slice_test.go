@@ -136,6 +136,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/session":                   "<!doctype html",
 		"/ui2/settings":                  "<!doctype html",
 		"/ui2/sitemap":                   "<!doctype html",
+		"/ui2/sitemap/repeater":          "<!doctype html",
 		"/ui2/ws":                        "<!doctype html",
 		"/ui2/intercept/{action}":        "<!doctype html",
 		"/ui2/decoder/run":               "<!doctype html",
