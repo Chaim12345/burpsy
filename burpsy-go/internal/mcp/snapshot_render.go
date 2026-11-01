@@ -181,7 +181,10 @@ func (r *uiRenderer) render(ctx context.Context, snap MessageSnapshot) ([]byte, 
 		"--dump-dom",
 		(&url.URL{Scheme: "file", Path: pagePath}).String(),
 	}
-	if os.Geteuid() == 0 {
+	// Chromium's sandbox cannot initialise in restricted containers (CI runners),
+	// where ZygoteHostImpl::Init aborts the launch. Operators get the sandbox;
+	// CI opts out explicitly via BURPSY_CHROME_NO_SANDBOX=1.
+	if os.Geteuid() == 0 || os.Getenv("BURPSY_CHROME_NO_SANDBOX") == "1" {
 		args = append([]string{"--no-sandbox"}, args...)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, snapshotTimeout)
