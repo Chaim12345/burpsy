@@ -15,6 +15,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,7 +132,9 @@ func openLiveWsWith(t *testing.T, engine *intercept.Engine) *liveWsFixture {
 		"Host: " + net.JoinHostPort(host, strconv.Itoa(int(port))) + "\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
 		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
-	client.Write([]byte(req))
+	if _, err := client.Write([]byte(req)); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
 	cr := bufio.NewReader(client)
 	client.SetReadDeadline(time.Now().Add(5 * time.Second))
 	for {
@@ -229,7 +232,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 	mask := [4]byte{1, 2, 3, 4}
 	whole := core.EncodeWsFrame(core.WsOpcodeText, []byte("0123456789abcdef"), &mask)
 	half := len(whole) - 8
-	f.client.Write(whole[:half])
+	_, _ = f.client.Write(whole[:half])
 	// Let the relay pass the first half on.
 	got := make([]byte, half)
 	for read := 0; read < half; {
@@ -247,7 +250,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 
 	// The client finishes its frame; the origin sees exactly that frame, uncorrupted, and the
 	// stream is at a boundary again, so the next injection goes through.
-	f.client.Write(whole[half:])
+	_, _ = f.client.Write(whole[half:])
 	rest := make([]byte, len(whole)-half)
 	for read := 0; read < len(rest); {
 		n, err := f.origin.Read(rest[read:])
@@ -355,7 +358,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAHalfHeader(t *testing.T) {
 
 	mask := [4]byte{1, 2, 3, 4}
 	whole := core.EncodeWsFrame(core.WsOpcodeText, []byte("hello"), &mask)
-	f.client.Write(whole[:3]) // two header bytes and one mask byte
+	_, _ = f.client.Write(whole[:3]) // two header bytes and one mask byte
 	got := make([]byte, 3)
 	for read := 0; read < 3; {
 		n, err := f.origin.Read(got[read:])
@@ -367,7 +370,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAHalfHeader(t *testing.T) {
 	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsMidMessage) {
 		t.Fatalf("inject into a half-read header: %v, want ErrWsMidMessage", err)
 	}
-	f.client.Write(whole[3:])
+	_, _ = f.client.Write(whole[3:])
 	rest := make([]byte, len(whole)-3)
 	for read := 0; read < len(rest); {
 		n, err := f.origin.Read(rest[read:])
@@ -406,4 +409,90 @@ func TestAFailedInjectedWriteClosesTheConnection(t *testing.T) {
 	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, true, core.WsOpcodeText, []byte("x")); err == nil {
 		t.Fatal("a later injection into the broken connection succeeded")
 	}
+}
+
+// TestAClientCloseEndsTheRelayAndLeavesTheRegistry pins the lifecycle half of the live registry:
+// when the client dies while the origin holds its side open and silent, the relay must still end —
+// the connection leaves LiveWebSockets, the origin's socket is closed rather than leaked, and the
+// lifecycle hook fires. Before the close propagation in relayWebsocket this connection stayed in
+// the registry forever: the client-to-server direction returned on its read error, but nothing
+// told the upstream, so the other direction blocked on it and wg.Wait never completed.
+func TestAClientCloseEndsTheRelayAndLeavesTheRegistry(t *testing.T) {
+	fx := openLiveWs(t)
+	if _, ok := fx.srv.LiveWebSocket(fx.id); !ok {
+		t.Fatal("fixture opened without a live registry entry")
+	}
+	if err := fx.client.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := fx.srv.LiveWebSocket(fx.id); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a closed client stayed in the live registry")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The origin's socket must be closed too, not held open on a dead relay.
+	_ = fx.origin.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := fx.origin.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("the origin side of a dead relay was never closed")
+	}
+}
+
+// TestWsLiveChangeHookFiresOnOpenAndClose pins the lifecycle signal: one call when the relay
+// registers the connection, one when it leaves — distinct from the store's per-message OnWsChange.
+func TestWsLiveChangeHookFiresOnOpenAndClose(t *testing.T) {
+	host, port, conns := startHeldWsOrigin(t)
+	_ = conns
+	store := core.NewTrafficStore()
+	cfg := NewProxyConfig(store).WithScope(testScope()).WithLogger(zap.NewNop())
+	srv := NewServer(cfg)
+	var mu sync.Mutex
+	calls := 0
+	srv.OnWsLiveChange(func() { mu.Lock(); calls++; mu.Unlock() })
+	proxyAddr := startProxy(t, srv)
+	client, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	req := "GET http://" + net.JoinHostPort(host, strconv.Itoa(int(port))) + "/chat HTTP/1.1\r\n" +
+		"Host: " + net.JoinHostPort(host, strconv.Itoa(int(port))) + "\r\n" +
+		"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+	if _, err := client.Write([]byte(req)); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
+	cr := bufio.NewReader(client)
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+	for {
+		line, err := cr.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read 101: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	awaitCalls := func(want int, what string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			mu.Lock()
+			n := calls
+			mu.Unlock()
+			if n >= want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the lifecycle hook never fired for %s (got %d, want %d)", what, n, want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	awaitCalls(1, "the connection opening")
+	_ = client.Close()
+	awaitCalls(2, "the connection closing")
 }

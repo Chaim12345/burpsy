@@ -1,0 +1,48 @@
+<div id="rows">
+<p class="meta">{{if .error}}<span role="alert" style="color:#c00">{{.error}}</span>{{end}}</p>
+{{if .launched_task}}<p class="meta">Attack finished — <a class="btn" href="/ui2/intruder/{{.launched_task}}/results">view results</a></p>{{end}}
+<h3>Running attacks</h3>
+<table>
+<thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Planned</th><th scope="col">Sent</th><th scope="col">Failed</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .attacks.attacks}}
+<tr>
+  <td>{{.task_id}}</td><td>{{.kind}}</td><td>{{.target}}</td><td>{{.planned}}</td>
+  <td>{{.sent}}</td><td>{{.failed}}</td><td>{{.status}}{{if .stop_reason}} ({{.stop_reason}}){{end}}</td>
+  <td>
+    <a class="btn" href="/ui2/intruder/{{.task_id}}/results">results</a>
+    {{if eq .status "running"}}
+    <form hx-post="/ui2/intruder/{{.task_id}}/pause" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>pause</button></form>
+    <form hx-post="/ui2/intruder/{{.task_id}}/stop" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>stop</button></form>
+    {{end}}
+    {{if eq .status "paused"}}
+    <form hx-post="/ui2/intruder/{{.task_id}}/resume" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>resume</button></form>
+    <form hx-post="/ui2/intruder/{{.task_id}}/stop" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>stop</button></form>
+    {{end}}
+  </td>
+</tr>
+{{else}}<tr><td colspan="8" class="meta">No attacks running.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>New attack</h3>
+<form hx-post="/ui2/intruder/points" method="post" hx-target="#points-out" hx-swap="innerHTML">
+  <p class="meta">Base exchange: #{{.base_exchange}} (request message {{.base_msgid}})</p>
+  <input type="hidden" name="msg_id" value="{{.base_msgid}}">
+  <label><input type="checkbox" name="all" checked> all insertion points</label>
+  <button type="submit">List points</button>
+</form>
+<div id="points-out"></div>
+<form hx-post="/ui2/intruder/confirm" method="post" hx-target="#confirm-out" hx-swap="innerHTML" style="margin-top:10px">
+  <input type="hidden" name="msg_id" value="{{.base_msgid}}">
+  <input type="text" name="target" placeholder="target host[:port] (default: base request's Host)" style="width:100%">
+  <textarea name="payloads" rows="5" style="width:100%" placeholder="one payload per line" aria-label="Payloads, one per line"></textarea>
+  <div>
+    <label><input type="checkbox" name="all_points" checked> all points</label>
+    <select name="payload_placement" aria-label="Payload placement">
+      <option value="">auto</option><option value="replace">replace</option><option value="append">append</option>
+    </select>
+  </div>
+  <button type="submit">Prepare attack…</button>
+</form>
+<div id="confirm-out"></div>
+</div>

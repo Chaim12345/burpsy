@@ -87,6 +87,25 @@ type TlsPolicy struct {
 	// autoAdded counts the hosts auto-add has written, so the behaviour is visible on the panel rather
 	// than a list that silently grows.
 	autoAdded int
+
+	// onChange holds the signal installed by OnChange: one call after the rendered
+	// passthrough host list moves.
+	onChange atomic.Value
+}
+
+// OnChange installs the signal called after the passthrough host list visibly moves: a host
+// added, removed, or auto-added after a failed negotiation. Single slot, mirroring
+// Options.OnChange; the hook runs synchronously on the caller's path, so it must stay as cheap
+// as the hub increment it feeds.
+func (p *TlsPolicy) OnChange(fn func()) {
+	p.onChange.Store(fn)
+}
+
+// noteChange invokes the installed hook, if any.
+func (p *TlsPolicy) noteChange() {
+	if fn, ok := p.onChange.Load().(func()); ok {
+		fn()
+	}
 }
 
 // NewTlsPolicy creates a new TLS policy.
@@ -97,11 +116,13 @@ func NewTlsPolicy() *TlsPolicy {
 	}
 }
 
-// AddPassthrough adds a host pattern to passthrough.
+// AddPassthrough adds a host pattern to passthrough. Every add moves the rendered list -
+// duplicates included, since the panel shows the list as written - so every add announces.
 func (p *TlsPolicy) AddPassthrough(pattern string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.passthrough = append(p.passthrough, pattern)
+	p.mu.Unlock()
+	p.noteChange()
 }
 
 // WithEngine sets the TLS engine for interception.
@@ -137,14 +158,19 @@ func (p *TlsPolicy) Passthrough() []string {
 // deliberately, and removing by wildcard equality would delete a rule they did not select.
 func (p *TlsPolicy) RemovePassthrough(pattern string) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	removed := false
 	for i, existing := range p.passthrough {
 		if existing == pattern {
 			p.passthrough = append(p.passthrough[:i], p.passthrough[i+1:]...)
-			return true
+			removed = true
+			break
 		}
 	}
-	return false
+	p.mu.Unlock()
+	if removed {
+		p.noteChange()
+	}
+	return removed
 }
 
 // ApplyOutOfScope reports whether an out-of-scope host is passed through. The scope check itself is
@@ -206,17 +232,22 @@ func (p *TlsPolicy) NoteFailedNegotiation(host string) bool {
 		return false
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if !p.autoAddOnFailure {
+		p.mu.Unlock()
 		return false
 	}
 	for _, existing := range p.passthrough {
 		if existing == host {
+			p.mu.Unlock()
 			return false
 		}
 	}
 	p.passthrough = append(p.passthrough, host)
 	p.autoAdded++
+	p.mu.Unlock()
+	// The auto-add moves the rendered passthrough list with no API call anywhere near it, so
+	// it announces exactly like an operator's own add.
+	p.noteChange()
 	return true
 }
 
@@ -1272,6 +1303,10 @@ type Server struct {
 	listenerMu    sync.Mutex
 	rebindMu      sync.Mutex
 
+	// listenersChange holds the signal installed by OnListenersChange: one call after the
+	// listener table visibly moves (add, remove, rebind, spec-changing update).
+	listenersChange atomic.Value
+
 	// wsLive is every WebSocket this relay is pumping right now, by handshake exchange, so Repeater
 	// can attach to one (burpsy-react-ui-wuwf). See ws_live.go.
 	wsLive wsLiveRegistry
@@ -1416,6 +1451,7 @@ func (s *Server) Rebind(addr string) (string, error) {
 			s.listeners[bootListenerID].spec.Bind = addr
 		}
 		s.listenerMu.Unlock()
+		s.noteListenersChange()
 		return "", nil
 	}
 

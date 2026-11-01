@@ -1,0 +1,7 @@
+<h3>{{.Name}} <span class="sev sev-{{.Severity | lower}}">{{.Severity}}</span></h3>
+<p class="meta">type index <code>{{.TypeIndex}}</code></p>
+{{if .Shadows}}<p class="meta">Shared index: {{range $i, $n := .Shadows}}{{if $i}}, {{end}}{{$n}}{{end}} also {{if eq (len .Shadows) 1}}declares{{else}}declare{{end}} type index {{.TypeIndex}} but {{if eq (len .Shadows) 1}}is{{else}}are{{end}} shadowed by this entry - the index resolves here.</p>{{end}}
+{{if .Description}}<h3>Description</h3>{{range .Description}}<p>{{.}}</p>{{end}}{{end}}
+{{if .Remediation}}<h3>Remediation</h3>{{range .Remediation}}<p>{{.}}</p>{{end}}{{end}}
+{{if .References}}<h3>References</h3>
+<ul>{{range .References}}<li><a href="{{.URL}}" rel="noreferrer" target="_blank">{{if .Title}}{{.Title}}{{else}}{{.URL}}{{end}}</a></li>{{end}}</ul>{{end}}

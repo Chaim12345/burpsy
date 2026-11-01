@@ -1,0 +1,89 @@
+<div id="srows">
+{{if .note}}<p class="meta" id="scope-note"><strong>Not applied: {{.note}}</strong></p>{{end}}
+{{if .done}}<p class="meta" id="scope-note"><strong>Applied: {{.done}}</strong></p>{{end}}
+<p class="meta">Scope decides where the proxy and every tool may send traffic; changes here persist. allow_all={{.allow_all}} &middot; drop_out_of_scope={{.drop_out_of_scope}} &middot; drop by {{.drop_scope.mode}} &middot; {{if .empty}}no rules{{else}}{{len .rules}} rules{{end}}</p>
+<div id="scope-controls">
+<p class="meta">Out-of-scope handling:
+{{if .drop_out_of_scope}}dropping out-of-scope requests
+<form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML"><input type="hidden" name="scope_action" value="drop-switch"><input type="hidden" name="enabled" value="false"><button type="submit">stop dropping</button></form>
+{{else}}out-of-scope requests pass
+<form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML"><input type="hidden" name="scope_action" value="drop-switch"><input type="hidden" name="enabled" value="true"><button type="submit">drop out-of-scope requests</button></form>
+{{end}}</p>
+<form hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
+<input type="hidden" name="scope_action" value="rule-add">
+<p class="meta">Add rule
+<select name="kind"><option value="include">include</option><option value="exclude">exclude</option></select>
+host <input type="text" name="pattern" size="16" placeholder="example.com or *.example.com">
+path <input type="text" name="path" size="8" placeholder="/prefix">
+port <input type="text" name="port" size="4">
+protocol <input type="text" name="protocol" size="5" placeholder="http">
+<button type="submit">add rule</button></p>
+</form>
+</div>
+<table class="scope-t">
+<thead><tr><th scope="col">Enabled</th><th scope="col">Kind</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Port</th><th scope="col">Protocol</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .rules}}
+<tr class="{{if not .enabled}}meta{{end}}">
+  <td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.kind}}</td>
+  <td>{{if .host}}{{.host}}{{else}}*{{end}}</td>
+  <td>{{if .path}}{{.path}}{{else}}—{{end}}</td>
+  <td>{{if .port}}{{.port}}{{else}}—{{end}}</td>
+  <td>{{if .protocol}}{{.protocol}}{{else}}—{{end}}</td>
+  <td class="sa"><form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
+    <input type="hidden" name="scope_action" value="rule-toggle">
+    <input type="hidden" name="kind" value="{{if eq .kind "Include"}}include{{else}}exclude{{end}}">
+    <input type="hidden" name="pattern" value="{{.host}}">
+    {{if .path}}<input type="hidden" name="path" value="{{.path}}">{{end}}
+    {{if .port}}<input type="hidden" name="port" value="{{.port}}">{{end}}
+    {{if .protocol}}<input type="hidden" name="protocol" value="{{.protocol}}">{{end}}
+    <input type="hidden" name="enabled" value="{{if .enabled}}false{{else}}true{{end}}">
+    <button type="submit">turn {{if .enabled}}off{{else}}on{{end}}</button></form>
+  <form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
+    <input type="hidden" name="scope_action" value="rule-remove">
+    <input type="hidden" name="kind" value="{{if eq .kind "Include"}}include{{else}}exclude{{end}}">
+    <input type="hidden" name="pattern" value="{{.host}}">
+    {{if .path}}<input type="hidden" name="path" value="{{.path}}">{{end}}
+    {{if .port}}<input type="hidden" name="port" value="{{.port}}">{{end}}
+    {{if .protocol}}<input type="hidden" name="protocol" value="{{.protocol}}">{{end}}
+    <button type="submit">remove</button></form>
+  <details class="scope-edit"><summary class="meta">edit</summary>
+  <form hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
+    <input type="hidden" name="scope_action" value="rule-edit">
+    <input type="hidden" name="old_kind" value="{{if eq .kind "Include"}}include{{else}}exclude{{end}}">
+    <input type="hidden" name="old_pattern" value="{{.host}}">
+    {{if .path}}<input type="hidden" name="old_path" value="{{.path}}">{{end}}
+    {{if .port}}<input type="hidden" name="old_port" value="{{.port}}">{{end}}
+    {{if .protocol}}<input type="hidden" name="old_protocol" value="{{.protocol}}">{{end}}
+    <p class="meta"><button type="button" class="scope-edit-close">close</button> Replace this rule:
+    <select name="kind"><option value="include"{{if eq .kind "Include"}} selected{{end}}>include</option><option value="exclude"{{if eq .kind "Exclude"}} selected{{end}}>exclude</option></select>
+    host <input type="text" name="pattern" size="16" value="{{.host}}">
+    path <input type="text" name="path" size="8" value="{{.path}}">
+    port <input type="text" name="port" size="4" value="{{.port}}">
+    protocol <input type="text" name="protocol" size="5" value="{{.protocol}}" placeholder="http">
+    <button type="submit">review replacement</button></p>
+  </form></details></td>
+</tr>
+<tr class="meta scope-sd"><td colspan="7">path: {{if .path}}{{.path}}{{else}}any{{end}} &middot; protocol: {{if .protocol}}{{.protocol}}{{else}}any (http and https){{end}}</td></tr>
+{{else}}<tr><td colspan="7" class="meta">No scope rules.</td></tr>{{end}}
+</tbody>
+</table>
+<div id="scope-libraries">
+<p><strong>Libraries</strong> &middot; <span class="meta">named saved copies of the whole rule list; loading one replaces the current rules.</span></p>
+{{if .libraries_db}}
+{{if .libraries_error}}<p class="meta">Libraries unavailable: {{.libraries_error}}</p>{{else}}
+<form hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
+<input type="hidden" name="scope_action" value="library-save">
+<p class="meta">Save the current rules as a library named <input type="text" name="name" size="20" placeholder="engagement name"> <button type="submit">review save</button></p>
+</form>
+{{if .libraries}}<table class="scope-t">
+<thead><tr><th scope="col">Name</th><th scope="col">Rules</th><th scope="col"></th></tr></thead>
+<tbody>{{range .libraries}}
+<tr><td>{{.name}}</td><td>{{.rules}}</td>
+<td class="sa"><form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML"><input type="hidden" name="scope_action" value="library-load"><input type="hidden" name="name" value="{{.name}}"><button type="submit">load…</button></form>
+<form style="display:inline" hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML"><input type="hidden" name="scope_action" value="library-delete"><input type="hidden" name="name" value="{{.name}}"><button type="submit">delete…</button></form></td></tr>
+{{end}}</tbody></table>{{else}}<p class="meta">No saved libraries.</p>{{end}}
+{{end}}
+{{else}}<p class="meta">Libraries need a project database; none is open, so saving and loading are unavailable here.</p>{{end}}
+</div>
+</div>

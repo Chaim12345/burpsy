@@ -1,0 +1,19 @@
+<h3>{{.CheckName}} <span class="sev sev-{{.Severity | lower}}">{{.Severity}}</span> <span class="meta">{{.Confidence}}</span></h3>
+<p class="meta">{{.Host}}{{if .Param}} · param <code>{{.Param}}</code>{{end}} · seen {{.TimesSeen}}× · {{.Source}}{{if .FalsePositive}} · marked false positive{{end}}</p>
+{{if .Evidence}}<h3>Evidence</h3><pre>{{.Evidence}}</pre>{{end}}
+{{if .Detail}}<h3>Detail</h3><div>{{.Detail}}</div>{{end}}
+{{if .Remediation}}<h3>Remediation</h3><div>{{.Remediation}}</div>{{end}}
+{{if .Comment}}<h3>Comment</h3><p>{{.Comment}}</p>{{end}}
+<h3>Occurrences</h3>
+<table>
+<thead><tr><th>Exchange</th><th>Path</th></tr></thead>
+<tbody>
+{{range .Occurrences}}
+<tr hx-get="/ui2/history/{{.ExchangeID}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click">
+  <td>#{{.ExchangeID}}</td><td>{{.Path}}</td>
+</tr>
+{{else}}
+<tr><td colspan="2" class="meta">No occurrences recorded.</td></tr>
+{{end}}
+</tbody>
+</table>

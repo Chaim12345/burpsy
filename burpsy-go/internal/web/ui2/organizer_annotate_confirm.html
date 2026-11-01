@@ -1,0 +1,12 @@
+<div id="rows" data-review="1">
+{{if .error}}<p><strong>Not saved: {{.error}}</strong></p>{{else}}
+<h3>Review item annotations</h3>
+<p>Item #{{.change.Before.ID}}: <span style="overflow-wrap:anywhere">{{if .change.Before.Title}}{{.change.Before.Title}}{{else}}(blank title){{end}}</span></p>
+<p>Title: <span style="overflow-wrap:anywhere">{{if .change.Before.Title}}{{.change.Before.Title}}{{else}}(blank){{end}}</span> &rarr; <span style="overflow-wrap:anywhere">{{if .change.Title}}{{.change.Title}}{{else}}(blank){{end}}</span></p>
+<p>Note: <span style="overflow-wrap:anywhere">{{if .change.Before.Note}}{{.change.Before.Note}}{{else}}(blank){{end}}</span> &rarr; <span style="overflow-wrap:anywhere">{{if .change.Note}}{{.change.Note}}{{else}}(blank){{end}}</span></p>
+<p>Highlight: <strong>{{.change.Before.Highlight}}</strong> &rarr; <strong>{{.change.Highlight}}</strong></p>
+<p>Only this saved item's title, note and highlight change. Its workflow status, collection and traffic stay unchanged. No request is sent. The one-time confirmation binds this change and the full stored item snapshot; a changed or removed item is refused.</p>
+<form hx-post="/ui2/organizer/annotate/run" hx-target="#rows" hx-swap="outerHTML"><input type="hidden" name="review_id" value="{{.review_id}}"><input type="hidden" name="token" value="{{.token}}"><button>Confirm annotations</button></form>
+{{end}}
+<p><a href="/ui2/organizer" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML">cancel</a> (pending reviews expire after the confirmation window)</p>
+</div>

@@ -1,0 +1,24 @@
+<div id="rows">
+{{if .Note}}<p class="meta" role="alert"><strong>Not applied: {{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta"><strong>{{.Done}}</strong></p>{{end}}
+<p class="meta">{{.Tree.Exchanges}} exchanges · {{.Tree.Nodes}} nodes · {{.Tree.Synced}} synced</p>
+<table class="sitemap-t">
+<thead><tr><th scope="col"></th><th scope="col">Path</th><th scope="col">Exch</th><th scope="col">Subtree</th><th scope="col">Methods</th><th scope="col">Statuses</th><th scope="col">MIME</th><th scope="col">Issues</th><th scope="col">Scope</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .Flat}}
+<tr class="{{if not .InScope}}meta{{end}}">
+  <td>{{if gt .Depth 0}}{{range $i := until .Depth}}·{{end}}{{end}}</td>
+  <td title="{{.Path}}">{{if .Segment}}{{.Segment}}{{else}}{{.Path}}{{end}}</td>
+  <td>{{.Exchanges}}</td><td>{{.Subtree}}</td><td>{{.Methods}}</td><td>{{.Statuses}}</td>
+  <td>{{.Mimes}}</td>
+  <td>{{if .SubtreeIssues}}<span class="sev sev-{{.Worst | lower}}">{{.Worst}}</span> {{.SubtreeIssues}}{{end}}</td>
+  <td>{{if .InScope}}in{{else}}out{{end}}</td>
+  <td>
+    <form hx-post="/ui2/sitemap/scope/confirm?key={{.Key | urlquery}}" hx-target="#rows" hx-swap="outerHTML" style="display:inline" aria-label="Review adding {{.Path}} to the target scope"><button type="submit">Add to scope</button></form>
+    {{if .Subtree}}<a class="btn" href="/ui2/sitemap/repeater?key={{.Key}}">Send to Repeater</a>{{else}}<span class="meta" title="Nothing has been captured under this row yet, so there is no stored request to load into Repeater">no request</span>{{end}}
+  </td>
+</tr>
+{{else}}<tr><td colspan="10" class="meta">Site map is empty — capture some traffic first.</td></tr>{{end}}
+</tbody>
+</table>
+</div>
