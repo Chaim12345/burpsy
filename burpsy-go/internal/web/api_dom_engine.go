@@ -70,16 +70,22 @@ func (s *Server) handleDOMEngine(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// The body goes through requestJSON, not a bare json.Decoder, and before the capability guard — the
+	// order and the decoder every other body-taking route uses. An agent's unknown field is then
+	// refused with a 400 rather than silently dropped (this route can name a binary to execute, so a
+	// misspelt "engine" must not quietly mean "no engine"), and the schema sweep reaches the decode.
+	var req domEngineReq
+	if r.Method == http.MethodPut {
+		if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil || req.Engine == nil {
+			http.Error(w, `body must be {"engine": ""|"chrome"|"ws://host:port/..."|"/path/to/browser"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	if s.domSwitch == nil || s.domBuild == nil {
 		http.Error(w, "this process has no switchable DOM engine (it was built without one); restart with -dom", http.StatusServiceUnavailable)
 		return
 	}
 	if r.Method == http.MethodPut {
-		var req domEngineReq
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil || req.Engine == nil {
-			http.Error(w, `body must be {"engine": ""|"chrome"|"ws://host:port/..."|"/path/to/browser"}`, http.StatusBadRequest)
-			return
-		}
 		value := strings.TrimSpace(*req.Engine)
 		var p scanner.BrowserProvider
 		if value != "" && value != "off" {

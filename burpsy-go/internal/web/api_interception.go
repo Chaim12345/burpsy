@@ -41,17 +41,23 @@ func (s *Server) handleInterception(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// A PUT's body is decoded before the policy guard, the order handleTlsPassthrough gives its own
+	// writes: a malformed body — or an agent's unknown field, which requestJSON refuses — is the
+	// caller's 400 whatever this process has attached, and the schema sweep reaches the decode the
+	// route publishes instead of stopping at a 503.
+	var req interceptionReq
+	if r.Method == http.MethodPut {
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil || req.Enabled == nil {
+			http.Error(w, `body must be {"enabled": true|false}`, http.StatusBadRequest)
+			return
+		}
+	}
 	if s.tlsPolicy == nil {
 		http.Error(w, "No TLS policy is attached to this server, so interception cannot be switched", http.StatusServiceUnavailable)
 		return
 	}
 	if r.Method == http.MethodGet {
 		writeJSON(w, http.StatusOK, s.viewInterception())
-		return
-	}
-	var req interceptionReq
-	if err := requestJSON(w, r, nil).Decode(&req); err != nil || req.Enabled == nil {
-		http.Error(w, `body must be {"enabled": true|false}`, http.StatusBadRequest)
 		return
 	}
 	if !*req.Enabled {

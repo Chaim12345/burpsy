@@ -165,8 +165,9 @@ func (s *Server) handleAuthzIdentities(w http.ResponseWriter, r *http.Request) {
 type authzVerdict struct {
 	Label string `json:"label"`
 	// Verdict is Enforced (access denied / different from baseline), Bypassed (the identity received
-	// the baseline's privileged content), Ambiguous (the send failed or the baseline was too thin to
-	// judge), or Baseline (this is the reference identity).
+	// the baseline's privileged content), Ambiguous (the send failed, or the baseline is no reference:
+	// it was not served a 2xx, or on a read it returned no data — Reasons[0] says which), or Baseline
+	// (this is the reference identity).
 	Verdict string `json:"verdict"`
 	Status  int    `json:"status"`
 	BodyLen int    `json:"body_len"`
@@ -224,7 +225,11 @@ func (a *authzRawSender) Send(ctx context.Context, auth scanner.AuthContext) (in
 	}
 	hold.Release()
 	status := authzStatus(respBytes)
-	body := string(responseBodyBytes(respBytes))
+	// The verdict compares what the application sent each identity, so the body is read decoded:
+	// chunk framing off and gzip/deflate undone (scanner.ReadableBody). Raw, two identical payloads
+	// framed differently read as different bodies, and an empty collection behind gzip is opaque bytes
+	// the no-data rule cannot see. The stored message above keeps the wire bytes for the Comparer.
+	body := string(scanner.ReadableBody(respBytes))
 	return status, body, elapsed, nil
 }
 
@@ -348,14 +353,20 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 			verdicts = append(verdicts, v)
 			continue
 		}
-		dev := base.DiffAccessControl(scanner.NewBaselineSample(status, bodyText, duration), threshold)
+		dev := base.DiffAccessControl(ex.Method, scanner.NewBaselineSample(status, bodyText, duration), threshold)
 		v.Status = status
 		v.BodyLen = len(bodyText)
 		v.Reasons = dev.Comparison.Reasons
+		// Ambiguous first: a baseline that was refused, or served nothing, is no reference, and
+		// reading its "not matched" as Enforced is the inversion this check exists to prevent.
 		// Matched == the other identity received what the baseline can see == access control bypassed.
-		if dev.Matched {
+		switch {
+		case dev.Ambiguous:
+			v.Verdict = "Ambiguous"
+			v.Reasons = append([]string{dev.Reason}, v.Reasons...)
+		case dev.Matched:
 			v.Verdict = "Bypassed"
-		} else {
+		default:
 			v.Verdict = "Enforced"
 		}
 		verdicts = append(verdicts, v)
@@ -432,12 +443,6 @@ func applyIdentity(raw []byte, id authzIdentity) []byte {
 		out = upsertHeader(out, name, value)
 	}
 	return out
-}
-
-// responseBodyBytes returns the body of a raw HTTP response.
-func responseBodyBytes(raw []byte) []byte {
-	_, body := splitHeadBody(raw)
-	return body
 }
 
 // authzStatus parses the status code off a raw response's status line, 0 when unreadable.

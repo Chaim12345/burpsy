@@ -66,7 +66,13 @@ import (
 // guess about a target. A close-delimited HTTP/1.0 body has the same frameless shape and does end, so
 // the policy counts these (NoteUnframed) and the counter is how an operator tells "the proxy streamed
 // my ordinary response" from "the proxy streamed my event stream and it arrived empty".
-func (s *Server) streamsResponse(host string, head []byte) bool {
+func (s *Server) streamsResponse(method, host string, head []byte) bool {
+	// The answer to a HEAD has no body to stream, whatever framing its head declares: a chunked or
+	// frameless HEAD answer admitted here parked the connection on a body that never comes, for the
+	// whole streaming window (httputil.ResponseHasBodyFor).
+	if !httputil.ResponseHasBodyFor(method, head) {
+		return false
+	}
 	// Both frameless AND chunked-without-a-terminal-chunk are open-ended, and the second is the
 	// common one: Go's own http server, and most SSE frameworks, frame an event stream as
 	// Transfer-Encoding: chunked and then simply never send the terminal chunk. Testing only for
@@ -135,6 +141,13 @@ func framingFor(policy *StreamingPolicy, head []byte) streamFraming {
 		// and there is nothing to re-frame or strip.
 		return streamFraming{head: head, closeEnd: true}
 	}
+	// A chunked head that also carries a Content-Length contradicts itself. Transfer-Encoding wins
+	// (RFC 9112 §6.3 rule 3) and a forwarding proxy must drop the Content-Length (§6.1): with strip on
+	// it would otherwise survive the Transfer-Encoding and tell the client to read that many bytes of a
+	// close-delimited body — a short read and the rest of the body parsed as the next response — and
+	// with strip off it describes neither the origin's chunks nor the re-framed ones. The recorded row
+	// keeps the origin's head as sent; only what the client is told changes.
+	head, _ = removeHeader(head, "Content-Length")
 	if policy.StripChunkedMetadata() {
 		// Strip on: drop Transfer-Encoding and send the decoded payload close-delimited.
 		stripped, _ := removeHeader(head, "Transfer-Encoding")
@@ -416,11 +429,11 @@ func (s *Server) streamPlainResponse(
 	// refused request followed by an authenticated one is a fair price; a credential storm is not.
 	learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(head))
 
-	if !s.streamsResponse(host, head) {
+	if !s.streamsResponse(method, host, head) {
 		// The origin framed the response after all, or answered with a status that carries no body.
 		// Reading it the ordinary way from the same buffered reader is correct and costs nothing: the
 		// head is already in hand, so this is ReadResponseBody and the rest of handleHTTP unchanged.
-		body, err := httputil.ReadResponseBody(br, head)
+		body, err := httputil.ReadResponseBodyFor(br, head, method)
 		// The upstream closed short of its declared Content-Length but did send bytes, or the
 		// body passed the cap (burpsy-react-ui-h1-cap-silent). Dropping the whole exchange is the
 		// worst answer: the client gets an empty reply to a request the origin answered, and

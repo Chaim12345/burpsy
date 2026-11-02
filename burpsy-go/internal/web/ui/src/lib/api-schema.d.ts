@@ -2056,6 +2056,24 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/proxy/interception": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** TLS interception on or off, live (the runtime form of -intercept-tls): on loads or generates the CA in -ca-dir; off tunnels CONNECTs opaque and keeps the CA */
+        get: operations["getApiProxyInterception"];
+        /** TLS interception on or off, live (the runtime form of -intercept-tls): on loads or generates the CA in -ca-dir; off tunnels CONNECTs opaque and keeps the CA */
+        put: operations["putApiProxyInterception"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proxy/listener": {
         parameters: {
             query?: never;
@@ -2538,6 +2556,24 @@ export type paths = {
         /** what the check set covers, and what it declines to look at */
         get: operations["getApiScannerCoverage"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scanner/dom": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on */
+        get: operations["getApiScannerDom"];
+        /** the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on */
+        put: operations["putApiScannerDom"];
         post?: never;
         delete?: never;
         options?: never;
@@ -10212,6 +10248,66 @@ export interface operations {
             };
         };
     };
+    getApiProxyInterception: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putApiProxyInterception: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getApiProxyListener: {
         parameters: {
             query?: never;
@@ -11797,6 +11893,66 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getApiScannerDom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putApiScannerDom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    engine?: string;
+                };
+            };
+        };
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

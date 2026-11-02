@@ -359,7 +359,7 @@ func TestDiffAccessControlFlagsAMatchWhenIdentityBGetsIdentityAsResourceBack(t *
 	// same body back that identity A (user 42, authenticated) normally gets.
 	idorSample := NewBaselineSample(200, "<html>user 42's private profile</html>", 31*time.Millisecond)
 
-	got := baseline.DiffAccessControl(idorSample, DefaultDeviationThreshold())
+	got := baseline.DiffAccessControl("GET", idorSample, DefaultDeviationThreshold())
 	if !got.Matched {
 		t.Fatalf("DiffAccessControl did not flag a byte-identical cross-identity response as a match: %+v", got)
 	}
@@ -382,7 +382,7 @@ func TestDiffAccessControlDoesNotFlagAMatchWhenIdentityBIsCorrectlyDenied(t *tes
 
 	deniedSample := NewBaselineSample(403, "<html>forbidden</html>", 15*time.Millisecond)
 
-	got := baseline.DiffAccessControl(deniedSample, DefaultDeviationThreshold())
+	got := baseline.DiffAccessControl("GET", deniedSample, DefaultDeviationThreshold())
 	if got.Matched {
 		t.Fatalf("DiffAccessControl flagged a 403 denial as matching the baseline: %+v", got)
 	}
