@@ -2436,8 +2436,14 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// Answered here, before the listener's redirect, the scope gate and the dial, because none of them
 	// apply to the proxy describing itself, and forwarding a request for the listener would loop. The
 	// own-address match is skipped on a redirecting listener, whose clients name the listener on every
-	// request and must be redirected, not shown this page; isWebInterfaceTarget says why.
-	if s.isWebInterfaceTarget(host, port, clientConn, spec) {
+	// request and must be redirected, not shown this page; addressesTheProxy says why. With the
+	// interface switched off the request is refused here rather than forwarded: the switch withdraws
+	// the page, it does not turn a name for the proxy into an origin to resolve and dial.
+	if s.addressesTheProxy(host, port, clientConn, spec) {
+		if s.config.options.Get(OptDisableWebInterface) {
+			s.writeProxyError(clientConn, webInterfaceDisabledResponse())
+			return
+		}
 		s.serveWebInterface(clientConn, method, path)
 		return
 	}

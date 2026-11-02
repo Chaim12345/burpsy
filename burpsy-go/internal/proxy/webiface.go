@@ -23,9 +23,16 @@ import (
 // webInterfaceHosts are the names that address the interface rather than an origin.
 var webInterfaceHosts = map[string]bool{"burpsuite": true, "burpsy": true}
 
-// isWebInterfaceTarget reports whether a request addresses the interface: a magic name on port 80, or
-// the listener's own address (the browser was pointed at the listener directly). Forwarding the latter
-// would loop the proxy into itself.
+// addressesTheProxy reports whether a request addresses the proxy itself rather than an origin: a magic
+// name on port 80, or the listener's own address (the browser was pointed at the listener directly).
+// Forwarding the latter would loop the proxy into itself.
+//
+// It does not read the disable switch, and that is the point. Turning the interface off decides what
+// such a request is answered with, not whether it names the proxy: before, the switch made this return
+// false, so a disabled listener forwarded http://burpsuite upstream as if it were an origin. That meant
+// a real DNS lookup for a name that resolves nowhere (or, on a network with a search domain, resolves
+// to some host the engagement never named), and a request for the listener's own address relayed back
+// into the listener. handleHTTP refuses such a request locally instead (webInterfaceDisabledResponse).
 //
 // The own-address half does not apply on a listener that redirects. There a client that is not
 // proxy-aware (a thick client pointed at the listener, invisible proxying on) names the listener
@@ -37,10 +44,7 @@ var webInterfaceHosts = map[string]bool{"burpsuite": true, "burpsy": true}
 //
 // An invisible listener that does NOT redirect keeps the own-address match: it forwards by the Host
 // header, so a request whose Host is the listener would be relayed back into the listener itself.
-func (s *Server) isWebInterfaceTarget(host string, port uint16, clientConn net.Conn, spec ListenerSpec) bool {
-	if s.config.options.Get(OptDisableWebInterface) {
-		return false
-	}
+func (s *Server) addressesTheProxy(host string, port uint16, clientConn net.Conn, spec ListenerSpec) bool {
 	h := strings.ToLower(strings.Trim(host, "[]"))
 	if webInterfaceHosts[h] && (port == 80 || port == 0) {
 		return true
@@ -72,6 +76,21 @@ func (s *Server) isWebInterfaceTarget(host string, port uint16, clientConn net.C
 		}
 	}
 	return false
+}
+
+// webInterfaceDisabledResponse is the answer to a request that addresses the proxy while the operator
+// has the interface off (Burp's "Disable web interface at http://burpsuite"): no welcome page and no
+// CA certificate, which is what the switch promises, and no forward either, because the name is the
+// proxy's and no origin's. It goes out through writeProxyError, so "Suppress Burp error messages in
+// browser" turns it into a bare close like every other burpsy refusal.
+func webInterfaceDisabledResponse() []byte {
+	body := "the burpsy proxy interface is disabled on this listener (disable_web_interface). " +
+		"http://burpsy, http://burpsuite and the listener's own address name the proxy, not an origin, " +
+		"so this request was not forwarded.\n"
+	return []byte("HTTP/1.1 404 Not Found\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
+		"Cache-Control: no-store\r\nConnection: close\r\n\r\n" + body)
 }
 
 // serveWebInterface answers one request to the interface. Nothing is forwarded or recorded: this is
