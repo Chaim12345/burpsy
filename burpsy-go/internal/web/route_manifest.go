@@ -800,6 +800,10 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",
 	},
+	"/api/proxy/interception": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "TLS interception on or off, live (the runtime form of -intercept-tls): on loads or generates the CA in -ca-dir; off tunnels CONNECTs opaque and keeps the CA",
+	},
 	"/api/proxy/passthrough": {
 		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskLocal,
 		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)",
@@ -904,6 +908,11 @@ var manifest = map[string]route{
 		pathValidatedFirst: true,
 		summary: "one queued item: POST {id}/again re-audits it (Burp's auditItemContextMenuAuditAgain); " +
 			"POST {id}/cancel stops it before dispatch and sends nothing (auditItemContextMenuCancel)",
+	},
+	"/api/scanner/dom": {
+		// riskExecute: a browser path names a program this process starts.
+		methods: []string{"GET", "PUT"}, risk: riskExecute,
+		summary: "the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on",
 	},
 	"/api/scanner/config": {
 		methods: []string{"GET", "PUT"}, risk: riskScope,

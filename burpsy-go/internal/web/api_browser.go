@@ -113,8 +113,8 @@ func (s *Server) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec := browser.Spec{ProxyAddr: s.browserProxyAddr(), URL: strings.TrimSpace(req.URL)}
-	if s.tlsEngine != nil {
-		if ca, _, ok := s.tlsEngine.ExportCA(); ok {
+	if s.caEngine() != nil {
+		if ca, _, ok := s.caEngine().ExportCA(); ok {
 			spec.CA = ca
 		}
 	}
