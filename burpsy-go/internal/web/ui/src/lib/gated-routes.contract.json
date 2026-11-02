@@ -111,6 +111,7 @@
   "/api/proxy/ca/import",
   "/api/proxy/ca/regenerate",
   "/api/proxy/history-logging",
+  "/api/proxy/interception",
   "/api/proxy/listener",
   "/api/proxy/options",
   "/api/proxy/passthrough",
@@ -137,6 +138,7 @@
   "/api/scanner/config",
   "/api/scanner/configs",
   "/api/scanner/coverage",
+  "/api/scanner/dom",
   "/api/scanner/issue-types",
   "/api/scanner/live",
   "/api/scanner/passive-branch",
@@ -2341,6 +2343,26 @@
    "gated": false
   },
   {
+   "path": "/api/proxy/interception",
+   "key": "/api/proxy/interception",
+   "gated": false
+  },
+  {
+   "path": "/api/proxy/interception/",
+   "key": "/api/proxy/interception",
+   "gated": false
+  },
+  {
+   "path": "/api/proxy/interception/extra",
+   "key": "/api/proxy/interception",
+   "gated": false
+  },
+  {
+   "path": "/api/proxy/interception/extra/more",
+   "key": "/api/proxy/interception",
+   "gated": false
+  },
+  {
    "path": "/api/proxy/listener",
    "key": "/api/proxy/listener",
    "gated": false
@@ -2838,6 +2860,26 @@
   {
    "path": "/api/scanner/coverage/extra/more",
    "key": "/api/scanner/coverage",
+   "gated": false
+  },
+  {
+   "path": "/api/scanner/dom",
+   "key": "/api/scanner/dom",
+   "gated": false
+  },
+  {
+   "path": "/api/scanner/dom/",
+   "key": "/api/scanner/dom",
+   "gated": false
+  },
+  {
+   "path": "/api/scanner/dom/extra",
+   "key": "/api/scanner/dom",
+   "gated": false
+  },
+  {
+   "path": "/api/scanner/dom/extra/more",
+   "key": "/api/scanner/dom",
    "gated": false
   },
   {

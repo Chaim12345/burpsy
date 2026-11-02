@@ -296,6 +296,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/proxy/passthrough":   {body: typeOf[tlsPassthroughAddReq]()},
 	"PUT /api/proxy/passthrough":    {body: typeOf[tlsPassthroughSwitchesReq]()},
 	"DELETE /api/proxy/passthrough": {query: []queryParam{{name: "pattern", kind: "string", desc: "the host pattern to remove"}}},
+	"PUT /api/proxy/interception":   {body: typeOf[interceptionReq]()},
+	"PUT /api/scanner/dom":          {body: typeOf[domEngineReq]()},
 	"PUT /api/browser/settings":     {body: typeOf[browser.Settings]()},
 	"POST /api/browser/launch":      {body: typeOf[browserLaunchReq](), optional: true},
 	"POST /api/browser/clear":       noBody,
