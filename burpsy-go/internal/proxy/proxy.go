@@ -2094,14 +2094,16 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// forwarded live and NOT held for editing — which is the correct trade, because holding it
 		// would mean holding the stream open for the operator, and an operator cannot edit bytes that
 		// have not been sent yet. The alternative — buffering — is the defect.
-		if s.streamsResponse(reqHost, head) {
+		if s.streamsResponse(method, reqHost, head) {
 			if !s.streamTLSResponse(tlsClient, upstream, upstreamBR, method, reqHost, reqPort, reqTLS, path, head, requestData, reqStages, inScope, startTime, firstByte, requestEdited, downgrade) {
 				return
 			}
 			continue
 		}
 
-		body, err := httputil.ReadResponseBody(upstreamBR, head)
+		// method is the one that went upstream (re-read from the final bytes above), so a HEAD reads no
+		// body whatever its head declares and upstreamBR stays at the next response on this tunnel.
+		body, err := httputil.ReadResponseBodyFor(upstreamBR, head, method)
 		// Truncation and cap salvage, TLS leg (arch review: the TLS leg kept the old
 		// drop-the-exchange shape after the plaintext leg was fixed). A short body's
 		// declared framing is false, so its head goes out close-delimited; a capped one
@@ -3700,7 +3702,7 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	// A body cut at the cap is forwarded as far as it was read (readHTTPResponse made its head
 	// honest); this path serves one response, so the connection ends with it.
 	var capped *httputil.BodyCapError
-	if resp, _, err := readHTTPResponse(upstreamConn); err == nil || errors.As(err, &capped) {
+	if resp, _, err := readHTTPResponse(upstreamConn, method); err == nil || errors.As(err, &capped) {
 		// Match & Replace first, then the blanket response modification rules — the same order, and
 		// for the same reason, as handleTLSResponse and completeResponse: a Match & Replace rule is
 		// written against the origin's own bytes, and running "remove all JavaScript" first would
@@ -3790,7 +3792,8 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	// forForwarding runs once, up front, so an h3 attempt and the h1 leg write the same
 	// bytes: the platform-auth headers it injects belong to the exchange whichever carrier
 	// rides it (PR #363 review).
-	forwardBytes := s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))
+	method := requestMethod(requestData)
+	forwardBytes := s.forForwarding(requestData, host, method, requestURI(requestData))
 	var h3Note *string
 	// h3EgressPossible: QUIC dials the advertised endpoint directly, so with an upstream
 	// proxy or the SOCKS carrier in force the Alt-Svc table is not ridden at all - the h1
@@ -3845,7 +3848,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	if n := s.config.network; n != nil {
 		understand100 = n.Continue.Understand100
 	}
-	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, understand100)
+	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, method, understand100)
 	// A body cut at the cap is still the answer: forwarded as far as it was read, noted, and the
 	// client connection ended after it (burpsy-react-ui-h1-cap-silent).
 	var capped *httputil.BodyCapError
@@ -3957,8 +3960,11 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 // A body cut at the cap comes back as the response with a *httputil.BodyCapError, its head made
 // honest for forwarding (salvageResponseBody): the caller forwards it, notes it, and ends the
 // connection.
-func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
-	return readHTTPResponseSkippingInterim(conn, false)
+//
+// method is the forwarded request's: the answer to a HEAD has no body whatever its head declares
+// (httputil.ResponseHasBodyFor), and reading one would wait on bytes that never come.
+func readHTTPResponse(conn net.Conn, method string) ([]byte, time.Time, error) {
+	return readHTTPResponseSkippingInterim(conn, method, false)
 }
 
 // readHTTPResponseSkippingInterim is readHTTPResponse with the operator's 100-continue handling
@@ -3974,7 +3980,7 @@ func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
 // from a slow one.
 //
 // With understand100 off it reads exactly one response, interim or not, which is readHTTPResponse.
-func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte, time.Time, error) {
+func readHTTPResponseSkippingInterim(conn net.Conn, method string, understand100 bool) ([]byte, time.Time, error) {
 	br := bufio.NewReader(conn)
 	firstByte := time.Time{}
 	for interim := 0; ; interim++ {
@@ -3985,7 +3991,7 @@ func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte,
 		if firstByte.IsZero() {
 			firstByte = at
 		}
-		body, err := httputil.ReadResponseBody(br, head)
+		body, err := httputil.ReadResponseBodyFor(br, head, method)
 		var capped *httputil.BodyCapError
 		if err != nil && !errors.As(err, &capped) {
 			return nil, time.Time{}, err

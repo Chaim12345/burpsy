@@ -182,6 +182,30 @@ func responseHasBody(head []byte) bool {
 	return !(len(statusLine) >= 12 && (statusLine[9] == '1' || string(statusLine[9:12]) == "204" || string(statusLine[9:12]) == "304"))
 }
 
+// ResponseHasBodyFor is responseHasBody with the method of the request the response answers, which
+// is the whole rule (RFC 9112 §6.3 rule 1): the answer to a HEAD, like any 1xx, 204 or 304, ends at
+// the blank line after its head whatever Content-Length or Transfer-Encoding it carries. Those fields
+// on a HEAD answer describe the body a GET would have had (Express sends the Content-Length, other
+// stacks say chunked); no byte of it follows. A reader that believes them waits for a body that never
+// comes, and on a keep-alive connection takes the next response as this one's body — tus clients
+// HEAD every upload for its offset, so a relay that did this hung each one. The Rust proxy carries the
+// same rule (crates/proxy response_is_complete(resp, method)).
+//
+// A caller with no method keeps responseHasBody's status-only answer through ReadResponseBody; a
+// caller relaying a request whose method it can read must ask this instead.
+func ResponseHasBodyFor(method string, head []byte) bool {
+	return !strings.EqualFold(method, "HEAD") && responseHasBody(head)
+}
+
+// ReadResponseBodyFor is ReadResponseBody for a response whose request method is known: the answer to
+// a HEAD reads nothing and leaves br at the start of the next response (see ResponseHasBodyFor).
+func ReadResponseBodyFor(br *bufio.Reader, head []byte, method string) ([]byte, error) {
+	if !ResponseHasBodyFor(method, head) {
+		return nil, nil
+	}
+	return ReadResponseBody(br, head)
+}
+
 // ResponseFraming reads the two fields a body reader needs — Transfer-Encoding and
 // Content-Length — out of a response head, tolerating header lines that are not well-formed.
 //
