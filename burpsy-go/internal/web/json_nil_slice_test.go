@@ -150,7 +150,6 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/exchanges/":                    "plain-text 400: an exchange ID is required",
 		"/api/extensions/console":            "plain-text 400: a plugin name is required",
 		"/api/intercept/rules/{dir...}":      "plain-text 404: a direction is required",
-		"/api/issues/":                       "plain-text 400: an issue ID is required",
 		"/api/project/logging":               "plain-text 503: no file logger attached",
 		"/api/proxy/listener":                "plain-text 503: no proxy server attached",
 		"/api/proxy/interception":            "plain-text 503: no TLS policy attached",

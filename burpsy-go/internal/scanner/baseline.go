@@ -30,9 +30,11 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/tools"
@@ -56,6 +58,10 @@ type BaselineSample struct {
 	BodyLen  int
 	BodyHash string
 	Duration time.Duration
+	// NoData is true when the body carried nothing a privileged identity could have been shown — an
+	// empty collection or a near-empty body (bodyCarriesNoData). It is kept per sample, like the hash,
+	// because the Baseline keeps no bodies.
+	NoData bool
 }
 
 // NewBaselineSample builds a sample from an observed status/body/duration triple, hashing the
@@ -70,6 +76,82 @@ func NewBaselineSample(status int, body string, duration time.Duration) Baseline
 		BodyLen:  len(body),
 		BodyHash: tools.NewHasher().SHA256(body),
 		Duration: duration,
+		NoData:   bodyCarriesNoData(body),
+	}
+}
+
+// noDataByteFloor is the fallback for a body that is not JSON: at most this many bytes, after
+// trimming whitespace, carry no data ("", "OK", "done"). Deliberately tiny — four bytes cannot hold an
+// identifier and a value, while anything longer might be a record the comparison must see.
+const noDataByteFloor = 4
+
+// noDataParseCap bounds the structural check: a body longer than this is not parsed and counts as
+// data. An empty collection, envelope included, is a few dozen bytes; a document this size carries
+// something, and parsing every large calibration body to prove otherwise would cost for nothing.
+const noDataParseCap = 4096
+
+// bodyCarriesNoData reports whether a response body has nothing in it a privileged identity could
+// have been shown, so two identities receiving it identically proves nothing about access control.
+//
+// The rule is structural for JSON and deliberately conservative — it must never call a real record
+// empty, because that would turn a true bypass into "Ambiguous":
+//
+//   - null, "", [] and {} carry no data.
+//   - An array carries data as soon as it has an element.
+//   - An object carries no data only when it is an envelope around nothing: it has at least one
+//     array or object member, every such member carries no data, and its other members are numbers,
+//     booleans or null — the count, page and success fields of a collection envelope. So
+//     {"data":[]}, {"rows":[],"count":0} and {"success":true,"items":[],"page":1} are empty, while
+//     {"success":true} (no collection: an action's acknowledgement) and {"id":5,"name":"x","roles":[]}
+//     (a string member: a record) carry data.
+//   - A top-level number or boolean carries data (a PIN, a balance, a flag).
+//
+// A body that is not JSON falls back to noDataByteFloor. A body that could not be decoded (an unknown
+// Content-Encoding) is opaque bytes and so counts as data, which is the safe direction.
+func bodyCarriesNoData(body string) bool {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return true
+	}
+	if len(trimmed) > noDataParseCap {
+		return false
+	}
+	var doc any
+	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
+		return len(trimmed) <= noDataByteFloor
+	}
+	return jsonCarriesNoData(doc)
+}
+
+// jsonCarriesNoData is bodyCarriesNoData's structural rule over a decoded JSON value.
+func jsonCarriesNoData(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case string:
+		return x == ""
+	case []any:
+		return len(x) == 0
+	case map[string]any:
+		if len(x) == 0 {
+			return true
+		}
+		collections := 0
+		for _, member := range x {
+			switch m := member.(type) {
+			case []any, map[string]any:
+				if !jsonCarriesNoData(m) {
+					return false
+				}
+				collections++
+			case string:
+				// A string member is content (a name, a message, an id), never envelope metadata.
+				return false
+			}
+		}
+		return collections > 0
+	default:
+		return false
 	}
 }
 
@@ -87,6 +169,7 @@ type Baseline struct {
 	avgDuration float64 // seconds; float64 so meanStdDev can be shared with length
 	durStdDev   float64
 	hashes      map[string]int
+	noData      int // calibration samples whose body carried no data (BaselineSample.NoData)
 }
 
 // CalibrateBaseline computes a Baseline's summary statistics from already-observed calibration
@@ -108,11 +191,15 @@ func CalibrateBaseline(samples []BaselineSample) (*Baseline, error) {
 	lens := make([]float64, len(samples))
 	durs := make([]float64, len(samples))
 	hashes := make(map[string]int, len(samples))
+	noData := 0
 	for i, s := range samples {
 		statusCounts[s.Status]++
 		lens[i] = float64(s.BodyLen)
 		durs[i] = s.Duration.Seconds()
 		hashes[s.BodyHash]++
+		if s.NoData {
+			noData++
+		}
 	}
 
 	modal, best := 0, -1
@@ -142,6 +229,7 @@ func CalibrateBaseline(samples []BaselineSample) (*Baseline, error) {
 		avgDuration: avgDur,
 		durStdDev:   durStdDev,
 		hashes:      hashes,
+		noData:      noData,
 	}, nil
 }
 
@@ -356,6 +444,11 @@ type AccessControlDeviation struct {
 	// Comparison is the underlying Deviation the match/no-match verdict was derived from, so
 	// a caller building a finding can cite exactly which signals matched (or didn't).
 	Comparison Deviation
+	// Ambiguous is true when the baseline cannot serve as the reference the verdict is drawn
+	// against, and Reason says why. Matched is then false, and a caller must not read that as
+	// "access control enforced" either: there is no verdict.
+	Ambiguous bool
+	Reason    string
 }
 
 // DiffAccessControl compares a single sample — captured under a different identity than the
@@ -363,9 +456,44 @@ type AccessControlDeviation struct {
 // identity appears to have received the same resource. threshold has the same meaning as in
 // Compare: a wider threshold accepts more incidental variance as "still the same resource"
 // before concluding the two identities diverged.
-func (b *Baseline) DiffAccessControl(other BaselineSample, threshold DeviationThreshold) AccessControlDeviation {
+//
+// The verdict is only as good as the baseline, so two baselines yield Ambiguous instead:
+//
+//   - One that was not served (its modal status is not 2xx: a 400, 403 or 500, or a redirect).
+//     Matching it means the other identity was refused or failed the same way, not that it got
+//     privileged content, and differing from it says nothing about enforcement. Every verdict
+//     against it is Ambiguous, whatever the other identity received.
+//   - One that was served but carried no data (most of its calibration samples were empty
+//     collections or near-empty bodies, bodyCarriesNoData) on a read. Matching it only shows that
+//     both identities saw nothing, so a match becomes Ambiguous; a differing answer keeps its
+//     Enforced reading (a 403 is still a denial). method is the request's method, and only GET,
+//     HEAD and OPTIONS — or "" when the caller does not know it — are reads: a write answered 204
+//     or {"success":true} for every identity performed the action for each, and that match is the
+//     function-level bypass this verdict exists to report.
+func (b *Baseline) DiffAccessControl(method string, other BaselineSample, threshold DeviationThreshold) AccessControlDeviation {
 	dev := b.Compare(other, threshold)
+	if s := b.modalStatus; s < 200 || s > 299 {
+		reason := fmt.Sprintf("baseline was not authorised (status %d) — pick a privileged baseline", s)
+		if s >= 300 && s < 400 {
+			reason = fmt.Sprintf("baseline was redirected (status %d), not served — pick a privileged baseline", s)
+		}
+		return AccessControlDeviation{Comparison: dev, Ambiguous: true, Reason: reason}
+	}
+	if !dev.Flagged && isReadMethod(method) && b.noData*2 > len(b.Samples) {
+		return AccessControlDeviation{Comparison: dev, Ambiguous: true,
+			Reason: "baseline returned no data; seed data the baseline can see"}
+	}
 	return AccessControlDeviation{Matched: !dev.Flagged, Comparison: dev}
+}
+
+// isReadMethod reports whether a request only reads, for DiffAccessControl's no-data rule. An unknown
+// method ("") counts as a read: the rule then errs towards Ambiguous, never towards a bypass.
+func isReadMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "", "GET", "HEAD", "OPTIONS":
+		return true
+	}
+	return false
 }
 
 // RunAccessControlBaselineDiff is the full pipeline the task this file exists for describes:
@@ -392,5 +520,7 @@ func RunAccessControlBaselineDiff(ctx context.Context, sender BaselineSender, id
 		return baseline, AccessControlDeviation{}, fmt.Errorf("access-control baseline diff: sending as identity %q: %w", identityB.Label, err)
 	}
 
-	return baseline, baseline.DiffAccessControl(NewBaselineSample(status, body, duration), threshold), nil
+	// The sender seam does not carry the request's method, so it is passed as unknown, which the
+	// no-data rule treats as a read (DiffAccessControl).
+	return baseline, baseline.DiffAccessControl("", NewBaselineSample(status, body, duration), threshold), nil
 }
