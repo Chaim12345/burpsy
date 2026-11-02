@@ -1708,7 +1708,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
 		return
 	}
-	defer upstream.Close()
+	// A closure, not `defer upstream.Close()`: the HTTP/1.1 loop below re-dials when the origin ends
+	// the connection (tunnel_upstream.go), and the deferred close must reach the connection in use
+	// at return, not the first one.
+	defer func() { upstream.Close() }()
 
 	protocol, err := NegotiatedProtocol(negotiated)
 	if err != nil {
@@ -1777,6 +1780,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// connection, is the beginning of the next response — and it is what lets
 	// the WebSocket handoff below keep the frame bytes that arrived with a 101.
 	upstreamBR := bufio.NewReader(upstream)
+	// The client keeps this tunnel open across requests, but the upstream connection behind it can
+	// end after any response (tunnel_upstream.go). upstreamFresh skips the liveness check on a
+	// connection no request has used yet; upstreamEnded records that the last response said the
+	// connection ends.
+	upstreamFresh, upstreamEnded := true, false
 	for {
 		requestLine, err := readHeadLine(br, maxRequestHeadBytes)
 		if err == errRequestHeadTooLarge {
@@ -1963,7 +1971,24 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// requestData — the forward, the record, the operator's own view in history — is the same
 		// bytes that went out. Rewriting it after the forward instead would make the row and the
 		// wire disagree, which is the one thing this proxy's record is not allowed to do.
+		//
+		// A connection a previous request used is checked first, and replaced when the origin has
+		// ended it (tunnel_upstream.go): writing into a dead socket read EOF and closed the client's
+		// tunnel with no response at all.
+		if !upstreamFresh && (upstreamEnded || !upstreamStillUsable(upstream, upstreamBR)) {
+			fresh, err := s.redialTunnelUpstream(host, addr, negotiated)
+			if err != nil {
+				s.config.logger.Warn("re-dialling the tunnel's upstream failed", zap.String("host", host), zap.Error(err))
+				s.writeProxyError(tlsClient, upstreamGoneResponse("could not reconnect to the origin: "+err.Error()))
+				return
+			}
+			upstream.Close()
+			upstream, upstreamBR = fresh, bufio.NewReader(fresh)
+		}
+		upstreamFresh, upstreamEnded = false, false
 		if _, err := upstream.Write(s.forForwarding(requestData, reqHost, method, path)); err != nil {
+			s.config.logger.Warn("forward failed: upstream write", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+			s.writeProxyError(tlsClient, upstreamGoneResponse("the request could not be written to the origin: "+err.Error()))
 			return
 		}
 
@@ -1979,8 +2004,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			// carries an ordinary response and must be measured like one.
 			head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 			if err != nil {
+				s.config.logger.Warn("upstream closed before answering", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+				s.writeProxyError(tlsClient, upstreamGoneResponse("the origin closed the connection before answering: "+err.Error()))
 				return
 			}
+			upstreamEnded = responseEndsConnection(head)
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
 				// The same salvage the plaintext leg has (stream_response.go): a short or
@@ -2073,8 +2101,15 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// single total cannot say (burpsy-react-ui-jcdm).
 		head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 		if err != nil {
+			// The origin closed (or reset) the connection without answering — a keep-alive close that
+			// raced the request past the liveness check. The request is not re-sent: whether the origin
+			// acted on it is unknowable, and replaying a non-idempotent write is worse than an error.
+			// The client gets a 502 saying so, never a silent close it reads as the proxy dying.
+			s.config.logger.Warn("upstream closed before answering", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+			s.writeProxyError(tlsClient, upstreamGoneResponse("the origin closed the connection before answering: "+err.Error()))
 			return
 		}
+		upstreamEnded = responseEndsConnection(head)
 
 		// A 401's challenge is the nonce a Digest credential has to be computed against, so it is
 		// recorded here and the NEXT request on this connection can answer it. This is the whole of
