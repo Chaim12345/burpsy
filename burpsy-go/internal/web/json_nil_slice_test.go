@@ -106,6 +106,8 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/engagement/clickbandit.js": "text/javascript",
 		"/ui2/":                          "<!doctype html",
 		"/ui2/history":                   "<!doctype html",
+		"/ui2/search":                    "<!doctype html",
+		"/ui2/discover":                  "<!doctype html",
 		"/ui2/issues":                    "<!doctype html",
 		"/ui2/htmx.min.js":               "text/javascript",
 		"/ui2/sse.min.js":                "text/javascript",

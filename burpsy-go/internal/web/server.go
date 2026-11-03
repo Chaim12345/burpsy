@@ -1583,6 +1583,9 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
 	s.route("/ui2/collaborator", s.handleUI2Collaborator)
 	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
+	s.route("/ui2/search", s.handleUI2Search)
+	s.route("/ui2/search/message/{id}", s.handleUI2SearchMessage)
+	s.route("/ui2/discover", s.handleUI2Discover)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

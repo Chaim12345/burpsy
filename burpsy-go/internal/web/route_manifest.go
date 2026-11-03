@@ -1470,6 +1470,18 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Extensions page: plugin list, state breakdown, JSON-RPC API table",
 	},
+	"/ui2/search": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Search page: suite-wide search over stored traffic through /api/search (term, case, regex, negate, in-scope, location, within, tools); a blank term renders the form and tool list",
+	},
+	"/ui2/search/message/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 Search preview: one matched message read through /api/message/{id}, rendered raw with the server's match offsets shown in context",
+	},
+	"/ui2/discover": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Discover page: the in-app reference (limits, query language, BCheck syntax, per-tool panels, hotkeys, shipped docs), filtered by q",
+	},
 	"/ui2/history": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 history page: server-paged rows (q/search/offset/limit), fragment when HX-Request",

@@ -50,6 +50,8 @@ var ui2Pages = []struct {
 	{"/ui2/collaborator", "collaborator", "Channel"},
 	{"/ui2/history", "history", "#rows"},
 	{"/ui2/issues", "issues", "findings"},
+	{"/ui2/search", "search", "Tools to search"},
+	{"/ui2/discover", "discover", "What burpsy does not do"},
 }
 
 func TestUI2EveryPageRendersShellAndFragment(t *testing.T) {
