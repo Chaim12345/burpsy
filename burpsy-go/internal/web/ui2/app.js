@@ -56,6 +56,10 @@ function liveStream() {
       liveRefresh('history');
     } else if (view === 'issues' && kind === 'issues') {
       liveRefresh('issues');
+    } else if (view === 'auditqueue' && (kind === 'dashboard' || kind === 'issues')) {
+      // An audit announces its end through dashboard (and its findings through issues); the
+      // queue's rows are re-read on either. The selected-item pane lives outside #rows.
+      liveRefresh('auditqueue');
     } else if (view === 'intercept' && kind === 'intercept') {
       liveRefresh('intercept');
     } else if (view === 'logger' && kind === 'toollog') {
@@ -171,7 +175,7 @@ function liveReapplyDirty(saved) {
 // the pill instead of refreshing; the pill's own refresh re-applies the edits it crosses.
 function liveGuarded(what) {
   if (liveScrolled()) return true;
-  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer') {
+  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'issues') {
     var rows = document.getElementById(what === 'scope' ? 'srows' : 'rows');
     if (!rows) return false;
     if (rows.querySelector('details.held-editor[open], details.scope-edit[open], details.collection-edit[open]')) return true;
@@ -221,7 +225,19 @@ function liveIssue(what) {
     url = '/ui2/history' + (parts.length ? '?' + parts.join('&') : '');
     target = '#rows';
   } else if (what === 'issues') {
-    url = '/ui2/issues';
+    // Carry the list's view filter (it lives inside #rows) so a refresh keeps the operator's view.
+    var ff = document.querySelector('#rows form.issues-filter');
+    var fq = [];
+    if (ff) {
+      ['source', 'severity', 'confidence', 'q'].forEach(function (n) {
+        var el = ff.querySelector('[name="' + n + '"]');
+        if (el && el.value) fq.push(n + '=' + encodeURIComponent(el.value));
+      });
+    }
+    url = '/ui2/issues' + (fq.length ? '?' + fq.join('&') : '');
+    target = '#rows';
+  } else if (what === 'auditqueue') {
+    url = '/ui2/auditqueue';
     target = '#rows';
   } else if (what === 'intercept') {
     url = '/ui2/intercept';
@@ -281,6 +297,16 @@ document.addEventListener('change', function (e) {
 
 document.body.addEventListener('htmx:beforeRequest', function (e) {
   if (!liveTag(e)) { liveGen++; liveOpFlight++; }
+});
+
+// A reviewed write answers with an HX-Trigger naming the list it changed (issue triage and
+// audit-queue actions announce nothing on the event stream); re-read that list. The refresh
+// is deferred behind the operator's own request by the in-flight count, like any other.
+document.body.addEventListener('ui2-issues-changed', function () {
+  if ((document.body.dataset || {}).view === 'issues') liveRefresh('issues');
+});
+document.body.addEventListener('ui2-auditqueue-changed', function () {
+  if ((document.body.dataset || {}).view === 'auditqueue') liveRefresh('auditqueue');
 });
 
 // Stale live answers are dropped before they can swap over a newer operator action.

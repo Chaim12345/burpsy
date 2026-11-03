@@ -118,7 +118,11 @@ type Server struct {
 	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
 	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
 	ui2SettingsWriteReviews sync.Map
-	sender                  *sender.Sender
+	// ui2IssueReviews holds the ungated issue, consolidation and audit-queue calls a ui2 operator
+	// has reviewed but not yet confirmed (ui2_issues.go): exact bytes, single-use, bounded by
+	// ui2IssueReviewCap, expiring with ConfirmTTL.
+	ui2IssueReviews sync.Map
+	sender          *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1528,6 +1532,13 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/history/{id}", s.handleUI2HistoryDetail)
 	s.route("/ui2/issues", s.handleUI2Issues)
 	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
+	s.route("/ui2/issues/action/{step}", s.handleUI2IssueAction)
+	s.route("/ui2/issues/consolidation", s.handleUI2IssueConsolidation)
+	s.route("/ui2/issues/consolidation/{step}", s.handleUI2IssueConsolidationAction)
+	s.route("/ui2/issues/report", s.handleUI2IssueReport)
+	s.route("/ui2/auditqueue", s.handleUI2AuditQueue)
+	s.route("/ui2/auditqueue/item/{id}", s.handleUI2AuditQueueItem)
+	s.route("/ui2/auditqueue/action/{step}", s.handleUI2AuditQueueAction)
 	s.route("/ui2/advisories/{typeIndex}", s.handleUI2AdvisoryDetail)
 	s.route("/ui2/htmx.min.js", serveUI2Asset)
 	s.route("/ui2/sse.min.js", serveUI2Asset)
