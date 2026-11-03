@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "ec41c1d67aa7",
+  "strategy": "manual-commit",
+  "branch": "ui2/search-discover",
+  "checkpoints_count": 55,
+  "files_touched": [
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui/src/lib/api-schema.d.ts",
+    "burpsy-go/internal/web/ui/src/lib/gated-routes.contract.json",
+    "burpsy-go/internal/web/ui/src/lib/gated-routes.ts",
+    "burpsy-go/internal/web/ui/src/lib/route-risk.ts",
+    "burpsy-go/internal/web/ui2/app.js",
+    "burpsy-go/internal/web/ui2/discover/discover_page.html",
+    "burpsy-go/internal/web/ui2/discover/discover_reference.json",
+    "burpsy-go/internal/web/ui2/nav.html",
+    "burpsy-go/internal/web/ui2/search/search_page.html",
+    "burpsy-go/internal/web/ui2/search/search_preview.html",
+    "burpsy-go/internal/web/ui2_discover.go",
+    "burpsy-go/internal/web/ui2_pages_test.go",
+    "burpsy-go/internal/web/ui2_search.go",
+    "burpsy-go/internal/web/ui2_search_test.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/41c1d67aa7/0/metadata.json",
+      "transcript": "/ec/41c1d67aa7/0/full.jsonl",
+      "compact_transcript": "/ec/41c1d67aa7/0/transcript.jsonl",
+      "content_hash": "/ec/41c1d67aa7/0/content_hash.txt",
+      "prompt": "/ec/41c1d67aa7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 3125,
+    "cache_read_tokens": 514150,
+    "output_tokens": 2452,
+    "api_call_count": 3
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
