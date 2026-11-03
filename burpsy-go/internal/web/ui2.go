@@ -83,6 +83,7 @@ type ui2HistoryParams struct {
 	Search string // substring search over method/host/path/status
 	Offset int    // server-side page offset, newest first
 	Limit  int    // page size (default 100)
+	F      ui2HistoryFilters
 }
 
 const ui2DefaultPageSize = 100
@@ -104,6 +105,7 @@ func parseUI2HistoryParams(r *http.Request) ui2HistoryParams {
 		}
 		p.Limit = n
 	}
+	p.F = parseUI2HistoryFilters(q)
 	return p
 }
 
@@ -123,6 +125,12 @@ type ui2Row struct {
 	StartedMs   uint64
 	Highlight   string
 	Selected    bool
+	Ext         string
+	Params      int
+	Listener    uint16
+	Comment     string
+	Title       string
+	Extract     []ui2ExtractCell
 }
 
 func ui2StatusString(s *uint16) string {
@@ -147,12 +155,15 @@ type ui2HistoryRows struct {
 	// and search strings inline broke the attribute's JSON (and dropped the filter from the
 	// next page) whenever they contained a double quote.
 	HxVals string
+	// Extractors names the saved extractor columns, in order; each row's Extract follows it.
+	Extractors []string
 }
 
 // handleUI2 is the /ui2/ subtree root: the shell page with the history view embedded.
 func (s *Server) handleUI2(w http.ResponseWriter, r *http.Request) {
 	page := ui2Page{Title: "burpsy /ui2/ — History", View: "history"}
-	page.Body = s.renderUI2HistoryRows(r, ui2HistoryParams{Limit: ui2DefaultPageSize})
+	p := ui2HistoryParams{Limit: ui2DefaultPageSize}
+	page.Body = s.ui2HistoryToolbar(p) + s.renderUI2HistoryRows(r, p)
 	if err := ui2Templates.ExecuteTemplate(w, "layout.html", page); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
@@ -180,7 +191,7 @@ func (s *Server) handleUI2History(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	page := ui2Page{Title: "burpsy /ui2/ — History", View: "history", Body: body}
+	page := ui2Page{Title: "burpsy /ui2/ — History", View: "history", Body: s.ui2HistoryToolbar(p) + body}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ui2Templates.ExecuteTemplate(w, "layout.html", page); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
@@ -203,43 +214,16 @@ func (s *Server) renderUI2HistoryRows(r *http.Request, p ui2HistoryParams) templ
 // that keeps a 200k-row capture responsive. Shared by the full fragment and the
 // infinite-scroll append so the two cannot disagree about which rows a page holds.
 func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryRows {
-	exchanges := s.store.Exchanges()
-
-	var filter *queryFilter
-	if p.Q != "" {
-		f, err := compileQuery(p.Q, s.store)
-		if err != nil {
-			// The DSL error is rendered by the JSON API with caret art; here a plain
-			// message in the rows fragment is what the operator sees inline.
-			return ui2HistoryRows{
-				Rows: nil, Total: len(exchanges), Matched: 0, Offset: 0, Limit: p.Limit,
-				NextOffset: -1, Q: p.Q, Search: p.Search, HasMore: false,
-				HxVals: ui2HistoryHxVals(-1, p),
-			}
+	matched, all, err := s.ui2HistoryMatched(p)
+	if err != nil {
+		// The DSL error is rendered by the JSON API with caret art; here a plain
+		// message in the rows fragment is what the operator sees inline.
+		return ui2HistoryRows{
+			Rows: nil, Total: all, Matched: 0, Offset: 0, Limit: p.Limit,
+			NextOffset: -1, Q: p.Q, Search: p.Search, HasMore: false,
+			HxVals: ui2HistoryHxVals(-1, p),
 		}
-		filter = f
 	}
-
-	needle := strings.ToLower(p.Search)
-	matched := make([]*core.Exchange, 0, len(exchanges))
-	for i := len(exchanges) - 1; i >= 0; i-- {
-		ex := exchanges[i]
-		switch ex.Source {
-		case core.SourceRepeater, core.SourceIntruder, core.SourceScanner:
-			continue
-		}
-		if filter != nil && !filter.match(ex) {
-			continue
-		}
-		if needle != "" {
-			hay := strings.ToLower(ex.Method + " " + ex.Host + ex.Path + " " + ui2StatusString(ex.Status))
-			if !strings.Contains(hay, needle) {
-				continue
-			}
-		}
-		matched = append(matched, ex)
-	}
-
 	total := len(matched)
 	end := p.Offset + p.Limit
 	if end > total {
@@ -265,11 +249,18 @@ func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryR
 				DurationMs:  v.DurationMs,
 				StartedMs:   v.StartedMs,
 				Highlight:   v.Highlight,
+				Ext:         ui2PathExt(v.Path),
+				Params:      v.RequestParams,
+				Listener:    v.ListenerPort,
+				Comment:     ptrString(v.Notes),
+				Title:       v.Title,
 			})
 		}
 	}
+	names := s.ui2HistoryExtractColumns(rows)
 	return ui2HistoryRows{
-		Rows: rows, Total: len(exchanges), Matched: total, Offset: p.Offset, Limit: p.Limit,
+		Extractors: names,
+		Rows:       rows, Total: all, Matched: total, Offset: p.Offset, Limit: p.Limit,
 		NextOffset: next, Q: p.Q, Search: p.Search, HasMore: next >= 0,
 		HxVals: ui2HistoryHxVals(next, p),
 	}
@@ -278,7 +269,11 @@ func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryR
 // ui2HistoryHxVals is the sentinel row's hx-vals payload: JSON with the filter and search
 // strings properly encoded, so any operator text round-trips into the next page request.
 func ui2HistoryHxVals(next int, p ui2HistoryParams) string {
-	b, _ := json.Marshal(map[string]any{"offset": next, "limit": p.Limit, "q": p.Q, "search": p.Search})
+	m := map[string]any{"offset": next, "limit": p.Limit, "q": p.Q, "search": p.Search}
+	for k, v := range p.F.values() {
+		m[k] = v
+	}
+	b, _ := json.Marshal(m)
 	return string(b)
 }
 
@@ -299,10 +294,22 @@ func (s *Server) handleUI2HistoryDetail(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
 		return
 	}
-	ex, err := s.store.GetExchange(core.ExchangeID(id))
-	if err != nil {
+	model, ok := s.ui2HistoryDetailModel(r, id)
+	if !ok {
 		http.Error(w, "Exchange not found", http.StatusNotFound)
 		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "history_detail.html", model); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// ui2HistoryDetailModel reads one exchange's panes; ok is false when the id is not stored.
+func (s *Server) ui2HistoryDetailModel(r *http.Request, id uint64) (ui2Detail, bool) {
+	ex, err := s.store.GetExchange(core.ExchangeID(id))
+	if err != nil {
+		return ui2Detail{}, false
 	}
 	v := exchangeView(ex)
 	model := ui2Detail{
@@ -336,10 +343,7 @@ func (s *Server) handleUI2HistoryDetail(w http.ResponseWriter, r *http.Request) 
 	model.RespPretty = r.URL.Query().Get("view_resp") != "raw"
 	model.ReqPane = renderMessagePane(model.Request, true, model.ReqPretty)
 	model.RespPane = renderMessagePane(model.Response, false, model.RespPretty)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := ui2Templates.ExecuteTemplate(w, "history_detail.html", model); err != nil {
-		http.Error(w, "template error", http.StatusInternalServerError)
-	}
+	return model, true
 }
 
 // requestMessageForExchange resolves an exchange's request bytes when the exchange's own

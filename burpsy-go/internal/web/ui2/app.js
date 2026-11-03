@@ -200,6 +200,12 @@ function liveGuarded(what) {
 }
 
 function liveRefresh(what) {
+  // "Follow new rows": history is newest-first, so following means jumping to the top.
+  if (what === 'history') {
+    var fol = document.getElementById('hfollow');
+    var lst = document.querySelector('main.split #list');
+    if (fol && fol.checked && lst) lst.scrollTop = 0;
+  }
   if (what !== 'crawlwatch' && liveGuarded(what)) { livePillShow(what); return; }
   if (liveBusy || liveOpFlight > 0) { liveTrailing = what; return; }
   liveIssue(what);
@@ -213,12 +219,9 @@ function liveIssue(what) {
     url = '/ui2/scanner/crawl-watch?task=' + encodeURIComponent(cw.dataset.task);
     target = '#crawlwatch';
   } else if (what === 'history') {
-    var q = document.getElementById('q');
-    var search = document.querySelector('header form input[name="search"]');
-    var parts = [];
-    if (q && q.value) parts.push('q=' + encodeURIComponent(q.value));
-    if (search && search.value) parts.push('search=' + encodeURIComponent(search.value));
-    url = '/ui2/history' + (parts.length ? '?' + parts.join('&') : '');
+    // The header query/search and the toolbar filters together are the view's state.
+    var hp = histParams().toString();
+    url = '/ui2/history' + (hp ? '?' + hp : '');
     target = '#rows';
   } else if (what === 'issues') {
     url = '/ui2/issues';
@@ -629,24 +632,185 @@ document.addEventListener('click', function (e) {
     if ((e.key === 'k' || e.key === 'ArrowUp') && !e.ctrlKey && !e.metaKey) { move(-1); e.preventDefault(); return; }
     if (e.key === 'Enter') { openSelected(); e.preventDefault(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && document.querySelector('#rows-body')) {
-      document.querySelectorAll('#rows-body tr[hx-get]').forEach(function (r) { r.classList.add('checked'); });
+      document.dispatchEvent(new CustomEvent('ui2:selectall'));
       e.preventDefault();
     }
   });
 })();
 
-// ---- Row multi-select (checkbox column driven by .checked class) ----
+// ---- Row multi-select (shift/ctrl/cmd-click or the row checkbox) ----
+// The selection is a list of row ids kept here, so it survives live rows swaps and paging; the
+// rows are re-marked after every swap. It feeds the History bulk-action forms (.hbulk-ids) and
+// enables their buttons (data-needs-sel = minimum count). Nothing is ever submitted from here.
 (function () {
-  function count() {
-    var n = document.querySelectorAll('#rows-body tr.checked').length;
+  var sel = [];
+  function sync() {
+    document.querySelectorAll('#rows-body tr[data-id]').forEach(function (tr) {
+      var on = sel.indexOf(tr.dataset.id) >= 0;
+      tr.classList.toggle('checked', on);
+      var b = tr.querySelector('.selbox');
+      if (b) b.checked = on;
+    });
     var el = document.getElementById('sel-count');
-    if (el) el.textContent = n ? n + ' selected' : '';
+    if (el) el.textContent = sel.length ? sel.length + ' selected' : '';
+    document.querySelectorAll('.hbulk-ids').forEach(function (i) { i.value = sel.join(','); });
+    document.querySelectorAll('[data-needs-sel]').forEach(function (b) {
+      b.disabled = sel.length < parseInt(b.getAttribute('data-needs-sel'), 10);
+    });
+  }
+  function toggle(id, on) {
+    var i = sel.indexOf(id);
+    if (on && i < 0) sel.push(id);
+    if (!on && i >= 0) sel.splice(i, 1);
   }
   document.addEventListener('click', function (e) {
-    var tr = e.target.closest && e.target.closest('#rows-body tr[hx-get]');
-    if (tr && (e.shiftKey || e.target.classList.contains('selbox'))) { tr.classList.toggle('checked'); count(); e.preventDefault(); }
+    var tr = e.target.closest && e.target.closest('#rows-body tr[data-id]');
+    if (!tr) return;
+    if (e.target.classList.contains('selbox')) { toggle(tr.dataset.id, e.target.checked); sync(); return; }
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      toggle(tr.dataset.id, sel.indexOf(tr.dataset.id) < 0);
+      sync();
+      e.preventDefault();
+    }
   });
-  document.body.addEventListener('htmx:afterSwap', function () { count(); });
+  document.addEventListener('ui2:selectall', function () {
+    document.querySelectorAll('#rows-body tr[data-id]').forEach(function (tr) { toggle(tr.dataset.id, true); });
+    sync();
+  });
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'hsel-clear') { sel = []; sync(); }
+  });
+  // Deleted or cleared rows are gone: drop the selection with them.
+  document.body.addEventListener('burpsy-history-changed', function () { sel = []; sync(); });
+  document.body.addEventListener('htmx:afterSwap', sync);
+  document.addEventListener('DOMContentLoaded', sync);
+})();
+
+// ---- History toolbar: view state, export link, columns, presets, follow, go-to ----
+// histParams is the History view's state as query fields: the header query/search form plus the
+// toolbar filter form. Live refresh, CSV export and presets all read it from here.
+function histParams() {
+  var out = new URLSearchParams();
+  ['hq', 'hfilter'].forEach(function (id) {
+    var f = document.getElementById(id);
+    if (!f) return;
+    new FormData(f).forEach(function (v, k) { if (v !== '') out.append(k, v); });
+  });
+  return out;
+}
+(function () {
+  function store(key, val) {
+    try {
+      if (val === undefined) return JSON.parse(localStorage.getItem(key) || 'null');
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (_) { return null; }
+    return null;
+  }
+  // Export: the link carries the view's current state at click time.
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('#hexport');
+    if (!a) return;
+    var hp = histParams().toString();
+    a.setAttribute('href', '/ui2/history/export.csv' + (hp ? '?' + hp : ''));
+  });
+  // Column chooser: hidden column keys live in localStorage; #list (outside every swap)
+  // carries one hc-<key> class per hidden column, matched by a generated style rule.
+  var COLS = 'burpsy.ui2.history.hiddencols';
+  function applyCols() {
+    var boxes = document.querySelectorAll('[data-hcol]');
+    var list = document.getElementById('list');
+    if (!boxes.length || !list) return;
+    var hidden = store(COLS);
+    var css = '';
+    boxes.forEach(function (b) {
+      var key = String(b.getAttribute('data-hcol')).replace(/[^a-z0-9-]/g, '');
+      var off = hidden ? hidden.indexOf(key) >= 0 : !b.hasAttribute('data-default');
+      b.checked = !off;
+      list.classList.toggle('hc-' + key, off);
+      css += '#list.hc-' + key + ' .c-' + key + '{display:none}';
+    });
+    var st = document.getElementById('hcols-css');
+    if (!st) { st = document.createElement('style'); st.id = 'hcols-css'; document.head.appendChild(st); }
+    st.textContent = css;
+  }
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-hcol')) {
+      var hidden = [];
+      document.querySelectorAll('[data-hcol]').forEach(function (b) { if (!b.checked) hidden.push(b.getAttribute('data-hcol')); });
+      store(COLS, hidden);
+      applyCols();
+    }
+    if (e.target && e.target.id === 'hfollow') store('burpsy.ui2.history.follow', e.target.checked);
+    if (e.target && e.target.id === 'hpreset' && e.target.value) {
+      var all = store(PRE) || {};
+      if (all[e.target.value] !== undefined) applyPreset(all[e.target.value]);
+    }
+  });
+  // Filter presets: name -> query string, per browser.
+  var PRE = 'burpsy.ui2.history.presets';
+  function fillPresets() {
+    var s = document.getElementById('hpreset');
+    if (!s) return;
+    var all = store(PRE) || {};
+    while (s.options.length > 1) s.remove(1);
+    Object.keys(all).sort().forEach(function (n) { var o = document.createElement('option'); o.value = n; o.textContent = n; s.appendChild(o); });
+  }
+  function applyPreset(qs) {
+    var p = new URLSearchParams(qs);
+    ['hq', 'hfilter'].forEach(function (id) {
+      var f = document.getElementById(id);
+      if (!f) return;
+      Array.prototype.forEach.call(f.elements, function (el) {
+        if (!el.name) return;
+        if (el.type === 'checkbox') el.checked = p.getAll(el.name).indexOf(el.value) >= 0;
+        else if (el.tagName === 'SELECT') {
+          var want = p.get(el.name);
+          Array.prototype.forEach.call(el.options, function (o) {
+            o.selected = want !== null ? (o.value === want) : o.hasAttribute('data-default') || (o.index === 0 && !el.querySelector('[data-default]'));
+          });
+        } else if (el.type !== 'hidden' && el.type !== 'file') el.value = p.get(el.name) || '';
+      });
+    });
+    var f = document.getElementById('hfilter');
+    if (f && window.htmx) htmx.trigger(f, 'submit');
+  }
+  document.addEventListener('click', function (e) {
+    var id = e.target && e.target.id;
+    if (id === 'hpreset-save') {
+      var name = (window.prompt('Name this filter preset') || '').trim();
+      if (!name) return;
+      var all = store(PRE) || {};
+      all[name] = histParams().toString();
+      store(PRE, all);
+      fillPresets();
+      document.getElementById('hpreset').value = name;
+    } else if (id === 'hpreset-del') {
+      var s = document.getElementById('hpreset');
+      var cur = store(PRE) || {};
+      if (s && s.value) { delete cur[s.value]; store(PRE, cur); fillPresets(); }
+    } else if (id === 'hpreset-reset') {
+      applyPreset('');
+    }
+  });
+  function init() {
+    applyCols();
+    fillPresets();
+    var fol = document.getElementById('hfollow');
+    if (fol) fol.checked = store('burpsy.ui2.history.follow') === true;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+  // A delete, clear or import changed the rows: refresh them like a live frame would.
+  document.body.addEventListener('burpsy-history-changed', function () {
+    if ((document.body.dataset || {}).view === 'history') liveRefresh('history');
+  });
+  // Go to entry: mark and reveal the row when the current list holds it.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    var g = e.detail.target && e.detail.target.querySelector && e.detail.target.querySelector('[data-goto]');
+    if (!g) return;
+    var tr = document.querySelector('#rows-body tr[data-id="' + g.getAttribute('data-goto') + '"]');
+    document.querySelectorAll('#rows-body tr.selected').forEach(function (r) { r.classList.remove('selected'); });
+    if (tr) { tr.classList.add('selected'); tr.scrollIntoView({ block: 'nearest' }); }
+  });
 })();
 
 // ---- Confirm-gate readiness (armed only after htmx has bound the fragment) ----

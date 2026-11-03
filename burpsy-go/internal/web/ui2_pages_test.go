@@ -49,6 +49,7 @@ var ui2Pages = []struct {
 	{"/ui2/sequencer", "sequencer", "Captures"},
 	{"/ui2/collaborator", "collaborator", "Channel"},
 	{"/ui2/history", "history", "#rows"},
+	{"/ui2/history/extractors", "extractors", "Extractor columns"},
 	{"/ui2/issues", "issues", "findings"},
 }
 

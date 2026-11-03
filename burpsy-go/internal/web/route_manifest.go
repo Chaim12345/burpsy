@@ -1478,6 +1478,34 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one exchange's request/response panes (message bytes read here, never in the list)",
 	},
+	"/ui2/history/export.csv": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 History CSV export: the rows the view's filters select, in the SPA's historyToCSV columns with the spreadsheet-formula guard (index data, never bodies)",
+	},
+	"/ui2/history/import": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 History HAR import: a multipart upload handed to /api/history/import/har (records rows, sends nothing)",
+	},
+	"/ui2/history/goto": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 History go-to-entry: one exchange's detail pane by id",
+	},
+	"/ui2/history/compare": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 History compare: the Comparer page seeded with the first two selected requests",
+	},
+	"/ui2/history/bulk/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "urls",
+		summary: "ui2 History bulk actions on the selected rows: copy URLs, add to Organizer, and the reviewed add-hosts-to-scope, audit-selected, delete-selected and clear-history calls (confirm renders the review, run spends it)",
+	},
+	"/ui2/history/extractors": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 History extractor-column manager over /api/history/extractors",
+	},
+	"/ui2/history/extractors/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "add",
+		summary: "ui2 History extractor add/remove: PUTs the whole definition list to /api/history/extractors, refused when the list changed since the page loaded",
+	},
 	"/ui2/htmx.min.js": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "vendored htmx 2.0.4 (50,917 bytes) serving as the ui2 client runtime",
