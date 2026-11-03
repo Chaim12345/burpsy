@@ -34,7 +34,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/sitemap/scope/{action}":         {raw: "application/x-www-form-urlencoded: confirm takes the row key in the post URL's query and no form fields; run takes the reviewed rule's hidden fields (token/pattern/port/protocol/path)"},
 	"POST /ui2/scope/confirm":                  {raw: "application/x-www-form-urlencoded: scope_action rule-add takes kind/pattern/path/port/protocol; rule-toggle/rule-remove take the row tuple; drop-switch takes enabled"},
 	"POST /ui2/scope/run":                      {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
-	"POST /ui2/logger/{action}":                {raw: "application/x-www-form-urlencoded: capture-<tool>-on/off takes search carryover; filter-set takes status/term/regex/case/negate/scope_only/mime"},
+	"POST /ui2/logger/{action}":                {raw: "application/x-www-form-urlencoded: capture-<tool>-on/off takes the view state (search, v_*); filter-set takes status/term/regex/case/negate/scope_only/mime/capacity; clear-review takes nothing; scope-review takes id; annotate takes id/comment/highlight; the *-run steps add the one-time token"},
 	"POST /ui2/intruder/confirm":               {raw: "application/x-www-form-urlencoded launch form"},
 	"POST /ui2/intruder/points":                {raw: "application/x-www-form-urlencoded form: msg_id, all"},
 	"POST /ui2/intruder/run":                   {raw: "application/x-www-form-urlencoded form + one-time confirm token"},

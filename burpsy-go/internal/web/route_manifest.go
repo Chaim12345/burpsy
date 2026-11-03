@@ -1504,7 +1504,15 @@ var manifest = map[string]route{
 	},
 	"/ui2/logger": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 Logger page: tool-sent requests, server-paged with search and infinite scroll",
+		summary: "ui2 Logger page: tool-sent requests, server-paged with view filters (tool/method/status/annotated/scope/response/parameterized/MIME/extension), capture settings and infinite scroll",
+	},
+	"/ui2/logger/entry/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 Logger detail pane for one log row: its fields, annotation editor, row actions and the linked exchange's request/response (read via /api/exchange and /api/message)",
+	},
+	"/ui2/logger/export": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Logger CSV export of the filtered view (formula-guarded cells, the React console's toolLogToCSV columns); reads /api/tools/log",
 	},
 	"/ui2/organizer/collections/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
@@ -1540,7 +1548,9 @@ var manifest = map[string]route{
 	},
 	"/ui2/logger/{action}": {
 		methods: []string{"POST"}, risk: riskAsset, subPath: "capture-repeater-off",
-		summary: "ui2 Logger capture controls: capture-<tool>-on/off flips one tool's recording via /api/tools/log and re-renders the page",
+		summary: "ui2 Logger actions: capture-<tool>-on/off, filter-set/filter-clear, clear-review and scope-review mint a one-time review " +
+			"for the exact /api/tools/log or /api/scope call and capture-run/filter-run/clear-run/scope-run spend it; annotate PATCHes " +
+			"/api/tools/log/{id} (reviewed only if that route's risk class needs confirmation)",
 	},
 	"/ui2/scanner": {
 		methods: []string{"GET"}, risk: riskAsset,
@@ -1621,6 +1631,14 @@ var manifest = map[string]route{
 	},
 	"/ui2/ws": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 WebSockets page: relayed connections and recent frames",
+		summary: "ui2 WebSockets page: metrics, relayed connections (select to narrow) and frames filtered server-side by direction/opcode/payload",
+	},
+	"/ui2/ws/frame/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one WebSocket frame's view (payload, close code/reason, actions) from /api/ws/message/{id}; ?download=1 serves the payload bytes as a file",
+	},
+	"/ui2/ws/handshake/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one WebSocket connection's upgrade request/response, read via /api/exchange and /api/message",
 	},
 }

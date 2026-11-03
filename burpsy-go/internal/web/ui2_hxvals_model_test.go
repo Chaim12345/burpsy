@@ -37,8 +37,8 @@ func TestUI2HistoryHxValsQuotedFilter(t *testing.T) {
 }
 
 func TestUI2LoggerHxValsQuotedSearch(t *testing.T) {
-	model := ui2LoggerModel{NextOffset: 10, Limit: 5, HasMore: true, HxVals: ui2LoggerHxVals(10, 5, `GET "admin"`)}
-	for _, name := range []string{"logger.html", "logger_rows_append.html"} {
+	model := ui2LoggerModel{NextOffset: 10, Limit: 5, HasMore: true, HxVals: ui2LoggerHxVals(10, ui2LoggerParams{Search: `GET "admin"`, Limit: 5})}
+	for _, name := range []string{"logger_page.html", "logger_rows_append.html"} {
 		vals := hxValsAttr(t, string(ui2Exec(name, model)))
 		if vals["search"] != `GET "admin"` || vals["offset"] != 10.0 {
 			t.Fatalf("%s round-trip lost the search text: %v", name, vals)
