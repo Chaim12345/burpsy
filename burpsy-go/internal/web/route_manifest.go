@@ -1562,6 +1562,19 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Scanner crawl launch: spends the confirmation token on /api/crawl and renders the accepted task or the refusal",
 	},
+	"/ui2/newscan": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 New scan page: crawl and audit, crawl, audit selected items, API-only scan, and the recorded-login library - reads only; every launch is a reviewed POST",
+	},
+	"/ui2/newscan/{kind}/{action}": {
+		// riskAsset like the other ui2 console routes: the gated class belongs to the API call the
+		// review mints, and this route reaches it only through a minted one-time token.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "crawl/confirm",
+		summary: "ui2 New scan writes: crawl and audit confirm/run (gate review showing the full /api/crawl or " +
+			"/api/audit/selected body), api check (in-process dry run, sends nothing) / fetch (POST " +
+			"/api/apiscan/fetch) / confirm / run, and logins confirm / run (recorded-login save, delete, " +
+			"replay); API-scan and login calls are held server-side and dispatched verbatim, single-use",
+	},
 	"/ui2/scanner/crawl-watch": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Scanner crawl watch: the refresh-on-demand view of one retained crawl (state, phase, fetches) - the page checks only when asked, nothing polls",
