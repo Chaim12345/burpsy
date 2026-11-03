@@ -1,0 +1,14 @@
+{{with .D}}<h3>#{{.ID}} {{.Method}} {{.Host}}:{{.Port}}{{.Path}} → {{.Status}}</h3>
+<p class="meta">{{.Mime}} · {{.ResponseLen}} bytes · {{.DurationMs}} ms</p>{{end}}
+<h3>Request
+  <span class="pane-toggle"><a class="btn" href="#sm-msg" hx-get="{{.ReqToggle}}" hx-target="#sm-msg" hx-swap="innerHTML">{{if .D.ReqPretty}}Raw{{else}}Pretty{{end}}</a></span>
+  {{if .D.ReqPane.Kind}}<span class="badge">{{.D.ReqPane.Kind}}</span>{{end}}
+</h3>
+{{if .D.ReqPane.Note}}<p class="meta" role="note">{{.D.ReqPane.Note}}</p>{{end}}
+{{if .D.Request}}<pre class="msg">{{.D.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response
+  <span class="pane-toggle"><a class="btn" href="#sm-msg" hx-get="{{.RespToggle}}" hx-target="#sm-msg" hx-swap="innerHTML">{{if .D.RespPretty}}Raw{{else}}Pretty{{end}}</a></span>
+  {{if .D.RespPane.Kind}}<span class="badge">{{.D.RespPane.Kind}}</span>{{end}}
+</h3>
+{{if .D.RespPane.Note}}<p class="meta" role="note">{{.D.RespPane.Note}}</p>{{end}}
+{{if .D.Response}}<pre class="msg">{{.D.RespPane.Highlighted}}</pre>{{else}}<p class="meta">No response was captured for this exchange.</p>{{end}}

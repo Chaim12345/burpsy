@@ -251,7 +251,12 @@
   "/ui2/settings/write/{area}",
   "/ui2/settings/write/{area}/{action}",
   "/ui2/sitemap",
+  "/ui2/sitemap/children",
+  "/ui2/sitemap/detail",
+  "/ui2/sitemap/export",
+  "/ui2/sitemap/message",
   "/ui2/sitemap/repeater",
+  "/ui2/sitemap/review/{action}",
   "/ui2/sitemap/scope/{action}",
   "/ui2/sse.min.js",
   "/ui2/ws"
@@ -5043,6 +5048,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/sitemap/children",
+   "key": "/ui2/sitemap/children",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/children/",
+   "key": "/ui2/sitemap/children",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/children/extra",
+   "key": "/ui2/sitemap/children",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/children/extra/more",
+   "key": "/ui2/sitemap/children",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/detail",
+   "key": "/ui2/sitemap/detail",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/detail/",
+   "key": "/ui2/sitemap/detail",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/detail/extra",
+   "key": "/ui2/sitemap/detail",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/detail/extra/more",
+   "key": "/ui2/sitemap/detail",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/export",
+   "key": "/ui2/sitemap/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/export/",
+   "key": "/ui2/sitemap/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/export/extra",
+   "key": "/ui2/sitemap/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/export/extra/more",
+   "key": "/ui2/sitemap/export",
+   "gated": false
+  },
+  {
    "path": "/ui2/sitemap/extra",
    "key": "/ui2/sitemap",
    "gated": false
@@ -5050,6 +5115,26 @@
   {
    "path": "/ui2/sitemap/extra/more",
    "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/message",
+   "key": "/ui2/sitemap/message",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/message/",
+   "key": "/ui2/sitemap/message",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/message/extra",
+   "key": "/ui2/sitemap/message",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/message/extra/more",
+   "key": "/ui2/sitemap/message",
    "gated": false
   },
   {
@@ -5070,6 +5155,26 @@
   {
    "path": "/ui2/sitemap/repeater/extra/more",
    "key": "/ui2/sitemap/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/review/w",
+   "key": "/ui2/sitemap/review/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/review/w/",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/review/w/extra",
+   "key": "/ui2/sitemap",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sitemap/review/w/extra/more",
+   "key": "/ui2/sitemap",
    "gated": false
   },
   {

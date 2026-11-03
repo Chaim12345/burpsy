@@ -137,6 +137,8 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/settings":                  "<!doctype html",
 		"/ui2/sitemap":                   "<!doctype html",
 		"/ui2/sitemap/repeater":          "<!doctype html",
+		"/ui2/sitemap/detail":            "text/html",
+		"/ui2/sitemap/export":            "text/csv",
 		"/ui2/ws":                        "<!doctype html",
 		"/ui2/intercept/{action}":        "<!doctype html",
 		"/ui2/decoder/run":               "<!doctype html",
@@ -163,6 +165,8 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/api/scanner/dom":                   "plain-text 503: no switchable DOM engine attached",
 		"/api/scope/check":                   "plain-text 400: url is required",
 		"/api/target/analyze":                "plain-text 400: host is required",
+		"/ui2/sitemap/children":              "plain-text 400: a node key is required",
+		"/ui2/sitemap/message":               "plain-text 400: an exchange id is required",
 		"/ca.crt":                            "plain-text 404: TLS interception is off in the test server",
 	}
 	// Routes that never return on empty state because they stream. Any other route that takes
