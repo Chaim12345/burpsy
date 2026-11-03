@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "7bbd5c2ad6c5",
+  "strategy": "manual-commit",
+  "branch": "ui2/sitemap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/route_schemas.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui/src/lib/gated-routes.contract.json",
+    "burpsy-go/internal/web/ui2/sitemap.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_analyzer.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_detail.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_engagement.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_message.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_page.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_paths.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_review.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_rows.html",
+    "burpsy-go/internal/web/ui2/sitemap_action_confirm.html",
+    "burpsy-go/internal/web/ui2_pages.go",
+    "burpsy-go/internal/web/ui2_sitemap.go",
+    "burpsy-go/internal/web/ui2_sitemap_actions.go",
+    "burpsy-go/internal/web/ui2_sitemap_test.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/bd5c2ad6c5/0/metadata.json",
+      "transcript": "/7b/bd5c2ad6c5/0/full.jsonl",
+      "compact_transcript": "/7b/bd5c2ad6c5/0/transcript.jsonl",
+      "content_hash": "/7b/bd5c2ad6c5/0/content_hash.txt",
+      "prompt": "/7b/bd5c2ad6c5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
