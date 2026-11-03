@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "4efe474b1def",
+  "strategy": "manual-commit",
+  "branch": "ui2/sequencer-comparer",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/route_schemas.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui2/comparer.html",
+    "burpsy-go/internal/web/ui2/comparer/comparer_page.html",
+    "burpsy-go/internal/web/ui2/sequencer.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_confirm.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_page.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_report.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_settings.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_settings_confirm.html",
+    "burpsy-go/internal/web/ui2/sequencer_confirm.html",
+    "burpsy-go/internal/web/ui2_attack_pages.go",
+    "burpsy-go/internal/web/ui2_comparer.go",
+    "burpsy-go/internal/web/ui2_pages.go",
+    "burpsy-go/internal/web/ui2_sequencer.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4e/fe474b1def/0/metadata.json",
+      "transcript": "/4e/fe474b1def/0/full.jsonl",
+      "compact_transcript": "/4e/fe474b1def/0/transcript.jsonl",
+      "content_hash": "/4e/fe474b1def/0/content_hash.txt",
+      "prompt": "/4e/fe474b1def/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
