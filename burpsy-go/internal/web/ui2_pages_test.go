@@ -41,6 +41,7 @@ var ui2Pages = []struct {
 	{"/ui2/advisories", "advisories", "definitions ·"},
 	{"/ui2/organizer", "organizer", "Organizer is empty"},
 	{"/ui2/session", "session", "Session handling rules"},
+	{"/ui2/session/editor", "session", "Rule editor"},
 	{"/ui2/sitemap", "sitemap", "exchanges ·"},
 	{"/ui2/comparer", "comparer", "Compare"},
 	{"/ui2/repeater", "repeater", "Request to send"},

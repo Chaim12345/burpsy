@@ -637,7 +637,7 @@ func TestUI2SessionRuleAddFormOffersThePageKinds(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(body, "Macro, validity and extension fields stay in the console. Existing rules offer ordered action-list controls below.") {
+	if !strings.Contains(body, "Macro, validity and extension fields are edited in the rule editor. Existing rules offer ordered action-list controls below.") {
 		t.Error("the form copy does not name exactly the deferred kinds and shapes")
 	}
 }
@@ -769,7 +769,7 @@ func TestUI2SessionRuleAddConsoleKindsRefused(t *testing.T) {
 				"rule_op": {"add"}, "name": {"x"}, "action": {kind},
 			})
 			body := rec.Body.String()
-			if !strings.Contains(body, "Not applied:") || !strings.Contains(body, "written in the console") {
+			if !strings.Contains(body, "Not applied:") || !strings.Contains(body, "written in the rule editor") {
 				t.Errorf("kind %q not refused naming the console: %s", kind, body[:ui2MinFor(300, len(body))])
 			}
 			if strings.Contains(body, `name="token"`) {

@@ -174,6 +174,8 @@ table.scope-t details.scope-edit[open] form {
 #notice { margin:6px 12px; padding:6px 10px; border:1px solid var(--line); border-left:3px solid #c60;
   font-size:14px; }
 #notice:empty { display:none; }
+#session-prompts { margin:6px 12px; padding:6px 10px; border:1px solid var(--line); border-left:3px solid #c00; font-size:14px; }
+#session-prompts:empty { display:none; }
 @media (max-width:560px) {
   #livepill { left:12px; right:12px; transform:none; flex-wrap:wrap; }
   #livepill span { flex:1 1 100%; }
@@ -207,6 +209,7 @@ table.scope-t details.scope-edit[open] form {
   {{end}}
 </header>
 <div id="notice" role="status" aria-live="polite"></div>
+<div id="session-prompts" role="status" aria-live="polite" hx-get="/ui2/session/prompts" hx-trigger="load" hx-swap="innerHTML"></div>
 <main class="{{if or (eq .View "history") (eq .View "issues") (eq .View "intruder") (eq .View "advisories")}}split{{end}}">
   <div id="list" role="region" aria-label="Rows">
     {{.Body}}

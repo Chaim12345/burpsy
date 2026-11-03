@@ -1450,6 +1450,7 @@ func (s *Server) ui2SessionView(note string) map[string]any {
 			}
 		}
 	}
+	ui2SessionViewRedact(model)
 	return model
 }
 

@@ -112,6 +112,12 @@ type Server struct {
 	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
 	// by ui2SessionRuleReviewCap, expiring with ConfirmTTL.
 	ui2SessionRuleReviews sync.Map
+	// ui2SessionDrafts holds the ui2 rule editor's server-side drafts (*ui2SessionDraft): the
+	// rule being edited lives here, so stored credentials never round-trip through a form.
+	ui2SessionDrafts sync.Map
+	// ui2SessionCalls holds the minted session tool calls (test, analyze, login, cookie writes,
+	// prompt resolution, ...) a ui2 operator has reviewed but not yet confirmed.
+	ui2SessionCalls sync.Map
 	// ui2SettingsWriteReviews holds the minted settings write calls (TLS passthrough, upstream
 	// proxy rules and default, backup config, pools) a ui2 operator has reviewed but not yet
 	// confirmed: the exact method, path, query and bytes the run step dispatches verbatim, plus
@@ -1562,6 +1568,10 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/organizer/items/{action}", s.handleUI2OrganizerItems)
 	s.route("/ui2/session", s.handleUI2Session)
 	s.route("/ui2/session/rules/{action}", s.handleUI2SessionRules)
+	s.route("/ui2/session/editor", s.handleUI2SessionEditorPage)
+	s.route("/ui2/session/editor/{action}", s.handleUI2SessionEditor)
+	s.route("/ui2/session/call/{action}", s.handleUI2SessionCall)
+	s.route("/ui2/session/prompts", s.handleUI2SessionPrompts)
 	s.route("/ui2/decoder", s.handleUI2Decoder)
 	s.route("/ui2/decoder/run", s.handleUI2DecoderRun)
 	s.route("/ui2/comparer", s.handleUI2Comparer)

@@ -49,6 +49,7 @@ function liveStream() {
     var kind = '';
     try { kind = JSON.parse(e.data).kind || ''; } catch (_) { return; }
     if (kind === 'ping' || kind === 'hello') return;
+    if (kind === 'session') sessionPromptsRefresh();
     var view = (document.body.dataset || {}).view || '';
     if (document.getElementById('crawlwatch') && (kind === 'history' || kind === 'dashboard')) {
       liveRefresh('crawlwatch');
@@ -95,6 +96,23 @@ liveStream();
 
 // The list scrolls inside main (split view: #list), never the window - measure that
 // element, or the pill rule would never engage.
+// Session prompt banner (#session-prompts, in every page's layout): loaded once by its own
+// hx-trigger="load", and re-fetched here on each session frame. A pending review inside the
+// banner is operator state and is never replaced. fetch, not htmx.ajax, so the banner refresh
+// never enters the live-refresh bookkeeping above.
+function sessionPromptsRefresh() {
+  var el = document.getElementById('session-prompts');
+  if (!el || el.querySelector('[data-review]')) return;
+  fetch('/ui2/session/prompts', { headers: { 'HX-Request': 'true' }, credentials: 'same-origin' })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (html) {
+      if (html === null || el.querySelector('[data-review]')) return;
+      el.innerHTML = html;
+      if (window.htmx) htmx.process(el);
+    })
+    .catch(function () {});
+}
+
 function liveScrolled() {
   var el = document.querySelector('main.split #list') || document.querySelector('main');
   return el ? el.scrollTop >= 150 : false;
@@ -187,6 +205,8 @@ function liveGuarded(what) {
       // the refresh to the pill until the operator asks for it.
       if (rows.dataset.review === '1') return true;
       if (rows.querySelector('#session-note')) return true;
+      // The rule editor works on a server-held draft: a live swap would leave it mid-edit.
+      if (rows.querySelector('#session-editor')) return true;
     }
     if (what === 'scope') {
       // The scope review sheet is the same stranded-token state as the session one (its
