@@ -1,0 +1,70 @@
+{{define "proxy_mr_rule"}}<div class="pxs-rule{{if not .Enabled}} off{{end}}" data-rule="{{.I}}">
+<div class="pxs-grid">
+<label class="pxs-check"><input type="checkbox" name="r{{.I}}_enabled" value="on"{{if .Enabled}} checked{{end}}> <span>Rule {{.I}} enabled</span></label>
+<label>Target<select name="r{{.I}}_type">
+{{if not .Known}}<option value="{{.Type}}" selected>{{.Type}} (unknown)</option>{{end}}
+{{$t := .Type}}{{range .Targets}}<option value="{{.Value}}"{{if eq .Value $t}} selected{{end}}>{{.Label}}</option>{{end}}
+</select></label>
+<label>Match kind<select name="r{{.I}}_cat">
+<option value="literal"{{if ne .Cat "regex"}} selected{{end}}>Literal</option>
+<option value="regex"{{if eq .Cat "regex"}} selected{{end}}>Regex</option>
+</select></label>
+{{if .MatchB64}}<label>Match (has line breaks; read-only here)<input type="hidden" name="r{{.I}}_match_b64" value="{{.MatchB64}}"><textarea readonly rows="2">{{.Match}}</textarea></label>{{else}}<label>Match<input type="text" name="r{{.I}}_match" value="{{.Match}}" placeholder="text or pattern to find"></label>{{end}}
+{{if .ReplaceB64}}<label>Replace with (has line breaks; read-only here)<input type="hidden" name="r{{.I}}_replace_b64" value="{{.ReplaceB64}}"><textarea readonly rows="2">{{.Replace}}</textarea></label>{{else}}<label>Replace with<input type="text" name="r{{.I}}_replace" value="{{.Replace}}" placeholder="empty = delete the match"></label>{{end}}
+{{if .CommentB64}}<label>Comment (has line breaks; read-only here)<input type="hidden" name="r{{.I}}_comment_b64" value="{{.CommentB64}}"><textarea readonly rows="2">{{.Comment}}</textarea></label>{{else}}<label>Comment<input type="text" name="r{{.I}}_comment" value="{{.Comment}}" placeholder="why this rule exists"></label>{{end}}
+</div>
+<div class="pxs-acts">
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=up&amp;i={{.I}}" hx-post="/ui2/proxy/match-replace/edit?op=up&amp;i={{.I}}" hx-target="#rows" hx-swap="outerHTML"{{if .First}} disabled{{end}} aria-label="Move rule {{.I}} up">↑ up</button>
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=down&amp;i={{.I}}" hx-post="/ui2/proxy/match-replace/edit?op=down&amp;i={{.I}}" hx-target="#rows" hx-swap="outerHTML"{{if .Last}} disabled{{end}} aria-label="Move rule {{.I}} down">↓ down</button>
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=dup&amp;i={{.I}}" hx-post="/ui2/proxy/match-replace/edit?op=dup&amp;i={{.I}}" hx-target="#rows" hx-swap="outerHTML">duplicate</button>
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=del&amp;i={{.I}}" hx-post="/ui2/proxy/match-replace/edit?op=del&amp;i={{.I}}" hx-target="#rows" hx-swap="outerHTML" aria-label="Delete rule {{.I}} from the draft">delete</button>
+</div>
+</div>{{end}}
+<div id="rows">
+{{template "proxy_subnav" "match-replace"}}
+{{template "proxy_note" .note}}
+<div id="proxy-review" class="pxs-review" aria-live="polite"></div>
+<form method="post" action="/ui2/proxy/match-replace/confirm" id="mr-form">
+<input type="hidden" name="baseline" value="{{.baseline}}">
+<input type="hidden" name="n" value="{{.n}}">
+<div class="pxs-sec">
+<p class="meta" style="padding:0">Rules run in order on every proxied message; each sees the output of the ones above it in its set. Nothing here changes traffic until it is reviewed and saved.</p>
+<p style="margin:4px 0">{{if .dirty}}<span class="badge" style="background:#fd6;color:#111">unsaved changes</span>{{else}}<span class="badge">saved</span>{{end}}
+<span class="badge">{{.enabled}} of {{.n}} enabled</span>
+{{with .saved}}<span class="badge">saved · requests {{if .AffectsRequests}}yes{{else}}no{{end}}</span> <span class="badge">saved · responses {{if .AffectsResponses}}yes{{else}}no{{end}}</span>{{if .ScopeSkipped}} <span class="badge">{{.ScopeSkipped}} message(s) left alone by scope</span>{{end}}{{end}}</p>
+<div class="pxs-acts">
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/confirm" hx-post="/ui2/proxy/match-replace/confirm" hx-target="#proxy-review" hx-swap="innerHTML show:top" style="font-weight:700">Review and save rules</button>
+<a class="btn" href="/ui2/proxy/match-replace" hx-get="/ui2/proxy/match-replace" hx-target="#rows" hx-swap="outerHTML">Revert to saved</a>
+</div>
+<div class="pxs-stack" style="margin-top:6px">
+<label class="pxs-check"><input type="checkbox" name="ucl" value="on"{{if .ucl}} checked{{end}}> <span>Fix Content-Length after a body rewrite</span></label>
+<label class="pxs-check"><input type="checkbox" name="in_scope" value="on"{{if .in_scope}} checked{{end}}> <span>Only apply to in-scope items (set-wide; there is no per-rule scope)</span></label>
+</div>
+</div>
+<h3 class="pxs-sec" style="margin:6px 0 0">Request rules <span class="meta" style="padding:0">(client → server, including WebSocket → server)</span></h3>
+<div class="pxs-sec" id="mr-request-rules">
+{{range .req_rows}}{{template "proxy_mr_rule" .}}{{else}}<p class="meta" style="padding:0">No request rules.</p>{{end}}
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=add&amp;set=request" hx-post="/ui2/proxy/match-replace/edit?op=add&amp;set=request" hx-target="#rows" hx-swap="outerHTML">+ Add request rule</button>
+</div>
+<h3 class="pxs-sec" style="margin:6px 0 0">Response rules <span class="meta" style="padding:0">(server → client, including WebSocket → client)</span></h3>
+<div class="pxs-sec" id="mr-response-rules">
+{{range .resp_rows}}{{template "proxy_mr_rule" .}}{{else}}<p class="meta" style="padding:0">No response rules.</p>{{end}}
+<button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/edit?op=add&amp;set=response" hx-post="/ui2/proxy/match-replace/edit?op=add&amp;set=response" hx-target="#rows" hx-swap="outerHTML">+ Add response rule</button>
+</div>
+<h3 class="pxs-sec" style="margin:6px 0 0">Draft test</h3>
+<div class="pxs-sec">
+<p class="meta" style="padding:0">Applies the draft above (saved or not) to a sample server-side, as a throwaway set; the saved rules and live traffic are untouched.</p>
+<div class="pxs-grid" style="margin-bottom:6px">
+<label>Direction<select name="direction">
+<option value="request"{{if ne .direction "response"}} selected{{end}}>Request rules</option>
+<option value="response"{{if eq .direction "response"}} selected{{end}}>Response rules</option>
+</select></label>
+<div><button type="submit" formmethod="post" formaction="/ui2/proxy/match-replace/test" hx-post="/ui2/proxy/match-replace/test" hx-target="#mr-test-out" hx-swap="innerHTML">Test draft</button></div>
+</div>
+<div class="pxs-two">
+<label class="pxs-stack" style="display:flex;flex-direction:column">Sample input<textarea name="sample" rows="10" placeholder="Paste a raw request or response">{{.sample}}</textarea></label>
+<div id="mr-test-out" aria-live="polite"><p class="meta">Run the test to see what the draft rules produce.</p></div>
+</div>
+</div>
+</form>
+</div>
