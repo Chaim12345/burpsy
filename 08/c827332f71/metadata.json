@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "08c827332f71",
+  "strategy": "manual-commit",
+  "branch": "ui2/bcheck",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/cmd/ui2seed/main.go",
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/route_schemas.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui2/bcheck/bcheck_editor.html",
+    "burpsy-go/internal/web/ui2/bcheck/bcheck_list.html",
+    "burpsy-go/internal/web/ui2/bcheck/bcheck_review.html",
+    "burpsy-go/internal/web/ui2/bcheck/bcheck_test_results.html",
+    "burpsy-go/internal/web/ui2/bcheck/bcheck_validation.html",
+    "burpsy-go/internal/web/ui2/nav.html",
+    "burpsy-go/internal/web/ui2_bcheck.go",
+    "burpsy-go/internal/web/ui2_bcheck_test.go",
+    "burpsy-go/internal/web/ui2_pages_test.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/c827332f71/0/metadata.json",
+      "transcript": "/08/c827332f71/0/full.jsonl",
+      "compact_transcript": "/08/c827332f71/0/transcript.jsonl",
+      "content_hash": "/08/c827332f71/0/content_hash.txt",
+      "prompt": "/08/c827332f71/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
