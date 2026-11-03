@@ -1538,6 +1538,50 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Repeater send: forwards the draft through /api/repeater/send and renders the outcome",
 	},
+	"/ui2/repeater/ws": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 WebSocket Repeater: the frame editor seeded from a WebSockets history frame or connection, the connection's frames and, with preview=1, the handshake a send would dial with - reads only, dials nothing",
+	},
+	"/ui2/repeater/ws/send": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 WebSocket Repeater send: one frame through /api/repeater/ws-send (new or cloned connection) or /api/repeater/ws-attach (a live proxied connection) and renders the reply",
+	},
+	"/ui2/repeater/h2": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 HTTP/2 kettle editor: a stored request's header list as editable HTTP/2 fields - reads the store and sends nothing",
+	},
+	"/ui2/repeater/h2/preview": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 HTTP/2 kettle editor preview: asks /api/http2/kettle whether the edited list is kettled and whether a send would be refused - sends nothing",
+	},
+	"/ui2/repeater/h2/send": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 HTTP/2 kettle editor send: the edited header list through /api/repeater/send's kettled path (h2_headers) and renders the response",
+	},
+	"/ui2/repeater/graphql": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: a stored request with its GraphQL query in an editor - reads the store and sends nothing",
+	},
+	"/ui2/repeater/graphql/validate": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: validates the edited query through /api/repeater/graphql-validate - sends and stores nothing",
+	},
+	"/ui2/repeater/graphql/query": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: writes the edited query (or an introspection document) into the request through /api/repeater/graphql-query - sends and stores nothing",
+	},
+	"/ui2/repeater/graphql/send": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: sends the request through /api/repeater/send and renders the response",
+	},
+	"/ui2/repeater/graphql/sitemap-confirm": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: reviews a save to the site map - lists the operations an exchange's introspection answer declares and holds the exact /api/graphql/sitemap call once; stores nothing",
+	},
+	"/ui2/repeater/graphql/sitemap-run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 GraphQL tools: spends the held review and dispatches its exact /api/graphql/sitemap call, writing unsent requests to the store; sends nothing",
+	},
 	"/ui2/logger/{action}": {
 		methods: []string{"POST"}, risk: riskAsset, subPath: "capture-repeater-off",
 		summary: "ui2 Logger capture controls: capture-<tool>-on/off flips one tool's recording via /api/tools/log and re-renders the page",

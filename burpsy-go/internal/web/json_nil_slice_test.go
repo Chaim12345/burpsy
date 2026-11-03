@@ -142,6 +142,9 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/decoder/run":               "<!doctype html",
 		"/ui2/comparer/run":              "<!doctype html",
 		"/ui2/repeater/send":             "<!doctype html",
+		"/ui2/repeater/ws":               "<!doctype html",
+		"/ui2/repeater/h2":               "<!doctype html",
+		"/ui2/repeater/graphql":          "<!doctype html",
 	}
 	nonJSONError := map[string]string{
 		"/api/advisories/":                   "plain-text 400/404: a type index is required",

@@ -1462,7 +1462,7 @@ func (s *Server) handleUI2Decoder(w http.ResponseWriter, r *http.Request) {
 		s.handleUI2DecoderRun(w, r)
 		return
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": nil}))
+	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": nil, "input": r.URL.Query().Get("input")}))
 }
 
 func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
@@ -1497,7 +1497,7 @@ func (s *Server) handleUI2Comparer(w http.ResponseWriter, r *http.Request) {
 		s.handleUI2ComparerRun(w, r)
 		return
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": nil}))
+	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": nil, "a": r.URL.Query().Get("a"), "b": r.URL.Query().Get("b")}))
 }
 
 func (s *Server) handleUI2ComparerRun(w http.ResponseWriter, r *http.Request) {
