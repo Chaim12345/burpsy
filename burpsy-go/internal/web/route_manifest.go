@@ -1371,6 +1371,38 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Collaborator page: channel status, minted payloads, interactions",
 	},
+	"/ui2/discovery": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Content discovery page: the ffuf sweep form (or why it cannot run), retained runs with counts, the command that ran and the discovered paths",
+	},
+	"/ui2/discovery/runs": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Content discovery runs fragment; polls itself every 2s while a sweep is running",
+	},
+	"/ui2/discovery/repeater": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Content discovery: loads a GET built from one discovered URL into the Repeater editor as a draft - sends nothing",
+	},
+	"/ui2/discovery/review": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Content discovery review step: holds the exact POST /api/discovery (gate-minted) or POST /api/browser/launch call server-side and renders it in full; nothing is sent",
+	},
+	"/ui2/discovery/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Content discovery run step: spends one held review (single-use, ConfirmTTL) and dispatches its bytes verbatim",
+	},
+	"/ui2/dominvader": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 DOM auditor page: canary watch, prototype-pollution probe plan and the reported source/sink flows",
+	},
+	"/ui2/dominvader/review": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 DOM auditor review step: holds the exact /api/dominvader settings/plan PUT, scan POST or hits DELETE server-side and renders it; nothing changes",
+	},
+	"/ui2/dominvader/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 DOM auditor run step: spends one held review (single-use, ConfirmTTL) and dispatches its bytes verbatim",
+	},
 	"/ui2/collaborator/mint": {
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Collaborator mint, two steps: the first POST holds the exact /api/collaborator/payload call server-side and renders it for review; the second spends that held call by id (single-use, 60s)",

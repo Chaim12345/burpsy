@@ -1,0 +1,50 @@
+<section id="disc-runs"{{if .Running}} hx-get="/ui2/discovery/runs" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+<h3>Runs <button type="button" hx-get="/ui2/discovery/runs" hx-target="#disc-runs" hx-swap="outerHTML">Refresh</button>{{if .Running}} <span class="hint">updating every 2s while a sweep runs</span>{{end}}</h3>
+{{if not .Runs}}
+<p class="meta">No sweeps recorded. {{if .Tool.Available}}The server retains the last {{.Retained}} runs; nothing has been started yet.{{else}}No sweep can be started until the tool is allowlisted.{{end}}</p>
+{{else}}
+<p class="hint">Most recent first. The server retains {{.Retained}}; older runs are gone rather than hidden.</p>
+{{range $run := .Runs}}
+<div class="run" data-task="{{.TaskID}}">
+<p style="margin:2px 0"><strong>#{{.TaskID}} — <span class="brk">{{.Target}}</span></strong> <span class="badge {{.StateClass}}">{{.State}}</span></p>
+<p class="hint brk">started {{.StartedAt}} · wordlist {{.Wordlist}}{{if .Extensions}} · extensions {{.Extensions}}{{end}}{{if .MatchCodes}} · match {{.MatchCodes}}{{end}}{{if .RecurseDepth}} · {{.RecurseDepth}} level(s){{end}}{{if .VariantExtensions}} · variants {{.VariantExtensions}}{{end}}</p>
+<p class="brk">{{.Summary}}</p>
+{{if .Error}}<p role="alert" style="color:#c00" class="brk">The sweep reported an error: {{.Error}}</p>{{end}}
+<div class="metrics">
+<div><span class="hint">Paths reported</span><br>{{.Counts.Discovered}}</div>
+<div><span class="hint">Dropped: out of scope</span><br><span{{if .Counts.OutOfScope}} class="st-warn"{{end}}>{{.Counts.OutOfScope}}</span></div>
+<div><span class="hint">Examined the target</span><br>{{if .Looked}}<span class="st-good">yes</span>{{else}}<span class="st-bad">no</span>{{end}}</div>
+<div><span class="hint">Outcome</span><br>{{.Outcome}}{{if ge .ExitCode 0}} (exit {{.ExitCode}}){{end}}</div>
+{{if .Levels}}<div><span class="hint">Recursion levels</span><br>{{len .Levels}}</div>{{end}}
+</div>
+{{if not .Looked}}<p class="hint">An empty result here means nothing was checked, not that nothing is there.</p>{{end}}
+{{if .Levels}}<ul class="hint">{{range .Levels}}<li>level {{.Level}}: {{.Discovered}} found, {{.OutOfScope}} out of scope, {{.Skipped}} skipped (scope-refused before launch, or capped), {{.Runs}} run(s){{if .Failed}}, {{.Failed}} failed{{end}}{{if .Capped}} — capped: {{.Capped}}{{end}}</li>{{end}}</ul>{{end}}
+{{if .Chips}}<p>{{range .Chips}}<span class="badge {{.Class}}">{{.Count}} × {{.Status}}</span> {{end}}</p>{{end}}
+{{if .Command}}<details><summary class="hint">Command that ran</summary><pre class="brk">{{range $i, $a := .Command}}{{if $i}} {{end}}{{$a}}{{end}}</pre></details>{{end}}
+{{if .Rows}}
+<div class="scroll"><table>
+<thead><tr><th scope="col">Status</th><th scope="col">Path</th><th scope="col">Length</th><th scope="col">Words</th><th scope="col">Lines</th><th scope="col">Type</th><th scope="col">Redirects to</th><th scope="col">Actions</th></tr></thead>
+<tbody>{{range .Rows}}
+<tr>
+<td class="{{.StatusClass}}">{{.Status}}</td>
+<td title="{{.URL}}"><code>{{.ShownPath}}</code></td>
+<td>{{.Length}}</td><td>{{.Words}}</td><td>{{.Lines}}</td>
+<td>{{if .ContentType}}{{.ContentType}}{{else}}—{{end}}</td>
+<td>{{if .Redirect}}<code>{{.Redirect}}</code>{{else}}—{{end}}</td>
+<td class="acts">
+<a class="btn" href="/ui2/discovery/repeater?task={{$run.TaskID}}&amp;idx={{.Idx}}" title="builds a GET from this URL; nothing is sent">Repeater</a>
+<form hx-post="/ui2/discovery/review" method="post" action="/ui2/discovery/review" hx-target="#disc-review" hx-swap="innerHTML"><input type="hidden" name="op" value="browser"><input type="hidden" name="task" value="{{$run.TaskID}}"><input type="hidden" name="idx" value="{{.Idx}}"><button type="submit">Open in browser…</button></form>
+<button type="button" class="copy-btn" data-copy="{{.URL}}">Copy URL</button>
+<button type="button" class="copy-btn" data-copy="{{.ShownPath}}">Copy path</button>
+{{if .Redirect}}<button type="button" class="copy-btn" data-copy="{{.Redirect}}">Copy redirect</button>{{end}}
+<a class="btn" href="{{.HistoryHref}}">Filter history</a>
+</td>
+</tr>{{end}}</tbody>
+</table></div>
+{{else if eq .State "running"}}<p class="meta">Sweeping. Nothing has been reported yet — an empty list here means not-yet, not nothing.</p>
+{{else if .Looked}}<p class="meta">No paths matched ({{.Outcome}}): the wordlist was swept and nothing matched. This is a result about the target.</p>
+{{else}}<p class="meta">Nothing was examined ({{.Outcome}}): this run never checked the target, so it says nothing about what is there.</p>{{end}}
+</div>
+{{end}}
+{{end}}
+</section>

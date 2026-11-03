@@ -118,7 +118,11 @@ type Server struct {
 	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
 	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
 	ui2SettingsWriteReviews sync.Map
-	sender                  *sender.Sender
+	// ui2HeldCalls holds the content-discovery and DOM-auditor writes a ui2 operator has reviewed
+	// but not yet confirmed (ui2_discovery.go): the exact method, path and bytes the run step
+	// dispatches verbatim. Single-use (LoadAndDelete), capped at 8, expiring with ConfirmTTL.
+	ui2HeldCalls sync.Map
+	sender       *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1583,6 +1587,14 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
 	s.route("/ui2/collaborator", s.handleUI2Collaborator)
 	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
+	s.route("/ui2/discovery", s.handleUI2Discovery)
+	s.route("/ui2/discovery/runs", s.handleUI2DiscoveryRuns)
+	s.route("/ui2/discovery/repeater", s.handleUI2DiscoveryRepeater)
+	s.route("/ui2/discovery/review", s.handleUI2DiscoveryReview)
+	s.route("/ui2/discovery/run", s.handleUI2DiscoveryRun)
+	s.route("/ui2/dominvader", s.handleUI2DomInvader)
+	s.route("/ui2/dominvader/review", s.handleUI2DomInvaderReview)
+	s.route("/ui2/dominvader/run", s.handleUI2DomInvaderRun)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
