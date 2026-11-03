@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01XSbYw42qtBm6BN2kgiEkRu",
+  "agent_id": "aa61e08070610087b",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 1: shell, default switch",
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 610563,
+    "cache_read_tokens": 14300906,
+    "output_tokens": 66510,
+    "api_call_count": 94
+  },
+  "started_at": "2026-11-03T08:20:40.178084325Z",
+  "completed_at": "2026-11-03T08:34:15.625598838Z"
+}

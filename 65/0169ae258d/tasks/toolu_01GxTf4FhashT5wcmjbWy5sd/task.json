@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01GxTf4FhashT5wcmjbWy5sd",
+  "agent_id": "a52650a10e9795095",
+  "subagent_type": "general-purpose",
+  "task_description": "Review perf-issues-ui branch",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 90512,
+    "cache_read_tokens": 654902,
+    "output_tokens": 7037,
+    "api_call_count": 10
+  },
+  "started_at": "2026-11-03T07:58:01.386304097Z",
+  "completed_at": "2026-11-03T08:34:15.303423564Z"
+}

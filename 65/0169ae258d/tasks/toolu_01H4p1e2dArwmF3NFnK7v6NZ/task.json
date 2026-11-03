@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01H4p1e2dArwmF3NFnK7v6NZ",
+  "agent_id": "a093c52a7cdfeae71",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 19: intruder settings, results",
+  "token_usage": {
+    "input_tokens": 162,
+    "cache_creation_tokens": 324731,
+    "cache_read_tokens": 15097655,
+    "output_tokens": 108620,
+    "api_call_count": 81
+  },
+  "started_at": "2026-11-03T08:24:42.00929171Z",
+  "completed_at": "2026-11-03T08:34:16.513901013Z"
+}

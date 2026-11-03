@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019vGRVWBx96gQzX282RQs8V",
+  "agent_id": "a8c320949298c9ce0",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 24: session complete",
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 270967,
+    "cache_read_tokens": 10706808,
+    "output_tokens": 97410,
+    "api_call_count": 59
+  },
+  "started_at": "2026-11-03T08:27:12.865008666Z",
+  "completed_at": "2026-11-03T08:34:16.592714676Z"
+}

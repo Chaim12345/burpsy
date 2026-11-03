@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_019JQT1igahm1NNFFFk4zLWo",
+  "agent_id": "af1107c5231af198f",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 22: logger and WS history",
+  "token_usage": {
+    "input_tokens": 196,
+    "cache_creation_tokens": 291093,
+    "cache_read_tokens": 20546553,
+    "output_tokens": 101026,
+    "api_call_count": 99
+  },
+  "started_at": "2026-11-03T08:27:12.710484606Z",
+  "completed_at": "2026-11-03T08:34:16.584370528Z"
+}

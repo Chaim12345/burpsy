@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01SuGqgd9Kf8fKQheEfF7u4R",
+  "agent_id": "aa1be0074726c2419",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 11: issues triage, audit queue",
+  "token_usage": {
+    "input_tokens": 206,
+    "cache_creation_tokens": 352169,
+    "cache_read_tokens": 20915200,
+    "output_tokens": 91864,
+    "api_call_count": 103
+  },
+  "started_at": "2026-11-03T08:24:42.183281875Z",
+  "completed_at": "2026-11-03T08:34:16.562809454Z"
+}

@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01LtrtZCs3HVMZHMK67Kfdyg",
+  "agent_id": "a3e647b252340e550",
+  "subagent_type": "general-purpose",
+  "task_description": "ui2 unit 4: history toolbar, bulk",
+  "token_usage": {
+    "input_tokens": 188,
+    "cache_creation_tokens": 521187,
+    "cache_read_tokens": 19325004,
+    "output_tokens": 93071,
+    "api_call_count": 94
+  },
+  "started_at": "2026-11-03T08:20:40.634466465Z",
+  "completed_at": "2026-11-03T08:34:16.03474935Z"
+}
