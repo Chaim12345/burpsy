@@ -178,8 +178,7 @@ nav completeness, decoder md5, comparer diff, intercept actions, 405s).
 13453497 bytes · suite running"; sitemap renders 190 nodes; history infinite-scroll 100→201
 rows with one live sentinel, `status=403` filter narrows 783→24, row click fills the detail
 pane and marks the row selected; decoder run returns md5("hello") correctly; comparer renders
-a diff. 17 screenshots + a 17 s walkthrough video + overview grid were emailed to
-awayt3005@proton.me via proton-cli (message in Sent, 2026-10-30).
+a diff. 17 screenshots, a 17 s walkthrough video and an overview grid were captured.
 
 **Remaining honest gaps (old SPA still wins these):** keyboard shortcuts, row multi-select /
 send-to-tool actions, manual theme toggle, Intruder attack launch UI, Collaborator/Sequencer/

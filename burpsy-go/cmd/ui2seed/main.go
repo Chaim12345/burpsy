@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +22,12 @@ import (
 var victimHits int64
 
 func main() {
+	targetAddr := flag.String("target", "127.0.0.1:18098", "victim origin address")
+	webAddr := flag.String("web", "127.0.0.1:18099", "console address")
+	flag.Parse()
+	_, tp, _ := net.SplitHostPort(*targetAddr)
+	targetPort64, _ := strconv.ParseUint(tp, 10, 16)
+	targetPort := uint16(targetPort64)
 	// Safe local attack target: a plain HTTP victim on loopback that counts hits.
 	go func() {
 		mux := http.NewServeMux()
@@ -30,7 +39,7 @@ func main() {
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("victim-ok"))
 		})
-		_ = http.ListenAndServe("127.0.0.1:18098", mux)
+		_ = http.ListenAndServe(*targetAddr, mux)
 	}()
 
 	store := core.NewTrafficStore()
@@ -42,35 +51,35 @@ func main() {
 		return uint64(id)
 	}
 	for i := 0; i < 3; i++ {
-		reqID := put(fmt.Sprintf("GET /p%d?a=%d HTTP/1.1\r\nHost: 127.0.0.1:18098\r\nCookie: sid=abc\r\n\r\n", i, i), core.DirectionRequest)
+		reqID := put(fmt.Sprintf("GET /p%d?a=%d HTTP/1.1\r\nHost: "+*targetAddr+"\r\nCookie: sid=abc\r\n\r\n", i, i), core.DirectionRequest)
 		respID := put("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 11\r\n\r\nhello world", core.DirectionResponse)
 		status := uint16(200)
 		store.AddExchange(&core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
-			Host: "127.0.0.1", Port: 18098, Method: "GET", Path: fmt.Sprintf("/p%d?a=%d", i, i), Status: &status, Source: core.SourceProxy})
+			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: fmt.Sprintf("/p%d?a=%d", i, i), Status: &status, Source: core.SourceProxy})
 	}
 	// A JSON API exchange and an HTML page exchange, for the detail pane's syntax views.
 	{
-		reqID := put("GET /api/users HTTP/1.1\r\nHost: 127.0.0.1:18098\r\nAccept: application/json\r\n\r\n", core.DirectionRequest)
+		reqID := put("GET /api/users HTTP/1.1\r\nHost: "+*targetAddr+"\r\nAccept: application/json\r\n\r\n", core.DirectionRequest)
 		respID := put("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n\r\n"+`{"users":[{"id":1,"name":"ada","admin":true},{"id":2,"name":"grace","admin":false}],"total":2,"note":null}`, core.DirectionResponse)
 		status := uint16(200)
 		store.AddExchange(&core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
-			Host: "127.0.0.1", Port: 18098, Method: "GET", Path: "/api/users", Status: &status, Source: core.SourceProxy})
+			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: "/api/users", Status: &status, Source: core.SourceProxy})
 	}
 	{
 		// A minified JavaScript asset: exercises JS detection, re-indenting and regex coloring.
-		reqID := put("GET /static/app.js HTTP/1.1\r\nHost: 127.0.0.1:18098\r\n\r\n", core.DirectionRequest)
+		reqID := put("GET /static/app.js HTTP/1.1\r\nHost: "+*targetAddr+"\r\n\r\n", core.DirectionRequest)
 		respID := put("HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n"+`function cart(){var items=[];var re=/sku-[0-9]{3,}/g;var tax=1.5e-2;function add(sku){if(re.test(sku)){items.push({sku:sku,qty:1});}}return{add:add,count:function(){return items.length;}}}`, core.DirectionResponse)
 		status := uint16(200)
 		store.AddExchange(&core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
-			Host: "127.0.0.1", Port: 18098, Method: "GET", Path: "/static/app.js", Status: &status, Source: core.SourceProxy})
+			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: "/static/app.js", Status: &status, Source: core.SourceProxy})
 	}
 	{
-		reqID := put("GET /home HTTP/1.1\r\nHost: 127.0.0.1:18098\r\n\r\n", core.DirectionRequest)
+		reqID := put("GET /home HTTP/1.1\r\nHost: "+*targetAddr+"\r\n\r\n", core.DirectionRequest)
 		respID := put("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"+`<!doctype html><html><head><title>shop</title><style>body{margin:0}.x{color:red}</style></head><body><h1 class="x">Hi</h1><script>var a=1;// demo
 function f(){return a}</script></body></html>`, core.DirectionResponse)
 		status := uint16(200)
 		store.AddExchange(&core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
-			Host: "127.0.0.1", Port: 18098, Method: "GET", Path: "/home", Status: &status, Source: core.SourceProxy})
+			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: "/home", Status: &status, Source: core.SourceProxy})
 	}
 	srv := web.NewServer(store, core.NewScope())
 	// A wired scanner so the Collaborator channel can be configured (POST
@@ -80,7 +89,7 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 	t.Advance(4)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		req, _ := http.NewRequest(http.MethodPut, "http://127.0.0.1:18099/api/tools/rules", bytes.NewReader([]byte(`{"rules":[{"rule_type":"request_header","enabled":true,"string_match":"secret-cookie-marker","string_replace":"redacted-marker"}]}`)))
+		req, _ := http.NewRequest(http.MethodPut, "http://"+*webAddr+"/api/tools/rules", bytes.NewReader([]byte(`{"rules":[{"rule_type":"request_header","enabled":true,"string_match":"secret-cookie-marker","string_replace":"redacted-marker"}]}`)))
 		req.Header.Set("Content-Type", "application/json")
 		if resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req); err == nil {
 			_ = resp.Body.Close()
@@ -89,7 +98,7 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 		}
 		post := func(path string, body map[string]any) {
 			b, _ := json.Marshal(body)
-			if resp, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://127.0.0.1:18099"+path, "application/json", bytes.NewReader(b)); err == nil {
+			if resp, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://"+*webAddr+path, "application/json", bytes.NewReader(b)); err == nil {
 				_ = resp.Body.Close()
 			} else {
 				fmt.Println("seed post", path, err)
@@ -97,8 +106,8 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 		}
 		post("/api/issues/record", map[string]any{"name": "Weak password policy", "description": "prose", "severity": "high", "exchange_id": 0})
 	}()
-	fmt.Println("listening on 127.0.0.1:18099, victim on 18098")
-	if err := http.ListenAndServe("127.0.0.1:18099", srv.MCPGuarded()); err != nil {
+	fmt.Println("listening on", *webAddr, "victim on", *targetAddr)
+	if err := http.ListenAndServe(*webAddr, srv.MCPGuarded()); err != nil {
 		panic(err)
 	}
 }

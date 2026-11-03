@@ -23,6 +23,20 @@ import (
 //go:embed ui2
 var ui2FS embed.FS
 
+// ui2TemplateFiles lists every template: ui2/*.html plus one level of per-domain directories.
+// Template names are file basenames, so basenames must be unique across domains.
+func ui2TemplateFiles() []string {
+	var out []string
+	for _, pat := range []string{"ui2/*.html", "ui2/*/*.html"} {
+		m, err := fs.Glob(ui2FS, pat)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, m...)
+	}
+	return out
+}
+
 // ui2Templates is every server-rendered fragment, parsed once at package init. text/template
 // would work too; html/template is chosen because message bytes are attacker-controlled and
 // land in these pages — auto-escaping is not optional here.
@@ -42,59 +56,7 @@ var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
 		}
 		return time.UnixMilli(int64(f)).Format("2006-01-02 15:04:05")
 	},
-}).ParseFS(ui2FS,
-	"ui2/layout.html",
-	"ui2/nav.html",
-	"ui2/dashboard.html",
-	"ui2/sitemap.html",
-	"ui2/sitemap_action_confirm.html",
-	"ui2/scope.html",
-	"ui2/scope_confirm.html",
-	"ui2/intercept.html",
-	"ui2/logger.html",
-	"ui2/logger_rows_append.html",
-	"ui2/ws.html",
-	"ui2/proxy.html",
-	"ui2/extensions.html",
-	"ui2/scanner.html",
-	"ui2/crawl_launch.html",
-	"ui2/crawl_watch.html",
-	"ui2/scanner_config_confirm.html",
-	"ui2/scanner_launch.html",
-	"ui2/advisories.html",
-	"ui2/organizer.html",
-	"ui2/organizer_confirm.html",
-	"ui2/organizer_status_confirm.html",
-	"ui2/organizer_annotate_confirm.html",
-	"ui2/organizer_item_confirm.html",
-	"ui2/session.html",
-	"ui2/session_confirm.html",
-	"ui2/decoder.html",
-	"ui2/comparer.html",
-	"ui2/repeater.html",
-	"ui2/settings.html",
-	"ui2/error.html",
-	"ui2/intruder.html",
-	"ui2/intruder_points.html",
-	"ui2/intruder_confirm.html",
-	"ui2/intruder_results.html",
-	"ui2/sequencer.html",
-	"ui2/sequencer_confirm.html",
-	"ui2/logger_confirm.html",
-	"ui2/settings_triage_confirm.html",
-	"ui2/settings_write_confirm.html",
-	"ui2/settings_write_passthrough.html",
-	"ui2/settings_write_proxy.html",
-	"ui2/settings_write_backup.html",
-	"ui2/settings_write_pools.html",
-	"ui2/collaborator.html",
-	"ui2/history_rows.html",
-	"ui2/history_rows_append.html",
-	"ui2/history_detail.html",
-	"ui2/issue_groups.html",
-	"ui2/issue_detail.html",
-	"ui2/advisory_detail.html",
-))
+}).ParseFS(ui2FS, ui2TemplateFiles()...))
 
 // ui2Error is the model for error.html.
 type ui2Error struct{ Message string }
