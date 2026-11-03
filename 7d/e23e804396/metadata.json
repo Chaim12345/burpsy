@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "7de23e804396",
+  "strategy": "manual-commit",
+  "branch": "ui2/discovery-dom",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/route_schemas.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui2/discovery/discovery.html",
+    "burpsy-go/internal/web/ui2/discovery/discovery_review.html",
+    "burpsy-go/internal/web/ui2/discovery/discovery_runs.html",
+    "burpsy-go/internal/web/ui2/dominvader/dominvader.html",
+    "burpsy-go/internal/web/ui2/nav.html",
+    "burpsy-go/internal/web/ui2_discovery.go",
+    "burpsy-go/internal/web/ui2_discovery_test.go",
+    "burpsy-go/internal/web/ui2_dominvader.go",
+    "burpsy-go/internal/web/ui2_dominvader_test.go",
+    "burpsy-go/internal/web/ui2_pages_test.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/e23e804396/0/metadata.json",
+      "transcript": "/7d/e23e804396/0/full.jsonl",
+      "compact_transcript": "/7d/e23e804396/0/transcript.jsonl",
+      "content_hash": "/7d/e23e804396/0/content_hash.txt",
+      "prompt": "/7d/e23e804396/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1930,
+    "cache_read_tokens": 350585,
+    "output_tokens": 976,
+    "api_call_count": 2
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
