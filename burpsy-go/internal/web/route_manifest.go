@@ -1391,6 +1391,14 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Intruder launch: spends the confirmation token on /api/intruder/run",
 	},
+	"/ui2/intruder/payloads": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder: re-render the payload sets and processing rules from the posted launch form; stores and sends nothing",
+	},
+	"/ui2/intruder/payloads/upload": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder: upload a payload wordlist via /api/intruder/payload-files and re-render the payload sets naming the stored file",
+	},
 	"/ui2/intruder/{id}/results": {
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1/results",
 		summary: "ui2 Intruder results: one attack's sent requests via /api/datasets/intruder/{task}",

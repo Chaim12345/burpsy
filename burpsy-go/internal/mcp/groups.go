@@ -531,6 +531,8 @@ var notExposed = map[string]string{
 	"POST /ui2/intruder/points":                "ui2 Intruder points button; /api/intruder/points is the agent-facing read",
 	"POST /ui2/intruder/confirm":               "ui2 Intruder confirm step; the agent mints via /api/intruder/run/confirm",
 	"POST /ui2/intruder/run":                   "ui2 Intruder launch button; /api/intruder/run is the agent-facing attack",
+	"POST /ui2/intruder/payloads":              "ui2 Intruder payload-set editor re-render; an agent writes payload_sources into /api/intruder/run directly",
+	"POST /ui2/intruder/payloads/upload":       "ui2 Intruder wordlist upload button; /api/intruder/payload-files is the agent-facing upload",
 	"GET /ui2/intruder/{id}/results":           "ui2 Intruder results page; /api/datasets/intruder/{task} is the agent-facing read",
 	"POST /ui2/intruder/{id}/{action}":         "ui2 Intruder pause/resume/stop buttons; /api/intruder/attacks/{id}/{action} are agent-facing",
 	"GET /ui2/sequencer":                       "ui2 Sequencer page; /api/sequencer/* are the agent-facing routes",

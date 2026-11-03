@@ -1,0 +1,34 @@
+<h3>New attack</h3>
+<style>
+.intruder-launch fieldset { border:1px solid var(--line); border-radius:6px; margin:8px 14px; padding:6px 10px; min-width:0; }
+.intruder-launch legend { font-weight:600; padding:0 4px; }
+.intruder-launch label { display:inline-flex; gap:6px; align-items:center; margin:3px 12px 3px 0; flex-wrap:wrap; }
+.intruder-launch input[type=text], .intruder-launch select { max-width:100%; }
+.intruder-launch textarea { width:100%; font:12px/1.4 ui-monospace, monospace; }
+.intruder-launch .wide { width:min(36em, 100%); }
+.intruder-launch ul { list-style:none; padding:0; margin:4px 0; }
+.intruder-launch li { overflow-wrap:anywhere; }
+.intruder-launch fieldset fieldset { margin:6px 0; }
+.intruder-review dt { font-weight:600; margin-top:4px; }
+.intruder-review dd { margin:0 0 0 12px; overflow-wrap:anywhere; }
+</style>
+<form id="intruder-launch" class="intruder-launch" hx-post="/ui2/intruder/confirm" action="/ui2/intruder/confirm" method="post" hx-target="#confirm-out" hx-swap="innerHTML" novalidate>
+<!-- First submit button in tree order: Enter in a text field reviews the attack. -->
+<button type="submit" style="display:none" tabindex="-1" aria-hidden="true">Review attack</button>
+<input type="hidden" name="form_seen" value="1">
+<fieldset><legend>Attack</legend>
+  <label>Attack type
+    <select name="mode">{{range .modes}}<option value="{{.Value}}"{{if eq .Value $.mode}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+  </label>
+  <label>Target <input type="text" class="wide" name="target" value="{{.target}}" placeholder="host[:port] or https://host — blank: the base request's own Host"></label>
+  <label><input type="checkbox" name="update_host_header"{{if .update_host}} checked{{end}}> Update Host header to match target</label>
+</fieldset>
+{{template "intruder_attack_positions.html" .positions}}
+{{template "intruder_payloads_sets.html" .}}
+{{template "intruder_payloads_pool.html" .}}
+<p class="meta"><button type="submit" id="intruder-review">Review attack…</button></p>
+</form>
+<!-- Wordlist uploads: the file inputs sit in the payload sets (form="intruder-upload"); the
+     launch form rides along so the re-rendered payload section keeps every other set. -->
+<form id="intruder-upload" hx-post="/ui2/intruder/payloads/upload" action="/ui2/intruder/payloads/upload" method="post" enctype="multipart/form-data" hx-encoding="multipart/form-data" hx-include="#intruder-launch" hx-target="#intruder-payloads" hx-swap="outerHTML"></form>
+<div id="confirm-out"></div>
