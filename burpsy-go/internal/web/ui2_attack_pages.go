@@ -111,7 +111,14 @@ func (s *Server) handleUI2Intruder(w http.ResponseWriter, r *http.Request) {
 	model["wordlists"] = wordlists
 	// Latest proxy exchange as the default base request for the launch form.
 	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
-	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
+	notice, seed, ok := s.ui2SeedFor(r, "Intruder", false)
+	if ok {
+		model["base_exchange"], model["base_msgid"], model["base_request"] = any("none"), seed.MsgID, seed.Raw
+		if seed.HasExchange {
+			model["base_exchange"] = seed.ExchangeID
+		}
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", notice+ui2Exec("intruder.html", model))
 }
 
 // ui2LatestExchange returns the newest non-tool exchange id, the id of its stored request
@@ -362,7 +369,15 @@ func ui2ParseCount(field, s string) (int, string) {
 
 // handleUI2Sequencer serves GET /ui2/sequencer: captures list + analyse form.
 func (s *Server) handleUI2Sequencer(w http.ResponseWriter, r *http.Request) {
-	ui2Fragment(w, r, "burpsy /ui2/ — Sequencer", "sequencer", ui2Exec("sequencer.html", s.ui2SequencerModel()))
+	model := s.ui2SequencerModel()
+	notice, seed, ok := s.ui2SeedFor(r, "Sequencer", true)
+	if ok {
+		model["base_request"] = seed.Raw
+		if seed.HasExchange {
+			model["base_target"], model["base_tls"] = seed.HostPort, seed.TLS
+		}
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Sequencer", "sequencer", notice+ui2Exec("sequencer.html", model))
 }
 
 // ui2SequencerModel is the page model every Sequencer handler re-renders with: the capture

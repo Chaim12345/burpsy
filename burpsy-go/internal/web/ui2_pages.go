@@ -150,6 +150,7 @@ func flattenSitemap(nodes []sitemapNodeView, depth int, out *[]ui2SitemapNode) [
 			Statuses: intSliceString(n.Statuses), Mimes: strings.Join(n.Mimes, ","), Params: strings.Join(n.Params, ","),
 			Issues: n.Issues, SubtreeIssues: n.SubtreeIssues, Worst: n.WorstSeverity,
 			InScope: n.InScope, Requested: n.Requested, Children: n.ChildCount,
+			Recent: ui2ExchangeIDs(n.Recent),
 		})
 		for i := range n.Children {
 			flattenSitemap([]sitemapNodeView{n.Children[i]}, depth+1, out)
@@ -1462,7 +1463,12 @@ func (s *Server) handleUI2Decoder(w http.ResponseWriter, r *http.Request) {
 		s.handleUI2DecoderRun(w, r)
 		return
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": nil}))
+	model := map[string]any{"result": nil}
+	notice, seed, ok := s.ui2SeedFor(r, "Decoder", true)
+	if ok {
+		model["input"] = seed.Raw
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", notice+ui2Exec("decoder.html", model))
 }
 
 func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
@@ -1497,7 +1503,16 @@ func (s *Server) handleUI2Comparer(w http.ResponseWriter, r *http.Request) {
 		s.handleUI2ComparerRun(w, r)
 		return
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": nil}))
+	model := map[string]any{"result": nil}
+	slot := "a"
+	if r.URL.Query().Get("slot") == "b" {
+		slot = "b"
+	}
+	notice, seed, ok := s.ui2SeedFor(r, "Comparer "+strings.ToUpper(slot), true)
+	if ok {
+		model[slot] = seed.Raw
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", notice+ui2Exec("comparer.html", model))
 }
 
 func (s *Server) handleUI2ComparerRun(w http.ResponseWriter, r *http.Request) {
@@ -1531,7 +1546,12 @@ func (s *Server) handleUI2Repeater(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{"draft": draft, "result": nil}))
+	target := ""
+	notice, seed, ok := s.ui2SeedFor(r, "Repeater", true)
+	if ok {
+		draft, target = seed.Raw, seed.Target
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", notice+ui2Exec("repeater.html", map[string]any{"draft": draft, "result": nil, "target": target}))
 }
 
 func (s *Server) handleUI2RepeaterSend(w http.ResponseWriter, r *http.Request) {

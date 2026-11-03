@@ -16,6 +16,7 @@
   <td>
     <form hx-post="/ui2/sitemap/scope/confirm?key={{.Key | urlquery}}" hx-target="#rows" hx-swap="outerHTML" style="display:inline" aria-label="Review adding {{.Path}} to the target scope"><button type="submit">Add to scope</button></form>
     {{if .Subtree}}<a class="btn" href="/ui2/sitemap/repeater?key={{.Key}}">Send to Repeater</a>{{else}}<span class="meta" title="Nothing has been captured under this row yet, so there is no stored request to load into Repeater">no request</span>{{end}}
+    {{if .HasActions}}<a class="btn" href="/ui2/exchange/{{.ActionsExchange}}" title="This row's newest exchange: send it to a tool, copy, annotate, audit">Actions</a>{{end}}
   </td>
 </tr>
 {{else}}<tr><td colspan="10" class="meta">Site map is empty — capture some traffic first.</td></tr>{{end}}

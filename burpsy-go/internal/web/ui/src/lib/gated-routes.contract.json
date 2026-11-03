@@ -206,6 +206,9 @@
   "/ui2/dashboard",
   "/ui2/decoder",
   "/ui2/decoder/run",
+  "/ui2/exchange/{id}",
+  "/ui2/exchange/{id}/menu",
+  "/ui2/exchange/{id}/{action}",
   "/ui2/extensions",
   "/ui2/history",
   "/ui2/history/{id}",
@@ -4140,6 +4143,66 @@
   {
    "path": "/ui2/decoder/run/extra/more",
    "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w",
+   "key": "/ui2/exchange/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/extra",
+   "key": "/ui2/exchange/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu",
+   "key": "/ui2/exchange/{id}/menu",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w",
+   "key": "/ui2/exchange/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/extra/more",
+   "key": "/ui2/",
    "gated": false
   },
   {

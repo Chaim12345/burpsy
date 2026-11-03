@@ -1478,6 +1478,18 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one exchange's request/response panes (message bytes read here, never in the list)",
 	},
+	"/ui2/exchange/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 detached exchange page: request/response panes, headers, query and body parameters, cookies, and the exchange actions menu",
+	},
+	"/ui2/exchange/{id}/menu": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/menu",
+		summary: "ui2 exchange actions menu fragment: send-to links, copy URL/curl/sqlmap/id, annotate, organizer, issue, scope/audit/crawl reviews, browser",
+	},
+	"/ui2/exchange/{id}/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/organizer",
+		summary: "ui2 exchange action: annotate/organizer/issue/browser in one post; scope/audit/crawl-branch/crawl-host .confirm mints a one-time confirmation for the exact call and .run spends it",
+	},
 	"/ui2/htmx.min.js": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "vendored htmx 2.0.4 (50,917 bytes) serving as the ui2 client runtime",
