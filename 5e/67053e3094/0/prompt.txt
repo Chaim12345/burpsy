@@ -1,0 +1,324 @@
+<task-notification>
+<task-id>aed37dcc34b0f9d74</task-id>
+<tool-use-id>toolu_016awRc6uW91F2uWk8nhmbpE</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aed37dcc34b0f9d74.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 18: intruder payloads, attack types" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8Dw76FyeyxDcXDZbb, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aed37dcc34b0f9d74</worktreePath><worktreeBranch>worktree-agent-aed37dcc34b0f9d74</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a07a7d29b8feb12b7</task-id>
+<tool-use-id>toolu_01RCNU1KgyZAfXHVHKgu3ez1</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a07a7d29b8feb12b7.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 17: repeater WS, H2, GraphQL" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8EjTz4Ghf1Wik7FuK, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a07a7d29b8feb12b7</worktreePath><worktreeBranch>worktree-agent-a07a7d29b8feb12b7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abeb630eff930fe21</task-id>
+<tool-use-id>toolu_01CCbwqqDXY8QEvR8LKrNqvh</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/abeb630eff930fe21.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 7: proxy settings, match-replace" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8E52c6BPsf5gGfXZ7, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now options and history logging and rules.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-abeb630eff930fe21</worktreePath><worktreeBranch>worktree-agent-abeb630eff930fe21</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a24a6d995ebf26ce0</task-id>
+<tool-use-id>toolu_014irXHkUw7rogmjJgQAbh3u</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a24a6d995ebf26ce0.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 14: discovery, DOM auditor" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8GGzUMsL6tfidrqz7, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a24a6d995ebf26ce0</worktreePath><worktreeBranch>worktree-agent-a24a6d995ebf26ce0</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6c9d917c7470cede</task-id>
+<tool-use-id>toolu_01LVNkYh3uZtDXvf51HDZ6Qc</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a6c9d917c7470cede.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 12: scanner configuration" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8HdMPVFq9pyyqNNDM, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a6c9d917c7470cede</worktreePath><worktreeBranch>worktree-agent-a6c9d917c7470cede</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0d6d4343fb690cf4</task-id>
+<tool-use-id>toolu_01N8Sr94EUk3SwCGWQPFmJjn</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a0d6d4343fb690cf4.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 15: authz, engagement tools" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a0d6d4343fb690cf4</worktreePath><worktreeBranch>worktree-agent-a0d6d4343fb690cf4</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa7f4f6c7dc857cc5</task-id>
+<tool-use-id>toolu_01SiDgneF7ZDUzin41Q6cKFk</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aa7f4f6c7dc857cc5.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 9: new scan launcher" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8Kx1E5LogLLV7Ue8W, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now the recorded logins, apiscan, and audit selected.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aa7f4f6c7dc857cc5</worktreePath><worktreeBranch>worktree-agent-aa7f4f6c7dc857cc5</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa1be0074726c2419</task-id>
+<tool-use-id>toolu_01SuGqgd9Kf8fKQheEfF7u4R</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aa1be0074726c2419.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 11: issues triage, audit queue" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8KqZ2MmGkgks3HCfL, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aa1be0074726c2419</worktreePath><worktreeBranch>worktree-agent-aa1be0074726c2419</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa8a95624db742f72</task-id>
+<tool-use-id>toolu_01PRnxriGaFBT6Wo9GmBCB7N</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aa8a95624db742f72.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 20: sequencer and comparer" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aa8a95624db742f72</worktreePath><worktreeBranch>worktree-agent-aa8a95624db742f72</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adc735676478c4e52</task-id>
+<tool-use-id>toolu_01QVyvM1XKxxobvzhULN68AH</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/adc735676478c4e52.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 8: dashboard tasks" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now app.js live refresh logic.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-adc735676478c4e52</worktreePath><worktreeBranch>worktree-agent-adc735676478c4e52</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aec5c65be9ecff1e0</task-id>
+<tool-use-id>toolu_0119BzpMVimBDqXkFJVZ4s3o</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aec5c65be9ecff1e0.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 13: BCheck custom checks" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8VawXCGfr5MXNLGdD, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now the scanner checks API handlers.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aec5c65be9ecff1e0</worktreePath><worktreeBranch>worktree-agent-aec5c65be9ecff1e0</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a093c52a7cdfeae71</task-id>
+<tool-use-id>toolu_01H4p1e2dArwmF3NFnK7v6NZ</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a093c52a7cdfeae71.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 19: intruder settings, results" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8W6gmzSr1hL4Hz9Xx, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a093c52a7cdfeae71</worktreePath><worktreeBranch>worktree-agent-a093c52a7cdfeae71</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3b61db08b4a3543c</task-id>
+<tool-use-id>toolu_01Sw3ypnmEHRH2SkSY2QudGY</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a3b61db08b4a3543c.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 16: repeater HTTP complete" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8XkfbCJpHrNRMyW7c, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a3b61db08b4a3543c</worktreePath><worktreeBranch>worktree-agent-a3b61db08b4a3543c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa61e08070610087b</task-id>
+<tool-use-id>toolu_01XSbYw42qtBm6BN2kgiEkRu</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aa61e08070610087b.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 1: shell, default switch" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8aYb17mU1vx96ph2Y, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now the config import/export.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aa61e08070610087b</worktreePath><worktreeBranch>worktree-agent-aa61e08070610087b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abb43ea29aedd5cf7</task-id>
+<tool-use-id>toolu_01Wc7iUKyQ4NoQnRup2BAaU8</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/abb43ea29aedd5cf7.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 3: exchange actions" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8mf4shgjF5ijzwW6W, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now the other APIs' bodies.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-abb43ea29aedd5cf7</worktreePath><worktreeBranch>worktree-agent-abb43ea29aedd5cf7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a31f19f01a00cbc9b</task-id>
+<tool-use-id>toolu_014VjUZkHdsZpd9cRSaA3vt6</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a31f19f01a00cbc9b.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 2: search, discover, palette" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg8vMTZtogUgMsaBrtw, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now the /api/search handler and /api/message.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a31f19f01a00cbc9b</worktreePath><worktreeBranch>worktree-agent-a31f19f01a00cbc9b</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af6f4b588489c4322</task-id>
+<tool-use-id>toolu_01BCUyQe9zCaeQd9qPhRcFQs</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/af6f4b588489c4322.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 6: intercept complete" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011Cgfg9RYsVYsiqW6yycvkh, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-af6f4b588489c4322</worktreePath><worktreeBranch>worktree-agent-af6f4b588489c4322</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa6614fc54e7f01f4</task-id>
+<tool-use-id>toolu_01XtRC1cY1j42HYJNrVUQrGo</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/aa6614fc54e7f01f4.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 10: site map complete" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-aa6614fc54e7f01f4</worktreePath><worktreeBranch>worktree-agent-aa6614fc54e7f01f4</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a26941d568a8efc44</task-id>
+<tool-use-id>toolu_017K7MeCGRM6u56TRwxzWxgu</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a26941d568a8efc44.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 5: message editor views" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id REDACTED, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a26941d568a8efc44</worktreePath><worktreeBranch>worktree-agent-a26941d568a8efc44</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3e647b252340e550</task-id>
+<tool-use-id>toolu_01LtrtZCs3HVMZHMK67Kfdyg</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/a3e647b252340e550.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 4: history toolbar, bulk" failed: Agent terminated early due to an API error: You've hit your weekly limit · resets 9am (UTC) (error type rate_limit, HTTP 429, request id req_011CgfgEJrviBWm2MGLWrhrR, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 9am (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Now audit selected and har import.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-a3e647b252340e550</worktreePath><worktreeBranch>worktree-agent-a3e647b252340e550</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+We are almost at use let them finish then start more
+
+---
+
+This session's worker process was restarted. If your previous turn was already complete, take no action and wait for the next event. Otherwise, continue from where you left off.
+
+---
+
+This session's worker process was restarted. If your previous turn was already complete, take no action and wait for the next event. Otherwise, continue from where you left off.
+
+---
+
+Continue
+
+---
+
+<task-notification>
+<task-id>abb43ea29aedd5cf7</task-id>
+<tool-use-id>toolu_01MYhsLgpvKxVndr1txxsEAD</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/abb43ea29aedd5cf7.output</output-file>
+<status>failed</status>
+<summary>Agent "ui2 unit 3: exchange actions" failed: Agent terminated early due to an API error: You've hit your 5-hour limit · resets 12:50pm (UTC) (error type rate_limit, HTTP 429, request id req_011CgfmCRPNiR5t5ssJsFmjd, model sent to the API: claude-opus-5-5)</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once. This agent's work so far is saved. The limit resets at 12:50pm (UTC). Once its requests are accepted again, send the agent a message (SendMessage) to let it continue from where it stopped instead of starting a new agent.</note>
+<result>Not applied yet. I'll write the script to a file and run it.</result>
+<worktree><worktreePath>/home/user/burpsy/.claude/worktrees/agent-abb43ea29aedd5cf7</worktreePath><worktreeBranch>worktree-agent-abb43ea29aedd5cf7</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Don't use any more subjects just you go and see the status of thir work and report
+
+---
+
+<task-notification>
+<task-id>bn11wah9n</task-id>
+<tool-use-id>toolu_01Q5CpHqyhrQN2WGHBwmH3mL</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bn11wah9n.output</output-file>
+<status>completed</status>
+<summary>Background command "Check pushed unit branches and time" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bsy8ash6a</task-id>
+<tool-use-id>toolu_01TFDJbNRYTy1TR3nUHer9EN</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bsy8ash6a.output</output-file>
+<status>completed</status>
+<summary>Background command "Run go vet across all unit worktrees in background" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Find what they did get done
+
+---
+
+Look at different with worktrees
+
+---
+
+<task-notification>
+<task-id>bfw6kqxxx</task-id>
+<tool-use-id>toolu_01Hs2hpg3sFzWWe6Wvpq4NKG</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bfw6kqxxx.output</output-file>
+<status>completed</status>
+<summary>Background command "Run vet on all unit worktrees" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Go thrgh them one by one and finish them
+
+---
+
+No need to rerun
