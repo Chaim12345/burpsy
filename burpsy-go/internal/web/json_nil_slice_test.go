@@ -118,6 +118,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/intruder/points":           "<!doctype html",
 		"/ui2/intruder/confirm":          "<!doctype html",
 		"/ui2/intruder/run":              "<!doctype html",
+		"/ui2/intruder/config/default":   "<!doctype html",
 		"/ui2/sequencer/analyse":         "<!doctype html",
 		"/ui2/collaborator/mint":         "<!doctype html",
 		"/ui2/advisories":                "<!doctype html",

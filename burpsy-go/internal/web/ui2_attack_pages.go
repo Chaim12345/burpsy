@@ -111,6 +111,7 @@ func (s *Server) handleUI2Intruder(w http.ResponseWriter, r *http.Request) {
 	model["wordlists"] = wordlists
 	// Latest proxy exchange as the default base request for the launch form.
 	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
+	model["settings"] = s.ui2IntruderSettingsForPage(nil)
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
 }
 
@@ -169,6 +170,9 @@ func (s *Server) handleUI2IntruderConfirm(w http.ResponseWriter, r *http.Request
 		"token": token, "preview": preview, "error": errText,
 		"run": run, "form": r.PostForm,
 	}
+	// The review shows the whole bound body, and re-posts the settings the body was built from.
+	model["full_body"] = string(payload)
+	model["settings_hidden"] = ui2IntruderSettingsHidden(r.PostForm)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(ui2Exec("intruder_confirm.html", model)))
 }
@@ -196,7 +200,9 @@ func (s *Server) handleUI2IntruderRun(w http.ResponseWriter, r *http.Request) {
 				model["launched_task"] = uint64(id)
 			}
 		}
+		s.ui2IntruderKeepReport(run, result)
 	}
+	model["settings"] = s.ui2IntruderSettingsForPage(r.PostForm)
 	// Re-seed the launch form: without the base request the re-rendered form goes blank.
 	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
@@ -204,39 +210,25 @@ func (s *Server) handleUI2IntruderRun(w http.ResponseWriter, r *http.Request) {
 
 // handleUI2IntruderControl serves POST /ui2/intruder/{id}/{action}: pause/resume/stop one attack.
 func (s *Server) handleUI2IntruderControl(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	idN, ok := ui2IntruderID(r)
 	action := r.PathValue("action")
 	if action != "pause" && action != "resume" && action != "stop" {
 		http.Error(w, "unknown attack action", http.StatusBadRequest)
 		return
 	}
-	path := "/api/intruder/attacks/" + id + "/" + action
+	if !ok {
+		http.Error(w, "attack ids are whole numbers", http.StatusNotFound)
+		return
+	}
+	id := strconv.FormatUint(idN, 10)
+	path := "/api/intruder/attacks/" + url.PathEscape(id) + "/" + action
 	_, errText := s.ui2APIResult(http.MethodPost, path, map[string]any{})
 	attacks, _ := s.ui2APIResult(http.MethodGet, "/api/intruder/attacks", nil)
 	wordlists, _ := s.ui2APIResult(http.MethodGet, "/api/wordlists", nil)
 	model := map[string]any{"attacks": attacks, "wordlists": wordlists, "error": errText, "action": action, "id": id}
 	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
+	model["settings"] = s.ui2IntruderSettingsForPage(nil)
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
-}
-
-// handleUI2IntruderResults serves GET /ui2/intruder/{id}/results: the attack's sent requests
-// via the datasets table view.
-func (s *Server) handleUI2IntruderResults(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	// The label says newest first, so ask for it (the dataset default is ascending ids), and
-	// forward the page offset: without it every page request returned the same first 200 rows.
-	q := "limit=200&sort_by=id&sort_order=desc"
-	if off := r.URL.Query().Get("offset"); off != "" {
-		q += "&offset=" + url.QueryEscape(off)
-	}
-	res, errText := s.ui2APIResult(http.MethodGet, "/api/datasets/intruder/"+id+"?"+q, nil)
-	model := map[string]any{"task": id, "results": res, "error": errText}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if r.Header.Get("HX-Request") == "true" {
-		_, _ = w.Write([]byte(ui2Exec("intruder_results.html", model)))
-		return
-	}
-	ui2RenderPage(w, "burpsy /ui2/ — Attack "+id, "intruder", ui2Exec("intruder_results.html", model))
 }
 
 // ui2IntruderRunPayload builds the /api/intruder/run body from the launch form.
@@ -310,6 +302,9 @@ func (s *Server) ui2IntruderRunPayload(r *http.Request) (map[string]any, string)
 	}
 	if r.PostFormValue("payload_placement") != "" {
 		run["payload_placement"] = r.PostFormValue("payload_placement")
+	}
+	if errText := ui2IntruderApplySettings(run, r.PostForm); errText != "" {
+		return run, errText
 	}
 	return run, ""
 }

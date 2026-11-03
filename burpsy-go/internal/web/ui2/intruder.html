@@ -34,15 +34,17 @@
 <div id="points-out"></div>
 <form hx-post="/ui2/intruder/confirm" method="post" hx-target="#confirm-out" hx-swap="innerHTML" style="margin-top:10px">
   <input type="hidden" name="msg_id" value="{{.base_msgid}}">
-  <input type="text" name="target" placeholder="target host[:port] (default: base request's Host)" style="width:100%">
-  <textarea name="payloads" rows="5" style="width:100%" placeholder="one payload per line" aria-label="Payloads, one per line"></textarea>
+  <input type="text" name="target" placeholder="target host[:port] (default: base request's Host)" style="width:100%" value="{{.loaded_target}}">
+  <textarea name="payloads" rows="5" style="width:100%" placeholder="one payload per line" aria-label="Payloads, one per line">{{.loaded_payloads}}</textarea>
   <div>
-    <label><input type="checkbox" name="all_points" checked> all points</label>
+    <label><input type="checkbox" name="all_points"{{if not .loaded_no_all_points}} checked{{end}}> all points</label>
     <select name="payload_placement" aria-label="Payload placement">
-      <option value="">auto</option><option value="replace">replace</option><option value="append">append</option>
+      <option value="">auto</option><option value="replace"{{if and .loaded_placement (eq .loaded_placement "replace")}} selected{{end}}>replace</option><option value="append"{{if and .loaded_placement (eq .loaded_placement "append")}} selected{{end}}>append</option>
     </select>
   </div>
+  {{if .settings}}{{template "intruder_settings_form.html" .settings}}{{end}}
   <button type="submit">Prepare attack…</button>
 </form>
+{{template "intruder_settings_load.html" .}}
 <div id="confirm-out"></div>
 </div>
