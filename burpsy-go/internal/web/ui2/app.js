@@ -50,6 +50,12 @@ function liveStream() {
     try { kind = JSON.parse(e.data).kind || ''; } catch (_) { return; }
     if (kind === 'ping' || kind === 'hello') return;
     var view = (document.body.dataset || {}).view || '';
+    // Scanner configuration: only the live-audit metrics block (it holds no form field) follows
+    // capture, finding and task frames; the rest of that page is operator state, never swapped.
+    if (view === 'scanconfig' && document.getElementById('livemetrics') && (kind === 'history' || kind === 'issues' || kind === 'dashboard')) {
+      liveRefresh('livemetrics');
+      return;
+    }
     if (document.getElementById('crawlwatch') && (kind === 'history' || kind === 'dashboard')) {
       liveRefresh('crawlwatch');
     } else if (view === 'history' && kind === 'history') {
@@ -200,7 +206,7 @@ function liveGuarded(what) {
 }
 
 function liveRefresh(what) {
-  if (what !== 'crawlwatch' && liveGuarded(what)) { livePillShow(what); return; }
+  if (what !== 'crawlwatch' && what !== 'livemetrics' && liveGuarded(what)) { livePillShow(what); return; }
   if (liveBusy || liveOpFlight > 0) { liveTrailing = what; return; }
   liveIssue(what);
 }
@@ -212,6 +218,10 @@ function liveIssue(what) {
     if (!cw || !cw.dataset.task) return;
     url = '/ui2/scanner/crawl-watch?task=' + encodeURIComponent(cw.dataset.task);
     target = '#crawlwatch';
+  } else if (what === 'livemetrics') {
+    if (!document.getElementById('livemetrics')) return;
+    url = '/ui2/scanner/live';
+    target = '#livemetrics';
   } else if (what === 'history') {
     var q = document.getElementById('q');
     var search = document.querySelector('header form input[name="search"]');

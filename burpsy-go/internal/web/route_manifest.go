@@ -1574,6 +1574,26 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Scanner configuration: spends the confirmation token on the reviewed PUT /api/scanner/config patch and renders the outcome",
 	},
+	"/ui2/scanner/config": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Scanner configuration page: every audit-check switch and knob, check inputs, issue-row restriction, XSS browser routes, secret detection, live active audit and passive coverage",
+	},
+	"/ui2/scanner/live": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Scanner live-audit metrics fragment (swept, findings, backlog, stalled, gated, second chance, ledger-refused), swapped by the page's live refresh",
+	},
+	"/ui2/scanner/library": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 scan configuration library: shipped and saved configurations, and with ?open= one configuration's issue selection, detection methods, skip parameters and read-only run overrides",
+	},
+	"/ui2/scanner/review": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner review step for the live audit, secret detection and library writes: builds the exact API call, holds it server-side (minting a gate token when the route is gated) and renders the full call for review",
+	},
+	"/ui2/scanner/review-run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Scanner review run: spends one held review (single use, constant-time token check, live-audit drift check) and dispatches the held call verbatim",
+	},
 	"/ui2/sitemap/scope/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 Site map: two-step add-to-scope - confirm resolves the row's node from the live tree and mints a one-time confirmation for the exact /api/scope include rule, run spends it; the change persists and neither step sends traffic",

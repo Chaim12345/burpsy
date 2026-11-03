@@ -1,0 +1,100 @@
+<div id="rows" class="sc" data-scanconfig="1">
+{{template "scanner_style.html"}}
+<h3>Scanner configuration</h3>
+<p class="meta"><a href="/ui2/scanner">Launch an audit or crawl</a> · <a href="/ui2/scanner/library">Scan configuration library</a> · every write below goes through a review step first.</p>
+{{if .note}}<p class="meta" id="scan-note" role="status"><strong>{{.note}}</strong></p>{{end}}
+{{if .note_error}}<p class="meta sc-err" role="alert"><strong>Not applied: {{.note_error}}</strong></p>{{end}}
+
+<h3>Live active audit</h3>
+<section aria-label="Live active audit">
+<p class="meta">Audits new in-scope traffic as it is captured. Active checks are never sent automatically while this is off.</p>
+{{if .live.v.Wired}}
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#liveconfirm" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="{{if .live.v.Enabled}}live-disable{{else}}live-enable{{end}}">
+<button id="live-toggle">{{if .live.v.Enabled}}Switch live audit off{{else}}Switch live audit on{{end}}</button>
+</form>
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#liveconfirm" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="live-source">
+<label>Traffic source <select name="traffic_source">
+<option value="proxy"{{if eq .live.source "proxy"}} selected{{end}}>Proxy traffic only</option>
+<option value="everything"{{if eq .live.source "everything"}} selected{{end}}>Everything in scope</option>
+</select></label>
+<button>Review source change</button>
+</form>
+{{if .live.stalled}}<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#liveconfirm" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="live-retry">
+<button title="Wait on the stalled exchange again, with its stall budget carried">Retry stalled #{{.live.stalled}}</button>
+</form>{{end}}
+<div id="liveconfirm"></div>
+{{end}}
+{{template "scanner_live_metrics.html" .live}}
+</section>
+
+<h3>Secret detection</h3>
+<section aria-label="Secret detection">
+<p class="meta">Scans every captured response for leaked API keys, cloud credentials, tokens and private keys. Passive: nothing is sent.</p>
+{{if .secrets.wired}}
+<p class="meta" id="secrets-state"><strong>{{if .secrets.enabled}}On{{else}}Off{{end}}</strong> - {{.secrets.rules}} rules from {{.secrets.corpus}}, plus {{.secrets.extra}}.{{range .secrets.excluded}} Not reported: {{.}}.{{end}} Applies to responses captured from now on.</p>
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#secretsconfirm" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="{{if .secrets.enabled}}secrets-off{{else}}secrets-on{{end}}">
+<button id="secrets-toggle">{{if .secrets.enabled}}Switch secret detection off{{else}}Switch secret detection on{{end}}</button>
+</form>
+<div id="secretsconfirm"></div>
+{{else}}<p class="meta">No passive scanner is attached to this server, so there is nothing to switch.</p>{{end}}
+</section>
+
+<h3>Audit checks</h3>
+<section aria-label="Audit checks">
+{{if .config_applied}}<p class="meta" role="status"><strong>Configuration applied; the running engine now uses it.</strong></p>{{end}}
+{{if .config_error}}<p class="meta sc-err" role="alert"><strong>Not applied: {{.config_error}}</strong></p>{{end}}
+{{if .wired}}
+<p class="meta">Which issue families the scanner runs, editable while it runs, and persisted for future starts. Changes go through a review step naming each one and showing the exact call; the confirmation is one-time.</p>
+<form id="scan-config-form" hx-post="/ui2/scanner/config-confirm" hx-target="#configconfirm" hx-swap="innerHTML" method="post">
+<div class="sc-knobs">
+<label>Concurrent checks <input type="text" name="max_concurrency" inputmode="numeric" size="5" value="{{.max_concurrency}}"></label>
+<label>Check timeout (ms) <input type="text" name="timeout_ms" inputmode="numeric" size="7" value="{{.timeout_ms}}"></label>
+<label>Probe timeout (ms) <input type="text" name="probe_timeout_ms" inputmode="numeric" size="7" value="{{.probe_timeout_ms}}"></label>
+</div>
+{{range .groups}}
+<fieldset><legend>{{.title}}</legend>
+<p class="sc-hint">{{.detail}}</p>
+<div class="sc-grid">
+{{range .rows}}<label class="sc-sw"><input type="checkbox" id="cf-{{.key}}" name="{{.key}}"{{if .on}} checked{{end}}><span>{{.label}}{{if .default_on}} <span class="badge">on by default</span>{{end}}{{if .hint}}<small>{{.hint}}</small>{{end}}</span></label>
+{{end}}
+</div>
+</fieldset>
+{{end}}
+<fieldset><legend>Check inputs</legend>
+<p class="sc-hint">Values the opt-in checks above read. Saved with the switches.</p>
+<p><label>Login rate-limit burst <input type="text" name="login_rate_limit_attempts" inputmode="numeric" size="5" value="{{.login_attempts}}"></label><span class="sc-hint">Failed attempts sent by Login rate limiting: {{.login_hint}}</span></p>
+<p><label for="cf-identities">Password-reset test identities</label><span class="sc-hint">One per line. Password reset tokens only acts on identities listed here, and changes their password.</span>
+<textarea id="cf-identities" name="reset_test_identities" rows="3" spellcheck="false">{{.identities_text}}</textarea></p>
+<p><label>Password-reset mailbox URL <input type="text" name="reset_mailbox_url" size="44" value="{{.mailbox_url}}" placeholder="https://mail.test/inbox?to={identity}"></label><span class="sc-hint">Test inbox the reset mail is read from; {identity} is replaced by the query-escaped identity. Blank reads tokens from responses only.</span></p>
+<p><label for="cf-only-rows">Restrict the audit to these issue rows</label><span class="sc-hint">One row name per line, spelled as findings name them. Empty runs every enabled check. A name the catalogue does not know is refused at review.</span>
+<textarea id="cf-only-rows" name="only_rows" rows="4" spellcheck="false">{{.only_rows_text}}</textarea><br>
+<label>Add an issue row <input type="text" name="only_rows_add" list="only-rows-catalogue" size="40" placeholder="start typing for the catalogue"></label>
+<datalist id="only-rows-catalogue">{{range .row_names}}<option value="{{.}}">{{end}}</datalist></p>
+</fieldset>
+<fieldset><legend>XSS browser routes</legend>
+<p class="sc-hint">How the browser confirmation reaches an application's page: where to start, what to click to reach the form, and where to type. Without a route, reflected points the server-side check cannot prove are declined. Fields marked * are required; at most {{.xss_max}} routes.</p>
+<input type="hidden" name="xr_count" value="{{.xss_count}}">
+{{range .xss_routes}}{{template "scanner_xss_route.html" .}}{{end}}
+{{if .xss_can_add}}<details{{if not .xss_routes}} open{{end}}><summary>Add a route</summary>{{template "scanner_xss_route.html" .xss_new}}</details>{{end}}
+</fieldset>
+<button>Review configuration changes</button>
+</form>
+<div id="configconfirm"></div>
+{{else}}<p class="meta">No scanner is configured in this process, so there is no audit configuration to edit.</p>{{end}}
+</section>
+
+<h3>Passive check coverage</h3>
+<section aria-label="Passive check coverage">
+{{if .coverage.Enabled}}
+<p class="meta">{{if .coverage.Summary}}{{.coverage.Summary}}{{else}}{{.coverage.Loaded}} BCheck(s) loaded{{end}}</p>
+<div class="sc-chips">{{range .coverage.Partition}}<span class="badge">{{.Count}} {{.State}}</span>{{end}}</div>
+{{if .coverage.Undecoded}}<p class="meta sc-warn">{{.coverage.Undecoded}} response(s) were scanned with a body this build cannot decode, so a clean result on them is not evidence the body is clean.</p>{{end}}
+<table class="sc-wrap"><thead><tr><th scope="col">Check</th><th scope="col">Ran</th><th scope="col">Findings</th><th scope="col">Errored</th><th scope="col">State</th></tr></thead>
+<tbody>{{range .coverage.Checks}}<tr><td>{{.Name}}</td><td>{{.Ran}}</td><td>{{.Findings}}</td><td>{{.Errored}}</td><td title="{{.LastError}}">{{.State}}</td></tr>{{else}}<tr><td colspan="5" class="meta">No checks have run yet.</td></tr>{{end}}</tbody></table>
+{{else}}<p class="meta">{{if .coverage.Hint}}{{.coverage.Hint}}{{else}}passive BCheck scanning is not enabled{{end}}</p>{{end}}
+</section>
+</div>

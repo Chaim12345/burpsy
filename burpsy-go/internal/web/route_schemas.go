@@ -44,6 +44,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/scanner/crawl-run":              {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
 	"POST /ui2/scanner/config-confirm":         {raw: "application/x-www-form-urlencoded configuration form"},
 	"POST /ui2/scanner/config-run":             {raw: "application/x-www-form-urlencoded reviewed patch + one-time confirm token"},
+	"POST /ui2/scanner/review":                 {raw: "application/x-www-form-urlencoded op + its form fields"},
+	"POST /ui2/scanner/review-run":             {raw: "application/x-www-form-urlencoded review id + one-time token"},
 	"POST /ui2/intruder/{id}/{action}":         noBody,
 	"POST /ui2/repeater":                       {raw: "application/x-www-form-urlencoded form: raw, optional target"},
 	"POST /ui2/repeater/send":                  {raw: "application/x-www-form-urlencoded form: raw, optional target"},

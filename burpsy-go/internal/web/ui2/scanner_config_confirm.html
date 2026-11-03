@@ -1,10 +1,15 @@
-{{if .error}}<p class="meta">Not applied: {{.error}}</p>{{else}}
-<p><strong>Review configuration changes:</strong> <span class="meta">{{.preview}}</span></p>
+<div class="sc-review" data-review="1">
+{{if .error}}<p class="meta sc-err" role="alert"><strong>Not applied: {{.error}}</strong></p>{{else}}
+<p><strong>Review configuration changes:</strong></p>
 <ul class="meta">{{range .changes}}<li>{{.}}</li>{{end}}</ul>
+<details open><summary>exact call (what the token binds)</summary>
+<pre class="brk">{{.projection}}</pre>
+</details>
 <p class="meta">This changes what later audits run: a family switched off sends none of its probes, and a timeout change bounds every later probe. Named configurations saved in the console are untouched. This confirmation is one-time and covers exactly the call above.</p>
-<form hx-post="/ui2/scanner/config-run" hx-target="#rows" hx-swap="outerHTML">
+<form hx-post="/ui2/scanner/config-run" hx-target="#rows" hx-swap="outerHTML" method="post">
 <input type="hidden" name="token" value="{{.token}}">
 <input type="hidden" name="patch" value="{{.patch}}">
-<button>Confirm and apply</button>
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and apply</button>
 </form>
 {{end}}
+</div>
