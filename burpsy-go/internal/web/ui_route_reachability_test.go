@@ -87,6 +87,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/":                               "the server-rendered /ui2/ console; the browser navigates to it by URL, the React SPA at / never fetches it, and its own pages live outside ui/src",
 	"/ui2/history":                        "the ui2 history page, reached by navigating to /ui2/ or /ui2/history; the console's own history calls /api/history",
 	"/ui2/history/{id}":                   "the ui2 exchange detail pane, fetched by htmx inside the /ui2/ page (not from ui/src); the console's viewer calls /api/exchange/ and /api/message/",
+	"/ui2/message/render/{id}":            "the ui2 Render view's iframe src inside the /ui2/ history detail pane (not from ui/src); the console renders with its own sandboxed iframe",
+	"/ui2/message/protobuf/{id}/{action}": "ui2 Protobuf view forms inside the /ui2/ history detail pane; the console calls /api/protobuf/decode and /api/protobuf/reflect-decode",
 	"/ui2/issues":                         "the ui2 issues page, reached by navigating to /ui2/issues; the console's Issues tree calls /api/issues",
 	"/ui2/issues/{id}":                    "the ui2 issue detail pane, fetched by htmx inside /ui2/issues; the console's advisory pane calls /api/issues/{id}",
 	"/ui2/htmx.min.js":                    "vendored htmx, requested by the browser as a script src from the /ui2/ page, not fetched from ui/src",

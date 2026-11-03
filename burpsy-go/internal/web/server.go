@@ -118,7 +118,10 @@ type Server struct {
 	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
 	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
 	ui2SettingsWriteReviews sync.Map
-	sender                  *sender.Sender
+	// ui2ReflectReviews holds reviewed gRPC reflection fetches (ui2_message_views.go): capped,
+	// single-use, expiring with ConfirmTTL.
+	ui2ReflectReviews sync.Map
+	sender            *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1526,6 +1529,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/", s.handleUI2)
 	s.route("/ui2/history", s.handleUI2History)
 	s.route("/ui2/history/{id}", s.handleUI2HistoryDetail)
+	s.route("/ui2/message/render/{id}", s.handleUI2MessageRender)
+	s.route("/ui2/message/protobuf/{id}/{action}", s.handleUI2MessageProtobuf)
 	s.route("/ui2/issues", s.handleUI2Issues)
 	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
 	s.route("/ui2/advisories/{typeIndex}", s.handleUI2AdvisoryDetail)

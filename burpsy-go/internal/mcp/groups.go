@@ -521,6 +521,8 @@ var notExposed = map[string]string{
 	"GET /ui2/":                                "the server-rendered console shell; the operator's browser navigates to it, an agent reads state through the JSON API",
 	"GET /ui2/history":                         "the ui2 history page; the JSON /api/history is the agent-facing list",
 	"GET /ui2/history/{id}":                    "the ui2 exchange detail pane; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
+	"GET /ui2/message/render/{id}":             "the ui2 Render view's sandboxed response body for an iframe; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
+	"POST /ui2/message/protobuf/{id}/{action}": "ui2 Protobuf view schema decode and reflection review/run steps; /api/protobuf/decode and /api/protobuf/reflect-decode are the agent-facing calls",
 	"GET /ui2/issues":                          "the ui2 issues page; /api/issues is the agent-facing list",
 	"GET /ui2/issues/{id}":                     "the ui2 issue detail pane; /api/issues/{id} is the agent-facing read",
 	"GET /ui2/advisories/{typeIndex}":          "the ui2 definition detail fragment; /api/advisories/{typeIndex} is the agent-facing read",
