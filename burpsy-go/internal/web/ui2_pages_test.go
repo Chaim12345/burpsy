@@ -33,6 +33,7 @@ var ui2Pages = []struct {
 	{"/ui2/dashboard", "dashboard", "Coverage"},
 	{"/ui2/scope", "scope", "scope rules"},
 	{"/ui2/intercept", "intercept", "interception"},
+	{"/ui2/intercept/rules", "intercept_rules", "Request interception rules"},
 	{"/ui2/logger", "logger", "Logger is empty"},
 	{"/ui2/ws", "ws", "No WebSocket connections"},
 	{"/ui2/proxy", "proxy", "Listeners"},

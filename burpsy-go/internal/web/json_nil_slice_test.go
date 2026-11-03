@@ -126,6 +126,8 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/decoder":                   "<!doctype html",
 		"/ui2/extensions":                "<!doctype html",
 		"/ui2/intercept":                 "<!doctype html",
+		"/ui2/intercept/rules":           "<!doctype html",
+		"/ui2/intercept/send":            "<!doctype html",
 		"/ui2/logger":                    "<!doctype html",
 		"/ui2/organizer":                 "<!doctype html",
 		"/ui2/proxy":                     "<!doctype html",

@@ -112,6 +112,9 @@ type Server struct {
 	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
 	// by ui2SessionRuleReviewCap, expiring with ConfirmTTL.
 	ui2SessionRuleReviews sync.Map
+	// ui2InterceptRuleReviews holds reviewed-but-unconfirmed intercept rule-list PUTs (the exact
+	// body plus the list snapshot it was built from); single-use, capped, ConfirmTTL.
+	ui2InterceptRuleReviews sync.Map
 	// ui2SettingsWriteReviews holds the minted settings write calls (TLS passthrough, upstream
 	// proxy rules and default, backup config, pools) a ui2 operator has reviewed but not yet
 	// confirmed: the exact method, path, query and bytes the run step dispatches verbatim, plus
@@ -1541,6 +1544,9 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/scope/run", s.handleUI2ScopeRun)
 	s.route("/ui2/intercept", s.handleUI2Intercept)
 	s.route("/ui2/intercept/{action}", s.handleUI2InterceptAction)
+	s.route("/ui2/intercept/rules", s.handleUI2InterceptRules)
+	s.route("/ui2/intercept/rules/{action}", s.handleUI2InterceptRulesAction)
+	s.route("/ui2/intercept/send", s.handleUI2InterceptSend)
 	s.route("/ui2/logger", s.handleUI2Logger)
 	s.route("/ui2/logger/{action}", s.handleUI2LoggerAction)
 	s.route("/ui2/ws", s.handleUI2WS)

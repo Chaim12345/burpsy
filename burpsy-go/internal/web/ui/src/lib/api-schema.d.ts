@@ -4089,8 +4089,59 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}): applies the change — forwarding the held message with the operator's edits when the raw field is present — and re-renders the queue */
+        /** ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}/annotate-{id}/forward-checked/drop-checked/in-scope-on|off/newline/startup): applies the change — forwarding the held message with the operator's edits, destination and hold-response choice when present — and re-renders the queue */
         post: operations["postUi2InterceptByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intercept/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 intercept rules editor: one direction's rule list (dir=requests|responses|websocket_to_server|websocket_to_client) as an editable draft */
+        get: operations["getUi2InterceptRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intercept/rules/{action}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** ui2 intercept rules: edit transforms the draft (no write), confirm/quick hold the exact rule-list PUT for review, run spends the review and saves it after a drift re-read */
+        post: operations["postUi2InterceptRulesByAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/intercept/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 intercept: Repeater, Comparer or Decoder seeded with one held message's bytes (id=, to=); reads the hold, sends nothing */
+        get: operations["getUi2InterceptSend"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15586,6 +15637,93 @@ export interface operations {
                 "application/json": unknown;
             };
         };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2InterceptRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    postUi2InterceptRulesByAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                action: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2InterceptSend: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

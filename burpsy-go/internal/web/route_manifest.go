@@ -1488,7 +1488,19 @@ var manifest = map[string]route{
 	},
 	"/ui2/intercept/{action}": {
 		methods: []string{"POST"}, risk: riskAsset, subPath: "enable",
-		summary: "ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}): applies the change — forwarding the held message with the operator's edits when the raw field is present — and re-renders the queue",
+		summary: "ui2 intercept action (enable/disable/forward-all/drop-all/forward-{id}/drop-{id}/annotate-{id}/forward-checked/drop-checked/in-scope-on|off/newline/startup): applies the change — forwarding the held message with the operator's edits, destination and hold-response choice when present — and re-renders the queue",
+	},
+	"/ui2/intercept/rules": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 intercept rules editor: one direction's rule list (dir=requests|responses|websocket_to_server|websocket_to_client) as an editable draft",
+	},
+	"/ui2/intercept/rules/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "edit",
+		summary: "ui2 intercept rules: edit transforms the draft (no write), confirm/quick hold the exact rule-list PUT for review, run spends the review and saves it after a drift re-read",
+	},
+	"/ui2/intercept/send": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 intercept: Repeater, Comparer or Decoder seeded with one held message's bytes (id=, to=); reads the hold, sends nothing",
 	},
 	"/ui2/issues": {
 		methods: []string{"GET"}, risk: riskAsset,
