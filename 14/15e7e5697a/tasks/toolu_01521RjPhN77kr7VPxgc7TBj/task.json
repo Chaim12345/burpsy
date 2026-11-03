@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01521RjPhN77kr7VPxgc7TBj",
+  "agent_id": "ac35688bb497e5655",
+  "subagent_type": "general-purpose",
+  "task_description": "Review runtime TLS/DOM switch commit",
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 201293,
+    "cache_read_tokens": 9124474,
+    "output_tokens": 47251,
+    "api_call_count": 64
+  },
+  "started_at": "2026-11-03T07:58:01.436744959Z",
+  "completed_at": "2026-11-03T08:10:52.02552786Z"
+}

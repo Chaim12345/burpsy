@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01YJJMLNKsrj82nuPGSoj8Ew",
+  "agent_id": "a23f766ced7885dfe",
+  "subagent_type": "Explore",
+  "task_description": "Inventory ui2 server-rendered console",
+  "token_usage": {
+    "input_tokens": 106,
+    "cache_creation_tokens": 247789,
+    "cache_read_tokens": 8517342,
+    "output_tokens": 28061,
+    "api_call_count": 53
+  },
+  "started_at": "2026-11-03T08:00:20.379171752Z",
+  "completed_at": "2026-11-03T08:05:55.831331294Z"
+}
