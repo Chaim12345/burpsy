@@ -1458,6 +1458,26 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 dashboard: coverage summaries, tasks, activity, events, pause state",
 	},
+	"/ui2/dashboard/task/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 dashboard task detail page: ?tab=summary|issues|events|activity|crawl; the events tab filters by severity, source and search",
+	},
+	"/ui2/dashboard/task/{id}/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/pause",
+		summary: "ui2 dashboard one-click task action (pause/resume/cancel/again/delete) dispatching the riskLocal /api/tasks/{id}* route and re-rendering the page",
+	},
+	"/ui2/dashboard/tasks/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "pause",
+		summary: "ui2 dashboard suite-wide pause/resume, dispatching the riskLocal /api/tasks/pause|resume route",
+	},
+	"/ui2/dashboard/live/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 dashboard live audit: confirm mints a one-time confirmation for the exact POST /api/scanner/live body (capturing switch or New live task) and renders it for review; run spends it",
+	},
+	"/ui2/dashboard/events/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 dashboard Clear event log: confirm mints a one-time confirmation for DELETE /api/dashboard/events and renders the review; run spends it",
+	},
 	"/ui2/decoder": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
 		summary: "ui2 Decoder: GET the form, POST /ui2/decoder/run runs one decode/encode/hash layer",

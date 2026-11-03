@@ -204,6 +204,11 @@
   "/ui2/comparer",
   "/ui2/comparer/run",
   "/ui2/dashboard",
+  "/ui2/dashboard/events/{action}",
+  "/ui2/dashboard/live/{action}",
+  "/ui2/dashboard/task/{id}",
+  "/ui2/dashboard/task/{id}/{action}",
+  "/ui2/dashboard/tasks/{action}",
   "/ui2/decoder",
   "/ui2/decoder/run",
   "/ui2/extensions",
@@ -4093,12 +4098,112 @@
    "gated": false
   },
   {
+   "path": "/ui2/dashboard/events/w",
+   "key": "/ui2/dashboard/events/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/events/w/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/events/w/extra",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/events/w/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
    "path": "/ui2/dashboard/extra",
    "key": "/ui2/dashboard",
    "gated": false
   },
   {
    "path": "/ui2/dashboard/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/live/w",
+   "key": "/ui2/dashboard/live/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/live/w/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/live/w/extra",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/live/w/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w",
+   "key": "/ui2/dashboard/task/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/extra",
+   "key": "/ui2/dashboard/task/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/w",
+   "key": "/ui2/dashboard/task/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/w/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/w/extra",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/task/w/w/extra/more",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/tasks/w",
+   "key": "/ui2/dashboard/tasks/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/tasks/w/",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/tasks/w/extra",
+   "key": "/ui2/dashboard",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dashboard/tasks/w/extra/more",
    "key": "/ui2/dashboard",
    "gated": false
   },
