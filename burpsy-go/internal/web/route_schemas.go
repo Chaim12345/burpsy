@@ -55,6 +55,12 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/organizer/status/{action}":      {raw: "application/x-www-form-urlencoded workflow status form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/annotate/{action}":    {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/items/{action}":       {raw: "application/x-www-form-urlencoded item move/copy/delete form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/bchecks/enable":                 {raw: "application/x-www-form-urlencoded form: name, enabled (true|false)"},
+	"POST /ui2/bchecks/reload":                 noBody,
+	"POST /ui2/bchecks/validate":               {raw: "application/x-www-form-urlencoded editor form: source (plus editing/heading/exchange_ids carried for the page)"},
+	"POST /ui2/bchecks/upload":                 {raw: "multipart/form-data: file, the .bcheck to open in the editor"},
+	"POST /ui2/bchecks/review/{op}":            {raw: "application/x-www-form-urlencoded: save/test take the editor form (source, editing, exchange_ids); delete takes name"},
+	"POST /ui2/bchecks/run":                    {raw: "application/x-www-form-urlencoded: review id + one-time token only"},
 	"POST /ui2/session/rules/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {

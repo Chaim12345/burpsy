@@ -1,0 +1,21 @@
+<div class="bcheck-review" data-review="1" style="padding:0 14px">
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">Not applied: {{.Error}}</p>
+{{else}}
+{{if eq .Op "save"}}<p><strong>Review before saving:</strong> load the check <span class="brk">{{.Name}}</span> ({{.Kind}}) into the corpus the next audit and the passive scanner dispatch; it is persisted with the project.</p>
+{{if .Replace}}<p class="meta"><strong>A console check named {{.Name}} is already loaded: saving replaces it.</strong></p>{{end}}
+{{if .Renamed}}<p class="meta">The editor opened {{.Renamed}}, but the draft is now named {{.Name}}: this saves {{.Name}} and leaves {{.Renamed}} loaded.</p>{{end}}
+{{else if eq .Op "delete"}}<p><strong>Review before deleting:</strong> remove the console check <span class="brk">{{.Name}}</span> from the corpus and the project.</p>
+{{else if eq .Op "test"}}<p><strong>Review before testing:</strong> run the draft <span class="brk">{{.Name}}</span> ({{.Kind}}) against exchange(s) {{range $i, $id := .IDs}}{{if $i}}, {{end}}#{{$id}}{{end}}.</p>
+<p class="meta" style="color:#c00"><strong>{{if eq .Kind "passive"}}A passive draft reads the stored responses and sends nothing.{{else}}This draft is active: it sends probe requests to each exchange's target (scope-gated).{{end}}</strong> Findings are reported here and not filed.</p>
+{{end}}
+<p class="meta brk">Exact call ({{.Risk}}{{if .Gated}}, confirmation-gated{{end}}): <code>{{.Call}}</code></p>
+{{if .Source}}<pre aria-label="Draft source being reviewed">{{.Source}}</pre>{{end}}
+{{if .Body}}<details><summary class="meta">Exact request body</summary><pre class="brk">{{.Body}}</pre></details>{{end}}
+<form hx-post="/ui2/bchecks/run" method="post" action="/ui2/bchecks/run" hx-target="{{.Target}}" hx-swap="{{.Swap}}">
+<input type="hidden" name="review_id" value="{{.ReviewID}}">
+<input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">{{if eq .Op "save"}}Confirm and save{{else if eq .Op "delete"}}Confirm and delete{{else}}Confirm and run test{{end}}</button>
+</form>
+<p class="meta">This confirmation is one-time and expires in 60 seconds; the call shown is the call that runs. Not confirming changes nothing.</p>
+{{end}}
+</div>
