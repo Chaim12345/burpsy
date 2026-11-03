@@ -1,0 +1,10 @@
+<div id="rows" data-review="1">
+{{if .error}}<p><strong>Not saved: {{.error}}</strong></p>{{else}}
+<h3>Review save exchange</h3>
+<p>Exchange #{{.change.Exchange}}: <span style="overflow-wrap:anywhere">{{.change.Method}} {{.change.Host}}{{.change.Path}}</span></p>
+<p>Saved to: <strong>Inbox</strong> · inherited highlight: {{if .change.Highlight}}{{.change.Highlight}}{{else}}none{{end}} · inherited note: <span style="overflow-wrap:anywhere;white-space:pre-wrap">{{if .change.Note}}{{.change.Note}}{{else}}(blank){{end}}</span></p>
+<p>A new Organizer item is created for this exchange. Nothing else changes and no request is sent. The one-time confirmation binds this exchange and its inherited note and highlight; a removed exchange or a changed note or highlight is refused.</p>
+<form hx-post="/ui2/organizer/add/run" method="post" action="/ui2/organizer/add/run" hx-target="#rows" hx-swap="outerHTML"><input type="hidden" name="review_id" value="{{.review_id}}"><input type="hidden" name="token" value="{{.token}}"><button disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm save exchange</button></form>
+{{end}}
+<p><a href="/ui2/organizer" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML">cancel</a> (pending reviews expire after the confirmation window)</p>
+</div>

@@ -51,9 +51,10 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/sequencer/capture/{action}":     {raw: "application/x-www-form-urlencoded form + one-time confirm token (confirm/run); empty body (pause/resume/stop)"},
 	"POST /ui2/settings/triage/{action}":       {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	"POST /ui2/settings/write/{area}/{action}": {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
-	"POST /ui2/organizer/collections/{action}": {raw: "application/x-www-form-urlencoded collection form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/organizer/collections/{action}": {raw: "application/x-www-form-urlencoded collection create/edit/duplicate/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/status/{action}":      {raw: "application/x-www-form-urlencoded workflow status form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/annotate/{action}":    {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/organizer/add/{action}":         {raw: "application/x-www-form-urlencoded exchange id (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/items/{action}":       {raw: "application/x-www-form-urlencoded item move/copy/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/session/rules/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------

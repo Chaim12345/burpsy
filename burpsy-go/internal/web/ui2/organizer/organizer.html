@@ -1,0 +1,91 @@
+<div id="rows"><span id="org-state" hidden data-query="{{.query}}"></span>
+<style>
+.org-bar { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; padding:6px 14px; }
+.org-bar label { white-space:nowrap; }
+.org-bar input[type=text], .org-bar select { max-width:100%; box-sizing:border-box; }
+.org-cols { display:flex; flex-wrap:wrap; gap:6px 14px; padding:0 14px; }
+.org-cols > section { flex:1 1 260px; min-width:0; overflow-wrap:anywhere; border:1px solid var(--line); border-radius:6px; padding:6px 10px; }
+.org-views a.active { font-weight:700; text-decoration:none; }
+#org-detail { border-top:2px solid var(--accent); margin-top:10px; padding:0 14px 14px; overflow-wrap:anywhere; }
+#org-detail form { margin:6px 0; }
+#org-detail input[type=text], #org-detail textarea { width:100%; max-width:640px; box-sizing:border-box; }
+.org-hl { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; }
+tr.org-sel { background:var(--sel); box-shadow:inset 3px 0 0 var(--accent); }
+</style>
+{{if .note}}<p id="organizer-note" role="status"><strong>{{.note}}</strong></p>{{end}}
+<p class="meta">{{.total}} saved · showing {{len .items}} in {{.view_name}}{{if .unjudged}} · {{.unjudged}} shown unjudged (their exchange is no longer captured, so no filter can judge them){{end}}. Collection changes are reviewed before they apply; no change here sends a request.</p>
+
+<details class="collection-edit"><summary>Save an exchange by id</summary>
+<form hx-post="/ui2/organizer/add/confirm" method="post" action="/ui2/organizer/add/confirm" hx-target="#rows" hx-swap="outerHTML" class="org-bar">
+<label>Exchange id (counting from 0) <input type="text" name="exchange" inputmode="numeric" pattern="[0-9]+" required size="10" aria-label="Exchange id to save"></label>
+<button>Review save exchange</button></form>
+<p class="meta">Usually you save from HTTP history; an exchange id works too. The new item lands in the Inbox and inherits the exchange's comment and highlight.</p></details>
+
+<form id="org-filters" class="org-bar" action="/ui2/organizer" method="get" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, submit">
+<input type="hidden" name="view" value="{{.filter.View}}">
+<label><input type="checkbox" name="in_scope" value="1"{{if .filter.InScope}} checked{{end}}> In scope only</label>
+<label>HTTP status <select name="status">{{range .status_classes}}<option value="{{.}}"{{if eq . $.filter.Status}} selected{{end}}>{{if eq . "all"}}Any status{{else if eq . "none"}}No response{{else}}{{.}}{{end}}</option>{{end}}</select></label>
+<label>MIME <select name="mime"><option value="all">Any MIME</option>{{range .mimes}}<option value="{{.}}"{{if eq . $.filter.Mime}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Tool <select name="tool"><option value="all">Any tool</option>{{range .tools}}<option value="{{.}}"{{if eq . $.filter.Tool}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Workflow <select name="workflow"><option value="all">Any workflow</option>{{range .workflows}}<option value="{{.}}"{{if eq (printf "%s" .) $.filter.Workflow}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label>Search <input type="text" name="q" value="{{.filter.Q}}" maxlength="1000" placeholder="title, note, host, path, method"></label>
+<label><input type="checkbox" name="regex" value="1"{{if .filter.Regex}} checked{{end}}> Regex</label>
+<label><input type="checkbox" name="case" value="1"{{if .filter.Case}} checked{{end}}> Case sensitive</label>
+<label><input type="checkbox" name="negative" value="1"{{if .filter.Negative}} checked{{end}}> Negative</label>
+<label>Extension <select name="ext"><option value="all">Any extension</option>{{range .exts}}<option value="{{.}}"{{if eq . $.filter.Ext}} selected{{end}}>.{{.}}</option>{{end}}</select></label>
+<label><input type="checkbox" name="annotated" value="1"{{if .filter.Annotated}} checked{{end}}> Annotated only</label>
+<button>Apply filters</button>
+{{if .filtering}}<a href="{{.clear_href}}" hx-get="{{.clear_href}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">Clear filters</a>{{end}}
+<a class="btn" href="{{.export_href}}" download="organizer.csv">Export CSV</a>
+</form>
+{{if .term_error}}<p class="meta" role="alert">{{.term_error}}</p>{{end}}
+<div id="org-presets" class="org-bar" data-preset-query="{{.filter_query}}">
+<label>Saved filters <select id="org-preset-list" aria-label="Saved filter presets"><option value="">(none saved)</option></select></label>
+<button type="button" id="org-preset-apply">Apply preset</button>
+<button type="button" id="org-preset-save">Save current filters</button>
+<button type="button" id="org-preset-delete">Delete preset</button>
+<span class="meta" id="org-preset-status" role="status"></span>
+</div>
+
+<h3>Collections</h3>
+<p class="org-views org-bar">View:
+<a href="{{.all_href}}" hx-get="{{.all_href}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true"{{if eq .filter.View "all"}} class="active" aria-current="true"{{end}}>All saved ({{.total}})</a>
+<a href="{{.inbox_href}}" hx-get="{{.inbox_href}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true"{{if eq .filter.View "0"}} class="active" aria-current="true"{{end}}>Inbox ({{.inbox_count}})</a>
+{{range .collections}}<a href="{{.view_href}}" hx-get="{{.view_href}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true"{{if .viewing}} class="active" aria-current="true"{{end}}>{{.name}} ({{.count}})</a> {{end}}</p>
+<div class="org-cols">
+{{range .collections}}
+<section><h4>{{.name}} <span class="meta">#{{.id}} · {{.count}} items</span></h4>
+{{if .note}}<p class="meta" style="white-space:pre-wrap">{{.note}}</p>{{end}}
+<details class="collection-edit"><summary>Rename or edit note</summary>
+<form hx-post="/ui2/organizer/collections/confirm" method="post" action="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="edit"><input type="hidden" name="collection_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.base}}">
+<p><label>Name (up to 120 UTF-8 bytes) <input name="name" value="{{.name}}" required style="max-width:100%;box-sizing:border-box"></label></p>
+<p><label>Note (up to 4096 UTF-8 bytes)<br><textarea name="note" rows="3" style="width:100%;box-sizing:border-box">{{.note}}</textarea></label></p>
+<button>Review collection edit</button></form></details>
+<details class="collection-edit"><summary>Duplicate</summary>
+<form hx-post="/ui2/organizer/collections/confirm" method="post" action="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="duplicate"><input type="hidden" name="collection_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.base}}"><input type="hidden" name="members_base" value="{{.members_base}}">
+<p><label>Name of the copy <input name="name" value="{{.copy_name}}" required style="max-width:100%;box-sizing:border-box"></label></p>
+<p class="meta">Copies the note and all {{.count}} items under fresh ids; the source stays unchanged.</p>
+<button>Review duplicate</button></form></details>
+<details class="collection-edit"><summary>Delete</summary>
+<form hx-post="/ui2/organizer/collections/confirm" method="post" action="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="delete"><input type="hidden" name="collection_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.base}}"><input type="hidden" name="members_base" value="{{.members_base}}">
+<button name="items" value="inbox">Review delete, keep items (move to Inbox)</button>
+<button name="items" value="delete">Review delete with its {{.count}} items</button></form></details>
+</section>
+{{else}}<p class="meta">No named collections yet.</p>{{end}}
+</div>
+<details class="collection-edit"><summary>Create collection</summary>
+<form hx-post="/ui2/organizer/collections/confirm" method="post" action="/ui2/organizer/collections/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="create"><p><label>Name (up to 120 UTF-8 bytes; Inbox is reserved) <input name="name" required style="max-width:100%;box-sizing:border-box"></label></p>
+<button>Review new collection</button></form></details>
+
+<h3>Saved items</h3>
+<table class="organizer-items"><thead><tr><th scope="col">ID</th><th scope="col">Title</th><th scope="col">Highlight</th><th scope="col">HTTP status</th><th scope="col">Workflow status</th><th scope="col">Exchange</th><th scope="col">Tool</th><th scope="col">Note</th><th scope="col">Collection</th></tr></thead><tbody>
+{{range .items}}<tr{{if .selected}} class="org-sel" aria-selected="true"{{end}}><td data-label="ID"><a href="{{.href}}" hx-get="{{.href}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" title="Open item #{{.item.ID}}">#{{.item.ID}}</a></td><td data-label="Title">{{.item.Title}}</td><td data-label="Highlight">{{.item.Highlight}}</td><td data-label="HTTP status">{{if not .item.Resolved}}unresolved{{else if .item.Status}}{{.item.Status}}{{else}}no response{{end}}</td><td data-label="Workflow status">{{.workflow}}</td><td data-label="Exchange">#{{.item.Exchange}}{{if .item.Resolved}} {{.item.Method}} {{.item.Host}}{{.item.Path}}{{end}}</td><td data-label="Tool">{{.item.Tool}}</td><td data-label="Note">{{.item.Note}}</td><td data-label="Collection">{{.collection_name}}</td></tr>
+{{else}}<tr><td colspan="9" class="meta">{{if .total}}No saved item matches these filters.{{else}}Organizer is empty.{{end}}</td></tr>{{end}}
+</tbody></table>
+{{with .detail}}{{template "organizer_detail.html" .}}{{end}}
+{{with .detail_missing}}<p class="meta" role="status">Item #{{.}} no longer exists.</p>{{end}}
+</div>

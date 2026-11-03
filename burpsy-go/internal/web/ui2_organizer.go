@@ -13,11 +13,15 @@ import (
 	"github.com/burpsy-go/burpsy/internal/organizer"
 )
 
+// ui2CollectionChange is one reviewed collection operation. Duplicate and delete also
+// bind the member items, so install acts on exactly the items the operator reviewed.
 type ui2CollectionChange struct {
-	Op     string               `json:"op"`
-	Before organizer.Collection `json:"before"`
-	Name   string               `json:"name"`
-	Note   string               `json:"note"`
+	Op      string               `json:"op"`
+	Before  organizer.Collection `json:"before"`
+	Name    string               `json:"name"`
+	Note    string               `json:"note"`
+	Members []organizer.Item     `json:"members,omitempty"`
+	Items   string               `json:"items,omitempty"` // delete: "inbox" keeps items, "delete" deletes them
 }
 type ui2CollectionReview struct {
 	body    []byte
@@ -30,31 +34,15 @@ func ui2CollectionDigest(c organizer.Collection) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-func (s *Server) ui2OrganizerView(note string) map[string]any {
-	collections := s.organizer.Collections()
-	names := map[int]string{0: "Inbox"}
-	counts := map[int]int{}
-	for _, c := range collections {
-		names[c.ID] = c.Name
+
+// ui2MembersDigest binds a collection's member snapshot into its duplicate/delete forms.
+func ui2MembersDigest(members []organizer.Item) string {
+	if members == nil {
+		members = []organizer.Item{}
 	}
-	items := s.organizerView()
-	rows := make([]map[string]any, 0, len(items))
-	for _, it := range items {
-		counts[it.Collection]++
-		name, ok := names[it.Collection]
-		if !ok {
-			name = fmt.Sprintf("Unknown collection #%d", it.Collection)
-		}
-		rows = append(rows, map[string]any{"item": it, "collection_name": name, "workflow": it.Item.Status, "workflow_base": ui2WorkflowDigest(it.Item)})
-	}
-	cards := make([]map[string]any, 0, len(collections))
-	for _, c := range collections {
-		cards = append(cards, map[string]any{"id": c.ID, "name": c.Name, "note": c.Note, "count": counts[c.ID], "base": ui2CollectionDigest(c)})
-	}
-	return map[string]any{"items": rows, "collections": cards, "inbox_count": counts[0], "note": note}
-}
-func (s *Server) ui2OrganizerRender(w http.ResponseWriter, r *http.Request, note string) {
-	ui2Fragment(w, r, "burpsy /ui2/ - Organizer", "organizer", ui2Exec("organizer.html", s.ui2OrganizerView(note)))
+	b, _ := json.Marshal(members)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 func (s *Server) ui2OrganizerFail(w http.ResponseWriter, r *http.Request, msg string) {
 	ui2Fragment(w, r, "burpsy /ui2/ - Organizer", "organizer", ui2Exec("organizer_confirm.html", map[string]any{"error": msg}))
@@ -86,26 +74,17 @@ func (s *Server) handleUI2OrganizerCollections(w http.ResponseWriter, r *http.Re
 		s.ui2OrganizerFail(w, r, "unknown collection action")
 		return
 	}
-	if err := ui2CollectionFields(r, map[string]bool{"op": true, "collection_id": true, "form_base": true, "name": true, "note": true}); err != nil {
+	if err := ui2CollectionFields(r, map[string]bool{"op": true, "collection_id": true, "form_base": true, "members_base": true, "name": true, "note": true, "items": true}); err != nil {
 		s.ui2OrganizerFail(w, r, err.Error())
 		return
 	}
 	change := ui2CollectionChange{Op: r.PostFormValue("op"), Name: strings.TrimSpace(r.PostFormValue("name")), Note: r.PostFormValue("note")}
-	if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
-		s.ui2OrganizerFail(w, r, err.Error())
-		return
-	}
-	switch change.Op {
-	case "create":
-		if r.PostFormValue("collection_id") != "" || r.PostFormValue("form_base") != "" || change.Note != "" {
-			s.ui2OrganizerFail(w, r, "create accepts a name only; edit its note after creation")
-			return
-		}
-	case "edit":
+	// existing resolves collection_id against the store and checks the form's snapshot.
+	existing := func() bool {
 		id, err := strconv.Atoi(r.PostFormValue("collection_id"))
 		if err != nil || id <= 0 {
 			s.ui2OrganizerFail(w, r, "choose a named collection, not Inbox")
-			return
+			return false
 		}
 		found := false
 		for _, c := range s.organizer.Collections() {
@@ -117,24 +96,89 @@ func (s *Server) handleUI2OrganizerCollections(w http.ResponseWriter, r *http.Re
 		}
 		if !found {
 			s.ui2OrganizerFail(w, r, fmt.Sprintf("collection %d no longer exists", id))
-			return
+			return false
 		}
 		if r.PostFormValue("form_base") != ui2CollectionDigest(change.Before) {
 			s.ui2OrganizerFail(w, r, fmt.Sprintf("collection %d changed since this form opened - reopen it", id))
+			return false
+		}
+		return true
+	}
+	// withMembers binds the member snapshot the form was rendered with.
+	withMembers := func() bool {
+		change.Members = s.organizer.Members(change.Before.ID)
+		if r.PostFormValue("members_base") != ui2MembersDigest(change.Members) {
+			s.ui2OrganizerFail(w, r, fmt.Sprintf("collection %d items changed since this form opened - reopen it", change.Before.ID))
+			return false
+		}
+		return true
+	}
+	only := func(keys ...string) bool {
+		allowed := map[string]bool{"op": true}
+		for _, k := range keys {
+			allowed[k] = true
+		}
+		for k := range r.PostForm {
+			if !allowed[k] {
+				s.ui2OrganizerFail(w, r, fmt.Sprintf("%s is not a field of the %s operation", k, change.Op))
+				return false
+			}
+		}
+		return true
+	}
+	switch change.Op {
+	case "create":
+		if r.PostFormValue("collection_id") != "" || r.PostFormValue("form_base") != "" || change.Note != "" {
+			s.ui2OrganizerFail(w, r, "create accepts a name only; edit its note after creation")
+			return
+		}
+		if !only("name") {
+			return
+		}
+		if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
+			s.ui2OrganizerFail(w, r, err.Error())
+			return
+		}
+	case "edit":
+		if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
+			s.ui2OrganizerFail(w, r, err.Error())
+			return
+		}
+		if !only("collection_id", "form_base", "name", "note") || !existing() {
 			return
 		}
 		if change.Name == change.Before.Name && change.Note == change.Before.Note {
 			s.ui2OrganizerFail(w, r, "collection name and note are unchanged - nothing to review")
 			return
 		}
+	case "duplicate":
+		if !only("collection_id", "form_base", "members_base", "name") || !existing() || !withMembers() {
+			return
+		}
+		change.Note = change.Before.Note
+		if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
+			s.ui2OrganizerFail(w, r, err.Error())
+			return
+		}
+	case "delete":
+		if !only("collection_id", "form_base", "members_base", "items") || !existing() || !withMembers() {
+			return
+		}
+		change.Items = r.PostFormValue("items")
+		if change.Items != "inbox" && change.Items != "delete" {
+			s.ui2OrganizerFail(w, r, "choose whether the collection's items go to the Inbox or are deleted")
+			return
+		}
 	default:
 		s.ui2OrganizerFail(w, r, "unknown collection operation")
 		return
 	}
-	for _, c := range s.organizer.Collections() {
-		if c.ID != change.Before.ID && c.Name == change.Name {
-			s.ui2OrganizerFail(w, r, fmt.Sprintf("a collection named %q already exists", change.Name))
-			return
+	if change.Op != "delete" {
+		for _, c := range s.organizer.Collections() {
+			if (change.Op == "duplicate" || c.ID != change.Before.ID) && c.Name == change.Name {
+				s.ui2OrganizerFail(w, r, fmt.Sprintf("a collection named %q already exists", change.Name))
+				return
+			}
 		}
 	}
 	now := time.Now()
@@ -188,25 +232,48 @@ func (s *Server) ui2OrganizerRun(w http.ResponseWriter, r *http.Request) {
 		s.ui2OrganizerRender(w, r, "held change is unreadable")
 		return
 	}
-	if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
-		s.ui2OrganizerRender(w, r, err.Error())
-		return
-	}
+	done := "collection saved; item membership unchanged"
 	switch change.Op {
-	case "create":
-		if _, ok := s.organizer.NewCollection(change.Name); !ok {
-			s.ui2OrganizerRender(w, r, fmt.Sprintf("a collection named %q already exists - nothing applied", change.Name))
-			return
-		}
-	case "edit":
-		if err := s.organizer.EditCollectionIfUnchanged(change.Before, change.Name, change.Note); err != nil {
+	case "create", "edit":
+		if err := organizer.ValidateCollectionText(change.Name, change.Note); err != nil {
 			s.ui2OrganizerRender(w, r, err.Error())
 			return
+		}
+		if change.Op == "create" {
+			if _, ok := s.organizer.NewCollection(change.Name); !ok {
+				s.ui2OrganizerRender(w, r, fmt.Sprintf("a collection named %q already exists - nothing applied", change.Name))
+				return
+			}
+		} else if err := s.organizer.EditCollectionIfUnchanged(change.Before, change.Name, change.Note); err != nil {
+			s.ui2OrganizerRender(w, r, err.Error())
+			return
+		}
+	case "duplicate":
+		created, err := s.organizer.DuplicateCollectionIfUnchanged(change.Before, change.Members, change.Name)
+		if err != nil {
+			s.ui2OrganizerRender(w, r, err.Error())
+			return
+		}
+		done = fmt.Sprintf("collection %q duplicated as %q with %d copied item(s); the source is unchanged; no request sent", change.Before.Name, created.Name, len(change.Members))
+	case "delete":
+		if change.Items != "inbox" && change.Items != "delete" {
+			s.ui2OrganizerRender(w, r, "unknown held item disposition")
+			return
+		}
+		n, err := s.organizer.DeleteCollectionIfUnchanged(change.Before, change.Members, change.Items == "delete")
+		if err != nil {
+			s.ui2OrganizerRender(w, r, err.Error())
+			return
+		}
+		if change.Items == "delete" {
+			done = fmt.Sprintf("collection %q deleted with its %d saved item(s); their exchanges and history are kept; no request sent", change.Before.Name, n)
+		} else {
+			done = fmt.Sprintf("collection %q deleted; its %d item(s) moved to the Inbox; no request sent", change.Before.Name, n)
 		}
 	default:
 		s.ui2OrganizerRender(w, r, "unknown held operation")
 		return
 	}
 	s.organizerChanged()
-	s.ui2OrganizerRender(w, r, "collection saved; item membership unchanged")
+	s.ui2OrganizerRender(w, r, done)
 }

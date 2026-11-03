@@ -100,9 +100,9 @@ func TestUI2AnnotateFlowAndPreservation(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer", nil))
+	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer?item="+strconv.Itoa(s.organizer.List()[0].ID), nil))
 	page := w.Body.String()
-	for _, word := range []string{"Annotation editors", "Edit annotations for item #", "current highlight:", "value=\"none\""} {
+	for _, word := range []string{"Title, highlight and investigation note", "Item #", "Highlight (current:", "value=\"none\""} {
 		if !strings.Contains(page, word) {
 			t.Fatal("page missing " + word)
 		}

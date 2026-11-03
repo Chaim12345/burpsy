@@ -183,7 +183,7 @@ func (s *Server) ui2ItemOpRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.organizerChanged()
-		s.ui2OrganizerRender(w, r, fmt.Sprintf("item #%d moved to %s; title, note, highlight and workflow status unchanged; no request sent", change.Before.ID, destName))
+		s.ui2OrganizerRenderItem(w, r, fmt.Sprintf("item #%d moved to %s; title, note, highlight and workflow status unchanged; no request sent", change.Before.ID, destName), change.Before.ID)
 	case "copy":
 		dup, err := s.organizer.CopyItemIfUnchanged(change.Before, change.Dest)
 		if err != nil {
@@ -191,7 +191,7 @@ func (s *Server) ui2ItemOpRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.organizerChanged()
-		s.ui2OrganizerRender(w, r, fmt.Sprintf("item #%d copied to %s as item #%d; the source item is unchanged; no request sent", change.Before.ID, destName, dup.ID))
+		s.ui2OrganizerRenderItem(w, r, fmt.Sprintf("item #%d copied to %s as item #%d; the source item is unchanged; no request sent", change.Before.ID, destName, dup.ID), change.Before.ID)
 	case "delete":
 		if err := s.organizer.DeleteItemIfUnchanged(change.Before); err != nil {
 			s.ui2OrganizerRender(w, r, err.Error())

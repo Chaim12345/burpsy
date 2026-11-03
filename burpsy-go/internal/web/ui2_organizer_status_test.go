@@ -82,9 +82,9 @@ func TestUI2WorkflowFlowAndPreservation(t *testing.T) {
 		}
 	}
 	w := httptest.NewRecorder()
-	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer", nil))
+	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer?item="+strconv.Itoa(s.organizer.List()[0].ID), nil))
 	page := w.Body.String()
-	for _, word := range []string{"HTTP status", "Workflow status", "unavailable", "&lt;b&gt;title&lt;/b&gt;", "value=\"new\""} {
+	for _, word := range []string{"HTTP status", "Workflow status", "unresolved", "&lt;b&gt;title&lt;/b&gt;", "value=\"new\""} {
 		if !strings.Contains(page, word) {
 			t.Fatal("page missing " + word)
 		}

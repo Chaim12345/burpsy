@@ -121,6 +121,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/organizer/annotate/{action}":    "server-rendered Organizer annotation confirmation forms outside ui/src; the SPA uses /api/tools/organizer/collections",
 	"/ui2/organizer/items/{action}":       "server-rendered Organizer item move/copy/delete confirmation forms outside ui/src; the SPA uses /api/tools/organizer/collections",
 	"/ui2/organizer":                      "ui2 Organizer page; the console calls /api/tools/organizer",
+	"/ui2/organizer/add/{action}":         "server-rendered Organizer save-exchange confirmation forms outside ui/src; the SPA uses POST /api/tools/organizer",
+	"/ui2/organizer/export.csv":           "server-rendered Organizer CSV download outside ui/src; the SPA builds its CSV client-side",
 	"/ui2/session":                        "ui2 Session page; the console calls /api/session/*",
 	"/ui2/decoder":                        "ui2 Decoder form; the console calls /api/tools/decode|encode|hash",
 	"/ui2/decoder/run":                    "ui2 Decoder run button inside the /ui2/ page",
