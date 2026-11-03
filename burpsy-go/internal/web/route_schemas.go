@@ -26,8 +26,8 @@ var routeSchemas = map[string]opSchema{
 
 	// ---- ui2 console (server-rendered pages; form-encoded bodies, not JSON) -------------------
 	"POST /ui2/collaborator/mint":              {raw: "application/x-www-form-urlencoded form: count to preview, or mint_id to spend the held call"},
-	"POST /ui2/comparer":                       {raw: "application/x-www-form-urlencoded form: a, b"},
-	"POST /ui2/comparer/run":                   {raw: "application/x-www-form-urlencoded form: a, b"},
+	"POST /ui2/comparer":                       {raw: "multipart/form-data or application/x-www-form-urlencoded workbench form: op, a, b, a_item/a_label/a_bin/a_sel and the b_ twins, a_msg/b_msg, a_file/b_file uploads, granularity, view, wrap, side"},
+	"POST /ui2/comparer/run":                   {raw: "multipart/form-data or application/x-www-form-urlencoded workbench form: op, a, b, a_item/a_label/a_bin/a_sel and the b_ twins, a_msg/b_msg, a_file/b_file uploads, granularity, view, wrap, side"},
 	"POST /ui2/decoder":                        {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/decoder/run":                    {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/intercept/{action}":             {raw: "no body — the action is in the path"},
@@ -47,7 +47,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/intruder/{id}/{action}":         noBody,
 	"POST /ui2/repeater":                       {raw: "application/x-www-form-urlencoded form: raw, optional target"},
 	"POST /ui2/repeater/send":                  {raw: "application/x-www-form-urlencoded form: raw, optional target"},
-	"POST /ui2/sequencer/analyse":              {raw: "application/x-www-form-urlencoded form: tokens, encoding"},
+	"POST /ui2/sequencer/analyse":              {raw: "multipart/form-data or application/x-www-form-urlencoded form: source, tokens, token_file upload, op=load, capture_id, redo/last_sample, encoding, significance, pad_mode, pad_byte"},
+	"POST /ui2/sequencer/settings/{action}":    {raw: "application/x-www-form-urlencoded: on_<key> switches and b64 (confirm); review id + one-time token only (run)"},
 	"POST /ui2/sequencer/capture/{action}":     {raw: "application/x-www-form-urlencoded form + one-time confirm token (confirm/run); empty body (pause/resume/stop)"},
 	"POST /ui2/settings/triage/{action}":       {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	"POST /ui2/settings/write/{area}/{action}": {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},

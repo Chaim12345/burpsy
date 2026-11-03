@@ -536,6 +536,8 @@ var notExposed = map[string]string{
 	"GET /ui2/sequencer":                       "ui2 Sequencer page; /api/sequencer/* are the agent-facing routes",
 	"POST /ui2/sequencer/analyse":              "ui2 Sequencer analyse button; /api/sequencer/analyse is the agent-facing call",
 	"POST /ui2/sequencer/capture/{action}":     "ui2 Sequencer capture buttons; /api/sequencer/capture is the agent-facing call",
+	"POST /ui2/sequencer/settings/{action}":    "ui2 Sequencer analysis-settings review and apply steps; PUT /api/sequencer/settings is the agent-facing control",
+	"GET /ui2/sequencer/tokens/{id}":           "ui2 Sequencer Save tokens download; GET /api/sequencer/capture/{id} is the agent-facing read",
 	"GET /ui2/collaborator":                    "ui2 Collaborator page; /api/collaborator/* are the agent-facing routes",
 	"POST /ui2/collaborator/mint":              "ui2 Collaborator mint button; /api/collaborator/payload is the agent-facing mint",
 	"GET /ui2/dashboard":                       "ui2 dashboard page; /api/dashboard is the agent-facing read",

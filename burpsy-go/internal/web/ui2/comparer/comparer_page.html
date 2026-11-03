@@ -1,0 +1,165 @@
+<div id="cmp" class="cmp">
+<style>
+.cmp { padding:0 14px 24px; max-width:1400px; }
+.cmp section { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:10px 0; }
+.cmp .cmp-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+.cmp .cmp-row label { display:inline-flex; gap:4px; align-items:center; }
+.cmp .cmp-slots { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+.cmp textarea { width:100%; font:12px/1.4 ui-monospace, monospace; }
+.cmp input[type=number] { width:8em; }
+.cmp input[type=file] { max-width:100%; }
+.cmp table td, .cmp table th { white-space:normal; max-width:none; overflow-wrap:anywhere; }
+.cmp tbody tr { cursor:default; }
+.cmp tr.cmp-sel td { background:var(--sel); }
+.cmp-good { color:#080; font-weight:700; }
+.cmp-warn { color:#a60; font-weight:700; }
+.cmp-metrics { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin:8px 0; }
+.cmp-metric { border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+.cmp-metric b { display:block; font-size:16px; }
+.cmp-metric span { color:var(--muted); font-size:11px; }
+.cmp-notice { border-left:3px solid var(--accent); padding:4px 8px; margin:6px 0; }
+.cmp-notice.warn { border-color:#a60; }
+.cmp-panes { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+.cmp-pane pre { max-height:60vh; margin:0; }
+.cmp-pane.nowrap pre { white-space:pre; word-break:normal; overflow-x:auto; }
+.cmp-pane a { color:inherit; text-decoration:none; }
+.cmp .d-insert { background:rgba(0,160,0,.22); }
+.cmp .d-delete { background:rgba(220,0,0,.22); }
+.cmp .d-replace { background:rgba(230,160,0,.28); }
+.cmp .d-unint { opacity:.5; }
+.cmp .d-mark { font-weight:700; color:var(--muted); }
+.cmp a:target, .cmp span:target { outline:2px solid var(--accent); }
+.cmp .cmp-hunk { border-top:1px solid var(--line); padding:4px 0; }
+.cmp .cmp-hunk:target { outline:2px solid var(--accent); background:var(--sel); }
+.cmp .cmp-hunk pre { margin:2px 0; max-height:8em; }
+@media (max-width:640px) { .cmp { padding:0 8px 24px; } .cmp .cmp-slots, .cmp-panes { grid-template-columns:minmax(0,1fr); } }
+</style>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="status">{{.Note}}</p>{{end}}
+
+<form id="cmp-form" hx-post="/ui2/comparer/run" hx-encoding="multipart/form-data" method="post" enctype="multipart/form-data" action="/ui2/comparer/run" hx-target="#cmp" hx-swap="outerHTML">
+<section aria-label="Comparison options">
+<div class="cmp-row">
+  <fieldset class="cmp-row" style="border:0;padding:0;margin:0"><legend class="meta" style="float:left;margin-right:4px">Compare</legend>
+    <label><input type="radio" name="granularity" value="bytes" {{if ne .Granularity "words"}}checked{{end}}> Bytes</label>
+    <label><input type="radio" name="granularity" value="words" {{if eq .Granularity "words"}}checked{{end}}> Words</label></fieldset>
+  <fieldset class="cmp-row" style="border:0;padding:0;margin:0"><legend class="meta" style="float:left;margin-right:4px">View</legend>
+    <label><input type="radio" name="view" value="text" {{if ne .View "hex"}}checked{{end}}> Text</label>
+    <label><input type="radio" name="view" value="hex" {{if eq .View "hex"}}checked{{end}}> Hex</label></fieldset>
+  <fieldset class="cmp-row" style="border:0;padding:0;margin:0"><legend class="meta" style="float:left;margin-right:4px">Wrap</legend>
+    <label><input type="radio" name="wrap" value="on" {{if .Wrap}}checked{{end}}> on</label>
+    <label><input type="radio" name="wrap" value="off" {{if not .Wrap}}checked{{end}}> off</label></fieldset>
+  <label>Discount headers as <select name="side" aria-label="Which uninteresting-header list to apply">
+    <option value="response" {{if ne .Side "request"}}selected{{end}}>Responses</option>
+    <option value="request" {{if eq .Side "request"}}selected{{end}}>Requests</option></select></label>
+  <button type="submit" name="op" value="swap">Swap A and B</button>
+  <button type="submit" name="op" value="compare"><strong>Compare</strong></button>
+</div>
+<p class="meta">Discounted {{if eq .Side "request"}}request{{else}}response{{end}} headers: {{if .Discounted}}{{.Discounted}}{{else}}none{{end}}. A difference inside one is dimmed, never removed. Bytes aligns character by character; Words aligns whole words, and the counts are then in words.</p>
+</section>
+
+<div class="cmp-slots">
+{{template "comparer_slot" .A}}
+{{template "comparer_slot" .B}}
+</div>
+</form>
+
+{{with .Result}}
+<section id="cmp-result" aria-label="Result">
+<h3>Diff <span class="badge">{{.Granularity}}-level</span></h3>
+<div class="cmp-metrics">
+  <div class="cmp-metric"><b id="cmp-verdict" class="{{.VerdictClass}}">{{.Verdict}}</b><span>{{.OpsN}} aligned run(s)</span></div>
+  <div class="cmp-metric"><b id="cmp-changed">{{.Changed}}</b><span>changed: bytes differing in place</span></div>
+  <div class="cmp-metric"><b id="cmp-deleted">{{.Deleted}}</b><span>deleted: only in A</span></div>
+  <div class="cmp-metric"><b id="cmp-inserted">{{.Inserted}}</b><span>inserted: only in B</span></div>
+</div>
+{{if .UnintOps}}<p class="cmp-notice">{{.UnintOps}} difference(s) fall inside header(s) you have discounted{{if .Headers}}: {{.Headers}}{{end}}. They are dimmed below rather than removed - the bytes really do differ.</p>{{end}}
+{{if or .Truncated .Omitted .NotDrawn}}<p class="cmp-notice warn">{{if .Truncated}}These two inputs differ too extensively to align, so the differing region is shown as one block (truncated alignment). {{end}}{{if .Omitted}}{{.Omitted}} run(s) were omitted server-side. {{end}}{{if .NotDrawn}}{{.NotDrawn}} run(s) past the first 2000 are not drawn here.{{end}}</p>{{end}}
+{{range .Notes}}<p class="cmp-notice">{{.}}</p>{{end}}
+{{if .Repaired}}<p class="cmp-notice warn">Invalid UTF-8 bytes in the editor text were replaced with U+FFFD before comparing.</p>{{end}}
+{{if .Identical}}<p class="meta">No differences: every byte matches.</p>
+{{else}}
+<nav class="cmp-row" aria-label="Difference navigation"><span class="badge" id="cmp-hunks">{{.Hunks}} difference(s)</span>
+{{if .Hunks}}<a class="btn" href="#d-0">First difference</a><a class="btn" href="#d-{{.LastHunk}}">Last difference</a>{{end}}
+<span class="meta">− only in A · + only in B · ~ changed · · padding</span></nav>
+{{if eq $.View "hex"}}
+<div class="cmp-panes">
+{{template "comparer_hex" .HexA}}
+{{template "comparer_hex" .HexB}}
+</div>
+{{else}}
+<div class="cmp-panes">
+<div class="cmp-pane{{if not $.Wrap}} nowrap{{end}}"><strong>A</strong><pre id="cmp-pane-a">{{range .Segs}}{{if eq .Kind "equal"}}{{.A}}{{else}}<a id="pa-{{.Hunk}}" href="#d-{{.Hunk}}" class="d-{{.Kind}}{{if .Unint}} d-unint{{end}}" title="{{.Kind}}: go to difference {{.Hunk}}"><span class="d-mark">{{.Mark}}</span>{{.A}}</a>{{end}}{{end}}</pre></div>
+<div class="cmp-pane{{if not $.Wrap}} nowrap{{end}}"><strong>B</strong><pre id="cmp-pane-b">{{range .Segs}}{{if eq .Kind "equal"}}{{.B}}{{else}}<a id="pb-{{.Hunk}}" href="#d-{{.Hunk}}" class="d-{{.Kind}}{{if .Unint}} d-unint{{end}}" title="{{.Kind}}: go to difference {{.Hunk}}"><span class="d-mark">{{.Mark}}</span>{{.B}}</a>{{end}}{{end}}</pre></div>
+</div>
+{{end}}
+<h3>Differences</h3>
+<div id="cmp-differences">
+{{range .List}}<div class="cmp-hunk" id="d-{{.N}}">
+<div class="cmp-row"><strong>Difference {{.Shown}} of {{$.Result.Hunks}}</strong> <span class="badge">{{.Kind}}</span>{{if .Unint}} <span class="meta">(discounted header)</span>{{end}}
+<span class="meta">A @{{.AOff}} · B @{{.BOff}}</span>
+{{if ge .Prev 0}}<a class="btn" href="#d-{{.Prev}}">‹ previous</a>{{end}}
+{{if ge .Next 0}}<a class="btn cmp-next" href="#d-{{.Next}}">next ›</a>{{end}}
+<a class="btn" href="#pa-{{.N}}">show in panes</a></div>
+{{if .A}}<pre class="d-delete">{{.A}}</pre>{{end}}{{if .B}}<pre class="d-insert">{{.B}}</pre>{{end}}
+</div>{{end}}
+{{if .ListMore}}<p class="meta">{{.ListMore}} more difference(s) are in the panes but not listed here.</p>{{end}}
+</div>
+{{end}}
+{{if .Unified}}<details><summary>Unified diff (text)</summary><pre class="msg">{{.Unified}}</pre></details>{{end}}
+</section>
+{{else}}<p class="meta">Nothing compared yet. Load both sides by stored message id, from a file, or paste them, then compare.</p>{{end}}
+
+<section id="cmp-sitemaps" aria-label="Compare site maps">
+<h3>Compare site maps</h3>
+<p class="meta">The path-set diff between two finished runs - what one crawl reached that the other did not. The access-control view: an anonymous crawl's map against an authenticated one's.</p>
+{{with .Sitemaps}}
+{{if lt (len .Runs) 2}}<p class="meta">Not two finished runs yet. Comparing site maps takes two finished crawls or API scans.</p>
+{{else}}
+<form class="cmp-row" method="get" action="/ui2/comparer" hx-get="/ui2/comparer" hx-select="#cmp-sitemaps" hx-target="#cmp-sitemaps" hx-swap="outerHTML">
+  <label>Run A <select name="run_a" aria-label="Run A for the site-map comparison">{{range .Runs}}<option value="{{.TaskID}}" {{if eq .TaskID $.Sitemaps.RunA}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+  <label>Run B <select name="run_b" aria-label="Run B for the site-map comparison">{{range .Runs}}<option value="{{.TaskID}}" {{if eq .TaskID $.Sitemaps.RunB}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+  <button type="submit">Compare site maps</button>
+</form>
+{{end}}
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Ran}}
+<div class="cmp-metrics">
+  <div class="cmp-metric"><b class="{{if .OnlyA}}cmp-warn{{else}}cmp-good{{end}}">{{.OnlyA}}</b><span>only in run {{.TaskA}}</span></div>
+  <div class="cmp-metric"><b class="{{if .OnlyB}}cmp-warn{{else}}cmp-good{{end}}">{{.OnlyB}}</b><span>only in run {{.TaskB}}</span></div>
+  <div class="cmp-metric"><b>{{.BothN}}</b><span>paths both runs share</span></div>
+</div>
+<table><thead><tr><th scope="col">Authority</th><th scope="col">Path</th><th scope="col">Side</th><th scope="col">Status A</th><th scope="col">Status B</th></tr></thead><tbody>
+{{range .Rows}}<tr><td>{{.Authority}}{{if .TLS}} <span class="meta">· https</span>{{end}}</td><td><code>{{.Path}}</code></td><td>{{if .Both}}{{.Side}}{{else}}<span class="cmp-warn">{{.Side}}</span>{{end}}</td><td>{{.StatusA}}</td><td>{{.StatusB}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">Neither run reached any path.</td></tr>{{end}}
+</tbody></table>
+<p class="meta">The rows each side is missing are the access-control surface: filter HTTP history by <code>task = {{.TaskA}}</code> or <code>task = {{.TaskB}}</code> for the bytes behind any row.</p>
+{{end}}
+{{end}}
+</section>
+</div>
+
+{{define "comparer_slot"}}<section aria-label="Slot {{.Upper}}">
+<div class="cmp-row"><strong>Slot {{.Upper}}</strong> <span class="badge">{{.Size}}</span>{{if .Binary}} <span class="badge">binary</span>{{end}}</div>
+<div class="cmp-row">
+  <label>Message id <input type="number" min="0" name="{{.Name}}_msg" aria-label="Stored message id for slot {{.Upper}}" value="{{.Msg}}"></label>
+  <button type="submit" name="op" value="load-{{.Name}}">Load</button>
+</div>
+<div class="cmp-row">
+  <label>File <input type="file" name="{{.Name}}_file" aria-label="File for slot {{.Upper}}"></label>
+  <button type="submit" name="op" value="file-{{.Name}}">Load file</button>
+</div>
+{{range .Items}}<input type="hidden" name="{{$.Name}}_item" value="{{.B64}}"><input type="hidden" name="{{$.Name}}_label" value="{{.Label}}"><input type="hidden" name="{{$.Name}}_bin" value="{{.Bn}}">{{end}}
+<input type="hidden" name="{{.Name}}_sel" value="{{.Sel}}">
+{{if .Items}}<table><thead><tr><th scope="col">Sent to {{.Upper}}</th><th scope="col">{{len .Items}} item(s)</th><th scope="col"></th></tr></thead><tbody>
+{{range .Items}}<tr{{if .Selected}} class="cmp-sel"{{end}}><td><button type="submit" name="op" value="select-{{$.Name}}-{{.Index}}" aria-pressed="{{if .Selected}}true{{else}}false{{end}}" style="text-align:left">{{.Label}}</button>{{if .Binary}} <span class="badge">binary</span>{{end}}</td><td class="meta">{{.Size}}</td>
+<td><button type="submit" name="op" value="remove-{{$.Name}}-{{.Index}}" aria-label="Remove {{.Label}} from slot {{$.Upper}}">Remove</button></td></tr>{{end}}
+</tbody></table>
+<button type="submit" name="op" value="clear-{{.Name}}">Clear list</button>{{end}}
+<textarea name="{{.Name}}" rows="10" aria-label="Side {{.Upper}}" placeholder="paste text, or load a stored message or a file">{{.Text}}</textarea>
+<div class="cmp-row"><button type="submit" name="op" value="add-{{.Name}}">Add paste to list</button></div>
+</section>{{end}}
+
+{{define "comparer_hex"}}<div class="cmp-pane"><strong>{{.Label}}</strong><pre>{{range .Rows}}<span class="meta">{{.Offset}}</span>  {{range .Groups}}{{if eq .Kind "equal"}}{{.Hex}} {{else}}<span class="d-{{.Kind}}{{if .Unint}} d-unint{{end}}"{{if .ID}} id="{{.ID}}"{{end}}>{{.Hex}} </span>{{end}}{{end}}{{.Pad}} |{{range .Groups}}{{if eq .Kind "equal"}}{{.ASCII}}{{else}}<span class="d-{{.Kind}}">{{.ASCII}}</span>{{end}}{{end}}|
+{{else}}(0 bytes)
+{{end}}{{if .More}}<span class="meta">… {{.More}} more byte(s) not dumped; switch back to text for the whole input</span>{{end}}</pre></div>{{end}}
