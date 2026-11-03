@@ -250,6 +250,11 @@
   "/ui2/settings/triage/{action}",
   "/ui2/settings/write/{area}",
   "/ui2/settings/write/{area}/{action}",
+  "/ui2/shell/config",
+  "/ui2/shell/config/{action}",
+  "/ui2/shell/project",
+  "/ui2/shell/project/{action}",
+  "/ui2/shell/status",
   "/ui2/sitemap",
   "/ui2/sitemap/repeater",
   "/ui2/sitemap/scope/{action}",
@@ -5030,6 +5035,106 @@
   {
    "path": "/ui2/settings/write/w/w/extra/more",
    "key": "/ui2/settings",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/extra",
+   "key": "/ui2/shell/config/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/extra/more",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/w",
+   "key": "/ui2/shell/config/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/w/",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/w/extra",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/config/w/extra/more",
+   "key": "/ui2/shell/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/extra",
+   "key": "/ui2/shell/project/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/extra/more",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/w",
+   "key": "/ui2/shell/project/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/w/",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/w/extra",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/project/w/extra/more",
+   "key": "/ui2/shell/project",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/status",
+   "key": "/ui2/shell/status",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/status/",
+   "key": "/ui2/shell/status",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/status/extra",
+   "key": "/ui2/shell/status",
+   "gated": false
+  },
+  {
+   "path": "/ui2/shell/status/extra/more",
+   "key": "/ui2/shell/status",
    "gated": false
   },
   {

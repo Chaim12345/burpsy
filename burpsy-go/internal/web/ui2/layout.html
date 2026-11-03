@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false}'>
+<link rel="icon" href="data:,">
 <style>
 :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
 html[data-theme="dark"] { color-scheme: dark; --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#274; }
@@ -12,6 +14,9 @@ tr.checked { outline: 2px solid var(--accent); }
 #sel-count { margin-left: 8px; font-weight: 600; }
 * { box-sizing: border-box; }
 body { margin:0; font:13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+/* The shell is one viewport tall: header, main (scrolls inside itself) and status bar. The page itself
+   never scrolls, so a sticky header cannot cover a link scrolled to the top. */
+body { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 header { display:flex; gap:10px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); flex-wrap:wrap; z-index:20; /* above sticky th: both are positioned, auto z would stack the later-in-DOM th over the bar and its open nav menu */ }
 header .brand { font-weight:700; }
 header nav { display:flex; gap:2px; flex-wrap:wrap; }
@@ -20,7 +25,23 @@ header nav a.active { background:var(--sel); }
 header form { display:flex; gap:6px; margin-left:auto; }
 input[type=search], input[type=text], textarea { padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
 button, .btn { padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); cursor:pointer; text-decoration:none; display:inline-block; }
-main { display:block; height:calc(100vh - 45px); overflow-y:auto; }
+main { display:block; flex:1 1 auto; min-height:0; overflow-y:auto; }
+/* File / Project menus: <details> dropdowns, closed by app.js on an outside click or Escape. */
+details.menu { position:relative; }
+details.menu > summary { list-style:none; cursor:pointer; padding:3px 8px; border-radius:6px; white-space:nowrap; }
+details.menu > summary::-webkit-details-marker { display:none; }
+details.menu > summary.active, details.menu[open] > summary { background:var(--sel); }
+details.menu .menu-list { position:absolute; top:100%; left:0; z-index:40; min-width:240px; display:flex; flex-direction:column;
+  background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px; box-shadow:0 2px 10px rgba(0,0,0,.2); }
+details.menu .menu-list a { padding:4px 8px; }
+details.menu .menu-list a:hover { background:var(--line); }
+/* Status bar: one line, scrolls sideways inside itself rather than widening the page. */
+#statusbar { display:flex; flex:none; gap:14px; align-items:center; height:26px; padding:0 10px; border-top:1px solid var(--line);
+  font-size:12px; color:var(--muted); white-space:nowrap; overflow-x:auto; overflow-y:hidden; }
+#statusbar a { color:var(--accent); }
+#sb-data { display:flex; gap:14px; }
+.sb-live { color:#080; font-weight:600; }
+.sb-off { color:#c00; font-weight:600; }
 main.split { display:flex; }
 main.split #list { width:60%; overflow-y:auto; border-right:1px solid var(--line); }
 main.split #detail { width:40%; overflow-y:auto; padding:10px 14px; }
@@ -98,6 +119,8 @@ table.scope-t details.scope-edit[open] form {
   main.split #list { width:100%; border-right:none; max-height:55vh; }
   main.split #detail { width:100%; }
   #nav-burger { display:inline-block; }
+  details.menu { flex-basis:100%; }
+  details.menu .menu-list { position:static; box-shadow:none; min-width:0; }
   table { table-layout:fixed; }
   th, td { max-width:none; }
   header { padding:6px 8px; gap:6px; }
@@ -213,6 +236,11 @@ table.scope-t details.scope-edit[open] form {
   </div>
   <div id="detail" role="region" aria-label="Selected item detail" aria-live="polite">{{if eq .View "history"}}<p class="meta">Select a row to see its request and response.</p>{{end}}</div>
 </main>
+<footer id="statusbar" aria-label="Status">
+  <span id="sb-stream" class="sb-off">stream: connecting</span>
+  <span id="sb-data"></span>
+  <span id="sb-last">last event: none yet</span>
+</footer>
 <script src="/ui2/htmx.min.js"></script>
 <script src="/ui2/app.js"></script>
 </body>

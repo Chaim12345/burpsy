@@ -794,3 +794,83 @@ window.addEventListener('resize', () => {
   ui2HeaderScanTimer = setTimeout(() => ui2SyncExpandableHeaders(document), 150);
 });
 ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(document));
+
+// ---- Shell: status bar, File/Project menus, bundle file picker ----
+// The status bar's data segment is server-rendered (/ui2/shell/status) and fetched with plain
+// fetch, NOT htmx: an htmx request would count as an operator request above and bump the live
+// generation, dropping a view's in-flight live refresh. Stream state and the last-event time
+// are facts only this page knows, so they are set here from the one EventSource.
+(function () {
+  var stream = document.getElementById('sb-stream');
+  var last = document.getElementById('sb-last');
+  var data = document.getElementById('sb-data');
+  if (!stream || !data) return;
+  function setStream(on) {
+    stream.textContent = on ? 'stream: live' : 'stream: offline';
+    stream.className = on ? 'sb-live' : 'sb-off';
+  }
+  var inFlight = false, again = false, timer = null;
+  function refresh() {
+    if (inFlight) { again = true; return; }
+    inFlight = true;
+    fetch('/ui2/shell/status', { credentials: 'same-origin' }).then(function (r) {
+      return r.ok ? r.text() : Promise.reject(r.status);
+    }).then(function (html) {
+      data.innerHTML = html;
+    }).catch(function () {
+      data.textContent = 'status unavailable';
+    }).then(function () {
+      inFlight = false;
+      if (again) { again = false; refresh(); }
+    });
+  }
+  function soon() {
+    if (timer) return;
+    timer = setTimeout(function () { timer = null; refresh(); }, 1500);
+  }
+  if (liveES) {
+    if (liveES.readyState === 1) setStream(true);
+    liveES.addEventListener('open', function () { setStream(true); });
+    liveES.addEventListener('error', function () { setStream(liveES.readyState === 1); });
+    liveES.addEventListener('message', function (e) {
+      setStream(true);
+      var kind = '';
+      try { kind = JSON.parse(e.data).kind || ''; } catch (_) { return; }
+      if (kind === 'ping' || kind === 'hello') return;
+      if (last) last.textContent = 'last event: ' + kind + ' at ' + new Date().toLocaleTimeString();
+      if (kind === 'history' || kind === 'scope' || kind === 'proxy' || kind === 'dashboard') soon();
+    });
+  } else {
+    setStream(false);
+  }
+  refresh();
+  setInterval(refresh, 30000);
+})();
+
+(function () {
+  function closeMenus(except) {
+    document.querySelectorAll('details.menu[open]').forEach(function (d) {
+      if (d !== except) d.open = false;
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var menu = e.target && e.target.closest ? e.target.closest('details.menu') : null;
+    closeMenus(menu);
+    if (menu && e.target.closest('.menu-list a')) menu.open = false;
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeMenus(null);
+  });
+  // File > Import configuration: a chosen bundle file is read into the paste box, so the
+  // review step posts plain form text (the route takes no multipart).
+  document.addEventListener('change', function (e) {
+    var input = e.target;
+    if (!input || !input.matches || !input.matches('input[type="file"][data-fill-into]')) return;
+    var box = document.getElementById(input.getAttribute('data-fill-into'));
+    var file = input.files && input.files[0];
+    if (!box || !file) return;
+    var reader = new FileReader();
+    reader.onload = function () { box.value = String(reader.result || ''); };
+    reader.readAsText(file);
+  });
+})();

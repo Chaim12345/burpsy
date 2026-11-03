@@ -1,0 +1,29 @@
+<div id="rows">
+<h3>Export</h3>
+<ul>
+<li><a href="/api/report/html" target="_blank" rel="noopener">Export report (HTML)</a></li>
+<li><a href="/api/report/json" download="burpsy-report.json">Export report (JSON)</a></li>
+<li><a href="/api/report/sarif" download="burpsy-report.sarif">Export report (SARIF)</a></li>
+<li><a href="/api/config/export" download="burpsy-config.json">Export configuration</a> <span class="meta">(partial: carries {{range $i, $s := .coverage.Included}}{{if $i}}, {{end}}{{$s}}{{end}}; does NOT carry {{range $i, $s := .coverage.Omitted}}{{if $i}}, {{end}}{{$s}}{{end}})</span></li>
+<li id="ca">{{if .ca_configured}}<a href="/ca.crt" download="burpsy-ca.crt">Download CA certificate</a>{{else}}<span class="meta">Download CA certificate: TLS interception is off, so there is no CA (start burpsy with -intercept-tls).</span>{{end}}</li>
+</ul>
+<h3>Import configuration</h3>
+{{if .error}}<p class="meta" role="alert"><strong>{{.error}}</strong></p>{{end}}
+{{with .result}}<div id="config-note"><p><strong>Configuration imported.</strong> {{.scope_rules}} scope rule(s), {{.intercept_dirs}} intercept direction(s), {{.session_rules}} session rule(s).</p></div>{{end}}
+{{if .result}}
+<table><thead><tr><th scope="col">Applied section</th><th scope="col">Change</th></tr></thead><tbody>
+{{range .applied}}<tr><td>{{.Name}}</td><td class="brk">{{.Detail}}</td></tr>{{end}}
+</tbody></table>
+<table><thead><tr><th scope="col">Omitted section</th><th scope="col">Why</th></tr></thead><tbody>
+{{range .untouched}}<tr><td>{{.Name}}</td><td>{{.Detail}}</td></tr>{{end}}
+{{range .coverage.Omitted}}<tr><td>{{.}}</td><td>not carried by configuration bundles — left as it is</td></tr>{{end}}
+</tbody></table>
+{{end}}
+<form hx-post="/ui2/shell/config/import-confirm" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/config/import-confirm">
+<p><label>Bundle file <input type="file" accept=".json,application/json" data-fill-into="config-bundle"></label></p>
+<p><label for="config-bundle">or paste the bundle JSON</label><br>
+<textarea id="config-bundle" name="bundle" rows="10" cols="60" spellcheck="false"></textarea></p>
+<p><button type="submit">Review import…</button></p>
+<p class="meta">Nothing is applied until you confirm the review. A section present in the bundle replaces that surface wholesale; an invalid rule refuses the whole bundle.</p>
+</form>
+</div>

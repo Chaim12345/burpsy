@@ -31,6 +31,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/decoder":                        {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/decoder/run":                    {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/intercept/{action}":             {raw: "no body — the action is in the path"},
+	"POST /ui2/shell/project/{action}":         {raw: "application/x-www-form-urlencoded: rename takes name; open-confirm/open-run take path (+ token on run); backup-confirm none; backup-run takes token"},
+	"POST /ui2/shell/config/{action}":          {raw: "application/x-www-form-urlencoded: bundle (the configuration JSON) on both steps, + token on import-run"},
 	"POST /ui2/sitemap/scope/{action}":         {raw: "application/x-www-form-urlencoded: confirm takes the row key in the post URL's query and no form fields; run takes the reviewed rule's hidden fields (token/pattern/port/protocol/path)"},
 	"POST /ui2/scope/confirm":                  {raw: "application/x-www-form-urlencoded: scope_action rule-add takes kind/pattern/path/port/protocol; rule-toggle/rule-remove take the row tuple; drop-switch takes enabled"},
 	"POST /ui2/scope/run":                      {raw: "application/x-www-form-urlencoded form + one-time confirm token"},

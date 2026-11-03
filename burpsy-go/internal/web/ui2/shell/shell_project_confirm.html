@@ -1,0 +1,26 @@
+<div id="rows" data-review="1">
+{{if .error}}<p class="meta" role="alert"><strong>Not applied: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/shell/project" hx-get="/ui2/shell/project" hx-target="#rows" hx-swap="outerHTML">back to project</a></p>{{else}}
+<p><strong>Review before applying:</strong></p>
+<pre class="brk">{{.preview}}</pre>
+{{if eq .op "backup"}}
+<p>Save a copy of project "{{.project.Name}}" as a new <code>burpsy-backup-&lt;time&gt;.db</code> file in <code class="brk">{{.dir}}</code> (beside the live database, so a disk failure loses both).</p>
+<p class="meta">Retention: only the newest {{.retention}} snapshots in that directory are kept. {{.existing}} exist now; this save deletes {{.prunes}} older one(s).</p>
+<form hx-post="/ui2/shell/project/backup-run" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/backup-run">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and save copy</button>
+</form>
+{{else}}
+<p>Switch this instance from <code class="brk">{{.project.Database}}</code> to <code class="brk">{{.resolved}}</code>.</p>
+{{if .already_open}}<p class="meta">That file is the project already open: nothing is switched.</p>
+{{else}}<p class="meta">{{if .creates}}<strong>The file does not exist: a NEW EMPTY project is created there.</strong> {{end}}Background tasks are paused, and every store on screen (history, findings, scope, rules) is replaced by that project's. The current project stays on disk unchanged.</p>{{end}}
+<form hx-post="/ui2/shell/project/open-run" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/open-run">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="path" value="{{.path}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and switch project</button>
+</form>
+{{end}}
+<p class="meta">This confirmation is one-time and covers exactly the call above.</p>
+<p class="meta"><a href="/ui2/shell/project" hx-get="/ui2/shell/project" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

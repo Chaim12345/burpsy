@@ -199,7 +199,7 @@ func TestUI2IssueDetailShowsEvidenceAndOccurrences(t *testing.T) {
 	}
 }
 
-func TestUI2AssetsAreServedAndCatchAllStaysOldUI(t *testing.T) {
+func TestUI2AssetsAreServedAndRootIsUI2(t *testing.T) {
 	s := newTestServer()
 	for _, path := range []string{"/ui2/htmx.min.js", "/ui2/sse.min.js"} {
 		rec := getUI2(t, s, path)
@@ -213,15 +213,76 @@ func TestUI2AssetsAreServedAndCatchAllStaysOldUI(t *testing.T) {
 			t.Errorf("%s served %d bytes, vendored file looks truncated", path, rec.Body.Len())
 		}
 	}
-	// An unknown /ui2/ asset name matches no registered pattern, so it falls through to the
-	// SPA catch-all (200 HTML) — asserted so the fallthrough is deliberate, not a gap.
+	// An unknown /ui2/ asset name matches only the "/ui2/" subtree route, which serves the
+	// shell (200 HTML) — asserted so the fallthrough is deliberate, not a gap.
 	if rec := getUI2(t, s, "/ui2/nope.js"); rec.Code != http.StatusOK {
-		t.Errorf("unknown /ui2/ asset = %d, want the SPA catch-all's 200", rec.Code)
+		t.Errorf("unknown /ui2/ asset = %d, want the /ui2/ shell's 200", rec.Code)
 	}
-	// The old UI catch-all must be untouched: / still serves the SPA shell.
+	// The console root is the ui2 dashboard, with the page security headers.
 	rec := getUI2(t, s, "/")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<") {
-		t.Errorf("GET / = %d, the SPA catch-all regressed", rec.Code)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "/ui2/htmx.min.js") ||
+		!strings.Contains(rec.Body.String(), `data-view="dashboard"`) {
+		t.Errorf("GET / = %d, want the ui2 dashboard shell", rec.Code)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("GET / CSP = %q", csp)
+	}
+	post := httptest.NewRecorder()
+	s.mux.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/", nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST / = %d, want 405", post.Code)
+	}
+	// The React SPA moved to /legacy/ with its assets; index.html points at them there.
+	rec = getUI2(t, s, "/legacy/")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `src="/legacy/app.js"`) ||
+		!strings.Contains(rec.Body.String(), `href="/legacy/style.css"`) || !strings.Contains(rec.Body.String(), `id="root"`) {
+		t.Errorf("GET /legacy/ = %d, want the SPA index with /legacy/ assets: %.300s", rec.Code, rec.Body.String())
+	}
+	if rec := getUI2(t, s, "/legacy"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/legacy/" {
+		t.Errorf("GET /legacy = %d -> %q, want a redirect to /legacy/", rec.Code, rec.Header().Get("Location"))
+	}
+	for path, ct := range map[string]string{
+		"/legacy/app.js": "javascript", "/legacy/style.css": "text/css", "/legacy/issues.worker.js": "javascript",
+		"/issues.worker.js": "javascript", // the bundle's hard-coded worker URL
+	} {
+		rec := getUI2(t, s, path)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), ct) || rec.Body.Len() < 100 {
+			t.Errorf("GET %s = %d %q (%d bytes)", path, rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
+		}
+	}
+	if rec := getUI2(t, s, "/no-such-file"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown root path = %d, want 404", rec.Code)
+	}
+}
+
+func TestUI2PagesCarrySecurityHeaders(t *testing.T) {
+	s := newTestServer()
+	rec := getUI2(t, s, "/ui2/dashboard")
+	for name, want := range map[string]string{
+		"Content-Security-Policy": "script-src 'self';",
+		"X-Frame-Options":         "DENY",
+	} {
+		if got := rec.Header().Get(name); !strings.Contains(got, want) {
+			t.Errorf("%s = %q, want it to contain %q", name, got, want)
+		}
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); strings.Contains(csp, "unsafe-eval") ||
+		strings.Contains(strings.SplitN(strings.SplitN(csp, "script-src", 2)[1], ";", 2)[0], "unsafe-inline") {
+		t.Errorf("CSP allows inline or eval script: %q", csp)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"allowEval":false`) || !strings.Contains(body, `"allowScriptTags":false`) {
+		t.Errorf("layout lacks the htmx-config meta turning eval and script tags off")
+	}
+	if strings.Contains(body, "<script>") {
+		t.Errorf("layout carries an inline script, which the CSP blocks")
+	}
+}
+
+func TestUI2ExecRendersErrorOnTemplateFailure(t *testing.T) {
+	out := string(ui2Exec("no-such-template.html", nil))
+	if !strings.Contains(out, "could not be rendered") {
+		t.Errorf("ui2Exec swallowed a template error: %q", out)
 	}
 }
 

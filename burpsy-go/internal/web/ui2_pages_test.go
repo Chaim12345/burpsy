@@ -50,6 +50,8 @@ var ui2Pages = []struct {
 	{"/ui2/collaborator", "collaborator", "Channel"},
 	{"/ui2/history", "history", "#rows"},
 	{"/ui2/issues", "issues", "findings"},
+	{"/ui2/shell/project", "project", "Open or create project"},
+	{"/ui2/shell/config", "config", "Import configuration"},
 }
 
 func TestUI2EveryPageRendersShellAndFragment(t *testing.T) {

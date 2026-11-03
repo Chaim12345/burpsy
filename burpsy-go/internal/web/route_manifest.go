@@ -106,7 +106,7 @@ func concretePath(pattern, subPath string) string {
 var manifest = map[string]route{
 	"/": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "the operator console: index.html, app.js, style.css, and the SPA catch-all",
+		summary: "the operator console: / renders the ui2 dashboard; the React SPA and its assets live under /legacy/",
 	},
 	"/api/advisories": {
 		methods: []string{"GET"}, risk: riskRead,
@@ -1577,6 +1577,28 @@ var manifest = map[string]route{
 	"/ui2/sitemap/scope/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 Site map: two-step add-to-scope - confirm resolves the row's node from the live tree and mints a one-time confirmation for the exact /api/scope include rule, run spends it; the change persists and neither step sends traffic",
+	},
+	"/ui2/shell/status": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 status bar data fragment: stored bytes, exchange/message counts, proxy bind, scope summary, CA status",
+	},
+	"/ui2/shell/project": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Project menu sheet: project file and name, rename, save copy, and the open/create/switch list",
+	},
+	"/ui2/shell/project/{action}": {
+		methods: []string{"POST"}, subPath: "rename", risk: riskAsset,
+		summary: "ui2 Project actions: rename (riskLocal, one click), and the review/run pairs for save copy " +
+			"(/api/backup) and open/switch (/api/project/open), each minting a one-time confirmation for the exact call",
+	},
+	"/ui2/shell/config": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 File menu sheet: report and configuration exports, CA download, configuration import form",
+	},
+	"/ui2/shell/config/{action}": {
+		methods: []string{"POST"}, subPath: "import-confirm", risk: riskAsset,
+		summary: "ui2 configuration import: import-confirm reviews the bundle's replaced and untouched sections and mints a " +
+			"one-time confirmation for the exact /api/config/import call; import-run spends it and lists what was applied",
 	},
 	"/ui2/sitemap/repeater": {
 		methods: []string{"GET"}, risk: riskRead,

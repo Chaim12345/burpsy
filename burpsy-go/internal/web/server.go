@@ -1583,8 +1583,13 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
 	s.route("/ui2/collaborator", s.handleUI2Collaborator)
 	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
+	s.route("/ui2/shell/status", s.handleUI2ShellStatus)
+	s.route("/ui2/shell/project", s.handleUI2ShellProject)
+	s.route("/ui2/shell/project/{action}", s.handleUI2ShellProjectAction)
+	s.route("/ui2/shell/config", s.handleUI2ShellConfig)
+	s.route("/ui2/shell/config/{action}", s.handleUI2ShellConfigAction)
 
-	// UI route
+	// The console root: "/" is the ui2 dashboard, /legacy/ the React SPA (see handleUI).
 	s.mux.HandleFunc("/", s.handleUI)
 
 	// The cross-site gate, installed over the finished mux (burpsy-react-ui-s19k). LAST, so it wraps
@@ -1703,8 +1708,21 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	return nil
 }
 
+// handleUI is the catch-all. The console root renders the server-side ui2 dashboard with the
+// same headers every /ui2/ page carries; everything else is the React SPA's /legacy/ tree and
+// its asset paths (uiHandler).
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	// Serve the static web UI, embedded at build time.
+	if r.URL.Path == "/" || r.URL.Path == "" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		ui2SecurityHeaders(w)
+		s.handleUI2Dashboard(w, r)
+		return
+	}
 	uiHandler(w, r)
 }
 
