@@ -1,21 +1,57 @@
-<div id="rows">
-<p class="meta">{{.extensions.loaded}} loaded · {{.extensions.allowlisted}} allowlisted · {{.extensions.failed}} failed · {{.extensions.crashed}} crashed</p>
-<p class="meta">{{.extensions.detail}}</p>
-<table>
-<thead><tr><th scope="col">Plugin</th><th scope="col">State</th><th scope="col">Registrations</th></tr></thead>
+<div id="ext-main">
+{{template "extensions_tabs" "installed"}}
+<p class="meta">A plugin is a local executable that speaks newline-delimited JSON-RPC on its stdin and stdout. There is no store to browse and nothing is downloaded: the operator names each one on the command line.</p>
+{{if .Error}}<p class="meta" role="alert"><strong>Could not read the plugin list: {{.Error}}</strong></p>{{else}}
+{{if .Note}}<p class="meta" role="alert" id="ext-note"><strong>Not done: {{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" id="ext-done"><strong>{{.Done}}</strong></p>{{end}}
+<h3 class="ext-sec">Allowlist</h3>
+<p class="meta">{{.List.Detail}}</p>
+<div class="ext-metrics">
+  <div><b>{{.List.Allowlisted}}</b><span>Allowlisted — named with -plugins</span></div>
+  <div><b>{{.List.Loaded}}</b><span>Loaded</span></div>
+  <div><b>{{.List.Unloaded}}</b><span>Not loaded</span></div>
+  <div><b {{if .List.Failed}}class="ext-bad"{{end}}>{{.List.Failed}}</b><span>Failed to load — never completed the handshake</span></div>
+  <div><b {{if .List.Crashed}}class="ext-bad"{{end}}>{{.List.Crashed}}</b><span>Exited on their own — loaded, then the process ended unasked</span></div>
+</div>
+<div id="ext-review"></div>
+{{if .Rows}}
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Order</th><th scope="col">Loaded</th><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Version</th><th scope="col">State</th><th scope="col">Registrations</th><th scope="col">Console</th><th scope="col">Actions</th></tr></thead>
 <tbody>
-{{range .extensions.extensions}}
-<tr><td>{{.name}}</td><td>{{.state}}</td><td>{{range .registrations}}{{.}} {{end}}</td></tr>
-{{else}}<tr><td colspan="3" class="meta">No plugins loaded.</td></tr>{{end}}
+{{range .Rows}}
+<tr data-plugin="{{.Name}}">
+<td data-label="Order" class="ext-row-actions">{{.Index}}
+{{if not .First}}<form method="post" action="/ui2/extensions/confirm" hx-post="/ui2/extensions/confirm" hx-target="#ext-review" hx-swap="outerHTML"><input type="hidden" name="action" value="up"><input type="hidden" name="name" value="{{.Name}}"><button type="submit" aria-label="Move {{.Name}} before {{.Prev}}" title="Move {{.Name}} before {{.Prev}}">&uarr;</button></form>{{end}}
+{{if not .Last}}<form method="post" action="/ui2/extensions/confirm" hx-post="/ui2/extensions/confirm" hx-target="#ext-review" hx-swap="outerHTML"><input type="hidden" name="action" value="down"><input type="hidden" name="name" value="{{.Name}}"><button type="submit" aria-label="Move {{.Name}} after {{.Next}}" title="Move {{.Name}} after {{.Next}}">&darr;</button></form>{{end}}
+</td>
+<td data-label="Loaded">{{if .Loaded}}yes{{else}}no{{end}}</td>
+<td data-label="Name"><a href="{{.DetailURL}}"><code>{{.Name}}</code></a></td>
+<td data-label="Type">{{if .Type}}{{.Type}}{{else}}<span class="meta">not declared yet</span>{{end}}</td>
+<td data-label="Version">{{if .Version}}{{.Version}}{{else}}—{{end}}</td>
+<td data-label="State"><span class="badge {{if or (eq .State "failed") (eq .State "crashed")}}ext-bad{{end}}">{{.StateLabel}}</span></td>
+<td data-label="Registrations">{{.Registrations}}{{if .Refused}} <span class="meta">({{.Refused}} refused)</span>{{end}}</td>
+<td data-label="Console">{{.OutputLines}} out / {{.ErrorLines}} err</td>
+<td data-label="Actions" class="ext-row-actions">
+<form method="post" action="/ui2/extensions/confirm" hx-post="/ui2/extensions/confirm" hx-target="#ext-review" hx-swap="outerHTML"><input type="hidden" name="action" value="{{if .Loaded}}unload{{else}}load{{end}}"><input type="hidden" name="name" value="{{.Name}}"><button type="submit">{{if .Loaded}}Unload{{else}}Load{{end}}</button></form>
+<a class="btn" href="{{.DetailURL}}">Detail</a>
+</td>
+</tr>
+{{end}}
 </tbody>
 </table>
-<h3>JSON-RPC API</h3>
-{{if .apis.methods}}
-<table>
-<thead><tr><th scope="col">Method</th><th scope="col">Call</th></tr></thead>
+{{else}}
+<p class="meta"><strong>No plugin is allowlisted.</strong> Loading a plugin runs operator-supplied code in this process, so nothing can be admitted from the browser.</p>
+{{end}}
+{{if .Exchange}}
+<h3 class="ext-sec">Plugin actions for exchange {{.Exchange}}</h3>
+{{if .Actions}}
+<table class="ext-t">
+<thead><tr><th scope="col">Plugin</th><th scope="col">Kind</th><th scope="col">Label</th><th scope="col"></th></tr></thead>
 <tbody>
-{{range .apis.methods}}<tr><td>{{.name}}</td><td class="meta">{{.direction}} · {{.call}}{{if .params}}<br><code>{{.params}}</code>{{end}}{{if .result}}<br>&rarr; <code>{{.result}}</code>{{end}}</td></tr>{{end}}
+{{range .Actions}}<tr><td><code>{{.Plugin}}</code></td><td>{{.Kind}}</td><td>{{.Label}}</td><td><a class="btn" href="{{.DetailURL}}">Run on this exchange&hellip;</a></td></tr>{{end}}
 </tbody>
 </table>
-{{else}}<p class="meta">No API methods registered.</p>{{end}}
+{{else}}<p class="meta">No loaded plugin declares a context-menu item or editor tab.</p>{{end}}
+{{end}}
+{{end}}
 </div>

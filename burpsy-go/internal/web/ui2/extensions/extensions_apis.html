@@ -1,0 +1,40 @@
+<div id="rows">
+{{template "extensions_tabs" "apis"}}
+<p class="meta">The contract a plugin is written against, served from the same method table the host dispatches on — so this page cannot drift away from what the code does.</p>
+{{if .error}}<p class="meta" role="alert"><strong>Could not read the protocol contract: {{.error}}</strong></p>{{else}}
+<h3 class="ext-sec">Transport</h3>
+<p class="meta">Protocol version {{.apis.ProtocolVersion}}.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col"></th><th scope="col">How it works</th></tr></thead>
+<tbody>
+<tr><td data-label="">Process</td><td data-label="How">{{.apis.Transport}}</td></tr>
+<tr><td data-label="">Framing</td><td data-label="How">{{.apis.Framing}}</td></tr>
+<tr><td data-label="">Handshake</td><td data-label="How">{{.apis.Handshake}}</td></tr>
+</tbody>
+</table>
+<h3 class="ext-sec">Registration points</h3>
+<p class="meta">{{len .apis.Kinds}} registration points. Montoya's userInterface() points that hand Burp a Swing object have no honest web analogue, so they are absent rather than approximated.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Kind</th><th scope="col">Invoked by</th><th scope="col">What it is</th><th scope="col">Burp's equivalent</th></tr></thead>
+<tbody>
+{{range .apis.Kinds}}<tr><td data-label="Kind"><code>{{.Kind}}</code></td><td data-label="Invoked by"><code>{{.Method}}</code></td><td data-label="What">{{.Label}}</td><td data-label="Burp">{{.Montoya}}</td></tr>{{end}}
+</tbody>
+</table>
+<h3 class="ext-sec">Methods</h3>
+<p class="meta">{{len .apis.Methods}} methods, generated from the host's own table. A Go test parses the dispatcher's source and fails if either side names a method the other does not.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Method</th><th scope="col">Direction</th><th scope="col">Call</th><th scope="col">Params</th><th scope="col">Result</th><th scope="col">Why</th></tr></thead>
+<tbody>
+{{range .apis.Methods}}<tr><td data-label="Method"><code>{{.Name}}</code></td><td data-label="Direction"><span class="badge">{{.Direction}}</span></td><td data-label="Call">{{.Call}}</td><td data-label="Params"><code>{{.Params}}</code></td><td data-label="Result"><code>{{.Result}}</code></td><td data-label="Why">{{.Why}}</td></tr>{{end}}
+</tbody>
+</table>
+<h3 class="ext-sec">What a plugin cannot do</h3>
+<p class="meta">Named rather than left to be discovered: an absent capability that is stated is a decision.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Not offered</th><th scope="col">Why</th></tr></thead>
+<tbody>
+{{range .apis.Unsupported}}<tr><td data-label="Not offered">{{.What}}</td><td data-label="Why">{{.Why}}</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+</div>
