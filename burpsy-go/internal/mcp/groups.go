@@ -582,4 +582,16 @@ var notExposed = map[string]string{
 	"POST /ui2/decoder":            "ui2 Decoder form submit; the JSON /api/tools/* routes are the agent-facing transforms",
 	"POST /ui2/comparer":           "ui2 Comparer form submit; /api/tools/compare is the agent-facing diff",
 	"POST /ui2/repeater":           "ui2 Repeater form submit; /api/repeater/send is the agent-facing send",
+
+	// ui2 access control and engagement tools (unit 15).
+	"GET /ui2/authz":                              "ui2 Access control page; /api/authz/* are the agent-facing routes",
+	"POST /ui2/authz/identities/{action}":         "ui2 Access control identities save review/apply steps; PUT /api/authz/identities is the agent-facing write",
+	"POST /ui2/authz/test/{action}":               "ui2 Access control test review/run steps (minted one-time confirmation); POST /api/authz/test is the agent-facing test",
+	"GET /ui2/authz/diff/{a}/{b}":                 "ui2 Comparer seeded with two stored messages; /api/message/{id} and /api/tools/compare are the agent-facing reads",
+	"GET /ui2/engagement/csrf":                    "ui2 CSRF PoC page; GET /api/exchange/{id}/csrf is the agent-facing generator",
+	"POST /ui2/engagement/csrf/test":              "ui2 CSRF PoC test-in-browser button; GET /api/exchange/{id}/csrf?test_url=true is the agent-facing mint",
+	"GET /ui2/engagement/csrf/{id}/download":      "ui2 CSRF PoC download link (attachment); GET /api/exchange/{id}/csrf carries the same HTML for agents",
+	"GET /ui2/engagement/hidden-inputs":           "ui2 Guess hidden inputs page; /api/hidden-inputs is the agent-facing route",
+	"POST /ui2/engagement/hidden-inputs/{action}": "ui2 Guess hidden inputs review/run steps (minted one-time confirmation); POST /api/hidden-inputs is the agent-facing launch",
+	"GET /ui2/engagement/clickbandit":             "ui2 Clickbandit page; GET /api/engagement/clickbandit.js is the agent-facing script",
 }

@@ -199,6 +199,10 @@
   "/ui2/advisories",
   "/ui2/advisories/{typeIndex}",
   "/ui2/app.js",
+  "/ui2/authz",
+  "/ui2/authz/diff/{a}/{b}",
+  "/ui2/authz/identities/{action}",
+  "/ui2/authz/test/{action}",
   "/ui2/collaborator",
   "/ui2/collaborator/mint",
   "/ui2/comparer",
@@ -206,6 +210,12 @@
   "/ui2/dashboard",
   "/ui2/decoder",
   "/ui2/decoder/run",
+  "/ui2/engagement/clickbandit",
+  "/ui2/engagement/csrf",
+  "/ui2/engagement/csrf/test",
+  "/ui2/engagement/csrf/{id}/download",
+  "/ui2/engagement/hidden-inputs",
+  "/ui2/engagement/hidden-inputs/{action}",
   "/ui2/extensions",
   "/ui2/history",
   "/ui2/history/{id}",
@@ -4003,6 +4013,86 @@
    "gated": false
   },
   {
+   "path": "/ui2/authz",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w",
+   "key": "/ui2/authz/diff/{a}/{b}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w",
+   "key": "/ui2/authz/identities/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w",
+   "key": "/ui2/authz/test/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
    "path": "/ui2/collaborator",
    "key": "/ui2/collaborator",
    "gated": false
@@ -4140,6 +4230,126 @@
   {
    "path": "/ui2/decoder/run/extra/more",
    "key": "/ui2/decoder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/extra",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/extra/more",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/extra",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/extra/more",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/extra",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/extra/more",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download",
+   "key": "/ui2/engagement/csrf/{id}/download",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/extra",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/extra/more",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/extra",
+   "key": "/ui2/engagement/hidden-inputs/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/extra/more",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w",
+   "key": "/ui2/engagement/hidden-inputs/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/extra",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/extra/more",
+   "key": "/ui2/engagement/hidden-inputs",
    "gated": false
   },
   {

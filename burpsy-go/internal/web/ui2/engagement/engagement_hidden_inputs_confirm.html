@@ -1,0 +1,17 @@
+<div id="rows" data-review="1" style="padding:8px 14px; max-width:960px">
+{{if .error}}<p class="meta" role="alert"><strong>Not started: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/engagement/hidden-inputs" hx-get="/ui2/engagement/hidden-inputs" hx-target="#rows" hx-swap="outerHTML">back to hidden inputs</a></p>{{else}}
+<p><strong>Review before sending (riskAttack):</strong> {{.summary}}</p>
+<details open><summary>exact call (the full body the confirmation binds)</summary>
+<pre class="meta brk" style="white-space:pre-wrap">{{.preview}}</pre></details>
+<form hx-post="/ui2/engagement/hidden-inputs/run" method="post" action="/ui2/engagement/hidden-inputs/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="exchange_id" value="{{.exchange_id}}">
+{{range .kinds}}<input type="hidden" name="kinds" value="{{.}}">{{end}}
+<input type="hidden" name="max_requests" value="{{.max_requests}}">
+{{if .cache_buster}}<input type="hidden" name="cache_buster" value="on">{{end}}
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and start guessing</button>
+</form>
+<p class="meta"><a href="/ui2/engagement/hidden-inputs" hx-get="/ui2/engagement/hidden-inputs" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

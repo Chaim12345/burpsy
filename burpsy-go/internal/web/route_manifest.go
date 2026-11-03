@@ -1446,6 +1446,24 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the ui2 console's entire client-side script (SSE live-refresh + infinite-scroll cleanup), kept as a static file so html/template never parses JS",
 	},
+	"/ui2/authz": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Access control page: identities editor (stored cookie and header values never rendered), test form and verdicts",
+	},
+	"/ui2/authz/diff/{a}/{b}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/2",
+		summary: "ui2 Access control: the Comparer seeded with two stored messages (baseline response vs one identity's), diffed through /api/tools/compare; reads only",
+	},
+	"/ui2/authz/identities/{action}": {
+		// riskAsset like the session-rules review route: the class belongs to PUT /api/authz/identities,
+		// which this reaches only through the held review (and a minted token when its class needs one).
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Access control identities save: confirm holds the full PUT /api/authz/identities body server-side and renders it with credential values withheld; run spends the single-use review and writes the held bytes",
+	},
+	"/ui2/authz/test/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Access control test: confirm mints a one-time confirmation for the exact POST /api/authz/test body and renders the review; run spends it (the test re-sends the exchange to its target)",
+	},
 	"/ui2/comparer": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
 		summary: "ui2 Comparer: GET the form, POST /ui2/comparer/run diffs two buffers via /api/tools/compare",
@@ -1465,6 +1483,30 @@ var manifest = map[string]route{
 	"/ui2/decoder/run": {
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Decoder run: forwards to /api/tools/decode|encode|hash and renders the result",
+	},
+	"/ui2/engagement/clickbandit": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Clickbandit page: the clickjacking recorder script as copyable text (never executed here)",
+	},
+	"/ui2/engagement/csrf": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 CSRF PoC generator: one exchange's PoC from GET /api/exchange/{id}/csrf shown as escaped text, with copy and download",
+	},
+	"/ui2/engagement/csrf/test": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 CSRF PoC test in browser: regenerates the PoC with test_url=true, which mints a one-shot URL on the separate PoC host, and links it",
+	},
+	"/ui2/engagement/csrf/{id}/download": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 CSRF PoC download: the generated HTML as an attachment under a sandbox CSP, never rendered in the console origin",
+	},
+	"/ui2/engagement/hidden-inputs": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Guess hidden inputs page: launch form, retained runs, and one run's live results (?task=)",
+	},
+	"/ui2/engagement/hidden-inputs/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Guess hidden inputs launch: confirm mints a one-time confirmation for the exact POST /api/hidden-inputs body and renders the review; run spends it",
 	},
 	"/ui2/extensions": {
 		methods: []string{"GET"}, risk: riskAsset,

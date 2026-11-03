@@ -56,6 +56,13 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/organizer/annotate/{action}":    {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/items/{action}":       {raw: "application/x-www-form-urlencoded item move/copy/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/session/rules/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
+
+	// ui2 access control and engagement tools (unit 15).
+	"POST /ui2/authz/identities/{action}":         {raw: "application/x-www-form-urlencoded identities editor form with base digest (confirm); review id + single-use review token only (run)"},
+	"POST /ui2/authz/test/{action}":               {raw: "application/x-www-form-urlencoded form: exchange_id, samples (confirm); same fields + one-time confirm token (run)"},
+	"POST /ui2/engagement/csrf/test":              {raw: "application/x-www-form-urlencoded form: id, technique, auto_submit"},
+	"POST /ui2/engagement/hidden-inputs/{action}": {raw: "application/x-www-form-urlencoded form: exchange_id, kinds, cache_buster, max_requests (confirm); same fields + one-time confirm token (run)"},
+
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{
