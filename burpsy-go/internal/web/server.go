@@ -1568,6 +1568,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/comparer/run", s.handleUI2ComparerRun)
 	s.route("/ui2/repeater", s.handleUI2Repeater)
 	s.route("/ui2/repeater/send", s.handleUI2RepeaterSend)
+	s.route("/ui2/repeater/send-group", s.handleUI2RepeaterSendGroup)
+	s.route("/ui2/repeater/tabs/{action}", s.handleUI2RepeaterTabs)
 	s.route("/ui2/settings", s.handleUI2Settings)
 	s.route("/ui2/intruder", s.handleUI2Intruder)
 	s.route("/ui2/intruder/points", s.handleUI2IntruderPoints)

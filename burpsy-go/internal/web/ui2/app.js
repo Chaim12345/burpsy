@@ -588,6 +588,19 @@ document.addEventListener('click', function (e) {
   });
 })();
 
+// ---- Repeater: Ctrl+Space or mod+Enter sends the active tab. Clicking the Send button keeps
+// the editor's values riding along exactly as a click sends them, and works inside the textarea.
+document.addEventListener('keydown', function (e) {
+  if ((document.body.dataset || {}).view !== 'repeater') return;
+  var space = e.ctrlKey && !e.metaKey && !e.altKey && (e.key === ' ' || e.code === 'Space');
+  var enter = (e.ctrlKey || e.metaKey) && !e.altKey && e.key === 'Enter';
+  if (!space && !enter) return;
+  var b = document.getElementById('rp-send');
+  if (!b || b.disabled) return;
+  e.preventDefault();
+  b.click();
+});
+
 // ---- Keyboard shortcuts (alt+1..0 tools, alt+T intercept, ? shortcuts) ----
 (function () {
   var TOOLS = ['dashboard', 'sitemap', 'scope', 'scanner', 'issues', 'intercept', 'history', 'ws', 'proxy', 'settings'];
@@ -596,6 +609,7 @@ document.addEventListener('click', function (e) {
     'alt+T — toggle interception',
     'j/k or ↑/↓ — move row selection, Enter — open detail',
     'mod+A (in table) — select all rows',
+    'Ctrl+Space or mod+Enter (Repeater) — send the active tab',
     '? — this list'
   ];
   var sel = -1;

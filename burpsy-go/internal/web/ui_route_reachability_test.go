@@ -128,6 +128,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/comparer/run":                   "ui2 Comparer run button inside the /ui2/ page",
 	"/ui2/repeater":                       "ui2 Repeater editor; the console calls /api/repeater/send",
 	"/ui2/repeater/send":                  "ui2 Repeater send button inside the /ui2/ page",
+	"/ui2/repeater/send-group":            "ui2 Repeater group send buttons inside the /ui2/repeater page",
+	"/ui2/repeater/tabs/{action}":         "ui2 Repeater tab actions inside the /ui2/repeater page; the React console keeps its tabs client-side",
 	"/ui2/settings":                       "ui2 Settings page; the console's Settings calls the /api/* routes it summarises",
 }
 

@@ -230,6 +230,8 @@
   "/ui2/proxy",
   "/ui2/repeater",
   "/ui2/repeater/send",
+  "/ui2/repeater/send-group",
+  "/ui2/repeater/tabs/{action}",
   "/ui2/scanner",
   "/ui2/scanner/config-confirm",
   "/ui2/scanner/config-run",
@@ -4618,6 +4620,26 @@
    "gated": false
   },
   {
+   "path": "/ui2/repeater/send-group",
+   "key": "/ui2/repeater/send-group",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send-group/",
+   "key": "/ui2/repeater/send-group",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send-group/extra",
+   "key": "/ui2/repeater/send-group",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/send-group/extra/more",
+   "key": "/ui2/repeater/send-group",
+   "gated": false
+  },
+  {
    "path": "/ui2/repeater/send/",
    "key": "/ui2/repeater/send",
    "gated": false
@@ -4630,6 +4652,26 @@
   {
    "path": "/ui2/repeater/send/extra/more",
    "key": "/ui2/repeater/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/tabs/w",
+   "key": "/ui2/repeater/tabs/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/tabs/w/",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/tabs/w/extra",
+   "key": "/ui2/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/tabs/w/extra/more",
+   "key": "/ui2/repeater",
    "gated": false
   },
   {
