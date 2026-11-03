@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "a047282b833f",
+  "strategy": "manual-commit",
+  "branch": "ui2/scanner-config",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "burpsy-go/internal/mcp/groups.go",
+    "burpsy-go/internal/web/json_nil_slice_test.go",
+    "burpsy-go/internal/web/route_manifest.go",
+    "burpsy-go/internal/web/route_schemas.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui2/app.js",
+    "burpsy-go/internal/web/ui2/nav.html",
+    "burpsy-go/internal/web/ui2/scanner.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_audit_result.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_config.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_library.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_library_detail.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_live_metrics.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_review.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_style.html",
+    "burpsy-go/internal/web/ui2/scanner/scanner_xss_route.html",
+    "burpsy-go/internal/web/ui2/scanner_config_confirm.html",
+    "burpsy-go/internal/web/ui2_pages.go",
+    "burpsy-go/internal/web/ui2_pages_test.go",
+    "burpsy-go/internal/web/ui2_scanner_config.go",
+    "burpsy-go/internal/web/ui2_scanner_config_test.go",
+    "burpsy-go/internal/web/ui_route_reachability_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a0/47282b833f/0/metadata.json",
+      "transcript": "/a0/47282b833f/0/full.jsonl",
+      "compact_transcript": "/a0/47282b833f/0/transcript.jsonl",
+      "content_hash": "/a0/47282b833f/0/content_hash.txt",
+      "prompt": "/a0/47282b833f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "redaction": {
+    "replacements": 180,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 5,
+      "credentialed_uri": 12,
+      "entropy": 102,
+      "key_context": 47,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
