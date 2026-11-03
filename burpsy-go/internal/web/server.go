@@ -92,8 +92,9 @@ type Server struct {
 	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
 	// /confirm suffix and so the patterns do not enter the route manifest's remit.
 	confirmMux http.Handler
-	// ui2Mints holds the collaborator mint calls a ui2 operator has reviewed but not yet confirmed
-	// (ui2_attack_pages.go, handleUI2CollaboratorMint): the confirm form carries only the id, so
+	// ui2Mints holds the Collaborator calls (mint, health check, server set/unset) a ui2 operator
+	// has reviewed but not yet confirmed (ui2_collaborator.go, bounded by ui2MintCap): the confirm
+	// form carries only the id, so
 	// the call that runs is the call the preview showed, not whatever fields a re-submitted form
 	// happens to carry. A sync.Map because LoadAndDelete makes single-use atomic, and the zero
 	// value is ready — a Server built by struct literal in a test has a working store.
@@ -1583,6 +1584,11 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
 	s.route("/ui2/collaborator", s.handleUI2Collaborator)
 	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
+	s.route("/ui2/collaborator/health", s.handleUI2CollaboratorHealth)
+	s.route("/ui2/collaborator/poll", s.handleUI2CollaboratorPoll)
+	s.route("/ui2/collaborator/blindxss", s.handleUI2CollaboratorBlindXSS)
+	s.route("/ui2/collaborator/server/{action}", s.handleUI2CollaboratorServer)
+	s.route("/ui2/collaborator/interaction/{id}", s.handleUI2CollaboratorInteraction)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

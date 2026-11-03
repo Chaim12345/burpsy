@@ -1453,43 +1453,7 @@ func (s *Server) ui2SessionView(note string) map[string]any {
 	return model
 }
 
-// ---- Tools: decoder / comparer ---------------------------------------------------------------
-
-// handleUI2Decoder serves GET /ui2/decoder (form) and POST /ui2/decoder/run (the transform),
-// posting to /api/tools/decode|encode|hash server-side and rendering the result.
-func (s *Server) handleUI2Decoder(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		s.handleUI2DecoderRun(w, r)
-		return
-	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": nil}))
-}
-
-func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	op := r.PostFormValue("op")
-	input := r.PostFormValue("input")
-	arg := r.PostFormValue("arg")
-	var path string
-	body := map[string]string{"input": input}
-	switch op {
-	case "decode":
-		path = "/api/tools/decode"
-		body["encoding"] = arg // toolsDecodeReq reads "encoding"; "op" would fall into the guesser
-	case "encode":
-		path = "/api/tools/encode"
-		body["encoding"] = arg // toolsEncodeReq reads "encoding"
-	case "hash":
-		path = "/api/tools/hash"
-		body["algorithm"] = arg
-	default:
-		http.Error(w, "unknown decoder op", http.StatusBadRequest)
-		return
-	}
-	result, errText := s.ui2APIResult(http.MethodPost, path, body)
-	display, meta := ui2ToolOutputText(result)
-	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": display, "meta": meta, "error": errText, "op": op, "arg": arg, "input": input}))
-}
+// ---- Tools: comparer (the Decoder is in ui2_decoder.go) ------------------------------------
 
 // handleUI2Comparer serves GET /ui2/comparer (form) and POST /ui2/comparer/run.
 func (s *Server) handleUI2Comparer(w http.ResponseWriter, r *http.Request) {
@@ -1629,28 +1593,6 @@ func ui2APIErrorText(errText string) string {
 		return msg + " " + hint
 	}
 	return msg
-}
-
-// ui2ToolOutputText renders a tools API result (decode/encode/hash) as display text:
-// the output text plus honest flags — never a Go map dump of the JSON.
-func ui2ToolOutputText(result any) (display, meta string) {
-	m, ok := result.(map[string]any)
-	if !ok {
-		return "", ""
-	}
-	out, _ := m["output"].(map[string]any)
-	text, _ := out["text"].(string)
-	flags := []string{}
-	if t, _ := out["truncated"].(bool); t {
-		flags = append(flags, "output truncated")
-	}
-	if p, _ := m["partial"].(bool); p {
-		flags = append(flags, "partial decode: a compressed stream stopped early")
-	}
-	if u, ok := out["utf8"].(bool); ok && !u {
-		flags = append(flags, "not valid UTF-8: replacement characters shown")
-	}
-	return text, strings.Join(flags, " · ")
 }
 
 // ui2DiffSeg is one rendered diff piece: prefix is "  " (context), "- " (removed

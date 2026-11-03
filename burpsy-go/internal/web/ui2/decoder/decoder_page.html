@@ -1,0 +1,101 @@
+<div id="rows" class="dec">
+<style>
+.dec { padding:0 14px 20px; }
+.dec .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+.dec textarea { width:100%; font:12px/1.4 ui-monospace, monospace; }
+.dec select, .dec input { max-width:100%; min-width:0; }
+.dec .step { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; }
+.dec .card { border:1px solid var(--line); border-radius:6px; padding:6px 10px; margin:8px 0; }
+.dec .card h4 { margin:2px 0 6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.dec .warn { border-left:3px solid #c60; padding:4px 8px; margin:6px 0; }
+.dec .alert { color:#c00; }
+.dec mark.dec-span { background:var(--sel); color:inherit; outline:1px solid var(--accent); }
+.dec input.num { width:80px; }
+</style>
+{{if .Seed}}<p class="meta" role="status">{{.Seed}}</p>{{end}}
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+<form id="dec-form" hx-post="/ui2/decoder/run" method="post" action="/ui2/decoder/run" hx-target="#rows" hx-swap="outerHTML">
+  <textarea id="dec-input" name="input" rows="8" aria-label="Input buffer" placeholder="paste a cookie, a JWT, a URL-encoded parameter…">{{.Input}}</textarea>
+  <div class="row">
+    <button type="submit" name="action" value="run" id="dec-run" style="font-weight:700">Run pipeline</button>
+    <label>Input as <select name="input_format" aria-label="Input format">
+      <option value="text"{{if eq .InputFormat "text"}} selected{{end}}>text</option>
+      <option value="hex"{{if eq .InputFormat "hex"}} selected{{end}}>hex</option>
+    </select></label>
+    <label>Output as <select name="view" aria-label="Output view">
+      <option value="text"{{if eq .View "text"}} selected{{end}}>text</option>
+      <option value="hex"{{if eq .View "hex"}} selected{{end}}>hex dump</option>
+    </select></label>
+    <a class="btn" href="/ui2/decoder" hx-get="/ui2/decoder" hx-target="#rows" hx-swap="outerHTML" id="dec-clear">Clear all</a>
+  </div>
+  <div class="row">
+    <span class="meta" style="padding:0">Transform only a span (character offsets into the input{{if eq .InputFormat "hex"}} after hex is read as bytes{{end}}; empty = whole input):</span>
+    <input class="num" type="number" min="0" name="sel_start" id="dec-sel-start" value="{{.SelStart}}" aria-label="Span start offset" placeholder="start">
+    <input class="num" type="number" min="0" name="sel_end" id="dec-sel-end" value="{{.SelEnd}}" aria-label="Span end offset" placeholder="end">
+    <button type="button" id="dec-use-selection" title="Fill the offsets from the text selected in the input">Use selection</button>
+    <button type="button" id="dec-clear-span">Whole input</button>
+  </div>
+
+  <h3>Transform pipeline</h3>
+  <p class="meta" style="padding:0">Each step is fed the previous step's output; every intermediate result stays on screen.</p>
+  <input type="hidden" name="steps" value="{{len .Steps}}">
+  {{range .Steps}}
+  {{$p := printf "s%d_" .Index}}
+  <div class="step row" data-dec-step="{{.Index}}">
+    <span class="badge">step {{.Num}}</span>
+    <select name="{{$p}}op" aria-label="Step {{.Num}} operation" hx-post="/ui2/decoder/run" hx-trigger="change" hx-vals='{"action":"layout"}' hx-target="#rows" hx-swap="outerHTML">
+      {{$op := .Op}}
+      <optgroup label="Decode">{{range $.Ops.Decode}}<option value="{{.Value}}"{{if eq .Value $op}} selected{{end}}>{{.Label}}</option>{{end}}</optgroup>
+      <optgroup label="Encode">{{range $.Ops.Encode}}<option value="{{.Value}}"{{if eq .Value $op}} selected{{end}}>{{.Label}}</option>{{end}}</optgroup>
+      <optgroup label="Hash">{{range $.Ops.Hash}}<option value="{{.Value}}"{{if eq .Value $op}} selected{{end}}>{{.Label}}</option>{{end}}</optgroup>
+    </select>
+    {{if and (eq .Kind "decode") (eq .Value "auto")}}<label><input type="checkbox" name="{{$p}}guess" value="1"{{if .Guess}} checked{{end}}> guess base64 / hex alphabets</label>{{end}}
+    {{if .Keyed}}
+    <input type="text" name="{{$p}}key" value="{{.Key}}" aria-label="Step {{.Num}} HMAC key" placeholder="HMAC key">
+    <select name="{{$p}}key_enc" aria-label="Step {{.Num}} key encoding">{{$ke := .KeyEnc}}{{range $.Ops.KeyEncodings}}<option value="{{.}}"{{if eq . $ke}} selected{{end}}>key: {{.}}</option>{{end}}</select>
+    {{end}}
+    {{if eq .Kind "hash"}}
+    <select name="{{$p}}out" aria-label="Step {{.Num}} digest output">{{$o := .Output}}{{range $.Ops.HashOutputs}}<option value="{{.}}"{{if eq . $o}} selected{{end}}>out: {{.}}</option>{{end}}</select>
+    {{end}}
+    <button type="submit" name="action" value="up-{{.Index}}" aria-label="Move step {{.Num}} earlier"{{if eq .Index 0}} disabled{{end}}>↑</button>
+    <button type="submit" name="action" value="down-{{.Index}}" aria-label="Move step {{.Num}} later"{{if .Last}} disabled{{end}}>↓</button>
+    <button type="submit" name="action" value="remove-{{.Index}}" aria-label="Remove step {{.Num}}">Remove</button>
+  </div>
+  {{else}}
+  <p class="meta">No steps: add a decode, encode or hash step to build a chain.</p>
+  {{end}}
+  {{if .HashNotLast}}<p class="warn">A hash is one-way: the steps after hash step {{.HashNotLast}} operate on the digest, not on the original bytes.</p>{{end}}
+  <div class="row">
+    <button type="submit" name="action" value="add-decode">+ Decode</button>
+    <button type="submit" name="action" value="add-encode">+ Encode</button>
+    <button type="submit" name="action" value="add-hash">+ Hash</button>
+  </div>
+</form>
+
+<div id="dec-results" aria-live="polite">
+{{if .InputNote}}<p class="meta">{{.InputNote}}</p>{{end}}
+{{if .SpanNote}}<p class="warn">{{.SpanNote}}</p>{{end}}
+{{if .FailedAt}}<p class="warn" role="alert">Step {{.FailedAt}} failed and the chain stopped there: {{.FailMsg}}. The cards below are the steps that did run.</p>{{end}}
+{{if .Ran}}
+  {{range .Results}}
+  <div class="card" data-dec-result="{{.Index}}">
+    <h4><span class="badge">step {{.Num}}</span> {{.Label}}
+      {{if $.Selection}}<span class="badge" title="Only the selected span was transformed; the rest of the input is shown unchanged around it. Length and UTF-8 describe the span.">selection</span>{{end}}
+      <span class="badge">{{.Len}} B</span>
+      {{if not .UTF8}}<span class="badge">not utf-8</span>{{end}}
+      {{if .Truncated}}<span class="badge">truncated</span>{{end}}
+      <button type="button" class="btn copy-btn" data-copy="{{.Output}}" aria-label="Copy step {{.Num}} output">Copy</button>
+    </h4>
+    {{if .Smart}}{{if .Layers}}<p class="meta" style="padding:0">detected: {{range $i, $l := .Layers}}{{if $i}} → {{end}}<code>{{$l}}</code>{{end}}</p>{{else}}<p class="warn">Nothing was detected: no layer decoded cleanly, so this step passed the input through unchanged.</p>{{end}}{{end}}
+    {{if .Partial}}<p class="warn">This stream only partly decompressed, so the output is a prefix of the plaintext, not all of it. A search that finds nothing here has not ruled the string out.</p>{{end}}
+    {{if .Hex}}<pre class="msg dec-out">{{.Hex}}</pre>
+    {{else if or $.Before .Output $.After}}<pre class="msg dec-out">{{$.Before}}<mark class="dec-span">{{.Output}}</mark>{{$.After}}</pre>
+    {{else}}<pre class="msg dec-out">(empty output)</pre>{{end}}
+  </div>
+  {{end}}
+  {{if .Results}}<p class="row"><button type="button" class="btn copy-btn" data-copy="{{.Final}}" id="dec-copy-final">Copy output</button> <span class="meta">the last step's output{{if .Selection}} with the untouched text around the span{{end}}</span></p>{{end}}
+{{else}}
+  <p class="meta">Nothing run yet: paste an input, arrange the steps, then run the pipeline to see each layer come off in turn.</p>
+{{end}}
+</div>
+</div>
