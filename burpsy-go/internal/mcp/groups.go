@@ -496,6 +496,13 @@ var groupedTools = []groupSpec{
 //
 // The route surface (-surface routes) still lists all of them, for debugging.
 var notExposed = map[string]string{
+	"GET /api/proxy/interception": "the runtime TLS-interception switch is the operator's console control; an agent reads the CA and " +
+		"interception state through proxy_ca",
+	"PUT /api/proxy/interception": "switching TLS interception changes what the proxy decrypts for every client; the operator flips it " +
+		"in the console, an agent does not",
+	"GET /api/scanner/dom": "the DOM engine's browser path is operator configuration (it names a program this process starts)",
+	"PUT /api/scanner/dom": "riskExecute: it names a browser binary or a CDP endpoint the process will launch or dial; the operator " +
+		"sets it in the console, never an agent (the unit that gates it fully is tracked as a follow-up)",
 	"POST /api/intruder/attacks/{id}": "the no-action 404 shape of the control route; an agent's /api/intruder/attacks/7 resolves to " +
 		"the {id}/{action...} route (the gate's own longest-prefix rule), so this key could never be the one a call reaches",
 	"GET /":       "the console's own index.html and SPA catch-all — an asset, not an operation",
