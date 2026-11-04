@@ -531,9 +531,5 @@ func (s *Server) handleUI2AuthzDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ra := strings.ToValidUTF8(string(ma.Raw()), "�")
 	rb := strings.ToValidUTF8(string(mb.Raw()), "�")
-	repaired := ra != string(ma.Raw()) || rb != string(mb.Raw())
-	result, errText := s.ui2APIResult(http.MethodPost, "/api/tools/compare", map[string]string{"a": ra, "b": rb})
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{
-		"result": ui2RenderCompare(ra, rb, result, repaired), "error": errText, "a": ra, "b": rb,
-	}))
+	s.ui2CmpRenderTexts(w, r, "", "response", fmt.Sprintf("message %d", a), ra, fmt.Sprintf("message %d", b), rb)
 }

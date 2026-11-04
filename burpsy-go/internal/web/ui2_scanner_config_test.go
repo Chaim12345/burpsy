@@ -156,7 +156,7 @@ func TestUI2ScanConfigReviewRefusesUnknownRowAndBadRoute(t *testing.T) {
 func TestUI2ScannerLiveReviewEnablesAndRefusesReplay(t *testing.T) {
 	s := ui2ScanFullServer(t)
 	review, run := ui2ScanReviewAndRun(t, s, "op=live-enable")
-	if !strings.Contains(review, "minted a one-time token") || !strings.Contains(review, `"enabled": true`) {
+	if !strings.Contains(review, "minted a one-time token") || !strings.Contains(html.UnescapeString(review), `"enabled": true`) {
 		t.Errorf("live review is not gated or lacks the body: %s", review)
 	}
 	if !strings.Contains(run, "Live active audit is on.") || !s.liveAudit.IsEnabled() {
@@ -166,7 +166,7 @@ func TestUI2ScannerLiveReviewEnablesAndRefusesReplay(t *testing.T) {
 	if !strings.Contains(again, "unknown or was already used") {
 		t.Errorf("a replayed review was not refused: %s", again)
 	}
-	if body := ui2ScanPost(t, s, "/ui2/scanner/review", "op=live-source&traffic_source=everything"); !strings.Contains(body, `"traffic_source": "everything"`) {
+	if body := ui2ScanPost(t, s, "/ui2/scanner/review", "op=live-source&traffic_source=everything"); !strings.Contains(html.UnescapeString(body), `"traffic_source": "everything"`) {
 		t.Errorf("source review lacks its body: %s", body)
 	}
 }

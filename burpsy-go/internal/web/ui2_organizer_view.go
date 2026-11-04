@@ -211,6 +211,10 @@ func ui2OrgApply(items []organizerItemView, f ui2OrgFilter) (visible []organizer
 		if f.View != "all" && strconv.Itoa(it.Collection) != f.View {
 			continue
 		}
+		// The workflow status is the item's own, so it filters even a row whose exchange is gone.
+		if f.Workflow != "all" && string(ui2OrgWorkflow(it.Item)) != f.Workflow {
+			continue
+		}
 		if !it.Resolved {
 			visible = append(visible, it)
 			unjudged++

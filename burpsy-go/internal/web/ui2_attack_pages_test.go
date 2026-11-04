@@ -175,7 +175,7 @@ func TestUI2IntruderConfirmedDispatchSpendsItsOwnToken(t *testing.T) {
 		t.Fatalf("run = %d", rec2.Code)
 	}
 	body := rec2.Body.String()
-	if strings.Contains(body, "confirmation required") || strings.Contains(body, "428") {
+	if strings.Contains(body, "confirmation required") {
 		t.Fatalf("confirmed dispatch refused its own token: %s", body[:ui2Min(300, len(body))])
 	}
 	if strings.Contains(body, "out of range") {

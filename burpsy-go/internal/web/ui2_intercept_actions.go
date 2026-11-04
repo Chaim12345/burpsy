@@ -290,9 +290,15 @@ func (s *Server) handleUI2InterceptSend(w http.ResponseWriter, r *http.Request) 
 	case "repeater":
 		ui2RenderPage(w, "burpsy /ui2/ — Repeater", "repeater", notice+ui2Exec("repeater.html", map[string]any{"draft": raw, "target": target, "result": nil}))
 	case "comparer":
-		ui2RenderPage(w, "burpsy /ui2/ — Comparer", "comparer", notice+ui2Exec("comparer.html", map[string]any{"a": raw, "result": nil}))
+		p := &ui2CmpPage{Granularity: "bytes", View: "text", Wrap: true, Side: "request", Notice: notice}
+		sa, sb := ui2CmpSlotState{Sel: -1}, ui2CmpSlotState{Sel: -1}
+		sa.add(ui2CmpItem{Label: "held message #" + idText, Data: []byte(raw)})
+		s.ui2CmpFinish(w, r, p, sa, sb, "", "")
 	case "decoder":
-		ui2RenderPage(w, "burpsy /ui2/ — Decoder", "decoder", notice+ui2Exec("decoder.html", map[string]any{"input": raw, "op": "decode", "arg": "", "result": nil}))
+		m := &ui2DecoderModel{InputFormat: "text", View: "text", Ops: ui2DecoderOps(), Input: raw, Notice: notice,
+			Steps: []ui2DecStep{ui2DecNewStep("decode", "auto")}}
+		m.finishSteps()
+		ui2Fragment(w, r, ui2DecoderTitle, "decoder", ui2Exec("decoder_page.html", m))
 	default:
 		fail("unknown tool: choose repeater, comparer or decoder")
 	}

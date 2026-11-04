@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/extscan"
+	"os"
+	"path/filepath"
 )
 
 // seedUI2DiscoveryRun records one finished run with one discovered row.
@@ -63,10 +65,14 @@ func TestUI2DiscoveryLaunchReviewAndRun(t *testing.T) {
 	s := newTestServer()
 	s.externalTools = map[string]string{"ffuf": "/bin/true"}
 	s.scope.AddInclude("disc.test")
-	form := url.Values{"op": {"start"}, "target": {"https://disc.test/app/"}, "wordlist": {"/w.txt"},
+	wl := filepath.Join(t.TempDir(), "w.txt")
+	if err := os.WriteFile(wl, []byte("admin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"op": {"start"}, "target": {"https://disc.test/app/"}, "wordlist": {wl},
 		"extensions": {"php,bak"}, "rate": {"7"}, "recurse_depth": {"2"}, "derivations": {"on"}}
 	review := postUI2Form(t, s, "/ui2/discovery/review", form).Body.String()
-	wantBody := `{"derivations":true,"extensions":"php,bak","rate":7,"recurse_depth":2,"target":"https://disc.test/app/","wordlist":"/w.txt"}`
+	wantBody := `{"derivations":true,"extensions":"php,bak","rate":7,"recurse_depth":2,"target":"https://disc.test/app/","wordlist":"` + wl + `"}`
 	if !strings.Contains(html.UnescapeString(review), "POST /api/discovery\n"+wantBody) || !strings.Contains(review, "gate confirmation") {
 		t.Fatalf("review sheet must show the full gated body: %s", review)
 	}

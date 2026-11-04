@@ -878,6 +878,10 @@ func (s *Server) handleUI2IntruderItemRepeater(w http.ResponseWriter, r *http.Re
 // handleUI2IntruderComment serves POST /ui2/intruder/{id}/comment: Burp's Comment column. The
 // comment is this console's annotation of the kept report; it reaches no API and no target.
 func (s *Server) handleUI2IntruderComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	_ = r.ParseForm()
 	id, kept, a, ok := s.ui2IntruderAttempt(w, r)
 	if !ok {

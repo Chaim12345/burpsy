@@ -172,10 +172,15 @@ func TestUI2SessionRendersCookieJarContents(t *testing.T) {
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("/ui2/session Cache-Control = %q, want no-store (the page renders jar values)", cc)
 	}
-	for _, want := range []string{"sid", "synthetic-render", "rendered.test"} {
+	// The jar table names the cookie and its authority; the value is withheld (only its length
+	// shows), so a captured session token never reaches the page.
+	for _, want := range []string{"sid", "rendered.test"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/ui2/session does not render %q from the attached jar", want)
 		}
+	}
+	if strings.Contains(body, "synthetic-render") {
+		t.Errorf("/ui2/session renders a cookie value from the jar")
 	}
 	// A session cookie has no expiry; the page says so rather than printing the zero time.
 	if strings.Contains(body, "0001-01-01") {

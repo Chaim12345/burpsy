@@ -225,7 +225,7 @@ func TestUI2InterceptQueueShowsRowTools(t *testing.T) {
 	h := ui2HoldRequest(t, s, "POST /x.php HTTP/1.1\r\nHost: a.test\r\nContent-Length: 1\r\n\r\nq")
 	h.Path = "/x.php"
 	body := getUI2(t, s, "/ui2/intercept").Body.String()
-	for _, want := range []string{"Don&#39;t intercept .php files", "to=comparer", `data-copy="http://a.test/x.php"`, "--data-raw", "Forward and intercept the response", `name="ids"`, "Edit request rules"} {
+	for _, want := range []string{"Don't intercept .php files", "to=comparer", `data-copy="http://a.test/x.php"`, "--data-raw", "Forward and intercept the response", `name="ids"`, "Edit request rules"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("queue missing %q", want)
 		}

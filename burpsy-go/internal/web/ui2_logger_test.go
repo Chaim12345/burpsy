@@ -59,7 +59,7 @@ func TestUI2LoggerEntryDetail(t *testing.T) {
 func TestUI2LoggerViewFilters(t *testing.T) {
 	s := newTestServer()
 	ui2LoggerSeedRow(t, s, "/keep")
-	s.toolLog.Record(toollog.ToolScanner, "other.test", 80, false, "POST", "/drop", 500, nil, 1, "", nil)
+	s.toolLog.Record(toollog.ToolScanner, "other.test", 80, false, "POST", "/drop", 0, nil, 1, "", nil) // no response
 	body := ui2HX(t, s, "/ui2/logger?v_tool=repeater&v_status=2").Body.String()
 	if !strings.Contains(body, "/keep") || strings.Contains(body, "/drop") {
 		t.Fatalf("tool+status filter did not narrow the rows")

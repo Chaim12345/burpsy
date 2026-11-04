@@ -1476,7 +1476,7 @@ var manifest = map[string]route{
 		summary: "ui2 Intruder results export: the kept report as a CSV sheet (formula-guarded) or the RunView JSON",
 	},
 	"/ui2/intruder/{id}/comment": {
-		methods: []string{"POST"}, risk: riskAsset, subPath: "1/comment",
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 Intruder results: set one attempt's comment on the console's kept report (no API, no target)",
 	},
 	"/ui2/intruder/{id}/again/{step}": {

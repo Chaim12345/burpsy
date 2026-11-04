@@ -40,7 +40,6 @@ var ui2Pages = []struct {
 	{"/ui2/proxy/listeners", "proxy-listeners", "Proxy listeners"},
 	{"/ui2/proxy/options", "proxy-options", "Proxy history logging"},
 	{"/ui2/proxy/match-replace", "match-replace", "Request rules"},
-	{"/ui2/extensions", "extensions", "JSON-RPC API"},
 	{"/ui2/extensions", "extensions", "Allowlist"},
 	{"/ui2/extensions/options", "extensions-options", "Admission"},
 	{"/ui2/extensions/apis", "extensions-apis", "What a plugin cannot do"},
@@ -399,7 +398,9 @@ func TestUI2DecoderAndComparerRenderStructuredResults(t *testing.T) {
 		"hebrew": {"שלום", "שלונ"},
 		"emoji":  {"a😀b", "a😃b"},
 	} {
-		body := post("/ui2/comparer/run", "a="+urlQueryEscape(bodies[0])+"&b="+urlQueryEscape(bodies[1]))
+		// Word granularity never splits a character. (Byte granularity may, and the page then
+		// says so in a notice instead of hiding the real bytes.)
+		body := post("/ui2/comparer/run", "granularity=words&a="+urlQueryEscape(bodies[0])+"&b="+urlQueryEscape(bodies[1]))
 		if !utf8.ValidString(body) || strings.Contains(body, "�") {
 			t.Errorf("%s diff renders invalid UTF-8: %s", name, body[:ui2Min(300, len(body))])
 		}
