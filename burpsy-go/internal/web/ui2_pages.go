@@ -1042,52 +1042,6 @@ func (s *Server) handleUI2ComparerRun(w http.ResponseWriter, r *http.Request) {
 
 // ---- Repeater --------------------------------------------------------------------------------
 
-// handleUI2Repeater serves GET /ui2/repeater: the editor with the last captured request as
-// the draft, and POST /ui2/repeater/send forwards through /api/repeater/send.
-func (s *Server) handleUI2Repeater(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
-		s.handleUI2RepeaterSend(w, r)
-		return
-	}
-	draft := ""
-	if exs := s.store.Exchanges(); len(exs) > 0 {
-		ex := exs[len(exs)-1]
-		if ex.Request != nil {
-			if msg, err := s.store.Get(*ex.Request); err == nil {
-				draft = string(msg.Raw())
-			}
-		}
-	}
-	target := ""
-	notice, seed, ok := s.ui2SeedFor(r, "Repeater", true)
-	if ok {
-		draft, target = seed.Raw, seed.Target
-	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", notice+ui2Exec("repeater.html", map[string]any{"draft": draft, "result": nil, "target": target}))
-}
-
-func (s *Server) handleUI2RepeaterSend(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	raw := r.PostFormValue("raw")
-	target := r.PostFormValue("target")
-	if target == "" {
-		// /api/repeater/send requires a target; the ui2 form's field is optional, so derive it
-		// from the request's own Host header (absolute-form request lines also work).
-		target = ui2HostFromRequest(raw)
-	}
-	if target == "" {
-		ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{
-			"draft": raw, "result": nil,
-			"error": "no target: the request carries no Host header and no target was given",
-		}))
-		return
-	}
-	result, errText := s.ui2APIResult(http.MethodPost, "/api/repeater/send", map[string]string{"target": target, "request": raw})
-	ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", ui2Exec("repeater.html", map[string]any{
-		"draft": raw, "result": result, "error": errText, "target": target,
-	}))
-}
-
 // ui2HostFromRequest extracts the target authority from a raw request: an absolute-form
 // request line wins, else the Host header. The scheme is kept on an absolute-form answer:
 // targetParts reads it for TLS and the default port, and dropping it sent https request

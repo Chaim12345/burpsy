@@ -1,0 +1,192 @@
+<div id="rows" class="rp" data-rp-tab="{{.Tab.ID}}">
+<style>
+.rp { padding:8px 12px; }
+.rp-bar, .rp-tabs, .rp-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0; }
+.rp-tabs { border-bottom:1px solid var(--line); padding-bottom:6px; }
+.rp-tab { padding:3px 10px; border:1px solid var(--line); border-top:3px solid var(--rpc, var(--line)); border-radius:6px 6px 0 0; color:var(--fg); text-decoration:none; white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis; }
+.rp-tab.active { background:var(--sel); font-weight:600; }
+.rp-group { display:inline-flex; gap:4px; align-items:center; padding:2px 4px; border:1px dashed var(--rpc, var(--line)); border-radius:8px; }
+.rp-gname { font-size:11px; color:var(--muted); padding:0 4px; }
+.rp-c-red { --rpc:#e53935; } .rp-c-orange { --rpc:#fb8c00; } .rp-c-yellow { --rpc:#fdd835; } .rp-c-green { --rpc:#43a047; }
+.rp-c-cyan { --rpc:#00acc1; } .rp-c-blue { --rpc:#1e88e5; } .rp-c-pink { --rpc:#ec407a; } .rp-c-magenta { --rpc:#ab47bc; } .rp-c-gray { --rpc:#9e9e9e; }
+.rp-split { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
+.rp-split textarea { width:100%; font:12px/1.4 ui-monospace,monospace; }
+.rp input[type=text], .rp input[type=search], .rp select { max-width:100%; }
+.rp fieldset { border:1px solid var(--line); border-radius:6px; margin:6px 0; min-width:0; }
+.rp-opts label { display:inline-block; margin:2px 10px 2px 0; }
+.rp details > summary { cursor:pointer; margin:4px 0; }
+.rp table td, .rp table th { white-space:normal; overflow-wrap:anywhere; max-width:none; }
+.rp table tbody tr { cursor:default; }
+.rp-diff .d-add { background:rgba(67,160,71,.25); }
+.rp-diff .d-del { background:rgba(229,57,53,.2); text-decoration:line-through; }
+.rp-err { color:#c00; }
+.rp .meta { padding:2px 0; }
+@media (max-width:760px) { .rp-split { grid-template-columns:minmax(0,1fr); } .rp-tab { max-width:150px; } }
+</style>
+{{if .Note}}<p class="meta rp-err" role="alert">{{.Note}}</p>{{end}}
+
+<div class="rp-bar">
+  <form class="rp-row" method="get" action="/ui2/repeater" hx-get="/ui2/repeater" hx-target="#rows" hx-swap="outerHTML">
+    <input type="hidden" name="tab" value="{{.Tab.ID}}">
+    <input type="search" name="q" value="{{.Search}}" placeholder="search tabs (name or target)" aria-label="Search tabs">
+    <button type="submit">Search</button>
+    {{if .Search}}<span class="meta">{{.Shown}} of {{.TabCount}} tabs</span>{{end}}
+  </form>
+  <form class="rp-row" method="post" action="/ui2/repeater/tabs/paste" hx-post="/ui2/repeater/tabs/paste" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+    <input type="text" name="url" placeholder="paste host / URL as a new tab" aria-label="Paste host or URL as a new request tab">
+    <select name="scheme" aria-label="Protocol for a bare host"><option value="https">https</option><option value="http">http</option></select>
+    <button type="submit">Open as tab</button>
+  </form>
+</div>
+
+<nav class="rp-tabs" aria-label="Repeater tabs">
+  {{range .Groups}}{{if .Tabs}}<span class="rp-group{{if .Color}} rp-c-{{.Color}}{{end}}" data-group="{{.ID}}"><span class="rp-gname">{{.Name}}</span>{{range .Tabs}}{{template "repeater_tab_link.html" .}}{{end}}</span>{{end}}{{end}}
+  {{range .Ungrouped}}{{template "repeater_tab_link.html" .}}{{end}}
+  {{if .Tab.Virtual}}<span class="rp-tab active" aria-current="page">{{.Tab.Name}} <span class="meta">(unsaved draft)</span></span>{{end}}
+  <form method="post" action="/ui2/repeater/tabs/new" hx-post="/ui2/repeater/tabs/new" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+    <button type="submit" id="rp-new" title="New tab" aria-label="New tab">+</button>
+  </form>
+</nav>
+
+{{with .Tab}}
+<details class="rp-tabmenu">
+  <summary>Tab: <strong>{{.Name}}</strong>{{if .GroupName}} <span class="badge">group {{.GroupName}}</span>{{end}}{{if .Color}} <span class="badge rp-c-{{.Color}}" style="border-left:8px solid var(--rpc)">{{.Color}}</span>{{end}}</summary>
+  <div class="rp-row">
+    <form class="rp-row" method="post" action="/ui2/repeater/tabs/rename" hx-post="/ui2/repeater/tabs/rename" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+      <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+      <input type="text" name="name" value="{{.Name}}" aria-label="Tab name" size="16">
+      <button type="submit" id="rp-rename">Rename</button>
+    </form>
+    <form class="rp-row" method="post" action="/ui2/repeater/tabs/color" hx-post="/ui2/repeater/tabs/color" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+      <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+      <select name="color" aria-label="Tab colour"><option value="">No colour</option>{{$own := .OwnColor}}{{range $.Colours}}<option value="{{.}}"{{if eq . $own}} selected{{end}}>{{.}}</option>{{end}}</select>
+      <button type="submit">Set colour</button>
+    </form>
+  </div>
+  <form id="rp-actions" class="rp-row" method="post" action="/ui2/repeater/tabs/duplicate" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+    <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+    <button type="submit" formaction="/ui2/repeater/tabs/duplicate" hx-post="/ui2/repeater/tabs/duplicate">Duplicate</button>
+    <button type="submit" formaction="/ui2/repeater/tabs/close" hx-post="/ui2/repeater/tabs/close" id="rp-close">Close</button>
+    <button type="submit" formaction="/ui2/repeater/tabs/close-others" hx-post="/ui2/repeater/tabs/close-others"{{if lt .TabCount 2}} disabled{{end}}>Close others</button>
+    <button type="submit" formaction="/ui2/repeater/tabs/close-left" hx-post="/ui2/repeater/tabs/close-left"{{if le .Index 0}} disabled{{end}}>Close tabs to the left</button>
+    <button type="submit" formaction="/ui2/repeater/tabs/close-right" hx-post="/ui2/repeater/tabs/close-right"{{if .Last}} disabled{{end}}>Close tabs to the right</button>
+    <button type="submit" formaction="/ui2/repeater/tabs/reopen" hx-post="/ui2/repeater/tabs/reopen"{{if eq $.Closed 0}} disabled{{end}}>Reopen closed tab{{if $.Closed}} ({{$.Closed}}){{end}}</button>
+    {{if .GroupID}}<button type="submit" formaction="/ui2/repeater/tabs/group-remove" hx-post="/ui2/repeater/tabs/group-remove">Remove from group</button>{{end}}
+  </form>
+  <div class="rp-row">
+    <form class="rp-row" method="post" action="/ui2/repeater/tabs/group-new" hx-post="/ui2/repeater/tabs/group-new" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+      <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+      <input type="text" name="group_name" placeholder="new group name" aria-label="New group name" size="14">
+      <select name="group_color" aria-label="New group colour"><option value="">No colour</option>{{range $.Colours}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <button type="submit">New group with this tab</button>
+    </form>
+    {{if $.AllGroups}}
+    <form class="rp-row" method="post" action="/ui2/repeater/tabs/group-move" hx-post="/ui2/repeater/tabs/group-move" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+      <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+      <select name="group" aria-label="Move to group">{{$gid := .GroupID}}{{range $.AllGroups}}<option value="{{.ID}}"{{if eq .ID $gid}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+      <button type="submit">Move to group</button>
+    </form>
+    {{end}}
+    {{if .GroupID}}
+    <form class="rp-row" method="post" action="/ui2/repeater/tabs/color" hx-post="/ui2/repeater/tabs/color" hx-include="#rp-editor" hx-target="#rows" hx-swap="outerHTML">
+      <input type="hidden" name="tab_id" value="{{.ID}}"><input type="hidden" name="group" value="{{.GroupID}}">
+      <select name="color" aria-label="Group colour"><option value="">No colour</option>{{range $.Colours}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+      <button type="submit">Set group colour</button>
+    </form>
+    {{end}}
+  </div>
+</details>
+
+<form id="rp-editor" method="post" action="/ui2/repeater/send"{{if not .Virtual}} hx-post="/ui2/repeater/tabs/save" hx-trigger="change delay:400ms" hx-swap="none"{{end}}>
+  {{/* Implicit submission (Enter in a text field) clicks the first submit button: this disabled one makes Enter do nothing rather than send. */}}
+  <button type="submit" disabled hidden aria-hidden="true" tabindex="-1"></button>
+  <input type="hidden" name="editor" value="1">
+  <input type="hidden" name="tab_id" value="{{if not .Virtual}}{{.ID}}{{end}}">
+  {{if .FromEx}}<input type="hidden" name="from_exchange" value="{{.FromEx}}">{{end}}
+  <div class="rp-row">
+    <input type="text" name="target" value="{{.Target}}" placeholder="target (http(s)://host:port) - defaults to the Host header" aria-label="Target URL" style="flex:2 1 260px">
+    <input type="text" name="sni" value="{{.SNI}}" placeholder="override SNI (TLS only)" aria-label="Override SNI" style="flex:1 1 160px">
+  </div>
+  <div class="rp-row">
+    <button type="submit" id="rp-send" hx-post="/ui2/repeater/send" hx-target="#rows" hx-swap="outerHTML" hx-disabled-elt="this" title="Send (Ctrl+Space or mod+Enter)">Send</button>
+    {{if not .Virtual}}<button type="button" id="rp-cancel" hx-post="/ui2/repeater/tabs/cancel" hx-swap="none" title="Cancel the send in flight">Cancel</button>{{end}}
+    {{if .HistLen}}
+    <span class="meta">send {{.HistPos}} of {{.HistLen}}</span>
+    {{if ge .Prev 0}}<a class="btn" id="rp-back" href="/ui2/repeater?tab={{.ID}}&amp;h={{.Prev}}" hx-get="/ui2/repeater?tab={{.ID}}&amp;h={{.Prev}}" hx-target="#rows" hx-swap="outerHTML">&#9664; Back</a>{{end}}
+    {{if ge .Next 0}}<a class="btn" id="rp-fwd" href="/ui2/repeater?tab={{.ID}}&amp;h={{.Next}}" hx-get="/ui2/repeater?tab={{.ID}}&amp;h={{.Next}}" hx-target="#rows" hx-swap="outerHTML">Forward &#9654;</a>{{end}}
+    {{end}}
+    {{if .Sending}}<span class="meta">a send is in flight</span>{{end}}
+  </div>
+  {{if .GroupID}}
+  <div class="rp-row" role="group" aria-label="Send group">
+    <span class="meta">group {{.GroupName}} ({{.GroupSize}} tabs):</span>
+    <button type="submit" name="mode" value="sequence_single_conn" formaction="/ui2/repeater/send-group" hx-post="/ui2/repeater/send-group" hx-vals='{"mode":"sequence_single_conn"}' hx-target="#rows" hx-swap="outerHTML">Sequence, single connection</button>
+    <button type="submit" name="mode" value="sequence_separate_conn" formaction="/ui2/repeater/send-group" hx-post="/ui2/repeater/send-group" hx-vals='{"mode":"sequence_separate_conn"}' hx-target="#rows" hx-swap="outerHTML">Sequence, separate connections</button>
+    <button type="submit" name="mode" value="parallel" formaction="/ui2/repeater/send-group" hx-post="/ui2/repeater/send-group" hx-vals='{"mode":"parallel"}' hx-target="#rows" hx-swap="outerHTML" id="rp-send-parallel">Parallel</button>
+  </div>
+  {{end}}
+  {{if .LastError}}<p class="meta rp-err" role="alert">{{.LastError}}</p>{{end}}
+
+  <details class="rp-opts"{{if .Opts.Override}} open{{end}}>
+    <summary>Send options {{if .Opts.Override}}<span class="badge">overridden for this tab</span>{{else}}<span class="meta">(global defaults)</span>{{end}}</summary>
+    <fieldset>
+      <label><input type="checkbox" name="opt_override" value="1"{{if .Opts.Override}} checked{{end}}> Override the global send options for this tab</label>
+      <div class="rp-row">
+        <label>Follow redirects <select name="opt_redirect" aria-label="Follow redirects">{{$r := .Opts.Redirect}}{{range $.Redirects}}<option value="{{index . 0}}"{{if eq (index . 0) $r}} selected{{end}}>{{index . 1}}</option>{{end}}</select></label>
+        <label>Protocol <select name="opt_protocol" aria-label="HTTP protocol">{{$p := .Opts.Protocol}}{{range $.Protocols}}<option value="{{index . 0}}"{{if eq (index . 0) $p}} selected{{end}}>{{index . 1}}</option>{{end}}</select></label>
+        <label>Response timeout ms <input type="text" inputmode="numeric" name="opt_resp_timeout" value="{{.Opts.ResponseTimeout}}" size="7" placeholder="standing"></label>
+        <label>Streaming timeout ms <input type="text" inputmode="numeric" name="opt_stream_timeout" value="{{.Opts.StreamingTimeout}}" size="7" placeholder="standing"></label>
+      </div>
+      <div>
+        <label><input type="checkbox" name="opt_cookies" value="1"{{if .Opts.ProcessCookies}} checked{{end}}> Process cookies</label>
+        <label><input type="checkbox" name="opt_strip_conn" value="1"{{if .Opts.StripConnection}} checked{{end}}> Strip Connection header</label>
+        <label><input type="checkbox" name="opt_crlf" value="1"{{if .Opts.NormalizeCRLF}} checked{{end}}> Normalize CRLF line endings</label>
+        <label><input type="checkbox" name="opt_cl" value="1"{{if .Opts.UpdateCL}} checked{{end}}> Update Content-Length</label>
+        <label><input type="checkbox" name="opt_h2reuse" value="1"{{if .Opts.H2Reuse}} checked{{end}}> HTTP/2 connection reuse</label>
+        <label><input type="checkbox" name="opt_xdomain" value="1"{{if .Opts.CrossDomainProto}} checked{{end}}> Use this protocol for cross-domain redirects</label>
+        <label><input type="checkbox" name="opt_unpack" value="1"{{if .Opts.Unpack}} checked{{end}}> Unpack compressed responses</label>
+      </div>
+      <div class="rp-row">
+        <button type="submit" formaction="/ui2/repeater/tabs/opts-global" hx-post="/ui2/repeater/tabs/opts-global" hx-target="#rows" hx-swap="outerHTML">Restore global default</button>
+        <button type="submit" formaction="/ui2/repeater/tabs/opts-reset" hx-post="/ui2/repeater/tabs/opts-reset" hx-target="#rows" hx-swap="outerHTML">Reset overrides</button>
+      </div>
+    </fieldset>
+  </details>
+
+  <div class="rp-split">
+    <div>
+      <h3>Request</h3>
+      {{if .EditorSafe}}
+      <textarea name="raw" rows="18" aria-label="Request to send" spellcheck="false">{{.Raw}}</textarea>
+      {{else}}
+      <p class="meta rp-err" role="alert">This request carries bytes a text editor cannot keep unchanged (invalid UTF-8 or NUL) - edit and send it from the console's binary-safe editor.</p>
+      {{end}}
+      <details{{if .Note}} open{{end}}><summary>Notes</summary>
+        <textarea name="note" rows="3" aria-label="Tab notes" placeholder="notes are recorded on the exchange as its comment">{{.Note}}</textarea>
+      </details>
+    </div>
+    <div id="rp-response">
+      {{with .Resp}}{{template "repeater_response.html" .}}{{else}}<h3>Response</h3><p class="meta">Nothing sent from this tab yet.</p>{{end}}
+    </div>
+  </div>
+</form>
+
+{{if and (not .Virtual) .HistLen}}
+<form method="post" action="/ui2/repeater/tabs/export" class="rp-row">
+  <input type="hidden" name="tab_id" value="{{.ID}}">
+  <button type="submit" id="rp-export">Save entire history ({{.HistLen}})</button>
+  <span class="meta">downloads the tab's sends as JSON, bytes exported by message id</span>
+</form>
+{{end}}
+{{end}}
+
+{{with .GroupResult}}
+<h3>Group send <span class="badge">{{.Mode}}</span> <span class="badge">{{.BatchMs}} ms total</span></h3>
+{{if .Shared}}<p class="meta">every item rode one connection to {{.Shared}}</p>{{end}}
+{{if not .Followed}}<p class="meta">redirects were not followed in this mode</p>{{end}}
+<table id="rp-group-result">
+  <thead><tr><th>Tab</th><th>Status</th><th>Exchange</th><th>Arrival</th><th>Framing</th><th>Error</th></tr></thead>
+  <tbody>{{range .Rows}}<tr><td>{{.Tab}}</td><td>{{if .Status}}{{.Status}}{{else}}—{{end}}</td><td>{{if .HasExchange}}<a href="/ui2/history/{{.Exchange}}">#{{.Exchange}}</a>{{end}}</td><td>{{if .Arrival}}{{.Arrival}}{{end}}</td><td>{{.Framing}}</td><td class="rp-err">{{.Error}}</td></tr>{{end}}</tbody>
+</table>
+{{end}}
+</div>

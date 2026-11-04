@@ -1762,11 +1762,19 @@ var manifest = map[string]route{
 	},
 	"/ui2/repeater": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
-		summary: "ui2 Repeater: GET the editor with the latest captured request, POST /ui2/repeater/send sends it",
+		summary: "ui2 Repeater: GET the tabbed workspace (tab, history entry, redirect hop, change highlighting by query, read-only); POST is the legacy single-form send",
 	},
 	"/ui2/repeater/send": {
 		methods: []string{"POST"}, risk: riskAsset,
-		summary: "ui2 Repeater send: forwards the draft through /api/repeater/send and renders the outcome",
+		summary: "ui2 Repeater send: saves the editor into its tab, forwards it through /api/repeater/send and records the answer in the tab's history",
+	},
+	"/ui2/repeater/send-group": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Repeater group send: the active tab's group through /api/repeater/send-group (sequence on one or separate connections, or parallel), each answer recorded in its tab",
+	},
+	"/ui2/repeater/tabs/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "save",
+		summary: "ui2 Repeater tab actions: new, paste URL, select, save, rename, colour, duplicate, close (others/left/right), reopen, groups, option resets, cancel a send, export history; sends nothing except export's read of stored messages",
 	},
 	"/ui2/logger/{action}": {
 		methods: []string{"POST"}, risk: riskAsset, subPath: "capture-repeater-off",

@@ -651,6 +651,8 @@ var notExposed = map[string]string{
 	"POST /ui2/comparer/run":                   "ui2 Comparer run button; /api/tools/compare is the agent-facing diff",
 	"GET /ui2/repeater":                        "ui2 Repeater editor; /api/repeater/send is the agent-facing send",
 	"POST /ui2/repeater/send":                  "ui2 Repeater send button; /api/repeater/send is the agent-facing send",
+	"POST /ui2/repeater/send-group":            "ui2 Repeater group send buttons; /api/repeater/send-group is the agent-facing group send",
+	"POST /ui2/repeater/tabs/{action}":         "ui2 Repeater tab state (browser-console tabs, groups, options, history export); agents send with /api/repeater/send and export with /api/repeater/history-export",
 	"GET /ui2/settings":                        "ui2 Settings page; the /api/* routes it summarises are the agent-facing reads",
 	"GET /ui2/settings/write/{area}":           "a ui2 Settings write section fragment the operator's browser loads into the page; the /api/* routes it reads are the agent-facing surface",
 	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +

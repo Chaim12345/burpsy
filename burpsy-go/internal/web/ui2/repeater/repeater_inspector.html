@@ -1,0 +1,3 @@
+<details open><summary>{{.Title}} ({{len .Rows}}{{if .More}} + {{.More}} more{{end}})</summary>
+<table><tbody>{{range .Rows}}<tr><th scope="row">{{.Name}}</th><td>{{.Value}}</td></tr>{{end}}</tbody></table>
+</details>
