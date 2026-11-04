@@ -1,0 +1,50 @@
+<div id="rows" class="sc" data-scanlibrary="1">
+{{template "scanner_style.html"}}
+<h3>Scan configuration library</h3>
+<p class="meta"><a href="/ui2/scanner">Launch an audit</a> · <a href="/ui2/scanner/config">Scanner configuration</a> · the shipped presets are read-only; your saved ones can be edited, renamed and deleted. Every write goes through a review step first.</p>
+{{if .note}}<p class="meta" id="scan-note" role="status"><strong>{{.note}}</strong></p>{{end}}
+{{if .note_error}}<p class="meta sc-err" role="alert"><strong>Not applied: {{.note_error}}</strong></p>{{end}}
+{{if .load_error}}<p class="meta sc-err" role="alert">{{.load_error}}</p>{{else}}
+{{if not .persisted}}<p class="meta sc-warn">No project database is attached, so saving, renaming and deleting configurations is refused; start burpsy with -db to use the library.</p>{{end}}
+<section aria-label="New configuration">
+<h4>New configuration</h4>
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#libreview" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="lib-new">
+<label>Name <input type="text" name="name" size="24" placeholder="name this configuration"></label>
+<label>Copy from <select name="from"><option value="">the settings this server audits under</option>{{range .names}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+<button>Review save</button>
+</form>
+</section>
+<div id="libreview"></div>
+<section aria-label="Configurations">
+<table class="sc-wrap">
+<thead><tr><th scope="col">Name</th><th scope="col">Source</th><th scope="col">Keys set</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .configs}}
+<tr{{if .opened}} class="selected"{{end}}><td><strong>{{.name}}</strong></td>
+<td>{{if .damaged}}<span class="sc-warn">unreadable</span>{{else if .shipped}}<span class="meta">shipped (read-only)</span>{{else}}<span class="badge">saved</span>{{end}}</td>
+<td>{{.key_count}}{{if .keys}} <span class="sc-hint">{{.keys}}</span>{{end}}</td>
+<td>{{if not .damaged}}<a class="btn" href="/ui2/scanner/library?open={{.name}}" hx-get="/ui2/scanner/library?open={{.name | urlquery}}" hx-target="#rows" hx-swap="outerHTML">{{if .shipped}}View{{else}}Edit{{end}}</a>{{end}}
+{{if not .shipped}}
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#libreview" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="lib-rename"><input type="hidden" name="from" value="{{.name}}">
+<input type="text" name="name" size="14" aria-label="New name for {{.name}}" placeholder="new name"><button>Rename</button>
+</form>
+<form class="sc-inline" hx-post="/ui2/scanner/review" hx-target="#libreview" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="lib-delete"><input type="hidden" name="name" value="{{.name}}"><button>Delete</button>
+</form>
+{{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No configurations.</td></tr>{{end}}
+</tbody>
+</table>
+<p class="meta">Burp ships {{.shipped_by_burp}} configurations; {{.implemented_here}} are implemented here as presets - {{.omitted_reason}}</p>
+</section>
+{{if .open_error}}<p class="meta sc-err" role="alert">{{.open_error}}</p>{{end}}
+{{with .detail}}{{template "scanner_library_detail.html" .}}{{end}}
+<section aria-label="Server default">
+<h4>Server default</h4>
+<dl class="sc-dl meta">{{range .default}}<dt>{{.label}}</dt><dd>{{.value}}</dd>{{end}}</dl>
+<p class="meta">{{.applies_to}}</p>
+</section>
+{{end}}
+</div>

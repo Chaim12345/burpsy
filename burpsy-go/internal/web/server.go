@@ -145,6 +145,11 @@ type Server struct {
 	// has reviewed but not yet confirmed (ui2_issues.go): exact bytes, single-use, bounded by
 	// ui2IssueReviewCap, expiring with ConfirmTTL.
 	ui2IssueReviews sync.Map
+	// ui2ScannerReviews holds the scanner-page calls (live audit, secret detection, scan
+	// configuration library) a ui2 operator has reviewed but not yet confirmed; same single-use
+	// LoadAndDelete semantics, bounded by ui2ScanReviewCap, expiring with ConfirmTTL.
+	ui2ScannerReviews sync.Map
+	sender            *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1621,6 +1626,11 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/newscan/{kind}/{action}", s.handleUI2NewScanAction)
 	s.route("/ui2/scanner/config-confirm", s.handleUI2ScannerConfigConfirm)
 	s.route("/ui2/scanner/config-run", s.handleUI2ScannerConfigRun)
+	s.route("/ui2/scanner/config", s.handleUI2ScannerConfig)
+	s.route("/ui2/scanner/live", s.handleUI2ScannerLive)
+	s.route("/ui2/scanner/library", s.handleUI2ScannerLibrary)
+	s.route("/ui2/scanner/review", s.handleUI2ScannerReview)
+	s.route("/ui2/scanner/review-run", s.handleUI2ScannerReviewRun)
 	s.route("/ui2/advisories", s.handleUI2Advisories)
 	s.route("/ui2/organizer", s.handleUI2Organizer)
 	s.route("/ui2/organizer/collections/{action}", s.handleUI2OrganizerCollections)

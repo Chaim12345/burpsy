@@ -24,8 +24,7 @@
 <button>watch this crawl</button></form>
 <div id="crawlwatch"></div>{{end}}
 {{if .audit_error}}<p class="meta">Launch failed: {{.audit_error}}</p>{{end}}
-{{if .audit_result}}<h3>Audit outcome</h3>
-<p class="meta">{{.audit_result.summary}}{{if .audit_result.config_name}} · configuration {{.audit_result.config_name}}{{end}}{{if .audit_result.outcome.error}} · refused: {{.audit_result.outcome.error}}{{end}}</p>{{end}}
+{{with .audit_view}}{{template "scanner_audit_result.html" .}}{{end}}
 <h3>Scan configurations</h3>
 <table>
 <thead><tr><th scope="col">Name</th><th scope="col">Shipped</th><th scope="col">Note</th></tr></thead>
@@ -36,7 +35,7 @@
 </tbody>
 </table>
 <h3>Live audit</h3>
-<p class="meta">wired={{.live.wired}} enabled={{.live.enabled}} config={{.live.config}} behind={{.live.behind}}</p>
+<p class="meta">wired={{.live.wired}} enabled={{.live.enabled}} config={{.live.config}} behind={{.live.behind}} · <a href="/ui2/scanner/config">switch and watch it</a></p>
 <h3>BCheck corpus ({{.checks.active_count}} active)</h3>
 <table>
 <thead><tr><th scope="col">Check</th><th scope="col">Active</th><th scope="col">Passive</th><th scope="col">Ran</th></tr></thead>
@@ -51,21 +50,5 @@
 <h3>Audit queue</h3>
 <p class="meta">{{.audit_items.returned}} items · queue retained={{.audit_items.queue.retained}} evicted={{.audit_items.queue.evicted}}</p>
 <h3>Engine and check families</h3>
-<p class="meta">max_concurrency={{.config.max_concurrency}} (console-managed) · the switches and timeouts below are the running audit configuration. Changes go through a review step naming each one; the confirmation is one-time.</p>
-{{if .config_applied}}<p class="meta">Configuration applied; the running engine now uses it.</p>{{end}}
-{{if .config_error}}<p class="meta">Not applied: {{.config_error}}</p>{{end}}
-<form hx-post="/ui2/scanner/config-confirm" hx-target="#configconfirm" hx-swap="innerHTML">
-<label>timeout_ms <input type="text" name="timeout_ms" inputmode="numeric" size="7" value="{{.config.timeout_ms}}"></label>
-<label>probe_timeout_ms <input type="text" name="probe_timeout_ms" inputmode="numeric" size="7" value="{{.config.probe_timeout_ms}}"></label>
-<table>
-<thead><tr><th scope="col">Check family</th><th scope="col">On</th></tr></thead>
-<tbody>
-{{range .scan_config_rows}}
-<tr><td>{{.label}}</td><td><input type="checkbox" name="{{.key}}"{{if .on}} checked{{end}}></td></tr>
-{{end}}
-</tbody>
-</table>
-<button>Review configuration changes</button>
-</form>
-<div id="configconfirm"></div>
+<p class="meta">max_concurrency={{.config.max_concurrency}} · the audit-check switches, knobs, issue-row restriction, XSS browser routes, secret detection, live audit and passive coverage are on <a href="/ui2/scanner/config">Scanner configuration</a>; named configurations are in the <a href="/ui2/scanner/library">configuration library</a>.</p>
 </div>

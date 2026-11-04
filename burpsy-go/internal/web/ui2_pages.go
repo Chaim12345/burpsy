@@ -706,9 +706,6 @@ func (s *Server) ui2ScannerModel() map[string]any {
 		config = map[string]any{}
 	}
 	model["config"] = config
-	if view, ok := config.(map[string]any); ok {
-		model["scan_config_rows"] = ui2ScanConfigRows(view)
-	}
 	return model
 }
 
@@ -766,138 +763,14 @@ func (s *Server) handleUI2ScannerRun(w http.ResponseWriter, r *http.Request) {
 	} else {
 		result, errText := s.ui2DispatchConfirmed(http.MethodPost, "/api/scanner/audit", payload, r.PostFormValue("token"))
 		model["audit_result"] = result
+		model["audit_view"] = ui2AuditResultView(result)
 		model["audit_error"] = errText
 	}
 	ui2Fragment(w, r, "burpsy /ui2/ — Scanner", "scanner", ui2Exec("scanner.html", model))
 }
 
-// ---- Scanner: engine and check-family configuration ------------------------------------------
-
-// ui2ScanConfigBoolKeys is the ordered list of the check-family switches PUT /api/scanner/config
-// accepts, mirrored from scannerConfigBoolKeys so the page offers exactly the wire's keys - the
-// endpoint refuses anything else, and a page that invented a key would teach the operator a
-// control that does not exist.
-var ui2ScanConfigBoolKeys = []string{
-	"check_sqli", "check_xss", "check_path_traversal", "check_ssrf", "check_xxe",
-	"check_jwt_weak", "check_js_vulns", "check_headers", "check_cache_poisoning", "check_corpus",
-	"check_dom", "check_xss_browser_confirm", "check_ssrf_in_band", "check_extended_coverage",
-	"check_reflection_probes", "check_host_discovery", "check_response_dependence",
-	"check_passive_posture", "check_passive_analysis", "check_active_injection",
-	"check_extended_active", "check_out_of_band", "check_stored", "check_file_upload",
-	"check_jwt_forgery", "check_jwt_exposure", "check_idor", "check_login_rate_limit",
-	"check_username_enumeration", "check_graphql_hardening", "check_sqli_heavy_query",
-	"check_sqli_or_boolean", "check_sqli_stacked", "check_password_reset", "check_session_management",
-	"check_request_smuggling", "check_host_header", "check_insecure_deserialization",
-	"check_nosql_injection", "check_websocket_hijacking", "check_client_ip_spoofing",
-	"check_server_side_parameter_pollution", "check_llm_prompt_injection", "check_weak_crypto",
-	"check_cookie_attributes", "check_subdomain_takeover",
-}
-
-// ui2ScanConfigView reads the live engine configuration the way the page does.
-func (s *Server) ui2ScanConfigView() map[string]any {
-	rec := newRecorder()
-	s.mux.ServeHTTP(rec, newReq(http.MethodGet, "/api/scanner/config"))
-	var view map[string]any
-	if err := ui2DecodeJSON(rec.Body.Bytes(), &view); err != nil {
-		return map[string]any{}
-	}
-	return view
-}
-
-// ui2ScanConfigRows pairs each switch's key with its current state for the template.
-func ui2ScanConfigRows(view map[string]any) []map[string]any {
-	rows := []map[string]any{}
-	for _, key := range ui2ScanConfigBoolKeys {
-		on, _ := view[key].(bool)
-		rows = append(rows, map[string]any{"key": key, "label": strings.TrimPrefix(key, "check_"), "on": on})
-	}
-	return rows
-}
-
-// ui2ScanConfigPatch diffs the submitted form against the live view into the exact PUT body:
-// only keys whose value changed, so the review step and the confirmation cover precisely what
-// moves. Numbers come back as float64 from the JSON decode; a negative or unparseable value is
-// an error before any token exists.
-func ui2ScanConfigPatch(r *http.Request, view map[string]any) (map[string]any, []string, string) {
-	patch := map[string]any{}
-	changes := []string{}
-	for _, key := range ui2ScanConfigBoolKeys {
-		cur, _ := view[key].(bool)
-		want := r.PostFormValue(key) == "on"
-		if want != cur {
-			patch[key] = want
-			onOff := func(b bool) string {
-				if b {
-					return "on"
-				}
-				return "off"
-			}
-			changes = append(changes, strings.TrimPrefix(key, "check_")+": "+onOff(cur)+" -> "+onOff(want))
-		}
-	}
-	for _, key := range []string{"timeout_ms", "probe_timeout_ms"} {
-		raw := strings.TrimSpace(r.PostFormValue(key))
-		if raw == "" {
-			continue
-		}
-		n, err := strconv.Atoi(raw)
-		if err != nil || n < 0 {
-			return nil, nil, key + " wants a non-negative number of milliseconds"
-		}
-		if cur, _ := view[key].(float64); int(cur) != n {
-			patch[key] = n
-			changes = append(changes, fmt.Sprintf("%s: %d -> %d", key, int(cur), n))
-		}
-	}
-	if len(patch) == 0 {
-		return nil, nil, "nothing changed - the submitted configuration matches the running one"
-	}
-	return patch, changes, ""
-}
-
-// handleUI2ScannerConfigConfirm serves POST /ui2/scanner/config-confirm: diffs the form against
-// the live configuration, mints a one-time confirmation for the exact PUT, and renders the
-// review step naming every change.
-func (s *Server) handleUI2ScannerConfigConfirm(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	model := map[string]any{}
-	patch, changes, errText := ui2ScanConfigPatch(r, s.ui2ScanConfigView())
-	if errText != "" {
-		model["error"] = errText
-	} else {
-		body, _ := ui2Marshal(patch)
-		token, preview, errText := s.ui2MintConfirm("/api/scanner/config", http.MethodPut, "/api/scanner/config", body)
-		model["token"] = token
-		model["preview"] = preview
-		model["error"] = errText
-		model["changes"] = changes
-		model["patch"] = string(body)
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(ui2Exec("scanner_config_confirm.html", model)))
-}
-
-// handleUI2ScannerConfigRun serves POST /ui2/scanner/config-run: spends the confirmation token
-// on the exact patch the operator reviewed and re-renders the page with the outcome.
-func (s *Server) handleUI2ScannerConfigRun(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	// Dispatch first: the re-rendered page must show the state AFTER the change, so the model is
-	// built once the PUT has landed - a model fetched first would show the operator the
-	// configuration they just replaced, next to a banner saying it was applied.
-	var patch map[string]any
-	var outcomeErr string
-	applied := false
-	if err := ui2DecodeJSON([]byte(r.PostFormValue("patch")), &patch); err != nil || len(patch) == 0 {
-		outcomeErr = "the reviewed change set was lost - submit the form again"
-	} else {
-		_, outcomeErr = s.ui2DispatchConfirmed(http.MethodPut, "/api/scanner/config", patch, r.PostFormValue("token"))
-		applied = outcomeErr == ""
-	}
-	model := s.ui2ScannerModel()
-	model["config_error"] = outcomeErr
-	model["config_applied"] = applied
-	ui2Fragment(w, r, "burpsy /ui2/ — Scanner", "scanner", ui2Exec("scanner.html", model))
-}
+// The engine and check-family configuration (config-confirm/config-run) lives in
+// ui2_scanner_config.go with the rest of the scanner configuration surface.
 
 // ---- Scanner: crawl launch -----------------------------------------------------------------
 

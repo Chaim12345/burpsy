@@ -42,6 +42,8 @@ var ui2Pages = []struct {
 	{"/ui2/proxy/match-replace", "match-replace", "Request rules"},
 	{"/ui2/extensions", "extensions", "JSON-RPC API"},
 	{"/ui2/scanner", "scanner", "Scan configurations"},
+	{"/ui2/scanner/config", "scanconfig", "Scanner configuration"},
+	{"/ui2/scanner/library", "scanlibrary", "Scan configuration library"},
 	{"/ui2/advisories", "advisories", "definitions ·"},
 	{"/ui2/organizer", "organizer", "Organizer is empty"},
 	{"/ui2/session", "session", "Session handling rules"},
