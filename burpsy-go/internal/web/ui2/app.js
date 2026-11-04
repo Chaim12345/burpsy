@@ -199,9 +199,7 @@ function liveReapplyDirty(saved) {
 // the pill instead of refreshing; the pill's own refresh re-applies the edits it crosses.
 function liveGuarded(what) {
   if (liveScrolled()) return true;
-  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'dashboard') {
-  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'issues') {
-  if (what === 'intercept' || what === 'logger' || what === 'ws' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer') {
+  if (what === 'intercept' || what === 'logger' || what === 'ws' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'dashboard' || what === 'issues') {
     var rows = document.getElementById(what === 'scope' ? 'srows' : 'rows');
     if (!rows) return false;
     // An open Logger row / WS frame pane is something the operator is reading: hold the swap.
@@ -248,7 +246,6 @@ function liveRefresh(what) {
     var lst = document.querySelector('main.split #list');
     if (fol && fol.checked && lst) lst.scrollTop = 0;
   }
-  if (what !== 'crawlwatch' && liveGuarded(what)) { livePillShow(what); return; }
   if (what !== 'crawlwatch' && what !== 'livemetrics' && liveGuarded(what)) { livePillShow(what); return; }
   if (liveBusy || liveOpFlight > 0) { liveTrailing = what; return; }
   liveIssue(what);
@@ -1136,6 +1133,8 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
     reader.onload = function () { box.value = String(reader.result || ''); };
     reader.readAsText(file);
   });
+})();
+
 // ---- Command palette (mod+K) ----
 // Lists every ui2 page (read from the header nav, so a page added there appears here with no
 // second list to maintain) plus the Settings page's sections (its headings, read from the
@@ -1384,6 +1383,8 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
   function ready() { addButton(); revealSection(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
   window.addEventListener('hashchange', revealSection);
+})();
+
 // ---- Saved view presets (Logger) ----
 // A [data-presets] box saves the named form's current values as a query string in
 // localStorage and re-applies one with an htmx GET of its page. Storage can be unavailable
@@ -1481,6 +1482,8 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
     });
   }
   apply();
+})();
+
 // ---- Organizer saved filter presets (per browser, localStorage) ----
 // A preset is the filter query string the server rendered for the current view. Applying one
 // keeps only the known filter keys, so a tampered entry cannot steer the request elsewhere.
