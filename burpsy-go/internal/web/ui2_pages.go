@@ -981,6 +981,7 @@ func (s *Server) handleUI2Decoder(w http.ResponseWriter, r *http.Request) {
 		model["input"] = seed.Raw
 	}
 	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", notice+ui2Exec("decoder.html", model))
+	ui2Fragment(w, r, "burpsy /ui2/ — Decoder", "decoder", ui2Exec("decoder.html", map[string]any{"result": nil, "input": r.URL.Query().Get("input")}))
 }
 
 func (s *Server) handleUI2DecoderRun(w http.ResponseWriter, r *http.Request) {
@@ -1025,6 +1026,7 @@ func (s *Server) handleUI2Comparer(w http.ResponseWriter, r *http.Request) {
 		model[slot] = seed.Raw
 	}
 	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", notice+ui2Exec("comparer.html", model))
+	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{"result": nil, "a": r.URL.Query().Get("a"), "b": r.URL.Query().Get("b")}))
 }
 
 func (s *Server) handleUI2ComparerRun(w http.ResponseWriter, r *http.Request) {

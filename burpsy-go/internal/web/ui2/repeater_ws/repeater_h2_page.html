@@ -1,0 +1,43 @@
+<div id="rows" style="padding:0 14px 14px">
+{{template "repeater_ws_tools"}}
+<h3>HTTP/2 header list{{with .Exchange}} <span class="badge">from exchange #{{.}}</span>{{end}}</h3>
+<p class="meta">The list is the request: pseudo-headers, order, case and bytes HTTP/1 text cannot carry are sent exactly as written. Write CR, LF, tab, a backslash or any byte as <code>\r</code> <code>\n</code> <code>\t</code> <code>\\</code> <code>\xHH</code>. Clear a row's name and value to drop it.</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="status">{{.Note}}</p>{{end}}
+<form id="h2-form" method="post" action="/ui2/repeater/h2/send" hx-post="/ui2/repeater/h2/send" hx-target="#rows" hx-swap="outerHTML">
+  {{with .Exchange}}<input type="hidden" name="exchange" value="{{.}}">{{end}}
+  <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px">
+    <input type="text" name="target" value="{{.Target}}" placeholder="https://host:port" aria-label="Target" style="flex:1; min-width:180px">
+    <label><input type="checkbox" name="tls" {{if .TLS}}checked{{end}}> TLS (Repeater speaks HTTP/2 only over TLS)</label>
+  </div>
+  <table aria-label="Header list" style="table-layout:fixed">
+  <thead><tr><th scope="col" style="width:35%">Name</th><th scope="col">Value</th></tr></thead>
+  <tbody>
+  {{range $i, $r := .Rows}}<tr><td><input type="text" name="name" value="{{$r.Name}}" aria-label="Field {{$i}} name" style="width:100%; font-family:ui-monospace,monospace"></td><td><input type="text" name="value" value="{{$r.Value}}" aria-label="Field {{$i}} value" style="width:100%; font-family:ui-monospace,monospace"></td></tr>
+  {{end}}
+  </tbody>
+  </table>
+  <textarea name="body" rows="5" style="width:100%; margin-top:6px; font-family:ui-monospace,monospace" aria-label="Request body" placeholder="body (optional)">{{.Body}}</textarea>
+  <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0">
+    <button type="button" hx-post="/ui2/repeater/h2/preview" hx-include="#h2-form" hx-target="#rows" hx-swap="outerHTML">Preview</button>
+    <button type="submit">Send header list</button>
+  </div>
+</form>
+{{with .Answer}}
+<div id="h2-answer" role="status">
+{{if .Kettled}}<p><strong>This request is kettled because:</strong></p>
+<ul>{{range .Reasons}}<li>field {{.Index}} <code>{{.Name}}</code>: {{.Text}}</li>{{end}}</ul>
+{{else}}<p>Not kettled: HTTP/1 text could carry this list.</p>{{end}}
+{{if .SendRefusals}}<p style="color:#c00"><strong>A send would be refused:</strong></p>
+<ul>{{range .SendRefusals}}<li>{{.}}</li>{{end}}</ul>
+{{else}}<p class="meta">The frame classifier accepts this HEADERS block (scope is checked at send time).</p>{{end}}
+</div>
+{{end}}
+{{if .Rendering}}<h3>HTTP/1 rendering (what history records)</h3><pre class="msg">{{.Rendering}}</pre>{{end}}
+{{with .Result}}
+<h3>Response <span class="badge">{{.Status}}</span> <span class="badge">{{.DurationMs}} ms</span>
+  <a class="btn" href="/ui2/history/{{.ExchangeID}}">stored exchange #{{.ExchangeID}}</a></h3>
+{{with .Kettled}}<p class="meta">{{.Fields}} header fields sent{{if .Ended}} · ended by {{.Ended}}{{end}}</p>{{range .Notes}}<p class="meta">{{.}}</p>{{end}}{{end}}
+<pre class="msg">{{.Response}}</pre>
+{{end}}
+</div>

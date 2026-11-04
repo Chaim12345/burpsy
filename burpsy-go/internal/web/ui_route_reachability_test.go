@@ -214,6 +214,17 @@ var uiRouteExempt = map[string]string{
 	"/ui2/engagement/hidden-inputs":          "ui2 Guess hidden inputs page; the console calls /api/hidden-inputs",
 	"/ui2/engagement/hidden-inputs/{action}": "ui2 hidden-inputs review/run forms inside /ui2/engagement/hidden-inputs",
 	"/ui2/engagement/clickbandit":            "ui2 Clickbandit page; the console calls /api/engagement/clickbandit.js",
+	"/ui2/repeater/ws":                       "ui2 WebSocket Repeater page, linked from /ui2/repeater and /ui2/ws rows; the console's Repeater ws tab calls /api/repeater/ws-*",
+	"/ui2/repeater/ws/send":                  "ui2 WebSocket Repeater send button inside the /ui2/ page",
+	"/ui2/repeater/h2":                       "ui2 HTTP/2 kettle editor, linked from /ui2/repeater; the console's Inspector calls /api/http2/kettle",
+	"/ui2/repeater/h2/preview":               "ui2 HTTP/2 kettle preview button inside the /ui2/ page",
+	"/ui2/repeater/h2/send":                  "ui2 HTTP/2 kettle send button inside the /ui2/ page",
+	"/ui2/repeater/graphql":                  "ui2 GraphQL tools page, linked from /ui2/repeater; the console's editor calls /api/repeater/graphql-*",
+	"/ui2/repeater/graphql/validate":         "ui2 GraphQL validate button inside the /ui2/ page",
+	"/ui2/repeater/graphql/query":            "ui2 GraphQL set-query buttons inside the /ui2/ page",
+	"/ui2/repeater/graphql/send":             "ui2 GraphQL send button inside the /ui2/ page",
+	"/ui2/repeater/graphql/sitemap-confirm":  "ui2 GraphQL save-to-site-map review button inside the /ui2/ page",
+	"/ui2/repeater/graphql/sitemap-run":      "ui2 GraphQL save-to-site-map confirm button inside the /ui2/ page",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each
