@@ -1,0 +1,11 @@
+{{- if or .error .note .prompts -}}
+{{if .error}}<p class="meta" role="alert"><strong>Not applied: {{.error}}</strong></p>{{end}}
+{{if .note}}<p class="meta"><strong>{{.note}}</strong></p>{{end}}
+{{range .prompts}}<div class="session-prompt">
+<strong>Session recovery needed:</strong> rule “{{.rule}}” is waiting for you to recover the login in your browser for <code class="brk">{{.url}}</code> (since {{.at}}).
+<form hx-post="/ui2/session/call/review" hx-target="#session-prompts" hx-swap="innerHTML" method="post" action="/ui2/session/call/review" style="display:inline">
+<input type="hidden" name="call" value="prompt_resolve"><input type="hidden" name="prompt_id" value="{{.id}}"><input type="hidden" name="recovered" value="true"><button type="submit">I recovered it</button></form>
+<form hx-post="/ui2/session/call/review" hx-target="#session-prompts" hx-swap="innerHTML" method="post" action="/ui2/session/call/review" style="display:inline">
+<input type="hidden" name="call" value="prompt_resolve"><input type="hidden" name="prompt_id" value="{{.id}}"><input type="hidden" name="recovered" value="false"><button type="submit">I could not</button></form>
+</div>{{end}}
+{{- end -}}

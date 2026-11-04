@@ -1,7 +1,10 @@
 <div id="rows">
 <h3>Session handling rules</h3>
 {{if .note}}<p class="meta" id="session-note"><strong>{{.note}}</strong></p>{{end}}
+{{with .result}}{{template "session_tool_result.html" .}}{{end}}
 {{if .rules.wired}}
+<div class="meta"><form hx-post="/ui2/session/editor/open" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/open" style="display:inline"><button type="submit">new rule in the rule editor</button></form>
+<a href="/ui2/session/editor" hx-get="/ui2/session/editor" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">rule editor</a> - name, scope, validity, macro steps, extractions and every action kind.</div>
 <div id="session-rule-controls">
 <form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
 <input type="hidden" name="rule_op" value="add">
@@ -21,7 +24,7 @@ action (a choice you must tick - nothing is created with an implicit default):<b
 <span class="kind-fields" data-kind="run_script" hidden><br>script<br><textarea name="action_script" rows="4" cols="48" disabled></textarea></span>
 tools {{range .rules.tools}}<label><input type="checkbox" name="tools" value="{{.}}">{{.}}</label> {{end}}
 <button type="submit">review new rule</button><br>
-New rules are created turned off and change no traffic until turned on, which is its own reviewed step. Ticking no tools means the rule applies to every tool. A value may name a macro-extracted placeholder only when the rule's own macro extracts it - a page-created rule has no macro, so a placeholder is refused here. Macro, validity and extension fields stay in the console. Existing rules offer ordered action-list controls below.</p>
+New rules are created turned off and change no traffic until turned on, which is its own reviewed step. Ticking no tools means the rule applies to every tool. A value may name a macro-extracted placeholder only when the rule's own macro extracts it - a page-created rule has no macro, so a placeholder is refused here. Macro, validity and extension fields are edited in the rule editor. Existing rules offer ordered action-list controls below.</p>
 </form>
 </div>
 <table class="rules-t">
@@ -31,7 +34,13 @@ New rules are created turned off and change no traffic until turned on, which is
 <tr class="{{if not .enabled}}meta{{end}}"><td>{{.id}}</td><td>{{.name}}</td><td>{{if .enabled}}on{{else}}off{{end}}</td>
 <td>{{if .scope_tools}}{{range .scope_tools}}{{.}} {{end}}{{else}}every tool{{end}}</td>
 <td>{{range .actions}}{{.label}}; {{end}}</td>
-<td class="sa"><form style="display:inline" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
+<td class="sa"><form style="display:inline" hx-post="/ui2/session/editor/open" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/open">
+  <input type="hidden" name="rule_id" value="{{.id}}"><button type="submit">editor</button></form>
+{{if .move_up}}<form style="display:inline" hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+  <input type="hidden" name="call" value="move_up"><input type="hidden" name="rule_id" value="{{.id}}"><button type="submit">move up</button></form>{{end}}
+{{if .move_down}}<form style="display:inline" hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+  <input type="hidden" name="call" value="move_down"><input type="hidden" name="rule_id" value="{{.id}}"><button type="submit">move down</button></form>{{end}}
+<form style="display:inline" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
   <input type="hidden" name="rule_op" value="toggle">
   <input type="hidden" name="rule_id" value="{{.id}}">
   <input type="hidden" name="target_enabled" value="{{if .enabled}}false{{else}}true{{end}}">
@@ -56,7 +65,7 @@ New rules are created turned off and change no traffic until turned on, which is
 </tbody>
 </table>
 <div id="session-action-editors">{{range .rules.rules}}{{$rule := .}}<details class="scope-edit"><summary class="meta">actions for rule {{.id}}: {{.name}}</summary>
-<p class="meta">Ordered action list. Rule stays {{if .enabled}}ON: edits change matching traffic immediately{{else}}OFF{{end}}. Supported actions have separately reviewed enabled and stop switches. Disabled actions are skipped, including their stop flag. A reached enabled stop action prevents later actions, even if it changes nothing. Macro, validity, extension and unfamiliar-field actions are label-only; moving or removing them still changes execution. Removing the last action is refused.</p>
+<p class="meta">Ordered action list. Rule stays {{if .enabled}}ON: edits change matching traffic immediately{{else}}OFF{{end}}. Supported actions have separately reviewed enabled and stop switches. Disabled actions are skipped, including their stop flag. A reached enabled stop action prevents later actions, even if it changes nothing. Macro, validity, extension and unfamiliar-field actions are label-only here - edit them in the rule editor; moving or removing them still changes execution. Removing the last action is refused.</p>
 {{range .action_rows}}
 <fieldset><legend>{{.position}}. {{.label}}</legend>
 <p class="meta">enabled={{.enabled}}; stop={{.stop}}</p>
@@ -88,7 +97,7 @@ New rules are created turned off and change no traffic until turned on, which is
 {{if eq .kind "run_script"}}<label>script <select name="action_script_mode"><option value="keep">keep stored script (not shown)</option><option value="replace">replace</option></select><br><textarea name="action_script" rows="4" cols="28" autocomplete="off"></textarea></label>{{end}}
 <p class="meta">Keep submits no new content. Replace uses the entered content. Clear is available only where the engine accepts empty content. Stored content is never prefilled.</p><button>review action edit</button></form>
 {{else}}<p class="meta">This action has no fields to edit.</p>{{end}}
-{{else}}<p class="meta">Label-only: edit its fields in the console. Move/remove above acts on the entire action and its branches.</p>{{end}}
+{{else}}<p class="meta">Label-only here: edit its fields in the rule editor. Move/remove above acts on the entire action and its branches.</p>{{end}}
 </fieldset>{{end}}
 <form class="session-action-append" hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
 <input type="hidden" name="rule_op" value="action_append"><input type="hidden" name="rule_id" value="{{.id}}"><input type="hidden" name="form_base" value="{{.action_base}}">
@@ -109,18 +118,42 @@ New rules are created turned off and change no traffic until turned on, which is
 <button>review append action</button></form>
 </details>{{end}}</div>
 {{else}}<p class="meta">No session coordinator wired.</p>{{end}}
+<h3>Log in again</h3>
+<form class="session-login" hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="login">
+<p class="meta">Probe a URL: the first enabled rule whose scope covers it checks the session and, if it is not valid, runs its macro and retries. Reviewed before anything is sent.<br>
+<label>method <input type="text" name="method" value="GET" size="7"></label>
+<label>URL <input type="text" name="url" size="40" required placeholder="https://target.example/account"></label><br>
+<label>headers (Name: value per line)<br><textarea name="headers" rows="2" cols="40" autocomplete="off"></textarea></label>
+<label>body<br><textarea name="body" rows="2" cols="40" autocomplete="off"></textarea></label><br>
+<button type="submit">review log-in probe</button></p></form>
 <h3>Cookie jar</h3>
 {{if .cookies.hint}}<p class="meta">{{.cookies.hint}}</p>{{end}}
 {{if .cookies.cookies}}
-<table>
-<thead><tr><th scope="col">Host</th><th scope="col">Name</th><th scope="col">Value</th><th scope="col">Path</th><th scope="col">Expires</th></tr></thead>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="cookie_empty"><button type="submit">review empty jar</button></form>
+<table class="cookies-t">
+<thead><tr><th scope="col">Host</th><th scope="col">Name</th><th scope="col">Value</th><th scope="col">Path</th><th scope="col">Expires</th><th scope="col"></th></tr></thead>
 <tbody>
-{{range $authority := .cookies.cookies}}{{range .cookies}}<tr><td>{{$authority.host}}</td><td>{{.name}}</td><td>{{.value}}</td><td>{{.path}}</td><td>{{if .expires}}{{.expires}}{{else}}session{{end}}</td></tr>{{end}}{{end}}
+{{range $authority := .cookies.cookies}}{{range .cookies}}<tr><td>{{$authority.host}}</td><td>{{.name}}</td><td class="meta">withheld ({{.value_len}} chars)</td><td>{{.path}}</td><td>{{if .expires}}{{.expires}}{{else}}session{{end}}</td>
+<td class="sa"><details class="scope-edit"><summary class="meta">edit</summary>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="cookie_set"><input type="hidden" name="host" value="{{$authority.hostname}}"><input type="hidden" name="port" value="{{$authority.port}}"><input type="hidden" name="tls" value="{{$authority.tls}}"><input type="hidden" name="name" value="{{.name}}">
+<label>new value <input type="text" name="value" autocomplete="off" required></label> <button type="submit">review set</button></form></details>
+<form style="display:inline" hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="cookie_remove"><input type="hidden" name="host" value="{{$authority.hostname}}"><input type="hidden" name="port" value="{{$authority.port}}"><input type="hidden" name="tls" value="{{$authority.tls}}"><input type="hidden" name="name" value="{{.name}}">
+<button type="submit">remove</button></form></td></tr>{{end}}{{end}}
 </tbody>
 </table>
-{{end}}
-<h3>Trace</h3>
-<p class="meta">recording={{.trace.enabled}} · {{len .trace.entries}} entries</p>
+{{else}}<p class="meta">No cookies in the jar.</p>{{end}}
+<h3>Session handling tracer</h3>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="{{if .trace.enabled}}trace_off{{else}}trace_on{{end}}">
+<p class="meta">{{if .trace.enabled}}Recording: every request a rule handles is traced - the overhead is real; stop it when you are done.{{else}}Off. Start it to record, per handled request, which rule matched and what each action changed.{{end}}
+<button type="submit">{{if .trace.enabled}}stop tracing{{else}}start tracing{{end}}</button></p></form>
+<p class="meta">recording={{.trace.enabled}} · {{len .trace.entries}} entries{{if .trace.capacity}} (the last {{.trace.capacity}} are kept){{end}}</p>
+{{if .trace.entries}}<ol class="session-trace">{{range .trace.entries}}<li><code class="brk">{{.host}}{{.path}}</code> {{if .tool}}via {{.tool}} {{end}}· rule {{.rule}} · {{.kind}}
+{{if .actions}}<ul>{{range .actions}}<li{{if .skipped}} class="meta"{{end}}>{{.label}}{{if .skipped}} - {{.skipped}}{{else if .changed}} - changed the request{{end}}{{if .detail}} ({{.detail}}){{end}}</li>{{end}}</ul>{{end}}</li>{{end}}</ol>{{end}}
 <h3>Pending prompts</h3>
-<p class="meta">{{if .prompts.prompts}}{{len .prompts.prompts}} pending{{else}}none{{end}}</p>
+<p class="meta">{{if .prompts.prompts}}{{len .prompts.prompts}} pending - answer them in the banner at the top of the page{{else}}none{{end}}</p>
 </div>

@@ -1,0 +1,182 @@
+{{define "session_editor_ids"}}<input type="hidden" name="draft_id" value="{{.draft_id}}"><input type="hidden" name="rev" value="{{.rev}}">{{end}}
+{{define "session_secret_mode"}}<select name="{{.}}_mode" aria-label="{{.}} change"><option value="keep" selected>keep stored (not shown)</option><option value="replace">replace</option><option value="clear">clear to empty</option></select>{{end}}
+{{define "session_validity_fields"}}{{$p := .prefix}}{{with .}}
+<label>status is <input type="number" name="{{$p}}status" min="100" max="599" value="{{.status}}" size="5"></label>
+<label>body contains <input type="text" name="{{$p}}body_contains" value="{{.body_contains}}"></label>
+<label>body does not contain <input type="text" name="{{$p}}body_not_contains" value="{{.body_not_contains}}"></label>
+<label>header present <input type="text" name="{{$p}}header_present" value="{{.header_present}}"></label>
+<label>header absent <input type="text" name="{{$p}}header_absent" value="{{.header_absent}}"></label>
+<label>redirect URL contains <input type="text" name="{{$p}}url_contains" value="{{.url_contains}}"></label>
+<label><input type="checkbox" name="{{$p}}regex" value="1" {{if .regex}}checked{{end}}> body/URL clauses are regular expressions</label>
+<label><input type="checkbox" name="{{$p}}case_sensitive" value="1" {{if .case_sensitive}}checked{{end}}> case sensitive</label>
+{{if .nested}}<span class="meta">Nested all/any/not groups are kept as stored.</span>{{end}}
+{{end}}{{end}}
+<div id="rows">
+<div id="session-editor" class="session-editor">
+<h3>Rule editor{{if .draft_id}} — {{if .is_new}}new rule{{else}}rule {{.rule_id}}{{end}}{{end}}</h3>
+<p class="meta"><a href="/ui2/session" hx-get="/ui2/session" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">back to session handling</a></p>
+{{if .error}}<p class="meta" role="alert"><strong>Not applied: {{.error}}</strong></p>{{end}}
+{{if .note}}<p class="meta" id="session-editor-note"><strong>{{.note}}</strong></p>{{end}}
+{{if not .wired}}<p class="meta">No session coordinator wired.</p>
+{{else if not .draft_id}}
+<p class="meta">Open a rule to edit it on a server-held draft. Nothing changes until you review and confirm the save.</p>
+<form hx-post="/ui2/session/editor/open" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/open">
+<button type="submit">new rule</button></form>
+<table class="rules-t"><thead><tr><th scope="col">ID</th><th scope="col">Name</th><th scope="col">Enabled</th><th scope="col"></th></tr></thead><tbody>
+{{range .rules}}<tr><td>{{.id}}</td><td>{{.name}}</td><td>{{if .enabled}}on{{else}}off{{end}}</td>
+<td><form hx-post="/ui2/session/editor/open" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/open"><input type="hidden" name="rule_id" value="{{.id}}"><button type="submit">edit</button></form></td></tr>
+{{else}}<tr><td colspan="4" class="meta">No rules yet.</td></tr>{{end}}
+</tbody></table>
+{{else}}
+{{if .problem}}<p class="meta"><strong>The engine would refuse this draft as it stands:</strong> {{.problem}}</p>{{end}}
+
+<h3>Rule</h3>
+<form class="editor-fields" hx-post="/ui2/session/editor/fields" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/fields">
+{{template "session_editor_ids" .}}
+<p class="meta"><label>name <input type="text" name="name" value="{{.name}}" required></label>
+<label><input type="checkbox" name="enabled" value="1" {{if .enabled}}checked{{end}}> enabled</label>
+<label>max login attempts <input type="number" name="max_attempts" min="1" value="{{.max_attempts}}" size="4"></label></p>
+<fieldset><legend>URL scope</legend>
+<label><input type="radio" name="scope_mode" value="all" {{if eq .scope_mode "all"}}checked{{end}}> all URLs (or only the hosts below)</label>
+<label><input type="radio" name="scope_mode" value="suite" {{if eq .scope_mode "suite"}}checked{{end}}> the suite's Target scope</label>
+<label><input type="radio" name="scope_mode" value="custom" {{if eq .scope_mode "custom"}}checked{{end}}> custom scope</label><br>
+<label>hosts (one per line)<br><textarea name="hosts" rows="2" cols="32">{{.hosts}}</textarea></label>
+<label>path prefix <input type="text" name="scope_path" value="{{.scope_path}}"></label>
+<label>port <input type="number" name="scope_port" min="1" max="65535" value="{{.scope_port}}" size="6"></label>
+<label>protocol <select name="scope_protocol"><option value="" {{if eq .scope_protocol ""}}selected{{end}}>any</option><option value="http" {{if eq .scope_protocol "http"}}selected{{end}}>http</option><option value="https" {{if eq .scope_protocol "https"}}selected{{end}}>https</option></select></label>
+<span class="meta">Path, port and protocol apply to the custom scope only.</span><br>
+<label>only requests carrying parameters (comma separated) <input type="text" name="params" value="{{.params}}"></label><br>
+tools: <label><input type="radio" name="tools_mode" value="all" {{if eq .tools_mode "all"}}checked{{end}}> every tool</label>
+<label><input type="radio" name="tools_mode" value="selected" {{if eq .tools_mode "selected"}}checked{{end}}> only:</label>
+{{range .tools_checks}}<label><input type="checkbox" name="tools" value="{{.name}}" {{if .checked}}checked{{end}}>{{.name}}</label> {{end}}
+</fieldset>
+<fieldset><legend>Session validity check (all stated clauses must hold)</legend>
+{{template "session_validity_fields" .validity}}
+</fieldset>
+<button type="submit">apply to draft</button>
+</form>
+
+<h3>Macro steps</h3>
+<p class="meta">Stored bodies, header values and credential-bearing URL parts are never shown or sent back to this page: an edit keeps them unless you choose replace or clear.</p>
+{{$root := .}}
+{{range .steps}}{{$step := .}}
+<fieldset class="editor-step"><legend>{{.position}}. {{.method}} {{.url}}</legend>
+<p class="meta">headers: {{range .headers}}{{.name}} (value withheld, {{.len}} chars); {{else}}none; {{end}}body: {{if .body_len}}withheld ({{.body_len}} bytes){{else}}empty{{end}}</p>
+{{if .up}}<form hx-post="/ui2/session/editor/step_up" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/step_up" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="step" value="{{.index}}"><button type="submit">move up</button></form>{{end}}
+{{if .down}}<form hx-post="/ui2/session/editor/step_down" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/step_down" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="step" value="{{.index}}"><button type="submit">move down</button></form>{{end}}
+<form hx-post="/ui2/session/editor/step_remove" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/step_remove" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="step" value="{{.index}}"><button type="submit">remove step</button></form>
+<details class="scope-edit"><summary class="meta">edit step</summary>
+<form hx-post="/ui2/session/editor/step_edit" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/step_edit">
+{{template "session_editor_ids" $root}}<input type="hidden" name="step" value="{{.index}}">
+<label>method <input type="text" name="method" value="{{.method}}" size="7"></label><br>
+<label>URL <select name="url_mode" aria-label="URL change"><option value="keep" selected>keep stored (not shown)</option><option value="replace">replace</option></select> <input type="text" name="url" autocomplete="off" size="40"></label><br>
+<label>body {{template "session_secret_mode" "body"}} <textarea name="body" rows="2" cols="40" autocomplete="off"></textarea></label><br>
+{{range .headers}}<label>header {{.name}} <select name="{{.key}}_mode" aria-label="header {{.name}} change"><option value="keep" selected>keep stored (not shown)</option><option value="replace">replace</option><option value="clear">clear to empty</option><option value="remove">remove header</option></select> <input type="text" name="{{.key}}" autocomplete="off"></label><br>{{end}}
+<label>new header <input type="text" name="new_header_name" placeholder="name" size="14"></label> <input type="text" name="new_header_value" placeholder="value" autocomplete="off" aria-label="new header value"><br>
+<button type="submit">apply step edit</button></form></details>
+<p class="meta">Extractions from this step's response:</p>
+<ul>{{range $root.extractions}}{{if eq .step $step.position}}<li>{{"{{"}}{{.name}}{{"}}"}} from {{.from}} by {{.how}}{{if .prefix}}, prefix {{.prefix}}{{end}}{{if .suffix}}, suffix {{.suffix}}{{end}}, URL-encode {{.url_encoded}}
+<form hx-post="/ui2/session/editor/extract_remove" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/extract_remove" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="extract" value="{{.index}}"><button type="submit">remove</button></form></li>{{end}}{{end}}</ul>
+<details class="scope-edit"><summary class="meta">add extraction</summary>
+<form hx-post="/ui2/session/editor/extract_add" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/extract_add">
+{{template "session_editor_ids" $root}}<input type="hidden" name="step" value="{{.index}}">
+<label>name <input type="text" name="ex_name" required size="12"></label>
+<label>from <select name="ex_from"><option value="body">response body</option><option value="header">response header</option></select></label>
+<label>header <input type="text" name="ex_header" size="12"></label><br>
+<label><input type="radio" name="ex_how" value="regex" checked> regex</label> <input type="text" name="ex_pattern" aria-label="regex pattern" size="20"> <label>group <input type="number" name="ex_group" min="0" value="1" size="3"></label>
+<label><input type="radio" name="ex_how" value="json_path"> JSON path</label> <input type="text" name="ex_json_path" aria-label="JSON path" size="14">
+<label><input type="radio" name="ex_how" value="whole"> whole value</label><br>
+<label>prefix <input type="text" name="ex_prefix" size="8"></label> <label>suffix <input type="text" name="ex_suffix" size="8"></label>
+<label>URL-encode <select name="ex_url_encoded"><option value="">default</option><option value="yes">yes</option><option value="no">no</option></select></label>
+<button type="submit">add extraction</button></form></details>
+</fieldset>
+{{else}}<p class="meta">No macro steps. Add one below or record from history.</p>{{end}}
+<details class="scope-edit"><summary class="meta">add a step</summary>
+<form hx-post="/ui2/session/editor/step_add" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/step_add">
+{{template "session_editor_ids" .}}
+<label>method <input type="text" name="method" value="GET" size="7"></label>
+<label>URL <input type="text" name="url" size="40" required></label><br>
+<label>headers (Name: value per line)<br><textarea name="headers" rows="2" cols="40" autocomplete="off"></textarea></label><br>
+<label>body<br><textarea name="body" rows="2" cols="40" autocomplete="off"></textarea></label><br>
+<button type="submit">add step</button></form></details>
+<details class="scope-edit" id="session-recorder"><summary class="meta">record steps from history</summary>
+<form hx-post="/ui2/session/editor/record" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/record">
+{{template "session_editor_ids" .}}
+<p class="meta">Tick the proxy history rows to append as steps, in order (newest first below).</p>
+{{range .history}}<label class="rec-row"><input type="checkbox" name="exchange" value="{{.ID}}"> #{{.ID}} {{.Method}} {{.Host}}{{.Path}} {{.Status}}</label><br>{{else}}<p class="meta">No proxy history rows.</p>{{end}}
+<label>or ids <input type="text" name="exchange_ids" placeholder="12, 15" size="12"></label>
+<label>request <select name="variant"><option value="edited">as sent</option><option value="original">original</option><option value="auto-modified">auto-modified</option></select></label>
+<button type="submit">record selected</button></form></details>
+
+<h3>Actions</h3>
+<p class="meta">Run in order for each request the rule handles. Disabled actions are skipped; a reached enabled stop action ends the list.</p>
+<div id="editor-actions">
+{{range .actions}}
+{{if eq .type "branch"}}<div class="editor-branch" style="margin-left:{{.indent}}px"><p class="meta"><strong>{{.label}}</strong>{{if .empty}} - nothing runs{{end}}</p></div>
+{{else}}{{$a := .}}
+<fieldset class="editor-action" style="margin-left:{{.indent}}px"><legend>{{.position}}. {{.label}}</legend>
+<p class="meta">enabled={{.enabled}}; stop={{.stop}}{{if .name}}; name {{.name}}{{end}}{{if .extension}}; extension {{.extension}}{{end}}{{if .own_macro}}; own macro of {{.own_macro}} step(s), kept{{end}}</p>
+{{if .up}}<form hx-post="/ui2/session/editor/action_up" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_up" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="path" value="{{.path}}"><button type="submit">move up</button></form>{{end}}
+{{if .down}}<form hx-post="/ui2/session/editor/action_down" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_down" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="path" value="{{.path}}"><button type="submit">move down</button></form>{{end}}
+<form hx-post="/ui2/session/editor/action_remove" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_remove" style="display:inline">{{template "session_editor_ids" $root}}<input type="hidden" name="path" value="{{.path}}"><button type="submit">remove</button></form>
+<details class="scope-edit"><summary class="meta">edit action</summary>
+<form hx-post="/ui2/session/editor/action_edit" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_edit">
+{{template "session_editor_ids" $root}}<input type="hidden" name="path" value="{{.path}}">
+<label><input type="checkbox" name="enabled" value="1" {{if .enabled}}checked{{end}}> enabled</label>
+<label><input type="checkbox" name="stop" value="1" {{if .stop}}checked{{end}}> stop: no further actions after this one</label><br>
+{{if or (eq .kind "set_cookie") (eq .kind "set_header") (eq .kind "set_param")}}
+<label>name <input type="text" name="name" value="{{.name}}"></label>
+<label>value {{template "session_secret_mode" "value"}} <input type="text" name="value" autocomplete="off"></label>{{if .has_value}}<span class="meta"> (a value is stored)</span>{{end}}
+{{if eq .kind "set_param"}}<label>where <select name="in"><option value="" {{if eq .in ""}}selected{{end}}>wherever it already is</option><option value="query" {{if eq .in "query"}}selected{{end}}>query string</option><option value="body" {{if eq .in "body"}}selected{{end}}>form body</option></select></label>{{end}}
+<br><span class="meta">A value may use {{"{{"}}name{{"}}"}} placeholders a macro extracts.</span>
+{{else if eq .kind "replace"}}
+<label>match <select name="match_mode" aria-label="match change"><option value="keep" selected>keep stored (not shown)</option><option value="replace">replace</option></select> <input type="text" name="match" autocomplete="off"></label>
+<label>replacement {{template "session_secret_mode" "replacement"}} <input type="text" name="replacement" autocomplete="off"></label>
+<label><input type="checkbox" name="regex" value="1" {{if .regex}}checked{{end}}> match is a regular expression</label>
+{{else if eq .kind "run_script"}}
+<label>pre-request script <select name="script_mode" aria-label="script change"><option value="keep" selected>keep stored (not shown)</option><option value="replace">replace</option></select><br><textarea name="script" rows="5" cols="48" autocomplete="off"></textarea></label>{{if .has_script}}<span class="meta"> (a script is stored)</span>{{end}}
+{{else if eq .kind "invoke_extension"}}
+<label>extension registration <input type="text" name="extension" value="{{.extension}}"></label>{{if .has_extension_session}}<span class="meta"> extension session state is stored and kept (withheld)</span>{{end}}
+{{else if eq .kind "check_validity"}}
+<label>validate every <input type="number" name="validate_every" min="0" value="{{.validate_every}}" size="4"> requests (0 = every request)</label><br>
+<label><input type="radio" name="validity_mode" value="rule" {{if not .validity.set}}checked{{end}}> use the rule's validity check</label>
+<label><input type="radio" name="validity_mode" value="own" {{if .validity.set}}checked{{end}}> its own criteria:</label><br>
+{{template "session_validity_fields" .validity}}
+{{else if eq .kind "run_macro"}}
+<label><input type="checkbox" name="update_with_params" value="1" {{if .update_with_params}}checked{{end}}> update the current request with parameters from the final macro response</label><br>
+<label><select name="match_params"><option value="all_params_except" {{if ne .match_params "specified_params"}}selected{{end}}>all parameters except</option><option value="specified_params" {{if eq .match_params "specified_params"}}selected{{end}}>only these parameters</option></select> <input type="text" name="params" value="{{.params}}" aria-label="parameter names"></label>
+<label><input type="checkbox" name="tolerate_url_mismatch" value="1" {{if .tolerate_url_mismatch}}checked{{end}}> match by name even if the URL differs</label><br>
+<label><input type="checkbox" name="update_with_cookies" value="1" {{if .update_with_cookies}}checked{{end}}> update the current request with cookies from the jar</label><br>
+<label><select name="match_cookies"><option value="all_cookies_except" {{if ne .match_cookies "specified_cookies"}}selected{{end}}>all cookies except</option><option value="specified_cookies" {{if eq .match_cookies "specified_cookies"}}selected{{end}}>only these cookies</option></select> <input type="text" name="cookies" value="{{.cookies}}" aria-label="cookie names"></label><br>
+{{if .own_macro}}<label><input type="checkbox" name="macro_source" value="rule"> drop its own {{.own_macro}} step(s) and run the rule's macro</label>{{else}}<span class="meta">Runs the rule's macro steps above.</span>{{end}}
+{{else if eq .kind "run_post_request_macro"}}
+{{if .own_macro}}<label><input type="checkbox" name="macro_source" value="rule"> drop its own {{.own_macro}} step(s) and run the rule's macro</label>{{else}}<span class="meta">Runs the rule's macro steps above after the request.</span>{{end}}
+{{else}}<span class="meta">This action has no fields beyond its switches.</span>{{end}}
+<br><button type="submit">apply action edit</button></form></details>
+</fieldset>
+{{end}}
+{{if eq .type "branch"}}<form class="editor-branch-add" style="margin-left:{{.indent}}px" hx-post="/ui2/session/editor/action_add" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_add">
+{{template "session_editor_ids" $root}}<input type="hidden" name="parent" value="{{.parent}}">
+<select name="kind" aria-label="action kind for this branch">{{range $root.kinds}}<option value="{{.Kind}}">{{.Label}}</option>{{end}}</select> <button type="submit">add to this branch</button></form>{{end}}
+{{else}}<p class="meta">No actions: the engine runs its default flow.</p>{{end}}
+<form hx-post="/ui2/session/editor/action_add" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/action_add">
+{{template "session_editor_ids" .}}<input type="hidden" name="parent" value="">
+<label>add action <select name="kind">{{range .kinds}}<option value="{{.Kind}}">{{.Label}}</option>{{end}}</select></label> <button type="submit">add at the end</button></form>
+</div>
+
+<h3>Save</h3>
+<form hx-post="/ui2/session/editor/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/review" style="display:inline">
+{{template "session_editor_ids" .}}<button type="submit">review save</button></form>
+<form hx-post="/ui2/session/editor/discard" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/discard" style="display:inline">
+{{template "session_editor_ids" .}}<button type="submit">discard draft</button></form>
+<p class="meta">The save is reviewed first: the exact rule is shown (credentials withheld) and applies only on confirm{{if not .is_new}}, and only while the stored rule is unchanged since this editor opened{{end}}.</p>
+{{if not .is_new}}
+<h3>Macro tools (act on the stored rule)</h3>
+<p class="meta">These run the rule as saved, not this draft. Each is reviewed before it sends anything.</p>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review" style="display:inline"><input type="hidden" name="rule_id" value="{{.rule_id}}"><input type="hidden" name="call" value="test"><button type="submit">test macro</button></form>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review" style="display:inline"><input type="hidden" name="rule_id" value="{{.rule_id}}"><input type="hidden" name="call" value="analyze"><button type="submit">re-analyze macro</button></form>
+<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review" style="display:inline"><input type="hidden" name="rule_id" value="{{.rule_id}}"><input type="hidden" name="call" value="update_macro"><button type="submit">update macro from last run</button></form>
+{{end}}
+{{end}}
+</div>
+</div>

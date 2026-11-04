@@ -6,11 +6,12 @@
 <details open><summary>{{.preview_label}}</summary>
 <pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.preview}}</pre>
 </details>
-<form hx-post="/ui2/session/rules/run" hx-target="#rows" hx-swap="outerHTML">
+<form hx-post="/ui2/session/rules/run" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/rules/run">
 <input type="hidden" name="review_id" value="{{.review_id}}">
 <input type="hidden" name="token" value="{{.token}}">
-<button>Confirm and apply</button>
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and apply</button>
 </form>
+{{if .back}}<p class="meta"><a href="{{.back}}" hx-get="{{.back}}" hx-target="#rows" hx-swap="outerHTML">back to the editor</a> (the draft is kept)</p>{{end}}
 <p class="meta"><a href="/ui2/session" hx-get="/ui2/session" hx-target="#rows" hx-swap="outerHTML">cancel</a> (cancelling just leaves this page - the pending review expires with the confirmation window on its own)</p>
 {{end}}
 </div>

@@ -119,6 +119,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/logger/{action}":                  {raw: "application/x-www-form-urlencoded: capture-<tool>-on/off takes the view state (search, v_*); filter-set takes status/term/regex/case/negate/scope_only/mime/capacity; clear-review takes nothing; scope-review takes id; annotate takes id/comment/highlight; the *-run steps add the one-time token"},
 	"POST /ui2/organizer/collections/{action}":   {raw: "application/x-www-form-urlencoded collection create/edit/duplicate/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/add/{action}":           {raw: "application/x-www-form-urlencoded exchange id (confirm); review id and one-time payload-bound token only (run)"},
+	"POST /ui2/session/editor/{action}":          {raw: "application/x-www-form-urlencoded editor form naming a server-held draft id"},
+	"POST /ui2/session/call/{action}":            {raw: "application/x-www-form-urlencoded tool form (review); review id + one-time review nonce only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

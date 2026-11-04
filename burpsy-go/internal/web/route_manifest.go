@@ -2092,6 +2092,27 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Session page: handling rules, cookie jar, trace, pending prompts",
 	},
+	"/ui2/session/call/{action}": {
+		// riskAsset like the rules review route: the credential class belongs to the
+		// /api/session/* calls reviewed here, reached only through minted one-time tokens.
+		methods: []string{"POST"}, subPath: "review", risk: riskAsset,
+		summary: "ui2 Session tools: review mints one-time confirmations for the exact /api/session/* " +
+			"call (test/analyze macro, apply extractions, update macro, move, log in, cookie writes, " +
+			"tracer, prompt resolution) held server-side; run spends them and renders the outcome",
+	},
+	"/ui2/session/editor": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Session rule editor: an open server-held draft, or the list of rules to open",
+	},
+	"/ui2/session/editor/{action}": {
+		methods: []string{"POST"}, subPath: "open", risk: riskAsset,
+		summary: "ui2 Session rule editor steps on a server-held draft (fields, macro steps, " +
+			"extractions, actions, record from history); review mints the one-time save",
+	},
+	"/ui2/session/prompts": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 pending session-prompt banner fragment, loaded by every ui2 page",
+	},
 	"/ui2/session/rules/{action}": {
 		// riskAsset for the same reason as the triage review route: the credential class
 		// belongs to the /api/session/rules calls this reviews, and it reaches them only

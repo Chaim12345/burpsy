@@ -161,6 +161,8 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/scanner/library":           "<!doctype html",
 		"/ui2/scope":                     "<!doctype html",
 		"/ui2/session":                   "<!doctype html",
+		"/ui2/session/editor":            "<!doctype html",
+		"/ui2/session/prompts":           "<!doctype html",
 		"/ui2/settings":                  "<!doctype html",
 		"/ui2/sitemap":                   "<!doctype html",
 		"/ui2/sitemap/repeater":          "<!doctype html",

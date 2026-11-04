@@ -68,6 +68,50 @@ type ui2SessionRuleReview struct {
 	domain       bool
 	ruleID       int64
 	expectedBase string
+	// create marks the rule editor's new-rule save: the run step decodes body as a fresh
+	// session.SessionRule and installs it with AddRule. draftID names the editor draft the
+	// save came from, dropped once the install lands.
+	create  bool
+	draftID string
+}
+
+// ui2SessionHoldRuleReview stores one minted rule review in the bounded map (sweep-on-issue,
+// capped at ui2SessionRuleReviewCap) and returns its id, or the refusal to render.
+func (s *Server) ui2SessionHoldRuleReview(entry ui2SessionRuleReview) (string, string) {
+	id, err := randomHex(16)
+	if err != nil {
+		return "", "review id: " + err.Error()
+	}
+	now := time.Now()
+	s.ui2SessionRuleReviews.Range(func(k, v any) bool {
+		if e, ok := v.(ui2SessionRuleReview); ok && now.After(e.expires) {
+			s.ui2SessionRuleReviews.Delete(k)
+		}
+		return true
+	})
+	count := 0
+	s.ui2SessionRuleReviews.Range(func(_, _ any) bool { count++; return true })
+	if count >= ui2SessionRuleReviewCap {
+		return "", "too many reviews are open at once - confirm or let some expire, then try again"
+	}
+	entry.expires = now.Add(ConfirmTTL)
+	s.ui2SessionRuleReviews.Store(id, entry)
+	return id, ""
+}
+
+// ui2SpendHeldToken spends a minted gate token on the exact call it was minted for, for the
+// review paths that install in-process instead of dispatching through the gate. Without this
+// the token would stay live for its whole TTL after the install, replayable on the wire route.
+func (s *Server) ui2SpendHeldToken(token, method, rawURL string, body []byte) bool {
+	u, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return false
+	}
+	pattern, _, ok := routeRiskFor(u.Path)
+	if !ok {
+		return false
+	}
+	return s.confirms.spend(token, pattern, newCallBinding(method, u.Path, u.RawQuery, body))
 }
 
 // ui2SessionRulesTools renders the tools axis as the review sheet must say it: an absent or
@@ -554,7 +598,7 @@ func (s *Server) ui2SessionRulesConfirm(w http.ResponseWriter, r *http.Request) 
 		// this page cannot offer a bare name+tools add at all.
 		kind, kindErr := session.ParseActionKind(r.PostFormValue("action"))
 		if kindErr != nil || !ui2SessionRulePageKind(kind) {
-			s.ui2SessionRulesFail(w, r, "choose the rule's action on the form - this page creates the cookie-jar, set-cookie, set-header, set-parameter, replace, pre-request-script and browser-recovery-prompt actions; macros, validity checks and extension actions are written in the console")
+			s.ui2SessionRulesFail(w, r, "choose the rule's action on the form - this page creates the cookie-jar, set-cookie, set-header, set-parameter, replace, pre-request-script and browser-recovery-prompt actions; macros, validity checks and extension actions are written in the rule editor")
 			return
 		}
 		tools := r.PostForm["tools"]
@@ -586,7 +630,7 @@ func (s *Server) ui2SessionRulesConfirm(w http.ResponseWriter, r *http.Request) 
 		}
 		method, url = http.MethodPost, "/api/session/rules"
 		summary = fmt.Sprintf("Add rule %q, created turned off, with one action: %s. Tools scope: %s.", name, ui2SessionRulePageActionSummary(kind, action), ui2SessionRulesToolsNote(tools))
-		consequence = "The rule is created turned off: it changes no traffic until you turn it on, which is its own reviewed step. Macro, validity and extension fields stay in the console. Existing rules offer ordered action-list controls."
+		consequence = "The rule is created turned off: it changes no traffic until you turn it on, which is its own reviewed step. Macro, validity and extension fields are edited in the rule editor. Existing rules offer ordered action-list controls."
 		successNote = "rule added (turned off)"
 	case "action_append", "action_edit", "action_up", "action_down", "action_remove", "action_enable", "action_disable", "action_stop_on", "action_stop_off":
 		id, err := strconv.ParseInt(r.PostFormValue("rule_id"), 10, 64)
@@ -747,28 +791,14 @@ func (s *Server) ui2SessionRulesConfirm(w http.ResponseWriter, r *http.Request) 
 		previewLabel = "exact change (the stored rule after install - the domain marshal the token binds; credential values and extension session state are withheld in this view but bound in the token; per-action validity criteria are shown as stored)"
 		projection = ui2SessionRuleDomainProjection(domainID, domainBase, body)
 	}
-	id, err := randomHex(16)
-	if err != nil {
-		s.ui2SessionRulesFail(w, r, "review id: "+err.Error())
-		return
-	}
-	now := time.Now()
-	s.ui2SessionRuleReviews.Range(func(k, v any) bool {
-		if e, ok := v.(ui2SessionRuleReview); ok && now.After(e.expires) {
-			s.ui2SessionRuleReviews.Delete(k)
-		}
-		return true
-	})
-	count := 0
-	s.ui2SessionRuleReviews.Range(func(_, _ any) bool { count++; return true })
-	if count >= ui2SessionRuleReviewCap {
-		s.ui2SessionRulesFail(w, r, "too many reviews are open at once - confirm or let some expire, then try again")
-		return
-	}
-	s.ui2SessionRuleReviews.Store(id, ui2SessionRuleReview{
+	id, errText := s.ui2SessionHoldRuleReview(ui2SessionRuleReview{
 		token: token, method: method, url: url, body: body, note: successNote,
-		expires: now.Add(ConfirmTTL), domain: domainOp, ruleID: domainID, expectedBase: domainBase,
+		domain: domainOp, ruleID: domainID, expectedBase: domainBase,
 	})
+	if errText != "" {
+		s.ui2SessionRulesFail(w, r, errText)
+		return
+	}
 	ui2Fragment(w, r, "burpsy /ui2/ — Session", "session", ui2Exec("session_confirm.html", map[string]any{
 		"review_id":     id,
 		"token":         token,
@@ -803,7 +833,14 @@ func (s *Server) ui2SessionRulesRun(w http.ResponseWriter, r *http.Request) {
 		fail("that review does not match this confirmation - review the change again")
 		return
 	}
-	if entry.domain {
+	if entry.domain || entry.create {
+		// The minted token is spent here, on the exact call it was minted for, before anything
+		// installs: the in-process install never passes the gate, and an unspent token would stay
+		// live for its TTL - replayable on PUT/POST /api/session/rules by anyone who saw it.
+		if !s.ui2SpendHeldToken(entry.token, entry.method, entry.url, entry.body) {
+			fail("that confirmation expired or was already used - nothing was applied; review the change again")
+			return
+		}
 		// Coordinator-level install: decode the held domain marshal into a FRESH rule (the
 		// entry's bytes are the reviewed change; nothing is re-read or re-merged at run time),
 		// rebuild the extraction matchers the JSON form cannot carry, and install through the
@@ -823,7 +860,13 @@ func (s *Server) ui2SessionRulesRun(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		err := s.sessionCoordinator.UpdateRuleIfUnchanged(session.RuleID(entry.ruleID), entry.expectedBase, &merged)
+		var err error
+		if entry.create {
+			merged.ID = 0
+			_, err = s.sessionCoordinator.AddRule(&merged)
+		} else {
+			err = s.sessionCoordinator.UpdateRuleIfUnchanged(session.RuleID(entry.ruleID), entry.expectedBase, &merged)
+		}
 		switch {
 		case errors.Is(err, session.ErrNoSuchRule):
 			fail("that rule no longer exists - nothing was applied")
@@ -834,6 +877,9 @@ func (s *Server) ui2SessionRulesRun(w http.ResponseWriter, r *http.Request) {
 		default:
 			// Install-then-persist, the API PUT's ordering.
 			s.persistSessionRules()
+			if entry.draftID != "" {
+				s.ui2SessionDrafts.Delete(entry.draftID)
+			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write([]byte(ui2Exec("session.html", s.ui2SessionView(entry.note))))
 		}
