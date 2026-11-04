@@ -1,0 +1,28 @@
+<div id="rows" style="padding:8px 14px; max-width:960px">
+<h3>Generate CSRF PoC</h3>
+<p class="meta">Builds an HTML page that makes a victim's browser replay a captured request. The PoC is shown here as text only - it is never rendered in this console's origin. "Test in browser" opens it from the separate PoC host.</p>
+<form id="csrf-form" hx-get="/ui2/engagement/csrf" action="/ui2/engagement/csrf" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">
+<p class="meta" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:0">
+<label>Exchange id <input type="text" name="id" inputmode="numeric" size="8" value="{{.id}}" placeholder="e.g. 42" aria-label="Exchange id"></label>
+<label>Technique <select name="technique" aria-label="CSRF technique">{{$t := .technique}}{{range .techniques}}<option value="{{.}}" {{if eq . $t}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label><input type="checkbox" name="auto_submit" value="true" {{if .auto_submit}}checked{{end}}> auto-submit on load</label>
+<input type="hidden" name="auto_submit" value="false">
+<button type="submit">Generate</button>
+</p>
+</form>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+{{with .poc}}
+<p class="meta">technique <strong>{{.technique}}</strong> · auto-submit {{if $.auto_submit}}on{{else}}off{{end}} · <code class="brk">{{.method}} {{.action}}</code></p>
+{{if .notes}}<ul class="meta">{{range .notes}}<li class="brk">{{.}}</li>{{end}}</ul>{{end}}
+<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0">
+<button type="button" class="btn copy-btn" data-copy="{{.html}}">Copy</button>
+<a class="btn" href="{{$.download}}" download>Download</a>
+<form style="display:inline" hx-post="/ui2/engagement/csrf/test" method="post" action="/ui2/engagement/csrf/test" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="id" value="{{$.id}}"><input type="hidden" name="technique" value="{{$.technique}}"><input type="hidden" name="auto_submit" value="{{$.auto_submit}}">
+<button type="submit">Test in browser</button></form>
+{{if .test_url}}<a id="csrf-test-url" class="btn" href="{{.test_url}}" target="_blank" rel="noopener noreferrer">Open one-shot test URL</a>{{end}}
+</div>
+{{if .test_url}}<p class="meta brk">One-shot URL on the PoC host (served once, from its own origin): <code>{{.test_url}}</code></p>{{end}}
+<pre id="csrf-poc" class="brk" style="max-height:60vh">{{.html}}</pre>
+{{end}}
+</div>

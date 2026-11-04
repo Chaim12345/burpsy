@@ -219,6 +219,10 @@ type Server struct {
 	domInvader *dominvader.Store
 	// authz holds the project's access-control test identities (burpsy-react-ui-cr37).
 	authz authzState
+	// ui2AuthzReviews holds reviewed-but-unconfirmed identity saves for /ui2/authz (the full PUT
+	// body, credentials included, so they never round-trip through the form). Single-use via
+	// LoadAndDelete, bounded by ui2AuthzReviewCap, expiring with ConfirmTTL.
+	ui2AuthzReviews sync.Map
 	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
 	// launch rewrites it so the temp area does not accumulate one per launch.
 	domExtDir string
@@ -1694,6 +1698,16 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/dominvader", s.handleUI2DomInvader)
 	s.route("/ui2/dominvader/review", s.handleUI2DomInvaderReview)
 	s.route("/ui2/dominvader/run", s.handleUI2DomInvaderRun)
+	s.route("/ui2/authz", s.handleUI2Authz)
+	s.route("/ui2/authz/identities/{action}", s.handleUI2AuthzIdentities)
+	s.route("/ui2/authz/test/{action}", s.handleUI2AuthzTest)
+	s.route("/ui2/authz/diff/{a}/{b}", s.handleUI2AuthzDiff)
+	s.route("/ui2/engagement/csrf", s.handleUI2EngagementCSRF)
+	s.route("/ui2/engagement/csrf/test", s.handleUI2EngagementCSRFTest)
+	s.route("/ui2/engagement/csrf/{id}/download", s.handleUI2EngagementCSRFDownload)
+	s.route("/ui2/engagement/hidden-inputs", s.handleUI2EngagementHiddenInputs)
+	s.route("/ui2/engagement/hidden-inputs/{action}", s.handleUI2EngagementHiddenInputsAction)
+	s.route("/ui2/engagement/clickbandit", s.handleUI2EngagementClickbandit)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)

@@ -200,6 +200,18 @@ var uiRouteExempt = map[string]string{
 	"/ui2/repeater":                       "ui2 Repeater editor; the console calls /api/repeater/send",
 	"/ui2/repeater/send":                  "ui2 Repeater send button inside the /ui2/ page",
 	"/ui2/settings":                       "ui2 Settings page; the console's Settings calls the /api/* routes it summarises",
+
+	// ui2 access control and engagement tools (unit 15).
+	"/ui2/authz":                             "ui2 Access control page; the console calls /api/authz/*",
+	"/ui2/authz/identities/{action}":         "ui2 identities save review/apply, fired by the page's htmx forms inside /ui2/authz; the console calls /api/authz/identities",
+	"/ui2/authz/test/{action}":               "ui2 access-control test review/run, fired by the page's htmx forms inside /ui2/authz; the console calls /api/authz/test",
+	"/ui2/authz/diff/{a}/{b}":                "ui2 verdict diff link inside /ui2/authz; the console seeds its own Comparer",
+	"/ui2/engagement/csrf":                   "ui2 CSRF PoC page; the console calls /api/exchange/{id}/csrf",
+	"/ui2/engagement/csrf/test":              "ui2 CSRF PoC test-in-browser form inside /ui2/engagement/csrf",
+	"/ui2/engagement/csrf/{id}/download":     "ui2 CSRF PoC download link inside /ui2/engagement/csrf",
+	"/ui2/engagement/hidden-inputs":          "ui2 Guess hidden inputs page; the console calls /api/hidden-inputs",
+	"/ui2/engagement/hidden-inputs/{action}": "ui2 hidden-inputs review/run forms inside /ui2/engagement/hidden-inputs",
+	"/ui2/engagement/clickbandit":            "ui2 Clickbandit page; the console calls /api/engagement/clickbandit.js",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each
