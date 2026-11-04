@@ -70,8 +70,6 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/engagement/hidden-inputs/{action}": {raw: "application/x-www-form-urlencoded form: exchange_id, kinds, cache_buster, max_requests (confirm); same fields + one-time confirm token (run)"},
 
 	"POST /ui2/collaborator/mint":                {raw: "application/x-www-form-urlencoded form: count to preview, or mint_id to spend the held call"},
-	"POST /ui2/comparer":                         {raw: "application/x-www-form-urlencoded form: a, b"},
-	"POST /ui2/comparer/run":                     {raw: "application/x-www-form-urlencoded form: a, b"},
 	"POST /ui2/decoder":                          {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/decoder/run":                      {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/sitemap/scope/{action}":           {raw: "application/x-www-form-urlencoded: confirm takes the row key in the post URL's query and no form fields; run takes the reviewed rule's hidden fields (token/pattern/port/protocol/path)"},
@@ -96,7 +94,6 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/repeater/graphql/send":            {raw: "application/x-www-form-urlencoded form: request, optional target, index, query, exchange"},
 	"POST /ui2/repeater/graphql/sitemap-confirm": {raw: "application/x-www-form-urlencoded form: exchange"},
 	"POST /ui2/repeater/graphql/sitemap-run":     {raw: "application/x-www-form-urlencoded form: review_id, token"},
-	"POST /ui2/sequencer/analyse":                {raw: "application/x-www-form-urlencoded form: tokens, encoding"},
 	"POST /ui2/sequencer/capture/{action}":       {raw: "application/x-www-form-urlencoded form + one-time confirm token (confirm/run); empty body (pause/resume/stop)"},
 	"POST /ui2/settings/triage/{action}":         {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
 	"POST /ui2/settings/write/{area}/{action}":   {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
@@ -108,11 +105,15 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/intruder/points":                  {raw: "application/x-www-form-urlencoded launch form; op: find, auto or clear"},
 	"POST /ui2/intruder/payloads":                {raw: "application/x-www-form-urlencoded launch form; op: add_set, remove_set:N, add_rule, remove_rule:N"},
 	"POST /ui2/intruder/payloads/upload":         {raw: "multipart/form-data: upload_set, upload_file_<set>, plus the launch form"},
-	"POST /ui2/intruder/{id}/comment":          {raw: "application/x-www-form-urlencoded form: ordinal, comment"},
-	"POST /ui2/intruder/{id}/again/{step}":     {raw: "application/x-www-form-urlencoded form: ordinal; run adds the one-time confirm token"},
-	"POST /ui2/intruder/config/save":           {raw: "application/x-www-form-urlencoded launch form plus positions=with|without, or config=<saved document> to download"},
-	"POST /ui2/intruder/config/load":           {raw: "multipart/form-data: config_file (or a config field) holding a saved attack configuration"},
-	"POST /ui2/intruder/settings/extract":      {raw: "application/x-www-form-urlencoded form: extract_response_id, extract_text"},
+	"POST /ui2/intruder/{id}/comment":            {raw: "application/x-www-form-urlencoded form: ordinal, comment"},
+	"POST /ui2/intruder/{id}/again/{step}":       {raw: "application/x-www-form-urlencoded form: ordinal; run adds the one-time confirm token"},
+	"POST /ui2/intruder/config/save":             {raw: "application/x-www-form-urlencoded launch form plus positions=with|without, or config=<saved document> to download"},
+	"POST /ui2/intruder/config/load":             {raw: "multipart/form-data: config_file (or a config field) holding a saved attack configuration"},
+	"POST /ui2/intruder/settings/extract":        {raw: "application/x-www-form-urlencoded form: extract_response_id, extract_text"},
+	"POST /ui2/comparer":                         {raw: "multipart/form-data or application/x-www-form-urlencoded workbench form: op, a, b, a_item/a_label/a_bin/a_sel and the b_ twins, a_msg/b_msg, a_file/b_file uploads, granularity, view, wrap, side"},
+	"POST /ui2/comparer/run":                     {raw: "multipart/form-data or application/x-www-form-urlencoded workbench form: op, a, b, a_item/a_label/a_bin/a_sel and the b_ twins, a_msg/b_msg, a_file/b_file uploads, granularity, view, wrap, side"},
+	"POST /ui2/sequencer/analyse":                {raw: "multipart/form-data or application/x-www-form-urlencoded form: source, tokens, token_file upload, op=load, capture_id, redo/last_sample, encoding, significance, pad_mode, pad_byte"},
+	"POST /ui2/sequencer/settings/{action}":      {raw: "application/x-www-form-urlencoded: on_<key> switches and b64 (confirm); review id + one-time token only (run)"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

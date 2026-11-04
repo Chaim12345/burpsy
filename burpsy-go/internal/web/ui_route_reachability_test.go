@@ -124,6 +124,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/intruder/{id}/{action}":         "ui2 Intruder control buttons inside the /ui2/ page; the console calls /api/intruder/attacks/{id}/{action}",
 	"/ui2/sequencer":                      "ui2 Sequencer page; the console calls /api/sequencer/*",
 	"/ui2/sequencer/analyse":              "ui2 Sequencer analyse button inside the /ui2/ page; the console calls /api/sequencer/analyse",
+	"/ui2/sequencer/settings/{action}":    "ui2 Sequencer settings review buttons inside the /ui2/ page; the console calls PUT /api/sequencer/settings",
+	"/ui2/sequencer/tokens/{id}":          "ui2 Sequencer Save tokens link inside the /ui2/ page; the console reads /api/sequencer/capture/{id}",
 	"/ui2/collaborator":                   "ui2 Collaborator page; the console calls /api/collaborator/*",
 	"/ui2/discovery":                      "ui2 Content discovery page, navigated by URL; the console calls /api/discovery",
 	"/ui2/discovery/runs":                 "ui2 Content discovery runs fragment, polled by htmx inside /ui2/discovery",

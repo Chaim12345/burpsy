@@ -1,0 +1,13 @@
+<section id="seq-settings" aria-label="Analysis settings review">
+<h3>Analysis settings</h3>
+<p><strong>Review before saving:</strong></p>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.projection}}</pre>
+{{range .lines}}<p class="meta">{{.}}</p>{{end}}
+<p class="meta">This writes burpsy's own analysis settings and sends nothing anywhere. The review is single-use and covers exactly the call above.</p>
+<form hx-post="/ui2/sequencer/settings/run" method="post" action="/ui2/sequencer/settings/run" hx-target="#seq-settings" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and save</button>
+</form>
+<p class="meta"><a href="/ui2/sequencer" hx-get="/ui2/sequencer" hx-select="#seq-settings" hx-target="#seq-settings" hx-swap="outerHTML">cancel</a> (the pending review expires on its own)</p>
+</section>

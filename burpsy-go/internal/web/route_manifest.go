@@ -1481,11 +1481,22 @@ var manifest = map[string]route{
 	},
 	"/ui2/sequencer": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 Sequencer page: captures list + paste-and-analyse form",
+		summary: "ui2 Sequencer page: captures list, follow a capture (?capture=, auto-analyse with ?auto=1), " +
+			"seed the capture form from an exchange (?msg_id=), paste/file/capture analysis forms and settings",
 	},
 	"/ui2/sequencer/analyse": {
 		methods: []string{"POST"}, risk: riskAsset,
-		summary: "ui2 Sequencer analyse: POST the token list to /api/sequencer/analyse and render the report",
+		summary: "ui2 Sequencer analyse: POST pasted, uploaded or captured tokens to /api/sequencer/analyse and render the report with its charts",
+	},
+	"/ui2/sequencer/settings/{action}": {
+		// riskAsset like the other ui2 review routes: the class belongs to the PUT the review holds.
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Sequencer analysis settings: confirm holds the exact PUT /api/sequencer/settings body " +
+			"for review, run dispatches it verbatim, single-use",
+	},
+	"/ui2/sequencer/tokens/{id}": {
+		methods: []string{"GET"}, subPath: "1", risk: riskAsset,
+		summary: "ui2 Sequencer Save tokens: one capture's tokens as a .txt download via /api/sequencer/capture/{id}",
 	},
 	"/ui2/sequencer/capture/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
@@ -1546,11 +1557,12 @@ var manifest = map[string]route{
 	},
 	"/ui2/comparer": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
-		summary: "ui2 Comparer: GET the form, POST /ui2/comparer/run diffs two buffers via /api/tools/compare",
+		summary: "ui2 Comparer: GET the workbench (?a=&b= message-id seeds, ?run_a=&run_b= site-map compare " +
+			"via /api/tools/compare-sitemaps); POST is the workbench form like /ui2/comparer/run",
 	},
 	"/ui2/comparer/run": {
 		methods: []string{"POST"}, risk: riskAsset,
-		summary: "ui2 Comparer run: POST the two buffers, render the diff fragment",
+		summary: "ui2 Comparer workbench: slot item lists (message id, file, paste), swap, and the diff via /api/tools/compare",
 	},
 	"/ui2/dashboard": {
 		methods: []string{"GET"}, risk: riskAsset,

@@ -161,6 +161,9 @@ type Server struct {
 	// (ui2_intruder_results.go): /api/intruder/run keeps nothing once it answers, and the results
 	// page, exports and row actions read the report from here. Bounded by ui2IntruderKeptCap.
 	ui2IntruderReports sync.Map
+	// ui2SequencerSettingsReviews holds the reviewed PUT /api/sequencer/settings bodies a ui2
+	// operator has not yet confirmed (ui2_sequencer.go): single-use, expiring with ConfirmTTL.
+	ui2SequencerSettingsReviews sync.Map
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1695,6 +1698,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/sequencer", s.handleUI2Sequencer)
 	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
 	s.route("/ui2/sequencer/capture/{action}", s.handleUI2SequencerCapture)
+	s.route("/ui2/sequencer/settings/{action}", s.handleUI2SequencerSettings)
+	s.route("/ui2/sequencer/tokens/{id}", s.handleUI2SequencerTokens)
 	s.route("/ui2/settings/triage/{action}", s.handleUI2SettingsTriage)
 	s.route("/ui2/settings/write/{area}", s.handleUI2SettingsWriteFragment)
 	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
