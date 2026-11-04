@@ -60,6 +60,9 @@ var ui2Pages = []struct {
 	{"/ui2/search", "search", "Tools to search"},
 	{"/ui2/discover", "discover", "What burpsy does not do"},
 	{"/ui2/newscan", "newscan", "URLs to scan"},
+	{"/ui2/issues/consolidation", "issueconsolidation", "Exceptions by issue type"},
+	{"/ui2/issues/report", "issuereport", "Report settings"},
+	{"/ui2/auditqueue", "auditqueue", "Burp status parity"},
 }
 
 func TestUI2EveryPageRendersShellAndFragment(t *testing.T) {

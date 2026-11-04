@@ -350,12 +350,17 @@ type ui2IssuesModel struct {
 	Groups   []ui2IssueGroup
 	Total    int
 	Severity map[string]int // lower-cased severity -> count
+	// Filter is the view filter (ui2_issues.go); Shown counts the findings it admitted.
+	Filter            ui2IssueFilter
+	Shown             int
+	SeverityOptions   []string
+	ConfidenceOptions []string
 }
 
 // handleUI2Issues serves GET /ui2/issues: the shell with the grouped issues list, or the
 // groups fragment alone for an htmx swap.
 func (s *Server) handleUI2Issues(w http.ResponseWriter, r *http.Request) {
-	body := s.renderUI2Issues()
+	body := s.renderUI2IssuesFiltered(parseUI2IssueFilter(r))
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(body))
@@ -372,6 +377,11 @@ func (s *Server) handleUI2Issues(w http.ResponseWriter, r *http.Request) {
 // does per target, rolled up one level for display — and renders the groups fragment.
 // Evidence lives one click deep (the detail route), so the list payload stays flat.
 func (s *Server) renderUI2Issues() template.HTML {
+	return s.renderUI2IssuesFiltered(ui2IssueFilter{})
+}
+
+// renderUI2IssuesFiltered is renderUI2Issues with the list's view filter applied.
+func (s *Server) renderUI2IssuesFiltered(filter ui2IssueFilter) template.HTML {
 	findings := s.findings.All()
 	// Same skip as handleIssues: no findings means no occurrence resolution, so the
 	// whole-history snapshot would be built for an empty render.
@@ -383,6 +393,7 @@ func (s *Server) renderUI2Issues() template.HTML {
 	order := make([]key, 0, len(findings))
 	groups := map[key]*ui2IssueGroup{}
 	sev := map[string]int{}
+	shown := 0
 	for _, f := range findings {
 		if s.isolatedAgainst(f, &idx) {
 			continue
@@ -392,6 +403,10 @@ func (s *Server) renderUI2Issues() template.HTML {
 		if v.IssueName != nil && *v.IssueName != "" {
 			name = *v.IssueName
 		}
+		if !filter.admits(v, name) {
+			continue
+		}
+		shown++
 		k := key{name: name, host: v.Host}
 		g, ok := groups[k]
 		if !ok {
@@ -409,7 +424,8 @@ func (s *Server) renderUI2Issues() template.HTML {
 			sev[strings.ToLower(v.Severity)]++
 		}
 	}
-	out := ui2IssuesModel{Groups: make([]ui2IssueGroup, 0, len(order)), Total: len(findings), Severity: sev}
+	out := ui2IssuesModel{Groups: make([]ui2IssueGroup, 0, len(order)), Total: len(findings), Severity: sev,
+		Filter: filter, Shown: shown, SeverityOptions: ui2SeverityOptions, ConfidenceOptions: ui2ConfidenceOptions}
 	for _, k := range order {
 		out.Groups = append(out.Groups, *groups[k])
 	}
@@ -426,21 +442,10 @@ func (s *Server) handleUI2IssueDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
 		return
 	}
-	f, err := s.findings.Get(id)
-	if err != nil {
+	model, ok := s.ui2IssueDetailModel(id)
+	if !ok {
 		http.Error(w, "Issue not found", http.StatusNotFound)
 		return
-	}
-	idx := s.exchangeIndexFor([]*core.Finding{f})
-	v := s.issueView(f, &idx, false)
-	model := ui2IssueDetail{
-		ID: v.ID, CheckName: v.CheckName, Severity: v.Severity, Confidence: v.Confidence,
-		Host: v.Host, Param: v.Param, Evidence: v.Evidence, TimesSeen: v.TimesSeen,
-		FalsePositive: v.FalsePositive, Comment: v.Comment, Source: v.Source,
-		Detail: ptrString(v.Detail), Remediation: ptrString(v.Remediation),
-	}
-	for _, occ := range v.Occurrences {
-		model.Occurrences = append(model.Occurrences, ui2Occurrence{ExchangeID: uint64(occ.ExchangeID), Path: occ.Path})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ui2Templates.ExecuteTemplate(w, "issue_detail.html", model); err != nil {
@@ -525,6 +530,18 @@ type ui2IssueDetail struct {
 	Detail        string
 	Remediation   string
 	Occurrences   []ui2Occurrence
+	// Triage state and the action forms' inputs (ui2_issues.go).
+	Name               string
+	Location           string
+	SeverityOverride   string
+	OriginalSeverity   string
+	ConfidenceOverride string
+	OriginalConfidence string
+	Triage             *core.TriageNote
+	SeverityOptions    []string
+	ConfidenceOptions  []string
+	Done               string // outcome of a reviewed action, rendered above the detail
+	Note               string // refusal of a reviewed action
 }
 
 type ui2Occurrence struct {

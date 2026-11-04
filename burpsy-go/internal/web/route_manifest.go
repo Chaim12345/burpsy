@@ -1582,6 +1582,40 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one finding's detail: evidence, occurrences, advisory — the pane the list omits",
 	},
+	"/ui2/issues/action/{step}": {
+		// riskAsset like the other ui2 console routes: the gated class belongs to the API call the
+		// review mints, and this route reaches it only through a minted one-time token or a held,
+		// single-use review.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 issue triage actions (severity, confidence, false positive, comment, delete, LLM " +
+			"second look, LLM triage all): confirm renders the review of the exact /api/issues call, run spends it",
+	},
+	"/ui2/issues/consolidation": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 issue consolidation page: default action, per-type exceptions, what consolidation has done",
+	},
+	"/ui2/issues/consolidation/{step}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 issue consolidation save: confirm holds the exact PUT /api/issues/consolidation body, run sends it verbatim once",
+	},
+	"/ui2/issues/report": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 report settings page: the export links to /api/report/{format} carrying the chosen settings",
+	},
+	"/ui2/auditqueue": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 audit queue page: per-state metrics and the queue table from /api/scanner/audit-items",
+	},
+	"/ui2/auditqueue/item/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 one audit queue item: state, insertion points, base request/response and its actions",
+	},
+	"/ui2/auditqueue/action/{step}": {
+		// riskAsset: the attack class belongs to /api/scanner/audit-items/{id}/again, which this
+		// route reaches only through a minted one-time token.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 audit queue item actions (cancel, audit again): confirm mints the review, run spends it",
+	},
 	"/ui2/advisories/{typeIndex}": {
 		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
 		summary: "ui2 one catalogue definition's detail as an HTML fragment for the Definitions pane",

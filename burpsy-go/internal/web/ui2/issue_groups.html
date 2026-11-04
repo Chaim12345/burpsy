@@ -1,5 +1,6 @@
 <div id="rows">
-<p class="meta">{{.Total}} findings{{range $sev, $n := .Severity}} · <span class="sev sev-{{$sev}}">{{$sev}}</span> {{$n}}{{end}}</p>
+{{template "issues_toolbar" .}}
+<p class="meta">{{if .Filter.Active}}{{.Shown}} of {{end}}{{.Total}} findings{{range $sev, $n := .Severity}} · <span class="sev sev-{{$sev}}">{{$sev}}</span> {{$n}}{{end}}</p>
 <table>
 <thead><tr><th scope="col">Issue</th><th scope="col">Severity</th><th scope="col">Confidence</th><th scope="col">Host</th><th scope="col">Seen</th></tr></thead>
 <tbody>
@@ -11,7 +12,7 @@
 </tr>
 {{if gt (len .IDs) 1}}<tr class="meta"><td colspan="5">{{len .IDs}} findings in this group: {{range .IDs}}<a href="/ui2/issues/{{.}}" hx-get="/ui2/issues/{{.}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click consume">#{{.}}</a> {{end}}</td></tr>{{end}}
 {{else}}
-<tr><td colspan="5" class="meta">No issues yet.</td></tr>
+<tr><td colspan="5" class="meta">{{if .Filter.Active}}No issues match this filter.{{else}}No issues yet.{{end}}</td></tr>
 {{end}}
 </tbody>
 </table>
