@@ -149,7 +149,6 @@ type Server struct {
 	// configuration library) a ui2 operator has reviewed but not yet confirmed; same single-use
 	// LoadAndDelete semantics, bounded by ui2ScanReviewCap, expiring with ConfirmTTL.
 	ui2ScannerReviews sync.Map
-	sender            *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
