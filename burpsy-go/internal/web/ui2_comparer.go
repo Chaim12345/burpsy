@@ -211,6 +211,7 @@ type ui2CmpSitemaps struct {
 }
 
 type ui2CmpPage struct {
+	Notice      templateHTML // the "Loaded request message" line of an exchange-menu seed
 	Error, Note string
 	A, B        ui2CmpSlotView
 	Granularity string
@@ -409,10 +410,21 @@ func (s *Server) handleUI2Comparer(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	p := &ui2CmpPage{Granularity: "bytes", View: "text", Wrap: true, Side: "response"}
 	a, b := ui2CmpSlotState{Sel: -1}, ui2CmpSlotState{Sel: -1}
+	aRaw, bRaw := q.Get("a"), q.Get("b")
+	// "Send to Comparer A/B" from an exchange's menu: ?msg_id= with slot=a|b.
+	notice, mseed, mok := s.ui2SeedFor(r, "Comparer", false)
+	p.Notice = notice
+	if mok {
+		if q.Get("slot") == "b" {
+			bRaw = strconv.FormatUint(mseed.MsgID, 10)
+		} else {
+			aRaw = strconv.FormatUint(mseed.MsgID, 10)
+		}
+	}
 	for _, seed := range []struct {
 		raw string
 		st  *ui2CmpSlotState
-	}{{q.Get("a"), &a}, {q.Get("b"), &b}} {
+	}{{aRaw, &a}, {bRaw, &b}} {
 		if seed.raw == "" {
 			continue
 		}
@@ -938,4 +950,16 @@ func ui2RenderCompare(a, b string, result any, repaired bool) string {
 		sb.WriteString("\u2026 invalid UTF-8 bytes in the input were replaced with \uFFFD before comparing\n")
 	}
 	return sb.String()
+}
+
+// ui2CmpRenderTexts answers with the Comparer page holding two texts in A and B, already diffed:
+// the entry point for other pages' compare links (History's first two rows, an Intruder pair).
+// side is "request" or "response", the message half the texts are.
+func (s *Server) ui2CmpRenderTexts(w http.ResponseWriter, r *http.Request, notice templateHTML, side, labelA, a, labelB, b string) {
+	p := &ui2CmpPage{Granularity: "bytes", View: "text", Wrap: true, Side: side, Notice: notice}
+	sa, sb := ui2CmpSlotState{Sel: -1}, ui2CmpSlotState{Sel: -1}
+	sa.add(ui2CmpItem{Label: labelA, Data: []byte(a), Binary: ui2CmpBinary([]byte(a))})
+	sb.add(ui2CmpItem{Label: labelB, Data: []byte(b), Binary: ui2CmpBinary([]byte(b))})
+	s.ui2CmpCompare(p, &sa, &sb)
+	s.ui2CmpFinish(w, r, p, sa, sb, "", "")
 }

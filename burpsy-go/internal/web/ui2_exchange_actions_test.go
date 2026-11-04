@@ -64,7 +64,7 @@ func TestUI2ExchangeMenuFragment(t *testing.T) {
 	if detail := getUI2(t, s, strings.Replace(base, "exchange", "history", 1)).Body.String(); !strings.Contains(detail, base+"/menu") {
 		t.Errorf("history detail does not load the actions menu")
 	}
-	if sm := getUI2(t, s, "/ui2/sitemap").Body.String(); !strings.Contains(sm, `href="`+base+`"`) {
+	if sm := getUI2(t, s, "/ui2/sitemap/detail?key="+url.QueryEscape("http://shop.test:80")).Body.String(); !strings.Contains(sm, `href="`+base+`"`) {
 		t.Errorf("site map request row has no Actions link")
 	}
 }

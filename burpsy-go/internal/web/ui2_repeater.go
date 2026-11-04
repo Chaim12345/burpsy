@@ -302,6 +302,18 @@ func (s *Server) handleUI2Repeater(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	// "Send to Repeater" from an exchange's menu: the request opens as a stand-alone draft (Send
+	// or "Open as new tab" is what creates a tab; a GET never does).
+	if notice, seed, ok := s.ui2SeedFor(r, "Repeater", true); notice != "" {
+		body := notice
+		if ok {
+			body += ui2Exec("repeater.html", map[string]any{"draft": seed.Raw, "target": seed.Target})
+		} else {
+			body += s.renderUI2Repeater(0, ui2RepeaterQuery{Hist: -1}, "", nil)
+		}
+		ui2Fragment(w, r, "burpsy /ui2/ — Repeater", "repeater", body)
+		return
+	}
 	tabID, _ := strconv.Atoi(q.Get("tab"))
 	st := ui2RepeaterQuery{Hist: -1}
 	if h, err := strconv.Atoi(q.Get("h")); err == nil {

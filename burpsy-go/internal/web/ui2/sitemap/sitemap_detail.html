@@ -33,10 +33,10 @@
 </details>
 <h3>Requests under this node ({{.Total}}){{if gt .Total (len .Rows)}} <span class="meta">showing the newest {{len .Rows}}</span>{{end}}</h3>
 <table class="sm-req" aria-label="Requests under {{.Label}}">
-<thead><tr><th scope="col">#</th><th scope="col">Method</th><th scope="col">URL</th><th scope="col">Params</th><th scope="col">Status</th><th scope="col">Length</th><th scope="col">MIME</th><th scope="col">Comment</th><th scope="col">Time</th><th scope="col">Age</th></tr></thead>
+<thead><tr><th scope="col">#</th><th scope="col">Method</th><th scope="col">URL</th><th scope="col">Params</th><th scope="col">Status</th><th scope="col">Length</th><th scope="col">MIME</th><th scope="col">Comment</th><th scope="col">Time</th><th scope="col">Age</th><th scope="col">Actions</th></tr></thead>
 <tbody>
-{{range .Rows}}<tr hx-get="{{.MsgURL}}" hx-target="#sm-msg" hx-swap="innerHTML" tabindex="0" data-ex="{{.ID}}"><td>{{.ID}}</td><td>{{.Method}}</td><td title="{{.URL}}">{{.URL}}</td><td>{{if .Params}}params{{else}}—{{end}}</td><td>{{.Status}}</td><td>{{.Length}}</td><td>{{if .Mime}}{{.Mime}}{{else}}—{{end}}</td><td title="{{.Comment}}">{{if .Comment}}{{.Comment}}{{else}}—{{end}}</td><td>{{.DurationMs}} ms</td><td>{{.Age}}</td></tr>
-{{else}}<tr><td colspan="10" class="meta">No requests under this node{{if not .IsHost}} — nothing requested this folder itself; open a child node to see its traffic{{end}}.</td></tr>{{end}}
+{{range .Rows}}<tr hx-get="{{.MsgURL}}" hx-target="#sm-msg" hx-swap="innerHTML" tabindex="0" data-ex="{{.ID}}"><td>{{.ID}}</td><td>{{.Method}}</td><td title="{{.URL}}">{{.URL}}</td><td>{{if .Params}}params{{else}}—{{end}}</td><td>{{.Status}}</td><td>{{.Length}}</td><td>{{if .Mime}}{{.Mime}}{{else}}—{{end}}</td><td title="{{.Comment}}">{{if .Comment}}{{.Comment}}{{else}}—{{end}}</td><td>{{.DurationMs}} ms</td><td>{{.Age}}</td><td><a class="btn" href="/ui2/exchange/{{.ID}}" title="Send this exchange to a tool, copy it, annotate, audit">Actions</a></td></tr>
+{{else}}<tr><td colspan="11" class="meta">No requests under this node{{if not .IsHost}} — nothing requested this folder itself; open a child node to see its traffic{{end}}.</td></tr>{{end}}
 </tbody></table>
 <div id="sm-msg"><p class="meta">Choose a row above to read its exact request and response bytes.</p></div>
 {{end}}

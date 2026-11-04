@@ -541,9 +541,9 @@ func (s *Server) handleUI2HistoryCompare(w http.ResponseWriter, r *http.Request)
 		bufs[i] = string(raw)
 	}
 	note := fmt.Sprintf("Request #%d loaded into A and #%d into B.", ids[0], ids[1])
-	body := ui2Exec("history_bulk_result.html", map[string]any{"done": note}) +
-		ui2Exec("comparer.html", map[string]any{"a": bufs[0], "b": bufs[1], "result": nil})
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", body)
+	s.ui2CmpRenderTexts(w, r, ui2Exec("history_bulk_result.html", map[string]any{"done": note}), "request",
+		fmt.Sprintf("request #%d: %s", ids[0], ui2CmpFirstLine(bufs[0])), bufs[0],
+		fmt.Sprintf("request #%d: %s", ids[1], ui2CmpFirstLine(bufs[1])), bufs[1])
 }
 
 // ---- bulk actions ------------------------------------------------------------------------------

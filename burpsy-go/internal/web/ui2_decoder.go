@@ -95,6 +95,7 @@ type ui2DecResult struct {
 
 // ui2DecoderModel is the whole Decoder page.
 type ui2DecoderModel struct {
+	Notice      templateHTML // the "Loaded request message" line of an exchange-menu seed
 	Input       string
 	InputFormat string // text | hex
 	SelStart    string
@@ -344,6 +345,7 @@ func (s *Server) handleUI2Decoder(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	m.Notice, _, _ = s.ui2SeedFor(r, "Decoder", false)
 	m.finishSteps()
 	ui2Fragment(w, r, ui2DecoderTitle, "decoder", ui2Exec("decoder_page.html", m))
 }

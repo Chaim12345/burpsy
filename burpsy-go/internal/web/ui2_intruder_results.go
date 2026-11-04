@@ -944,9 +944,12 @@ func (s *Server) handleUI2IntruderCompare(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ra, rb := strings.ToValidUTF8(a, "�"), strings.ToValidUTF8(b, "�")
-	result, errText := s.ui2APIResult(http.MethodPost, "/api/tools/compare", map[string]string{"a": ra, "b": rb})
-	ui2Fragment(w, r, "burpsy /ui2/ — Comparer", "comparer", ui2Exec("comparer.html", map[string]any{
-		"result": ui2RenderCompare(ra, rb, result, ra != a || rb != b), "error": errText, "a": a, "b": b}))
+	side := "response"
+	if strings.HasPrefix(r.URL.Query().Get("a"), "req") && strings.HasPrefix(r.URL.Query().Get("b"), "req") {
+		side = "request"
+	}
+	s.ui2CmpRenderTexts(w, r, "", side, "attack "+strconv.FormatUint(id, 10)+" "+r.URL.Query().Get("a"), ra,
+		"attack "+strconv.FormatUint(id, 10)+" "+r.URL.Query().Get("b"), rb)
 }
 
 // ---- request item again (attack class: review A with the full bound body) ---------------------

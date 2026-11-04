@@ -602,6 +602,7 @@ type ui2SeqSettingsModel struct {
 }
 
 type ui2SeqPage struct {
+	Notice     templateHTML // the "Loaded request message" line of an exchange-menu seed
 	Error      string
 	Captures   []captureView
 	AnyRunning bool
@@ -834,9 +835,7 @@ func (s *Server) handleUI2Sequencer(w http.ResponseWriter, r *http.Request) {
 		s.ui2SeqSeed(p, id)
 	}
 	// "Send to Sequencer" from an exchange's menu arrives as a seed.
-	if _, seed, ok := s.ui2SeedFor(r, "Sequencer", true); ok {
-		s.ui2SeqSeed(p, strconv.FormatUint(seed.MsgID, 10))
-	}
+	p.Notice, _, _ = s.ui2SeedFor(r, "Sequencer", true)
 	// Auto-analysis is a read: the followed capture's tokens analysed under the URL's options.
 	if p.Auto && p.Follow != nil && len(p.Follow.Tokens) > 0 && optErr == "" {
 		p.Source = "capture"
