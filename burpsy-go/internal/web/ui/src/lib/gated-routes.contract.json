@@ -199,8 +199,29 @@
   "/ui2/advisories",
   "/ui2/advisories/{typeIndex}",
   "/ui2/app.js",
+  "/ui2/auditqueue",
+  "/ui2/auditqueue/action/{step}",
+  "/ui2/auditqueue/item/{id}",
+  "/ui2/authz",
+  "/ui2/authz/diff/{a}/{b}",
+  "/ui2/authz/identities/{action}",
+  "/ui2/authz/test/{action}",
+  "/ui2/bchecks",
+  "/ui2/bchecks/editor",
+  "/ui2/bchecks/enable",
+  "/ui2/bchecks/export",
+  "/ui2/bchecks/reload",
+  "/ui2/bchecks/review/{op}",
+  "/ui2/bchecks/run",
+  "/ui2/bchecks/upload",
+  "/ui2/bchecks/validate",
   "/ui2/collaborator",
+  "/ui2/collaborator/blindxss",
+  "/ui2/collaborator/health",
+  "/ui2/collaborator/interaction/{id}",
   "/ui2/collaborator/mint",
+  "/ui2/collaborator/poll",
+  "/ui2/collaborator/server/{action}",
   "/ui2/comparer",
   "/ui2/comparer/run",
   "/ui2/dashboard",
@@ -212,7 +233,30 @@
   "/ui2/decoder",
   "/ui2/decoder/run",
   "/ui2/discover",
+  "/ui2/discovery",
+  "/ui2/discovery/repeater",
+  "/ui2/discovery/review",
+  "/ui2/discovery/run",
+  "/ui2/discovery/runs",
+  "/ui2/dominvader",
+  "/ui2/dominvader/review",
+  "/ui2/dominvader/run",
+  "/ui2/engagement/clickbandit",
+  "/ui2/engagement/csrf",
+  "/ui2/engagement/csrf/test",
+  "/ui2/engagement/csrf/{id}/download",
+  "/ui2/engagement/hidden-inputs",
+  "/ui2/engagement/hidden-inputs/{action}",
+  "/ui2/exchange/{id}",
+  "/ui2/exchange/{id}/menu",
+  "/ui2/exchange/{id}/{action}",
   "/ui2/extensions",
+  "/ui2/extensions/apis",
+  "/ui2/extensions/confirm",
+  "/ui2/extensions/console",
+  "/ui2/extensions/options",
+  "/ui2/extensions/plugin",
+  "/ui2/extensions/run",
   "/ui2/history",
   "/ui2/history/bulk/{action}",
   "/ui2/history/compare",
@@ -229,20 +273,42 @@
   "/ui2/intercept/send",
   "/ui2/intercept/{action}",
   "/ui2/intruder",
+  "/ui2/intruder/config/default",
+  "/ui2/intruder/config/load",
+  "/ui2/intruder/config/save",
   "/ui2/intruder/confirm",
+  "/ui2/intruder/payloads",
+  "/ui2/intruder/payloads/upload",
   "/ui2/intruder/points",
   "/ui2/intruder/run",
+  "/ui2/intruder/settings/extract",
+  "/ui2/intruder/{id}/again/{step}",
+  "/ui2/intruder/{id}/comment",
+  "/ui2/intruder/{id}/compare",
+  "/ui2/intruder/{id}/export",
+  "/ui2/intruder/{id}/item/{ordinal}",
+  "/ui2/intruder/{id}/item/{ordinal}/repeater",
   "/ui2/intruder/{id}/results",
   "/ui2/intruder/{id}/{action}",
   "/ui2/issues",
+  "/ui2/issues/action/{step}",
+  "/ui2/issues/consolidation",
+  "/ui2/issues/consolidation/{step}",
+  "/ui2/issues/report",
   "/ui2/issues/{id}",
   "/ui2/logger",
+  "/ui2/logger/entry/{id}",
+  "/ui2/logger/export",
   "/ui2/logger/{action}",
   "/ui2/message/protobuf/{id}/{action}",
   "/ui2/message/render/{id}",
+  "/ui2/newscan",
+  "/ui2/newscan/{kind}/{action}",
   "/ui2/organizer",
+  "/ui2/organizer/add/{action}",
   "/ui2/organizer/annotate/{action}",
   "/ui2/organizer/collections/{action}",
+  "/ui2/organizer/export.csv",
   "/ui2/organizer/items/{action}",
   "/ui2/organizer/status/{action}",
   "/ui2/proxy",
@@ -254,16 +320,32 @@
   "/ui2/proxy/options",
   "/ui2/proxy/options/{action}",
   "/ui2/repeater",
+  "/ui2/repeater/graphql",
+  "/ui2/repeater/graphql/query",
+  "/ui2/repeater/graphql/send",
+  "/ui2/repeater/graphql/sitemap-confirm",
+  "/ui2/repeater/graphql/sitemap-run",
+  "/ui2/repeater/graphql/validate",
+  "/ui2/repeater/h2",
+  "/ui2/repeater/h2/preview",
+  "/ui2/repeater/h2/send",
   "/ui2/repeater/send",
   "/ui2/repeater/send-group",
   "/ui2/repeater/tabs/{action}",
+  "/ui2/repeater/ws",
+  "/ui2/repeater/ws/send",
   "/ui2/scanner",
+  "/ui2/scanner/config",
   "/ui2/scanner/config-confirm",
   "/ui2/scanner/config-run",
   "/ui2/scanner/crawl-launch",
   "/ui2/scanner/crawl-run",
   "/ui2/scanner/crawl-watch",
   "/ui2/scanner/launch",
+  "/ui2/scanner/library",
+  "/ui2/scanner/live",
+  "/ui2/scanner/review",
+  "/ui2/scanner/review-run",
   "/ui2/scanner/run",
   "/ui2/scope",
   "/ui2/scope/confirm",
@@ -273,7 +355,13 @@
   "/ui2/sequencer",
   "/ui2/sequencer/analyse",
   "/ui2/sequencer/capture/{action}",
+  "/ui2/sequencer/settings/{action}",
+  "/ui2/sequencer/tokens/{id}",
   "/ui2/session",
+  "/ui2/session/call/{action}",
+  "/ui2/session/editor",
+  "/ui2/session/editor/{action}",
+  "/ui2/session/prompts",
   "/ui2/session/rules/{action}",
   "/ui2/settings",
   "/ui2/settings/triage/{action}",
@@ -293,7 +381,9 @@
   "/ui2/sitemap/review/{action}",
   "/ui2/sitemap/scope/{action}",
   "/ui2/sse.min.js",
-  "/ui2/ws"
+  "/ui2/ws",
+  "/ui2/ws/frame/{id}",
+  "/ui2/ws/handshake/{id}"
  ],
  "paths": [
   {
@@ -4042,6 +4132,326 @@
    "gated": false
   },
   {
+   "path": "/ui2/auditqueue",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/action/w",
+   "key": "/ui2/auditqueue/action/{step}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/action/w/",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/action/w/extra",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/action/w/extra/more",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/extra",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/extra/more",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/item/w",
+   "key": "/ui2/auditqueue/item/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/item/w/",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/item/w/extra",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/auditqueue/item/w/extra/more",
+   "key": "/ui2/auditqueue",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w",
+   "key": "/ui2/authz/diff/{a}/{b}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/diff/w/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w",
+   "key": "/ui2/authz/identities/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/identities/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w",
+   "key": "/ui2/authz/test/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/extra",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/authz/test/w/extra/more",
+   "key": "/ui2/authz",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/editor",
+   "key": "/ui2/bchecks/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/editor/",
+   "key": "/ui2/bchecks/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/editor/extra",
+   "key": "/ui2/bchecks/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/editor/extra/more",
+   "key": "/ui2/bchecks/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/enable",
+   "key": "/ui2/bchecks/enable",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/enable/",
+   "key": "/ui2/bchecks/enable",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/enable/extra",
+   "key": "/ui2/bchecks/enable",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/enable/extra/more",
+   "key": "/ui2/bchecks/enable",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/export",
+   "key": "/ui2/bchecks/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/export/",
+   "key": "/ui2/bchecks/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/export/extra",
+   "key": "/ui2/bchecks/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/export/extra/more",
+   "key": "/ui2/bchecks/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/extra",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/extra/more",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/reload",
+   "key": "/ui2/bchecks/reload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/reload/",
+   "key": "/ui2/bchecks/reload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/reload/extra",
+   "key": "/ui2/bchecks/reload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/reload/extra/more",
+   "key": "/ui2/bchecks/reload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/review/w",
+   "key": "/ui2/bchecks/review/{op}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/review/w/",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/review/w/extra",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/review/w/extra/more",
+   "key": "/ui2/bchecks",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/run",
+   "key": "/ui2/bchecks/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/run/",
+   "key": "/ui2/bchecks/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/run/extra",
+   "key": "/ui2/bchecks/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/run/extra/more",
+   "key": "/ui2/bchecks/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/upload",
+   "key": "/ui2/bchecks/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/upload/",
+   "key": "/ui2/bchecks/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/upload/extra",
+   "key": "/ui2/bchecks/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/upload/extra/more",
+   "key": "/ui2/bchecks/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/validate",
+   "key": "/ui2/bchecks/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/validate/",
+   "key": "/ui2/bchecks/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/validate/extra",
+   "key": "/ui2/bchecks/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/bchecks/validate/extra/more",
+   "key": "/ui2/bchecks/validate",
+   "gated": false
+  },
+  {
    "path": "/ui2/collaborator",
    "key": "/ui2/collaborator",
    "gated": false
@@ -4052,12 +4462,72 @@
    "gated": false
   },
   {
+   "path": "/ui2/collaborator/blindxss",
+   "key": "/ui2/collaborator/blindxss",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/blindxss/",
+   "key": "/ui2/collaborator/blindxss",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/blindxss/extra",
+   "key": "/ui2/collaborator/blindxss",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/blindxss/extra/more",
+   "key": "/ui2/collaborator/blindxss",
+   "gated": false
+  },
+  {
    "path": "/ui2/collaborator/extra",
    "key": "/ui2/collaborator",
    "gated": false
   },
   {
    "path": "/ui2/collaborator/extra/more",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/health",
+   "key": "/ui2/collaborator/health",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/health/",
+   "key": "/ui2/collaborator/health",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/health/extra",
+   "key": "/ui2/collaborator/health",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/health/extra/more",
+   "key": "/ui2/collaborator/health",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/interaction/w",
+   "key": "/ui2/collaborator/interaction/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/interaction/w/",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/interaction/w/extra",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/interaction/w/extra/more",
    "key": "/ui2/collaborator",
    "gated": false
   },
@@ -4079,6 +4549,46 @@
   {
    "path": "/ui2/collaborator/mint/extra/more",
    "key": "/ui2/collaborator/mint",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/poll",
+   "key": "/ui2/collaborator/poll",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/poll/",
+   "key": "/ui2/collaborator/poll",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/poll/extra",
+   "key": "/ui2/collaborator/poll",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/poll/extra/more",
+   "key": "/ui2/collaborator/poll",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/server/w",
+   "key": "/ui2/collaborator/server/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/server/w/",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/server/w/extra",
+   "key": "/ui2/collaborator",
+   "gated": false
+  },
+  {
+   "path": "/ui2/collaborator/server/w/extra/more",
+   "key": "/ui2/collaborator",
    "gated": false
   },
   {
@@ -4302,6 +4812,346 @@
    "gated": false
   },
   {
+   "path": "/ui2/discovery",
+   "key": "/ui2/discovery",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/",
+   "key": "/ui2/discovery",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/extra",
+   "key": "/ui2/discovery",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/extra/more",
+   "key": "/ui2/discovery",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/repeater",
+   "key": "/ui2/discovery/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/repeater/",
+   "key": "/ui2/discovery/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/repeater/extra",
+   "key": "/ui2/discovery/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/repeater/extra/more",
+   "key": "/ui2/discovery/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/review",
+   "key": "/ui2/discovery/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/review/",
+   "key": "/ui2/discovery/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/review/extra",
+   "key": "/ui2/discovery/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/review/extra/more",
+   "key": "/ui2/discovery/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/run",
+   "key": "/ui2/discovery/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/run/",
+   "key": "/ui2/discovery/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/run/extra",
+   "key": "/ui2/discovery/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/run/extra/more",
+   "key": "/ui2/discovery/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/runs",
+   "key": "/ui2/discovery/runs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/runs/",
+   "key": "/ui2/discovery/runs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/runs/extra",
+   "key": "/ui2/discovery/runs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discovery/runs/extra/more",
+   "key": "/ui2/discovery/runs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader",
+   "key": "/ui2/dominvader",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/",
+   "key": "/ui2/dominvader",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/extra",
+   "key": "/ui2/dominvader",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/extra/more",
+   "key": "/ui2/dominvader",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/review",
+   "key": "/ui2/dominvader/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/review/",
+   "key": "/ui2/dominvader/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/review/extra",
+   "key": "/ui2/dominvader/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/review/extra/more",
+   "key": "/ui2/dominvader/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/run",
+   "key": "/ui2/dominvader/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/run/",
+   "key": "/ui2/dominvader/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/run/extra",
+   "key": "/ui2/dominvader/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/dominvader/run/extra/more",
+   "key": "/ui2/dominvader/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/extra",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/clickbandit/extra/more",
+   "key": "/ui2/engagement/clickbandit",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/extra",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/extra/more",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/extra",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/test/extra/more",
+   "key": "/ui2/engagement/csrf/test",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download",
+   "key": "/ui2/engagement/csrf/{id}/download",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/extra",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/csrf/w/download/extra/more",
+   "key": "/ui2/engagement/csrf",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/extra",
+   "key": "/ui2/engagement/hidden-inputs/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/extra/more",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w",
+   "key": "/ui2/engagement/hidden-inputs/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/extra",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/engagement/hidden-inputs/w/extra/more",
+   "key": "/ui2/engagement/hidden-inputs",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w",
+   "key": "/ui2/exchange/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/extra",
+   "key": "/ui2/exchange/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu",
+   "key": "/ui2/exchange/{id}/menu",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/menu/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w",
+   "key": "/ui2/exchange/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/exchange/w/w/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
    "path": "/ui2/extensions",
    "key": "/ui2/extensions",
    "gated": false
@@ -4312,6 +5162,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/extensions/apis",
+   "key": "/ui2/extensions/apis",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/apis/",
+   "key": "/ui2/extensions/apis",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/apis/extra",
+   "key": "/ui2/extensions/apis",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/apis/extra/more",
+   "key": "/ui2/extensions/apis",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/confirm",
+   "key": "/ui2/extensions/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/confirm/",
+   "key": "/ui2/extensions/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/confirm/extra",
+   "key": "/ui2/extensions/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/confirm/extra/more",
+   "key": "/ui2/extensions/confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/console",
+   "key": "/ui2/extensions/console",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/console/",
+   "key": "/ui2/extensions/console",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/console/extra",
+   "key": "/ui2/extensions/console",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/console/extra/more",
+   "key": "/ui2/extensions/console",
+   "gated": false
+  },
+  {
    "path": "/ui2/extensions/extra",
    "key": "/ui2/extensions",
    "gated": false
@@ -4319,6 +5229,66 @@
   {
    "path": "/ui2/extensions/extra/more",
    "key": "/ui2/extensions",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/options",
+   "key": "/ui2/extensions/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/options/",
+   "key": "/ui2/extensions/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/options/extra",
+   "key": "/ui2/extensions/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/options/extra/more",
+   "key": "/ui2/extensions/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/plugin",
+   "key": "/ui2/extensions/plugin",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/plugin/",
+   "key": "/ui2/extensions/plugin",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/plugin/extra",
+   "key": "/ui2/extensions/plugin",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/plugin/extra/more",
+   "key": "/ui2/extensions/plugin",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/run",
+   "key": "/ui2/extensions/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/run/",
+   "key": "/ui2/extensions/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/run/extra",
+   "key": "/ui2/extensions/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/extensions/run/extra/more",
+   "key": "/ui2/extensions/run",
    "gated": false
   },
   {
@@ -4642,6 +5612,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/intruder/config/default",
+   "key": "/ui2/intruder/config/default",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/default/",
+   "key": "/ui2/intruder/config/default",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/default/extra",
+   "key": "/ui2/intruder/config/default",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/default/extra/more",
+   "key": "/ui2/intruder/config/default",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/load",
+   "key": "/ui2/intruder/config/load",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/load/",
+   "key": "/ui2/intruder/config/load",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/load/extra",
+   "key": "/ui2/intruder/config/load",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/load/extra/more",
+   "key": "/ui2/intruder/config/load",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/save",
+   "key": "/ui2/intruder/config/save",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/save/",
+   "key": "/ui2/intruder/config/save",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/save/extra",
+   "key": "/ui2/intruder/config/save",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/config/save/extra/more",
+   "key": "/ui2/intruder/config/save",
+   "gated": false
+  },
+  {
    "path": "/ui2/intruder/confirm",
    "key": "/ui2/intruder/confirm",
    "gated": false
@@ -4669,6 +5699,46 @@
   {
    "path": "/ui2/intruder/extra/more",
    "key": "/ui2/intruder/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads",
+   "key": "/ui2/intruder/payloads",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/",
+   "key": "/ui2/intruder/payloads",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/extra",
+   "key": "/ui2/intruder/payloads",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/extra/more",
+   "key": "/ui2/intruder/payloads",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/upload",
+   "key": "/ui2/intruder/payloads/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/upload/",
+   "key": "/ui2/intruder/payloads/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/upload/extra",
+   "key": "/ui2/intruder/payloads/upload",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/payloads/upload/extra/more",
+   "key": "/ui2/intruder/payloads/upload",
    "gated": false
   },
   {
@@ -4709,6 +5779,146 @@
   {
    "path": "/ui2/intruder/run/extra/more",
    "key": "/ui2/intruder/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/settings/extract",
+   "key": "/ui2/intruder/settings/extract",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/settings/extract/",
+   "key": "/ui2/intruder/settings/extract",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/settings/extract/extra",
+   "key": "/ui2/intruder/settings/extract",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/settings/extract/extra/more",
+   "key": "/ui2/intruder/settings/extract",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/again/w",
+   "key": "/ui2/intruder/{id}/again/{step}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/again/w/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/again/w/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/again/w/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/comment",
+   "key": "/ui2/intruder/{id}/comment",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/comment/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/comment/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/comment/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/compare",
+   "key": "/ui2/intruder/{id}/compare",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/compare/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/compare/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/compare/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/export",
+   "key": "/ui2/intruder/{id}/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/export/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/export/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/export/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w",
+   "key": "/ui2/intruder/{id}/item/{ordinal}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/extra/more",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/repeater",
+   "key": "/ui2/intruder/{id}/item/{ordinal}/repeater",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/repeater/",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/repeater/extra",
+   "key": "/ui2/intruder",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intruder/w/item/w/repeater/extra/more",
+   "key": "/ui2/intruder",
    "gated": false
   },
   {
@@ -4762,6 +5972,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/issues/action/w",
+   "key": "/ui2/issues/action/{step}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/action/w/",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/action/w/extra",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/action/w/extra/more",
+   "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/extra",
+   "key": "/ui2/issues/consolidation/{step}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/extra/more",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/w",
+   "key": "/ui2/issues/consolidation/{step}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/w/",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/w/extra",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/consolidation/w/extra/more",
+   "key": "/ui2/issues/consolidation",
+   "gated": false
+  },
+  {
    "path": "/ui2/issues/extra",
    "key": "/ui2/issues/{id}",
    "gated": false
@@ -4769,6 +6039,26 @@
   {
    "path": "/ui2/issues/extra/more",
    "key": "/ui2/issues",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/report",
+   "key": "/ui2/issues/report",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/report/",
+   "key": "/ui2/issues/report",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/report/extra",
+   "key": "/ui2/issues/report",
+   "gated": false
+  },
+  {
+   "path": "/ui2/issues/report/extra/more",
+   "key": "/ui2/issues/report",
    "gated": false
   },
   {
@@ -4799,6 +6089,46 @@
   {
    "path": "/ui2/logger/",
    "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/entry/w",
+   "key": "/ui2/logger/entry/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/entry/w/",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/entry/w/extra",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/entry/w/extra/more",
+   "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/export",
+   "key": "/ui2/logger/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/export/",
+   "key": "/ui2/logger/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/export/extra",
+   "key": "/ui2/logger/export",
+   "gated": false
+  },
+  {
+   "path": "/ui2/logger/export/extra/more",
+   "key": "/ui2/logger/export",
    "gated": false
   },
   {
@@ -4872,12 +6202,72 @@
    "gated": false
   },
   {
+   "path": "/ui2/newscan",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/extra",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/extra/more",
+   "key": "/ui2/newscan/{kind}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/w/w",
+   "key": "/ui2/newscan/{kind}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/w/w/",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/w/w/extra",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
+   "path": "/ui2/newscan/w/w/extra/more",
+   "key": "/ui2/newscan",
+   "gated": false
+  },
+  {
    "path": "/ui2/organizer",
    "key": "/ui2/organizer",
    "gated": false
   },
   {
    "path": "/ui2/organizer/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/add/w",
+   "key": "/ui2/organizer/add/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/add/w/",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/add/w/extra",
+   "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/add/w/extra/more",
    "key": "/ui2/organizer",
    "gated": false
   },
@@ -4919,6 +6309,26 @@
   {
    "path": "/ui2/organizer/collections/w/extra/more",
    "key": "/ui2/organizer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/export.csv",
+   "key": "/ui2/organizer/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/export.csv/",
+   "key": "/ui2/organizer/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/export.csv/extra",
+   "key": "/ui2/organizer/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/organizer/export.csv/extra/more",
+   "key": "/ui2/organizer/export.csv",
    "gated": false
   },
   {
@@ -5152,6 +6562,186 @@
    "gated": false
   },
   {
+   "path": "/ui2/repeater/graphql",
+   "key": "/ui2/repeater/graphql",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/",
+   "key": "/ui2/repeater/graphql",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/extra",
+   "key": "/ui2/repeater/graphql",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/extra/more",
+   "key": "/ui2/repeater/graphql",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/query",
+   "key": "/ui2/repeater/graphql/query",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/query/",
+   "key": "/ui2/repeater/graphql/query",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/query/extra",
+   "key": "/ui2/repeater/graphql/query",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/query/extra/more",
+   "key": "/ui2/repeater/graphql/query",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/send",
+   "key": "/ui2/repeater/graphql/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/send/",
+   "key": "/ui2/repeater/graphql/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/send/extra",
+   "key": "/ui2/repeater/graphql/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/send/extra/more",
+   "key": "/ui2/repeater/graphql/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-confirm",
+   "key": "/ui2/repeater/graphql/sitemap-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-confirm/",
+   "key": "/ui2/repeater/graphql/sitemap-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-confirm/extra",
+   "key": "/ui2/repeater/graphql/sitemap-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-confirm/extra/more",
+   "key": "/ui2/repeater/graphql/sitemap-confirm",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-run",
+   "key": "/ui2/repeater/graphql/sitemap-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-run/",
+   "key": "/ui2/repeater/graphql/sitemap-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-run/extra",
+   "key": "/ui2/repeater/graphql/sitemap-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/sitemap-run/extra/more",
+   "key": "/ui2/repeater/graphql/sitemap-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/validate",
+   "key": "/ui2/repeater/graphql/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/validate/",
+   "key": "/ui2/repeater/graphql/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/validate/extra",
+   "key": "/ui2/repeater/graphql/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/graphql/validate/extra/more",
+   "key": "/ui2/repeater/graphql/validate",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2",
+   "key": "/ui2/repeater/h2",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/",
+   "key": "/ui2/repeater/h2",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/extra",
+   "key": "/ui2/repeater/h2",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/extra/more",
+   "key": "/ui2/repeater/h2",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/preview",
+   "key": "/ui2/repeater/h2/preview",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/preview/",
+   "key": "/ui2/repeater/h2/preview",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/preview/extra",
+   "key": "/ui2/repeater/h2/preview",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/preview/extra/more",
+   "key": "/ui2/repeater/h2/preview",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/send",
+   "key": "/ui2/repeater/h2/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/send/",
+   "key": "/ui2/repeater/h2/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/send/extra",
+   "key": "/ui2/repeater/h2/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/h2/send/extra/more",
+   "key": "/ui2/repeater/h2/send",
+   "gated": false
+  },
+  {
    "path": "/ui2/repeater/send",
    "key": "/ui2/repeater/send",
    "gated": false
@@ -5212,6 +6802,46 @@
    "gated": false
   },
   {
+   "path": "/ui2/repeater/ws",
+   "key": "/ui2/repeater/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/",
+   "key": "/ui2/repeater/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/extra",
+   "key": "/ui2/repeater/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/extra/more",
+   "key": "/ui2/repeater/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/send",
+   "key": "/ui2/repeater/ws/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/send/",
+   "key": "/ui2/repeater/ws/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/send/extra",
+   "key": "/ui2/repeater/ws/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/repeater/ws/send/extra/more",
+   "key": "/ui2/repeater/ws/send",
+   "gated": false
+  },
+  {
    "path": "/ui2/scanner",
    "key": "/ui2/scanner",
    "gated": false
@@ -5219,6 +6849,11 @@
   {
    "path": "/ui2/scanner/",
    "key": "/ui2/scanner",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config",
+   "key": "/ui2/scanner/config",
    "gated": false
   },
   {
@@ -5259,6 +6894,21 @@
   {
    "path": "/ui2/scanner/config-run/extra/more",
    "key": "/ui2/scanner/config-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config/",
+   "key": "/ui2/scanner/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config/extra",
+   "key": "/ui2/scanner/config",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/config/extra/more",
+   "key": "/ui2/scanner/config",
    "gated": false
   },
   {
@@ -5349,6 +6999,86 @@
   {
    "path": "/ui2/scanner/launch/extra/more",
    "key": "/ui2/scanner/launch",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/library",
+   "key": "/ui2/scanner/library",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/library/",
+   "key": "/ui2/scanner/library",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/library/extra",
+   "key": "/ui2/scanner/library",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/library/extra/more",
+   "key": "/ui2/scanner/library",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/live",
+   "key": "/ui2/scanner/live",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/live/",
+   "key": "/ui2/scanner/live",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/live/extra",
+   "key": "/ui2/scanner/live",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/live/extra/more",
+   "key": "/ui2/scanner/live",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review",
+   "key": "/ui2/scanner/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review-run",
+   "key": "/ui2/scanner/review-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review-run/",
+   "key": "/ui2/scanner/review-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review-run/extra",
+   "key": "/ui2/scanner/review-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review-run/extra/more",
+   "key": "/ui2/scanner/review-run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review/",
+   "key": "/ui2/scanner/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review/extra",
+   "key": "/ui2/scanner/review",
+   "gated": false
+  },
+  {
+   "path": "/ui2/scanner/review/extra/more",
+   "key": "/ui2/scanner/review",
    "gated": false
   },
   {
@@ -5532,6 +7262,46 @@
    "gated": false
   },
   {
+   "path": "/ui2/sequencer/settings/w",
+   "key": "/ui2/sequencer/settings/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/settings/w/",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/settings/w/extra",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/settings/w/extra/more",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/tokens/w",
+   "key": "/ui2/sequencer/tokens/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/tokens/w/",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/tokens/w/extra",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
+   "path": "/ui2/sequencer/tokens/w/extra/more",
+   "key": "/ui2/sequencer",
+   "gated": false
+  },
+  {
    "path": "/ui2/session",
    "key": "/ui2/session",
    "gated": false
@@ -5542,6 +7312,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/session/call/w",
+   "key": "/ui2/session/call/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/call/w/",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/call/w/extra",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/call/w/extra/more",
+   "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/extra",
+   "key": "/ui2/session/editor/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/extra/more",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/w",
+   "key": "/ui2/session/editor/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/w/",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/w/extra",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/editor/w/extra/more",
+   "key": "/ui2/session/editor",
+   "gated": false
+  },
+  {
    "path": "/ui2/session/extra",
    "key": "/ui2/session",
    "gated": false
@@ -5549,6 +7379,26 @@
   {
    "path": "/ui2/session/extra/more",
    "key": "/ui2/session",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/prompts",
+   "key": "/ui2/session/prompts",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/prompts/",
+   "key": "/ui2/session/prompts",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/prompts/extra",
+   "key": "/ui2/session/prompts",
+   "gated": false
+  },
+  {
+   "path": "/ui2/session/prompts/extra/more",
+   "key": "/ui2/session/prompts",
    "gated": false
   },
   {
@@ -5948,6 +7798,46 @@
   },
   {
    "path": "/ui2/ws/extra/more",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/frame/w",
+   "key": "/ui2/ws/frame/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/frame/w/",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/frame/w/extra",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/frame/w/extra/more",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/handshake/w",
+   "key": "/ui2/ws/handshake/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/handshake/w/",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/handshake/w/extra",
+   "key": "/ui2/ws",
+   "gated": false
+  },
+  {
+   "path": "/ui2/ws/handshake/w/extra/more",
    "key": "/ui2/ws",
    "gated": false
   }
