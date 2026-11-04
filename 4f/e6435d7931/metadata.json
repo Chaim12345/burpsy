@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "4fe6435d7931",
+  "strategy": "manual-commit",
+  "branch": "ui2-migration",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "burpsy-go/internal/web/ui2/comparer/comparer_page.html",
+    "burpsy-go/internal/web/ui2/decoder/decoder_page.html",
+    "burpsy-go/internal/web/ui2/sequencer/sequencer_page.html",
+    "burpsy-go/internal/web/ui2/sitemap/sitemap_detail.html",
+    "burpsy-go/internal/web/ui2_comparer.go",
+    "burpsy-go/internal/web/ui2_decoder.go",
+    "burpsy-go/internal/web/ui2_exchange_actions_test.go",
+    "burpsy-go/internal/web/ui2_history_bulk.go",
+    "burpsy-go/internal/web/ui2_intruder_results.go",
+    "burpsy-go/internal/web/ui2_repeater.go",
+    "burpsy-go/internal/web/ui2_sequencer.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4f/e6435d7931/0/metadata.json",
+      "transcript": "/4f/e6435d7931/0/full.jsonl",
+      "compact_transcript": "/4f/e6435d7931/0/transcript.jsonl",
+      "content_hash": "/4f/e6435d7931/0/content_hash.txt",
+      "prompt": "/4f/e6435d7931/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 37484,
+    "cache_read_tokens": 8525417,
+    "output_tokens": 15122,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 187,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 7,
+      "credentialed_uri": 12,
+      "entropy": 106,
+      "key_context": 48,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

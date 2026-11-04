@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bowwhw52x</task-id>
+<tool-use-id>toolu_01GvL3VUxgnjQ8oQw3hWLSYx</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bowwhw52x.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the full web and mcp test suites on the integrated branch" completed (exit code 0)</summary>
+</task-notification>
