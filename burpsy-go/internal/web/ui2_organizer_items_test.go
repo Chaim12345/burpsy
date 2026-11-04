@@ -185,7 +185,7 @@ func TestUI2AnnotateHighlightPrefill(t *testing.T) {
 	it := s.organizer.Add(4242)
 	s.organizer.Update(it.ID, "title", "note", "red")
 	w := httptest.NewRecorder()
-	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer", nil))
+	s.mux.ServeHTTP(w, httptest.NewRequest("GET", "/ui2/organizer?item="+strconv.Itoa(it.ID), nil))
 	page := w.Body.String()
 	if !strings.Contains(page, `value="red" checked`) {
 		t.Fatal("current highlight not pre-checked; a title-only edit is browser-blocked")
@@ -203,9 +203,9 @@ func TestUI2AnnotateHighlightPrefill(t *testing.T) {
 	}
 	// A default item pre-checks the none literal.
 	s2 := organizerTestServer(t)
-	s2.organizer.Add(4242)
+	it2 := s2.organizer.Add(4242)
 	w2 := httptest.NewRecorder()
-	s2.mux.ServeHTTP(w2, httptest.NewRequest("GET", "/ui2/organizer", nil))
+	s2.mux.ServeHTTP(w2, httptest.NewRequest("GET", "/ui2/organizer?item="+strconv.Itoa(it2.ID), nil))
 	if !strings.Contains(w2.Body.String(), `value="none" checked`) {
 		t.Fatal("none not pre-checked for a default item")
 	}

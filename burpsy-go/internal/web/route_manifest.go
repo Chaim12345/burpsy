@@ -1796,7 +1796,7 @@ var manifest = map[string]route{
 	},
 	"/ui2/organizer/collections/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
-		summary: "ui2 collection create and name/note review and one-time install",
+		summary: "ui2 collection create, name/note edit, duplicate and delete review and one-time install",
 	},
 	"/ui2/organizer/status/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
@@ -1812,7 +1812,15 @@ var manifest = map[string]route{
 	},
 	"/ui2/organizer": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 Organizer page: saved items and collections",
+		summary: "ui2 Organizer page: saved items and collections, filters, collection view and the selected item's detail",
+	},
+	"/ui2/organizer/add/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 save-exchange-by-id review and one-time install",
+	},
+	"/ui2/organizer/export.csv": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Organizer filtered view as CSV (read-only, formula-guarded)",
 	},
 	"/ui2/proxy": {
 		methods: []string{"GET"}, risk: riskAsset,

@@ -153,5 +153,5 @@ func (s *Server) ui2WorkflowRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.organizerChanged()
-	s.ui2OrganizerRender(w, r, "workflow status saved; other item fields and memberships unchanged; no traffic sent")
+	s.ui2OrganizerRenderItem(w, r, "workflow status saved; other item fields and memberships unchanged; no traffic sent", change.Before.ID)
 }

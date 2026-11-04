@@ -151,5 +151,5 @@ func (s *Server) ui2AnnotateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.organizerChanged()
-	s.ui2OrganizerRender(w, r, "annotations saved; workflow status, membership and traffic unchanged; no request sent")
+	s.ui2OrganizerRenderItem(w, r, "annotations saved; workflow status, membership and traffic unchanged; no request sent", change.Before.ID)
 }

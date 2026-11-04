@@ -689,6 +689,8 @@ var notExposed = map[string]string{
 	"GET /ui2/logger/export":                         "ui2 Logger CSV download for the operator's browser; /api/tools/log is the agent-facing list",
 	"GET /ui2/ws/frame/{id}":                         "ui2 WebSocket frame view and payload download; /api/ws/message/{id} is the agent-facing read",
 	"GET /ui2/ws/handshake/{id}":                     "ui2 WebSocket handshake view; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
+	"GET /ui2/organizer/export.csv":            "ui2 Organizer CSV download; /api/tools/organizer is the agent-facing read",
+	"POST /ui2/organizer/add/{action}":         "ui2 Organizer save-exchange review and apply steps (minted one-time confirmation); POST /api/tools/organizer is the agent-facing control",
 	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +
 		"/api/* routes a review mints (the gated ones through their own /confirm endpoints)",
 	"POST /ui2/intercept/{action}": "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",

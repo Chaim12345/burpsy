@@ -145,6 +145,7 @@ func Test_no_get_route_serves_a_null_on_empty_state(t *testing.T) {
 		"/ui2/logger":                    "<!doctype html",
 		"/ui2/logger/export":             "text/csv",
 		"/ui2/organizer":                 "<!doctype html",
+		"/ui2/organizer/export.csv":      "text/csv",
 		"/ui2/proxy":                     "<!doctype html",
 		"/ui2/proxy/listeners":           "<!doctype html",
 		"/ui2/proxy/options":             "<!doctype html",

@@ -283,7 +283,10 @@ function liveIssue(what) {
     url = '/ui2/ws' + (wq ? '?' + wq : '');
     target = '#rows';
   } else if (what === 'organizer') {
-    url = '/ui2/organizer';
+    // The filter, collection view and selected item ride the fragment's own state element.
+    var orgState = document.getElementById('org-state');
+    var orgQuery = orgState ? orgState.getAttribute('data-query') : '';
+    url = '/ui2/organizer' + (orgQuery ? '?' + orgQuery : '');
     target = '#rows';
   } else if (what === 'proxy') {
     url = '/ui2/proxy';
@@ -1458,4 +1461,78 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
     });
   }
   apply();
+// ---- Organizer saved filter presets (per browser, localStorage) ----
+// A preset is the filter query string the server rendered for the current view. Applying one
+// keeps only the known filter keys, so a tampered entry cannot steer the request elsewhere.
+// Storage can be absent or throw (private windows, blocked site data): every access is guarded
+// and the controls report what happened instead of failing silently.
+(function () {
+  var KEY = 'burpsy.ui2.organizer.presets';
+  var KEYS = ['in_scope', 'status', 'mime', 'tool', 'workflow', 'q', 'regex', 'case', 'negative', 'ext', 'annotated', 'view'];
+  function load() {
+    try {
+      var v = JSON.parse(localStorage.getItem(KEY) || '{}');
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    } catch (_) { return {}; }
+  }
+  function store(p) {
+    try { localStorage.setItem(KEY, JSON.stringify(p)); return true; } catch (_) { return false; }
+  }
+  function say(text) {
+    var el = document.getElementById('org-preset-status');
+    if (el) el.textContent = text;
+  }
+  function clean(query) {
+    var src = new URLSearchParams(String(query || '')), out = new URLSearchParams();
+    KEYS.forEach(function (k) { var v = src.get(k); if (v !== null && v !== '') out.set(k, v); });
+    return out.toString();
+  }
+  function fill() {
+    var sel = document.getElementById('org-preset-list');
+    if (!sel) return;
+    var presets = load(), names = Object.keys(presets).sort();
+    sel.textContent = '';
+    var none = document.createElement('option');
+    none.value = '';
+    none.textContent = names.length ? '(choose a preset)' : '(none saved)';
+    sel.appendChild(none);
+    names.forEach(function (n) {
+      var o = document.createElement('option');
+      o.value = n;
+      o.textContent = n;
+      sel.appendChild(o);
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var id = e.target && e.target.id;
+    if (id !== 'org-preset-save' && id !== 'org-preset-apply' && id !== 'org-preset-delete') return;
+    var box = document.getElementById('org-presets');
+    var sel = document.getElementById('org-preset-list');
+    if (!box || !sel) return;
+    var presets = load();
+    if (id === 'org-preset-save') {
+      var name = (window.prompt('Name this filter preset') || '').trim();
+      if (!name) return;
+      presets[name] = clean(box.getAttribute('data-preset-query'));
+      say(store(presets) ? 'Saved preset ' + name : 'Could not save: browser storage is unavailable');
+      fill();
+      sel.value = name;
+    } else if (!sel.value || !Object.prototype.hasOwnProperty.call(presets, sel.value)) {
+      say('Choose a preset first');
+    } else if (id === 'org-preset-delete') {
+      var gone = sel.value;
+      delete presets[gone];
+      say(store(presets) ? 'Deleted preset ' + gone : 'Could not delete: browser storage is unavailable');
+      fill();
+    } else {
+      var q = clean(presets[sel.value]);
+      var url = '/ui2/organizer' + (q ? '?' + q : '');
+      htmx.ajax('GET', url, { target: '#rows', swap: 'outerHTML' }).then(function () {
+        try { history.pushState({}, '', url); } catch (_) {}
+      });
+    }
+  });
+  document.addEventListener('DOMContentLoaded', fill);
+  document.body.addEventListener('htmx:afterSwap', fill);
+  fill();
 })();
