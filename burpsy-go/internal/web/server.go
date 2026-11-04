@@ -128,6 +128,11 @@ type Server struct {
 	// single-use, expiring with ConfirmTTL.
 	ui2ReflectReviews sync.Map
 	sender            *sender.Sender
+
+	// ui2ProxyReviews holds the reviewed proxy-settings writes (listeners, options, match &
+	// replace; ui2_proxy_settings.go): single-use, capped by ui2ProxyReviewCap, ConfirmTTL.
+	ui2ProxyReviews sync.Map
+
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1569,6 +1574,13 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/logger/{action}", s.handleUI2LoggerAction)
 	s.route("/ui2/ws", s.handleUI2WS)
 	s.route("/ui2/proxy", s.handleUI2Proxy)
+	s.route("/ui2/proxy/listeners", s.handleUI2ProxyListeners)
+	s.route("/ui2/proxy/listeners/{action}", s.handleUI2ProxyListenersAction)
+	s.route("/ui2/proxy/options", s.handleUI2ProxyOptions)
+	s.route("/ui2/proxy/options/{action}", s.handleUI2ProxyOptionsAction)
+	s.route("/ui2/proxy/history-logging", s.handleUI2ProxyHistoryLogging)
+	s.route("/ui2/proxy/match-replace", s.handleUI2MatchReplace)
+	s.route("/ui2/proxy/match-replace/{action}", s.handleUI2MatchReplaceAction)
 	s.route("/ui2/extensions", s.handleUI2Extensions)
 	s.route("/ui2/scanner", s.handleUI2Scanner)
 	s.route("/ui2/scanner/launch", s.handleUI2ScannerLaunch)

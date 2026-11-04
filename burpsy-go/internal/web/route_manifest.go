@@ -1602,6 +1602,36 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 proxy settings page: listeners, response-modification options, match&replace, passthrough",
 	},
+	"/ui2/proxy/listeners": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Proxy listeners editor: every listener with add, edit and remove forms",
+	},
+	"/ui2/proxy/listeners/{action}": {
+		// riskAsset like the other ui2 console routes: the risk class belongs to the
+		// /api/proxy/listener call a review holds, dispatched only by the run step.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 Proxy listeners: confirm holds the exact /api/proxy/listener add/edit/remove call server-side for review, run dispatches it verbatim, single-use",
+	},
+	"/ui2/proxy/options": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Proxy options editor: response-modification, transport and console switches, proxy history logging, outcome counters",
+	},
+	"/ui2/proxy/options/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "confirm",
+		summary: "ui2 Proxy options: confirm holds a diff-only /api/proxy/options PUT for review, run re-reads the switches, refuses drift and dispatches it verbatim, single-use",
+	},
+	"/ui2/proxy/history-logging": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Proxy history logging: one-click write of the riskLocal /api/proxy/history-logging preference (stop, ask or nothing)",
+	},
+	"/ui2/proxy/match-replace": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Match & Replace editor: request and response rule sets loaded from the saved set",
+	},
+	"/ui2/proxy/match-replace/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "edit",
+		summary: "ui2 Match & Replace: edit re-renders the draft (add/delete/duplicate/reorder, nothing saved), test dry-runs it via /api/tools/rules/test, confirm holds the whole-set /api/tools/rules PUT for review, run dispatches it verbatim after a drift check",
+	},
 	"/ui2/repeater": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
 		summary: "ui2 Repeater: GET the editor with the latest captured request, POST /ui2/repeater/send sends it",

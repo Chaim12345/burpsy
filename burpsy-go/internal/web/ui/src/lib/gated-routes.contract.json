@@ -241,6 +241,13 @@
   "/ui2/organizer/items/{action}",
   "/ui2/organizer/status/{action}",
   "/ui2/proxy",
+  "/ui2/proxy/history-logging",
+  "/ui2/proxy/listeners",
+  "/ui2/proxy/listeners/{action}",
+  "/ui2/proxy/match-replace",
+  "/ui2/proxy/match-replace/{action}",
+  "/ui2/proxy/options",
+  "/ui2/proxy/options/{action}",
   "/ui2/repeater",
   "/ui2/repeater/send",
   "/ui2/scanner",
@@ -4870,6 +4877,146 @@
   {
    "path": "/ui2/proxy/extra/more",
    "key": "/ui2/proxy",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/history-logging",
+   "key": "/ui2/proxy/history-logging",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/history-logging/",
+   "key": "/ui2/proxy/history-logging",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/history-logging/extra",
+   "key": "/ui2/proxy/history-logging",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/history-logging/extra/more",
+   "key": "/ui2/proxy/history-logging",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/extra",
+   "key": "/ui2/proxy/listeners/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/extra/more",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/w",
+   "key": "/ui2/proxy/listeners/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/w/",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/w/extra",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/listeners/w/extra/more",
+   "key": "/ui2/proxy/listeners",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/extra",
+   "key": "/ui2/proxy/match-replace/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/extra/more",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/w",
+   "key": "/ui2/proxy/match-replace/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/w/",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/w/extra",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/match-replace/w/extra/more",
+   "key": "/ui2/proxy/match-replace",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options",
+   "key": "/ui2/proxy/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/",
+   "key": "/ui2/proxy/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/extra",
+   "key": "/ui2/proxy/options/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/extra/more",
+   "key": "/ui2/proxy/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/w",
+   "key": "/ui2/proxy/options/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/w/",
+   "key": "/ui2/proxy/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/w/extra",
+   "key": "/ui2/proxy/options",
+   "gated": false
+  },
+  {
+   "path": "/ui2/proxy/options/w/extra/more",
+   "key": "/ui2/proxy/options",
    "gated": false
   },
   {

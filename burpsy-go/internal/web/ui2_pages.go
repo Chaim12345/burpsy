@@ -773,6 +773,7 @@ func (s *Server) handleUI2Proxy(w http.ResponseWriter, r *http.Request) {
 	model["options"] = get("/api/proxy/options")
 	model["rules"] = get("/api/tools/rules")
 	model["passthrough"] = get("/api/proxy/passthrough")
+	s.ui2ProxyOverviewExtras(model)
 	ui2Fragment(w, r, "burpsy /ui2/ — Proxy settings", "proxy", ui2Exec("proxy.html", model))
 }
 

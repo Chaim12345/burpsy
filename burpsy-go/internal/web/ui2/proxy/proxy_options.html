@@ -1,0 +1,30 @@
+<div id="rows">
+{{template "proxy_subnav" "options"}}
+{{template "proxy_note" .note}}
+<div id="proxy-review" class="pxs-review" aria-live="polite"></div>
+{{if .unwired}}<p class="meta">No proxy option set is attached to this server, so there are no response modification or transport options to manage.</p>{{else}}
+<form method="post" action="/ui2/proxy/options/confirm" hx-post="/ui2/proxy/options/confirm" hx-target="#proxy-review" hx-swap="innerHTML show:top" id="proxy-options-form">
+{{range .groups}}{{if .Rows}}
+<h3 class="pxs-sec" style="margin:6px 0 0">{{.Title}}</h3>
+<div class="pxs-sec pxs-stack">
+{{range .Rows}}<input type="hidden" name="was_{{.Key}}" value="{{.On}}">
+<label class="pxs-check"><input type="checkbox" name="opt_{{.Key}}" value="on"{{if .On}} checked{{end}}> <span>{{.Label}}{{if .Detail}}<br><span class="meta" style="padding:0">{{.Detail}}</span>{{end}}</span></label>
+{{end}}</div>
+{{end}}{{end}}
+<div class="pxs-sec"><button type="submit">Review changes</button> <span class="meta">Only the switches you change are sent; every switch applies live from the next matching message.</span></div>
+</form>
+{{end}}
+<h3 class="pxs-sec" style="margin:6px 0 0">Proxy history logging</h3>
+<form method="post" action="/ui2/proxy/history-logging" hx-post="/ui2/proxy/history-logging" hx-target="#rows" hx-swap="outerHTML" class="pxs-sec pxs-grid" id="proxy-history-logging">
+<label>When hosts are added to scope<select name="mode" required>
+{{if not .history_logging}}<option value="" selected disabled>(the current setting could not be read)</option>{{end}}
+<option value="stop"{{if eq (printf "%v" .history_logging) "stop"}} selected{{end}}>Stop logging out-of-scope items</option>
+<option value="ask"{{if eq (printf "%v" .history_logging) "ask"}} selected{{end}}>Ask me what to do each time</option>
+<option value="nothing"{{if eq (printf "%v" .history_logging) "nothing"}} selected{{end}}>Do nothing</option>
+</select></label>
+<div><button type="submit">Save</button></div>
+</form>
+{{if not .persist}}<p class="meta">This server has no project database, so the history-logging choice cannot be saved (the API refuses it).</p>{{end}}
+<h3 class="pxs-sec" style="margin:6px 0 0">Outcome counters</h3>
+<div class="pxs-sec">{{template "proxy_counters" .counter_rows}}</div>
+</div>
