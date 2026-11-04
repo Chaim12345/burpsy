@@ -1,0 +1,148 @@
+<div id="rows">
+<span id="dash-live" data-live="{{.LiveURL}}" hidden></span>
+<p class="meta"><a href="/ui2/dashboard" hx-get="/ui2/dashboard" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">← Dashboard</a></p>
+{{if .Error}}<p class="meta" role="alert"><strong>{{.Error}}</strong></p>{{end}}
+{{if .Note}}<p class="meta" role="alert" id="dash-note"><strong>{{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status" id="dash-note"><strong>{{.Done}}</strong></p>{{end}}
+{{if not .Found}}{{if not .Error}}<p class="meta">Task {{.ID}} is not in the task list — it finished and was deleted, or it aged out of the list.</p>{{end}}
+{{else}}
+<h3 id="dash-task-title">Task {{.Task.ID}}. {{.Task.Title}}</h3>
+<div class="meta" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+<span>{{.Task.State}}{{if .Task.Paused}} <span class="badge">paused</span>{{end}}{{if and .Paused .Task.Running}} <span class="badge">suite paused</span>{{end}}</span>
+{{if .Task.CanPause}}{{if .Task.Paused}}<form hx-post="/ui2/dashboard/task/{{.ID}}/resume" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/resume" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit" id="dash-task-resume">Resume task</button></form>
+{{else}}<form hx-post="/ui2/dashboard/task/{{.ID}}/pause" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/pause" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit" id="dash-task-pause">Pause task</button></form>{{end}}{{end}}
+{{if .Task.CanCancel}}<form hx-post="/ui2/dashboard/task/{{.ID}}/cancel" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/cancel" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit">Cancel task</button></form>{{end}}
+{{if .Task.CanAgain}}<form hx-post="/ui2/dashboard/task/{{.ID}}/again" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/again" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit">Scan again</button></form>{{end}}
+{{if not .Task.Running}}<form hx-post="/ui2/dashboard/task/{{.ID}}/delete" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/delete" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit">Delete task</button></form>{{end}}
+</div>
+
+<nav aria-label="Task tabs" class="meta" style="display:flex; gap:4px; flex-wrap:wrap">
+{{range .Tabs}}<a class="btn{{if .Active}} active{{end}}"{{if .Active}} aria-current="page" style="background:var(--sel)"{{end}} href="/ui2/dashboard/task/{{$.ID}}?tab={{.Key}}" hx-get="/ui2/dashboard/task/{{$.ID}}?tab={{.Key}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" data-tab="{{.Key}}">{{.Label}}</a>
+{{end}}</nav>
+
+{{if eq .Tab "summary"}}
+<section id="dash-tab-summary">
+<h3>Findings</h3>
+<table><tbody>
+<tr><th scope="row">Findings</th><td>{{.Findings}} <span class="meta">{{if .IsLive}}live audit sweep{{else}}recorded by this task{{end}}</span></td></tr>
+<tr><th scope="row">Requests</th><td>{{.Task.Done}} <span class="meta">sent by this task</span></td></tr>
+<tr><th scope="row">Elapsed</th><td>{{.Elapsed}}{{if .Task.Running}} <span class="meta">still running</span>{{end}}</td></tr>
+<tr><th scope="row">Avg throughput</th><td>{{.Rate}} <span class="meta">whole-task average</span></td></tr>
+</tbody></table>
+<p class="meta">{{if .Task.Result.Summary}}{{.Task.Result.Summary}}{{else}}No issues recorded for this task.{{end}} · <a href="{{.History}}">Show in HTTP history</a></p>
+
+{{if .Stops}}<h3>{{if .Policy}}Paused by policy — the crawl stopped itself{{else}}Incomplete — the crawl hit a bound{{end}}</h3>
+<p class="meta">This crawl did not cover the application. Everything counted here is what it reached before it stopped.</p>
+<ul class="meta">{{range .Stops}}<li>{{.}}</li>{{end}}</ul>{{end}}
+
+{{if .Run}}{{if .Run.Report}}{{with .Run.Report.Login}}
+<h3>{{if not .Authenticated}}The recorded login “{{.Label}}” failed{{else if .Verified}}Logged in with “{{.Label}}”{{else}}“{{.Label}}” ran — the login was not verified{{end}}</h3>
+<p class="meta">{{if not .Authenticated}}The replay before the first request did not log in, so this crawl ran logged out.{{else if .Verified}}The recorded login was replayed in an isolated browser before the first request, confirmed by its status check, and its session was carried on every request.{{else}}Every step ran, but the sequence has no status check, so nothing confirmed the session was real.{{end}}</p>
+<table><tbody>
+<tr><th scope="row">Replays</th><td>{{.Attempts}} <span class="meta">{{.Succeeded}} logged in, {{.Failed}} failed</span></td></tr>
+<tr><th scope="row">Re-logins</th><td>{{.Relogins}}</td></tr>
+<tr><th scope="row">Requests with the session</th><td>{{.RequestsWithSession}}</td></tr>
+<tr><th scope="row">Pages found after login</th><td>{{.PagesAfterLogin}}</td></tr>
+{{if .LastFailure}}<tr><th scope="row">Last failure</th><td class="brk">{{.LastFailure}}</td></tr>{{end}}
+<tr><th scope="row">Ended on</th><td class="brk">{{if .FinalURL}}{{.FinalURL}}{{else}}—{{end}}</td></tr>
+<tr><th scope="row">Cookies earned</th><td>{{if .CookieNames}}{{range $i, $c := .CookieNames}}{{if $i}}, {{end}}{{$c}}{{end}}{{else}}none{{end}}</td></tr>
+<tr><th scope="row">Refused by scope</th><td class="brk">{{if .Blocked}}{{range .Blocked}}{{.}}<br>{{end}}{{else}}nothing{{end}}</td></tr>
+<tr><th scope="row">Refused while rendering</th><td class="brk">{{if .RenderBlocked}}{{range .RenderBlocked}}{{.}}<br>{{end}}{{else}}nothing{{end}}</td></tr>
+</tbody></table>
+{{end}}{{end}}{{end}}
+
+<h3>Task configuration</h3>
+<table><tbody>
+<tr><th scope="row">Task type</th><td>{{if .IsLive}}Live audit{{else}}{{.Task.Kind}}{{end}}</td></tr>
+<tr><th scope="row">Target</th><td class="brk">{{.Task.Target}}</td></tr>
+<tr><th scope="row">{{if .IsLive}}Capturing{{else}}Outcome{{end}}</th><td>{{if .IsLive}}{{template "dash-live-toggle" .}}{{else if and .Run (not .Task.Running)}}{{.Outcome}}{{else}}{{.Task.State}}{{end}}</td></tr>
+<tr><th scope="row">Progress</th><td>{{.Task.Progress}}</td></tr>
+{{if .Task.Note}}<tr><th scope="row">Note</th><td class="brk">{{.Task.Note}}</td></tr>{{end}}
+</tbody></table>
+
+<h3>Coverage <span class="meta">project-wide: every run's accounting, not this task's</span></h3>
+<table>
+<thead><tr><th scope="col">Summary</th><th scope="col">Found</th><th scope="col">Verdict</th></tr></thead>
+<tbody>{{range .Summaries}}<tr><td>{{.Label}}</td><td>{{.Breakdown.Found}} {{.Unit}}</td><td class="meta">{{if .Breakdown.Complete}}complete{{else}}{{.Breakdown.Unaccounted}} {{.WorkUnit}} without a verdict{{end}}{{if .Breakdown.Skipped}} · {{.Breakdown.Skipped}} skipped{{end}}{{if .Breakdown.Errored}} · {{.Breakdown.Errored}} errored{{end}}{{if .Breakdown.Gated}} · {{.Breakdown.Gated}} gated{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No coverage reported.</td></tr>{{end}}</tbody>
+</table>
+
+<h3>Traffic sources <span class="meta">project-wide</span></h3>
+<p class="meta">{{range .Sources}}{{.Name}} {{.Count}} · {{else}}No traffic yet.{{end}}</p>
+
+<h3>Recent traffic <span class="meta">project-wide; the full list is on the Activity tab</span></h3>
+{{template "dash-activity" .Recent}}
+</section>
+{{end}}
+
+{{if eq .Tab "issues"}}
+<section id="dash-tab-issues">
+<h3>Issue activity</h3>
+<p class="meta">Findings THIS task raised, newest first (isolated scans included).</p>
+{{if .IssuesErr}}<p class="meta" role="alert">Issues unavailable: {{.IssuesErr}}</p>{{end}}
+<table>
+<thead><tr><th scope="col">Severity</th><th scope="col">Issue</th><th scope="col">Host</th><th scope="col">ID</th></tr></thead>
+<tbody>{{range .Issues}}
+<tr><td class="sev sev-{{lower .Severity}}">{{.Severity}}</td><td><a href="/ui2/issues/{{.ID}}">{{if .IssueName}}{{.IssueName}}{{else if .CheckName}}{{.CheckName}}{{else}}Unnamed finding{{end}}</a>{{if gt .TimesSeen 1}} <span class="meta">×{{.TimesSeen}}</span>{{end}}{{if .Isolated}} <span class="badge">isolated</span>{{end}}</td><td>{{.Host}}</td><td class="meta">#{{.ID}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">This task recorded no issues.{{if not .IssuesEnabled}} The scanner reports no source of findings.{{end}}</td></tr>{{end}}</tbody>
+</table>
+{{if .IssuesHidden}}<p class="meta">Showing the {{len .Issues}} newest; {{.IssuesHidden}} more of this task's findings are on the Issues page.</p>{{end}}
+</section>
+{{end}}
+
+{{if eq .Tab "events"}}
+<section id="dash-tab-events">
+<h3>Event log</h3>
+<p class="meta">State changes that are not requests — the whole log, not only this task's.{{if .EventsDrop}} {{.EventsDrop}} older event(s) were discarded as the log filled.{{end}}</p>
+<div class="meta" style="display:flex; gap:6px; flex-wrap:wrap; align-items:end">
+<form id="dash-ev-filter" hx-get="/ui2/dashboard/task/{{.ID}}" hx-target="#rows" hx-swap="outerHTML" hx-trigger="submit, change" action="/ui2/dashboard/task/{{.ID}}" method="get" style="display:flex; gap:6px; flex-wrap:wrap; align-items:end">
+<input type="hidden" name="tab" value="events">
+<label>Severity<br><select name="severity">
+<option value="all"{{if eq .Severity "all"}} selected{{end}}>All severities ({{.EventsAll}})</option>
+<option value="error"{{if eq .Severity "error"}} selected{{end}}>Error ({{index .SevCounts "error"}})</option>
+<option value="warn"{{if eq .Severity "warn"}} selected{{end}}>Warning ({{index .SevCounts "warn"}})</option>
+<option value="info"{{if eq .Severity "info"}} selected{{end}}>Info ({{index .SevCounts "info"}})</option>
+</select></label>
+<label>Source<br><select name="source">
+<option value="all"{{if eq .Source "all"}} selected{{end}}>All sources</option>
+<option value="task"{{if eq .Source "task"}} selected{{end}}>This task (Task {{.ID}})</option>
+</select></label>
+<label>Search<br><input type="search" name="search" value="{{.Search}}" placeholder="kind, detail or source…"></label>
+<button type="submit">Filter</button>
+</form>
+<form hx-post="/ui2/dashboard/events/confirm" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/events/confirm" method="post"><input type="hidden" name="back" value="{{.ID}}"><button type="submit"{{if not .EventsAll}} disabled{{end}}>Clear event log</button></form>
+</div>
+{{if .Filtered}}<p class="meta" role="status" id="dash-ev-count">{{len .Events}} of {{.EventsAll}} shown</p>{{end}}
+<table>
+<thead><tr><th scope="col">Severity</th><th scope="col">Kind</th><th scope="col">Detail</th>{{if ne .Source "task"}}<th scope="col">Source</th>{{end}}<th scope="col">At</th></tr></thead>
+<tbody id="dash-events">{{range .Events}}
+<tr><td class="sev sev-{{.Severity}}">{{.Severity}}</td><td>{{.Kind}}</td><td class="meta" title="{{.Detail}}">{{.Detail}}</td>{{if ne $.Source "task"}}<td class="meta">{{.Source}}</td>{{end}}<td class="meta">{{.At}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">{{if .EventsAll}}No event matches these filters — all {{.EventsAll}} events are still in the log.{{else}}No event log items to show.{{end}}</td></tr>{{end}}</tbody>
+</table>
+</section>
+{{end}}
+
+{{if eq .Tab "activity"}}
+<section id="dash-tab-activity">
+<h3>Recent traffic</h3>
+<p class="meta">Project-wide: what burpsy sent across every tool, newest first. The full log is on the <a href="/ui2/logger">Logger</a> page.</p>
+{{template "dash-activity" .Activity}}
+</section>
+{{end}}
+
+{{if eq .Tab "crawl"}}
+<section id="dash-tab-crawl">
+<h3>Live crawl view</h3>
+{{if .CrawlErr}}<p class="meta">{{.CrawlErr}}</p>{{else}}{{with .CrawlLive}}
+<p class="meta">state {{.state}} · phase {{.phase}} · {{.fetched}} fetched{{if .current}} · now: {{.current.method}} <span class="brk">{{.current.url}}</span>{{end}}</p>
+{{if .frame_note}}<p class="meta">{{.frame_note}}</p>{{end}}
+{{if .recent}}<table>
+<thead><tr><th scope="col">Method</th><th scope="col">URL</th><th scope="col">Status</th><th scope="col">Depth</th></tr></thead>
+<tbody>{{range .recent}}<tr><td>{{.method}}</td><td title="{{.url}}">{{.url}}</td><td>{{.status}}</td><td>{{.depth}}</td></tr>{{end}}</tbody>
+</table>{{else}}<p class="meta">No fetch recorded yet.</p>{{end}}
+{{end}}{{end}}
+<p class="meta">Updates itself while the crawl produces traffic or task activity.</p>
+</section>
+{{end}}
+{{end}}
+</div>

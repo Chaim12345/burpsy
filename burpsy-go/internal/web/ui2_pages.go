@@ -53,45 +53,7 @@ func ui2Exec(name string, model any) templateHTML {
 	return templateHTML(sb.String())
 }
 
-// ---- Dashboard -------------------------------------------------------------------------------
-
-// handleUI2Dashboard serves GET /ui2/dashboard: summaries, running tasks, recent activity
-// and events, and the suite-wide pause state — one page, no client computation.
-func (s *Server) handleUI2Dashboard(w http.ResponseWriter, r *http.Request) {
-	body := s.renderUI2Dashboard()
-	ui2Fragment(w, r, "burpsy /ui2/ — Dashboard", "dashboard", body)
-}
-
-func (s *Server) renderUI2Dashboard() templateHTML {
-	messages, exchanges := s.store.Count()
-	resp := dashboardResp{
-		Summaries:       s.dashboardSummaries(),
-		Tasks:           s.tasks.Snapshot(),
-		TasksRunning:    s.tasks.Running(),
-		TasksDropped:    s.tasks.Dropped(),
-		Activity:        nil,
-		ActivityShown:   0,
-		ActivityTotal:   0,
-		ActivityDropped: s.toolLog.Dropped(),
-		Events:          s.events.Recent(dashboardActivityLimit),
-		EventsShown:     0,
-		EventsTotal:     s.events.Count(),
-		EventsDropped:   s.events.Dropped(),
-		Exchanges:       exchanges,
-		Messages:        messages,
-		StoredBytes:     s.store.Bytes(),
-		Sources:         s.sourceCounts(),
-		Paused:          s.tasks.Paused(),
-	}
-	entries := s.toolLog.All()
-	for i := len(entries) - 1; i >= 0 && len(resp.Activity) < dashboardActivityLimit; i-- {
-		resp.Activity = append(resp.Activity, toolLogEntryView(entries[i]))
-	}
-	resp.ActivityShown = len(resp.Activity)
-	resp.ActivityTotal = len(entries)
-	resp.EventsShown = len(resp.Events)
-	return ui2Exec("dashboard.html", resp)
-}
+// ---- Dashboard: see ui2_dashboard.go ---------------------------------------------------------
 
 // ---- Site map --------------------------------------------------------------------------------
 

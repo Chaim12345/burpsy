@@ -1,0 +1,21 @@
+<div id="rows" data-review="1">
+{{if .error}}<p class="meta" role="alert"><strong>Not applied: {{.error}}</strong></p>
+{{else}}
+<p><strong>Review before applying:</strong> {{.title}}.</p>
+<pre class="brk">{{.preview}}</pre>
+{{if eq .kind "live"}}
+<p class="meta">Exact request body (bound to this confirmation):</p>
+<pre class="brk" id="dash-review-body">{{.body}}</pre>
+{{if .enabled}}<p class="meta">While capturing is on, the live sweep sends active checks at newly captured in-scope traffic. Exactly the body shown runs; editing any field refuses the confirmation. This confirmation is one-time.</p>
+{{else}}<p class="meta">Switching capturing off stops new sweeps; findings already raised stay. This confirmation is one-time.</p>{{end}}
+{{else}}
+<p class="meta">No request body. The event log currently holds {{.count}} event(s) — the trail of scope changes, refusals and task outcomes. Clearing discards them for every viewer and cannot be undone; the SSE stream and the findings are untouched. This confirmation is one-time.</p>
+{{end}}
+<form hx-post="{{.action}}" method="post" action="{{.action}}" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+{{range .fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+{{end}}<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">{{if eq .kind "live"}}Confirm and apply{{else}}Confirm and clear event log{{end}}</button>
+</form>
+{{end}}
+<p class="meta">{{if .back}}<a href="/ui2/dashboard/task/{{.back}}" hx-get="/ui2/dashboard/task/{{.back}}" hx-target="#rows" hx-swap="outerHTML">cancel</a>{{else}}<a href="/ui2/dashboard" hx-get="/ui2/dashboard" hx-target="#rows" hx-swap="outerHTML">cancel</a>{{end}}</p>
+</div>

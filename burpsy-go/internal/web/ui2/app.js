@@ -171,7 +171,7 @@ function liveReapplyDirty(saved) {
 // the pill instead of refreshing; the pill's own refresh re-applies the edits it crosses.
 function liveGuarded(what) {
   if (liveScrolled()) return true;
-  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer') {
+  if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'dashboard') {
     var rows = document.getElementById(what === 'scope' ? 'srows' : 'rows');
     if (!rows) return false;
     if (rows.querySelector('details.held-editor[open], details.scope-edit[open], details.collection-edit[open]')) return true;
@@ -187,6 +187,14 @@ function liveGuarded(what) {
       // the refresh to the pill until the operator asks for it.
       if (rows.dataset.review === '1') return true;
       if (rows.querySelector('#session-note')) return true;
+    }
+    if (what === 'dashboard') {
+      // A pending review sheet (live audit, clear event log) holds its one-time token only in
+      // this DOM, and the outcome note is the record of what a button just did: the pill
+      // announces the update instead of erasing either.
+      if (rows.dataset.review === '1') return true;
+      if (rows.querySelector('#dash-note')) return true;
+      if (rows.querySelector('details#dash-new-live[open]')) return true;
     }
     if (what === 'scope') {
       // The scope review sheet is the same stranded-token state as the session one (its
@@ -243,7 +251,11 @@ function liveIssue(what) {
     url = '/ui2/proxy';
     target = '#rows';
   } else if (what === 'dashboard') {
-    url = '/ui2/dashboard';
+    // The dashboard and a task's detail page share this view; each names its own refresh URL
+    // (filter, tab and event-log filters included) in #dash-live, so a refresh keeps them.
+    var dl = document.getElementById('dash-live');
+    url = (dl && dl.getAttribute('data-live')) || '/ui2/dashboard';
+    if (url.indexOf('/ui2/dashboard') !== 0) url = '/ui2/dashboard';
     target = '#rows';
   } else if (what === 'session') {
     url = '/ui2/session';
