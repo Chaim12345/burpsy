@@ -84,7 +84,7 @@ export async function gotoRoute(page: Page, route: Route): Promise<void> {
       window.location.hash = `#${id}`;
     }, route.id);
   } else {
-    await page.goto(`/#${route.id}`);
+    await page.goto(`/legacy/#${route.id}`);
   }
   await expect(page.locator("main h1")).toHaveText(new RegExp(`^${escapeRegExp(route.h1)}`));
 }
@@ -124,7 +124,7 @@ export async function confirmedPost(page: Page, url: string, data: Record<string
 
 /** Wait for the shell itself — used by tests that do not care which route they land on. */
 export async function gotoApp(page: Page, route = ROUTES[0]!): Promise<void> {
-  await page.goto(`/#${route.id}`);
+  await page.goto(`/legacy/#${route.id}`);
   await expect(page.locator("header.toolbar-row")).toBeVisible();
   await expect(page.locator("main h1")).toBeVisible();
 }

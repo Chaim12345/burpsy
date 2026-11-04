@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -20,9 +21,13 @@ import (
 // ui2RenderPage renders the shell with the given view and fragment body.
 func ui2RenderPage(w http.ResponseWriter, title, view string, body templateHTML) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := ui2Templates.ExecuteTemplate(w, "layout.html", ui2Page{Title: title, View: view, Body: body}); err != nil {
+	var sb strings.Builder
+	if err := ui2Templates.ExecuteTemplate(&sb, "layout.html", ui2Page{Title: title, View: view, Body: body}); err != nil {
+		slog.Error("ui2 layout failed", "view", view, "error", err)
 		http.Error(w, "template error", http.StatusInternalServerError)
+		return
 	}
+	_, _ = w.Write([]byte(sb.String()))
 }
 
 // ui2Fragment answers an htmx request with just the fragment, or renders the full shell.
@@ -35,10 +40,17 @@ func ui2Fragment(w http.ResponseWriter, r *http.Request, title, view string, bod
 	ui2RenderPage(w, title, view, body)
 }
 
-// ui2Exec renders one named template into a string.
+// ui2Exec renders one named template into a string. A template error is logged and the
+// fragment becomes error.html: a half-rendered fragment would read as a page with data missing.
 func ui2Exec(name string, model any) templateHTML {
 	var sb strings.Builder
-	_ = ui2Templates.ExecuteTemplate(&sb, name, model)
+	if err := ui2Templates.ExecuteTemplate(&sb, name, model); err != nil {
+		slog.Error("ui2 template failed", "template", name, "error", err)
+		sb.Reset()
+		if err := ui2Templates.ExecuteTemplate(&sb, "error.html", ui2Error{Message: "the " + name + " view could not be rendered; the server log has the cause"}); err != nil {
+			return templateHTML("")
+		}
+	}
 	return templateHTML(sb.String())
 }
 
@@ -1070,6 +1082,11 @@ func (s *Server) ui2ScannerModel() map[string]any {
 	model["coverage"] = coverage
 	model["live"] = live
 	model["audit_items"] = auditItems
+	if _, ok := config.(map[string]any); !ok {
+		// An unreadable config (no scanner wired) must not abort the page mid-template:
+		// field access on a nil interface is a template error, which ui2Exec now reports.
+		config = map[string]any{}
+	}
 	model["config"] = config
 	if view, ok := config.(map[string]any); ok {
 		model["scan_config_rows"] = ui2ScanConfigRows(view)

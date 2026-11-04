@@ -1,5 +1,22 @@
 {{define "nav"}}
 <nav aria-label="Tools">
+  <details class="menu"><summary class="{{if eq .View "config"}}active{{end}}">File</summary>
+    <div class="menu-list" role="menu">
+      <a role="menuitem" href="/api/report/html" target="_blank" rel="noopener">Export report (HTML)</a>
+      <a role="menuitem" href="/api/report/json" download="burpsy-report.json">Export report (JSON)</a>
+      <a role="menuitem" href="/api/report/sarif" download="burpsy-report.sarif">Export report (SARIF)</a>
+      <a role="menuitem" href="/api/config/export" download="burpsy-config.json">Export configuration (partial)</a>
+      <a role="menuitem" href="/ui2/shell/config">Import configuration…</a>
+      <a role="menuitem" href="/ui2/shell/config#ca" title="offered there only when TLS interception has a CA">Download CA certificate…</a>
+    </div>
+  </details>
+  <details class="menu"><summary class="{{if eq .View "project"}}active{{end}}">Project</summary>
+    <div class="menu-list" role="menu">
+      <a role="menuitem" href="/ui2/shell/project">Project file &amp; rename…</a>
+      <a role="menuitem" href="/ui2/shell/project">Save copy…</a>
+      <a role="menuitem" href="/ui2/shell/project">Open, create or switch project…</a>
+    </div>
+  </details>
   <a href="/ui2/dashboard" class="{{if eq .View "dashboard"}}active{{end}}">Dashboard</a>
   <a href="/ui2/sitemap" class="{{if eq .View "sitemap"}}active{{end}}">Site map</a>
   <a href="/ui2/scope" class="{{if eq .View "scope"}}active{{end}}">Scope</a>
@@ -21,6 +38,6 @@
   <a href="/ui2/session" class="{{if eq .View "session"}}active{{end}}">Session</a>
   <a href="/ui2/extensions" class="{{if eq .View "extensions"}}active{{end}}">Extensions</a>
   <a href="/ui2/settings" class="{{if eq .View "settings"}}active{{end}}">Settings</a>
-  <a href="/" title="the original React console">old UI</a>
+  <a href="/legacy/" title="the original React console">old UI</a>
 </nav>
 {{end}}

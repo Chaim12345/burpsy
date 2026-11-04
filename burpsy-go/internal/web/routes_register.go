@@ -55,9 +55,11 @@ func (s *Server) route(pattern string, h http.HandlerFunc) {
 	handler := h
 	if strings.HasPrefix(pattern, "/ui2/") {
 		// ui2 pages can carry session material (the cookie jar renders values verbatim), so
-		// the browser must never store a copy of one.
+		// the browser must never store a copy of one; every one also carries the console's
+		// CSP and anti-framing headers.
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
+			ui2SecurityHeaders(w)
 			h(w, r)
 		}
 	}
