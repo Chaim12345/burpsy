@@ -219,6 +219,9 @@
   "/ui2/history/{id}",
   "/ui2/htmx.min.js",
   "/ui2/intercept",
+  "/ui2/intercept/rules",
+  "/ui2/intercept/rules/{action}",
+  "/ui2/intercept/send",
   "/ui2/intercept/{action}",
   "/ui2/intruder",
   "/ui2/intruder/confirm",
@@ -4427,6 +4430,66 @@
   {
    "path": "/ui2/intercept/extra/more",
    "key": "/ui2/intercept",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/extra",
+   "key": "/ui2/intercept/rules/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/extra/more",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/w",
+   "key": "/ui2/intercept/rules/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/w/",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/w/extra",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/rules/w/extra/more",
+   "key": "/ui2/intercept/rules",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/send",
+   "key": "/ui2/intercept/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/send/",
+   "key": "/ui2/intercept/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/send/extra",
+   "key": "/ui2/intercept/send",
+   "gated": false
+  },
+  {
+   "path": "/ui2/intercept/send/extra/more",
+   "key": "/ui2/intercept/send",
    "gated": false
   },
   {
