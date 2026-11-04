@@ -541,6 +541,8 @@ var notExposed = map[string]string{
 	"POST /ui2/history/bulk/{action}":          "the ui2 History bulk-action buttons and review sheets; /api/tools/organizer, /api/scope, /api/audit/selected and /api/history/rows are the agent-facing calls",
 	"GET /ui2/history/extractors":              "the ui2 extractor-column manager page; /api/history/extractors is the agent-facing read",
 	"POST /ui2/history/extractors/{action}":    "the ui2 extractor add/remove forms; PUT /api/history/extractors is the agent-facing write",
+	"GET /ui2/message/render/{id}":             "the ui2 Render view's sandboxed response body for an iframe; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
+	"POST /ui2/message/protobuf/{id}/{action}": "ui2 Protobuf view schema decode and reflection review/run steps; /api/protobuf/decode and /api/protobuf/reflect-decode are the agent-facing calls",
 	"GET /ui2/issues":                          "the ui2 issues page; /api/issues is the agent-facing list",
 	"GET /ui2/issues/{id}":                     "the ui2 issue detail pane; /api/issues/{id} is the agent-facing read",
 	"GET /ui2/advisories/{typeIndex}":          "the ui2 definition detail fragment; /api/advisories/{typeIndex} is the agent-facing read",

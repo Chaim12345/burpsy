@@ -100,6 +100,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/history/bulk/{action}":          "ui2 History bulk-action buttons inside the /ui2/history page; the console calls the underlying /api routes itself",
 	"/ui2/history/extractors":             "ui2 extractor-column manager page, linked from /ui2/history; the console calls /api/history/extractors",
 	"/ui2/history/extractors/{action}":    "ui2 extractor add/remove forms inside the /ui2/history/extractors page; the console PUTs /api/history/extractors",
+	"/ui2/message/render/{id}":            "the ui2 Render view's iframe src inside the /ui2/ history detail pane (not from ui/src); the console renders with its own sandboxed iframe",
+	"/ui2/message/protobuf/{id}/{action}": "ui2 Protobuf view forms inside the /ui2/ history detail pane; the console calls /api/protobuf/decode and /api/protobuf/reflect-decode",
 	"/ui2/issues":                         "the ui2 issues page, reached by navigating to /ui2/issues; the console's Issues tree calls /api/issues",
 	"/ui2/issues/{id}":                    "the ui2 issue detail pane, fetched by htmx inside /ui2/issues; the console's advisory pane calls /api/issues/{id}",
 	"/ui2/htmx.min.js":                    "vendored htmx, requested by the browser as a script src from the /ui2/ page, not fetched from ui/src",

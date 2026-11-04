@@ -234,6 +234,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/ui2/issues/{id}": false,
  "/ui2/logger": false,
  "/ui2/logger/{action}": false,
+ "/ui2/message/protobuf/{id}/{action}": false,
+ "/ui2/message/render/{id}": false,
  "/ui2/organizer": false,
  "/ui2/organizer/annotate/{action}": false,
  "/ui2/organizer/collections/{action}": false,

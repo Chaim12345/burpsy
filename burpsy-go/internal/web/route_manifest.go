@@ -1558,6 +1558,14 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Logger page: tool-sent requests, server-paged with search and infinite scroll",
 	},
+	"/ui2/message/render/{id}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1",
+		summary: "ui2 Render view: one exchange's response body for a sandbox=\"\" iframe, served under a CSP sandbox with no script source",
+	},
+	"/ui2/message/protobuf/{id}/{action}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/schema",
+		summary: "ui2 Protobuf view: schema decodes one side with an operator .proto (local); reflect-review holds a gRPC reflection fetch for review and reflect-run spends it once",
+	},
 	"/ui2/organizer/collections/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
 		summary: "ui2 collection create and name/note review and one-time install",

@@ -195,12 +195,6 @@ type ui2ExchangeMenu struct {
 	Colours     []string
 }
 
-// ui2KV is one name/value row of the detached page's parameter sections.
-type ui2KV struct {
-	Name  string
-	Value string
-}
-
 // ui2ExchangeView is the detached exchange page.
 type ui2ExchangeView struct {
 	Menu        ui2ExchangeMenu

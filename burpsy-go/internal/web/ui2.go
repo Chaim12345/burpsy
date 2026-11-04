@@ -287,63 +287,16 @@ func (s *Server) renderUI2HistoryRowsAppend(r *http.Request, p ui2HistoryParams)
 }
 
 // handleUI2HistoryDetail serves GET /ui2/history/{id}: the request/response panes for one
-// exchange. Message bytes are read here, one message at a time, never in the list.
+// exchange. Message bytes are read here, one message at a time, never in the list. The views
+// (Pretty/Raw/Hex/Render/JWT/GraphQL/Protobuf), Inspector and display options are query state,
+// built in ui2_message_views.go; nothing here writes the store.
 func (s *Server) handleUI2HistoryDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
 		return
 	}
-	model, ok := s.ui2HistoryDetailModel(r, id)
-	if !ok {
-		http.Error(w, "Exchange not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := ui2Templates.ExecuteTemplate(w, "history_detail.html", model); err != nil {
-		http.Error(w, "template error", http.StatusInternalServerError)
-	}
-}
-
-// ui2HistoryDetailModel reads one exchange's panes; ok is false when the id is not stored.
-func (s *Server) ui2HistoryDetailModel(r *http.Request, id uint64) (ui2Detail, bool) {
-	ex, err := s.store.GetExchange(core.ExchangeID(id))
-	if err != nil {
-		return ui2Detail{}, false
-	}
-	v := exchangeView(ex)
-	model := ui2Detail{
-		ID: uint64(v.ID), Method: v.Method, Host: v.Host, Port: v.Port, Path: v.Path,
-		Status: ui2StatusString(v.Status), Mime: v.Mime, ResponseLen: v.ResponseLen,
-		DurationMs: v.DurationMs,
-	}
-	if v.Request != nil {
-		if msg, err := s.store.Get(core.MsgId(*v.Request)); err == nil {
-			model.Request = string(msg.Raw())
-		}
-	}
-	if model.Request == "" {
-		// Restored-project case: the exchanges table carries request_msg, but the
-		// in-memory Request pointer is nil after this tree's restore path, so the row
-		// reads as request-less even though the bytes are on disk. Resolve through the
-		// store's request index rather than guessing an id.
-		if raw := requestMessageForExchange(s.store, ex); raw != nil {
-			model.Request = string(raw)
-		}
-	}
-	if v.Response != nil {
-		if msg, err := s.store.Get(core.MsgId(*v.Response)); err == nil {
-			model.Response = string(msg.Raw())
-		}
-	}
-	// Pretty/Raw reading toggle, per pane. Pretty is the default reading; Raw is the exact
-	// recorded bytes. The toggle only changes THIS rendering — the store is never written
-	// and the bytes the repeater would re-send are untouched.
-	model.ReqPretty = r.URL.Query().Get("view_req") != "raw"
-	model.RespPretty = r.URL.Query().Get("view_resp") != "raw"
-	model.ReqPane = renderMessagePane(model.Request, true, model.ReqPretty)
-	model.RespPane = renderMessagePane(model.Response, false, model.RespPretty)
-	return model, true
+	s.ui2RenderDetail(w, r, id, nil)
 }
 
 // requestMessageForExchange resolves an exchange's request bytes when the exchange's own
@@ -376,12 +329,8 @@ type ui2Detail struct {
 	DurationMs  uint64
 	Request     string
 	Response    string
-	// Rendered panes + view state for the Pretty/Raw reading toggle. The strings stay:
-	// the raw view renders exactly them, and tests read them straight.
-	ReqPane    ui2PaneView
-	RespPane   ui2PaneView
-	ReqPretty  bool
-	RespPretty bool
+	// Views is the rendered panes, Inspector and display options (ui2_message_views.go).
+	Views ui2MsgViews
 }
 
 // ui2IssueGroup is one grouped issue (same issue name + host) for the issues tree.

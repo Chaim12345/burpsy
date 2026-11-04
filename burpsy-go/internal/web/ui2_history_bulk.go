@@ -492,12 +492,12 @@ func (s *Server) handleUI2HistoryGoto(w http.ResponseWriter, r *http.Request) {
 		msg("an exchange id is a whole number")
 		return
 	}
-	model, ok := s.ui2HistoryDetailModel(r, id)
-	if !ok {
+	detail, code, _ := s.ui2DetailBody(r, id, nil)
+	if code != 0 {
 		msg(fmt.Sprintf("no exchange #%d is stored", id))
 		return
 	}
-	body := ui2Exec("history_goto.html", map[string]any{"id": id}) + ui2Exec("history_detail.html", model)
+	body := ui2Exec("history_goto.html", map[string]any{"id": id}) + detail
 	ui2Fragment(w, r, "burpsy /ui2/ — History", "history", body)
 }
 

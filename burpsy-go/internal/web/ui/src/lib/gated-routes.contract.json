@@ -230,6 +230,8 @@
   "/ui2/issues/{id}",
   "/ui2/logger",
   "/ui2/logger/{action}",
+  "/ui2/message/protobuf/{id}/{action}",
+  "/ui2/message/render/{id}",
   "/ui2/organizer",
   "/ui2/organizer/annotate/{action}",
   "/ui2/organizer/collections/{action}",
@@ -4645,6 +4647,46 @@
   {
    "path": "/ui2/logger/w/extra/more",
    "key": "/ui2/logger",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/protobuf/w/w",
+   "key": "/ui2/message/protobuf/{id}/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/protobuf/w/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/protobuf/w/w/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/protobuf/w/w/extra/more",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/render/w",
+   "key": "/ui2/message/render/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/render/w/",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/render/w/extra",
+   "key": "/ui2/",
+   "gated": false
+  },
+  {
+   "path": "/ui2/message/render/w/extra/more",
+   "key": "/ui2/",
    "gated": false
   },
   {
