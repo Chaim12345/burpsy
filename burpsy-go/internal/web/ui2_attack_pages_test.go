@@ -449,24 +449,22 @@ func TestUI2ConfirmFragmentsRenderUnarmedAndArmable(t *testing.T) {
 // API showed total 1 while the page showed a blank row). The table now ranges
 // .interactions.rows and renders the recorded id, type, client and time.
 func TestUI2CollaboratorInteractionsRenderRows(t *testing.T) {
-	model := map[string]any{
-		"status": map[string]any{"configured": true, "hint": "h", "domain": "d.oast.local"},
-		"interactions": map[string]any{
-			"total": 1, "distinct": 1,
-			"rows": []any{map[string]any{
-				"interaction_id": "abc123", "type": "dns", "q_type": "A",
-				"client_ip": "127.0.0.1", "at_ms": float64(1793400325000),
-			}},
-		},
+	model := &ui2CollabModel{
+		Status: collaboratorStatus{Configured: true, Hint: "h", Domain: "d.oast.local"},
+		Counts: &collaboratorCounts{Total: 1, Distinct: 1},
+		Rows: []ui2CollabRow{{collaboratorInteractionRow: collaboratorInteractionRow{
+			ID: 7, InteractionID: "abc123", Type: "dns", QType: "A", ClientIP: "127.0.0.1", AtMs: 1793400325000,
+		}, TypeUpper: "DNS", Time: ui2CollabTime(1793400325000)}},
+		RowsTotal: 1,
 	}
-	out := string(ui2Exec("collaborator.html", model))
-	if !strings.Contains(out, "abc123") || !strings.Contains(out, "dns A") || !strings.Contains(out, "127.0.0.1") {
+	out := string(ui2Exec("collaborator_page.html", model))
+	if !strings.Contains(out, `data-collab-id="7"`) || !strings.Contains(out, "DNS A") || !strings.Contains(out, "127.0.0.1") {
 		t.Errorf("interaction row does not render its fields: %s", out[:ui2Min(500, len(out))])
 	}
 	if strings.Contains(out, "<td></td>") {
 		t.Errorf("interaction row rendered empty cells: %s", out[:ui2Min(500, len(out))])
 	}
-	if strings.Contains(out, "No interactions recorded.") {
+	if strings.Contains(out, "No interactions recorded") {
 		t.Errorf("empty-state shown alongside a real row")
 	}
 	if !strings.Contains(out, "2026-") {
@@ -480,16 +478,11 @@ func TestUI2CollaboratorInteractionsRenderRows(t *testing.T) {
 // into a screen share. Addresses render through html/template, so a hostile address cannot
 // break out of the copy attribute.
 func TestUI2CollaboratorMintResultIsStructured(t *testing.T) {
-	model := map[string]any{
-		"status":       map[string]any{"configured": true, "hint": "h", "domain": "d.oast.local"},
-		"interactions": map[string]any{"total": 0, "rows": []any{}},
-		"minted": map[string]any{
-			"addresses": []string{"mk1.d.oast.local", "mk2.d.oast.local"},
-			"domain":    "d.oast.local",
-			"marker":    "mk",
-		},
+	model := &ui2CollabModel{
+		Status: collaboratorStatus{Configured: true, Hint: "h", Domain: "d.oast.local"},
+		Minted: &ui2CollabMinted{Addresses: []string{"mk1.d.oast.local", "mk2.d.oast.local"}, Domain: "d.oast.local", Marker: "mk"},
 	}
-	out := string(ui2Exec("collaborator.html", model))
+	out := string(ui2Exec("collaborator_page.html", model))
 	for _, want := range []string{"mk1.d.oast.local", "mk2.d.oast.local", `data-copy="mk1.d.oast.local"`, "Copy", "d.oast.local", "Minted 2 payload(s)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("structured mint result missing %q: %s", want, out[:ui2Min(600, len(out))])
@@ -500,17 +493,16 @@ func TestUI2CollaboratorMintResultIsStructured(t *testing.T) {
 	}
 
 	// A hostile address stays inert in both the text and the copy attribute.
-	model["minted"] = map[string]any{"addresses": []string{`x"><script>alert(1)</script>`}, "domain": "d", "marker": "m"}
-	out = string(ui2Exec("collaborator.html", model))
+	model.Minted = &ui2CollabMinted{Addresses: []string{`x"><script>alert(1)</script>`}, Domain: "d", Marker: "m"}
+	out = string(ui2Exec("collaborator_page.html", model))
 	if strings.Contains(out, "<script>alert(1)</script>") {
 		t.Errorf("hostile minted address rendered unescaped")
 	}
 
 	// The failure path is a clean alert line, not a dump.
-	out = string(ui2Exec("collaborator.html", map[string]any{
-		"status":       map[string]any{"configured": false, "hint": "h"},
-		"interactions": map[string]any{"total": 0, "rows": []any{}},
-		"mint_error":   "no out-of-band interaction channel is configured",
+	out = string(ui2Exec("collaborator_page.html", &ui2CollabModel{
+		Status:    collaboratorStatus{Hint: "h"},
+		MintError: "no out-of-band interaction channel is configured",
 	}))
 	if !strings.Contains(out, `role="alert"`) || !strings.Contains(out, "no out-of-band interaction channel is configured") {
 		t.Errorf("mint failure does not render as a clean alert: %s", out[:ui2Min(400, len(out))])

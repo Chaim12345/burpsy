@@ -1407,6 +1407,26 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Collaborator mint, two steps: the first POST holds the exact /api/collaborator/payload call server-side and renders it for review; the second spends that held call by id (single-use, 60s)",
 	},
+	"/ui2/collaborator/health": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Collaborator health check, two steps: the first POST holds the exact /api/collaborator/health call server-side and renders it for review; the second (review_id) spends it (single-use, 60s)",
+	},
+	"/ui2/collaborator/poll": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Collaborator poll now: re-reads the interaction log through /api/collaborator/poll (nothing leaves the process) and re-renders the page",
+	},
+	"/ui2/collaborator/blindxss": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Collaborator blind-XSS mint: one POST /api/blindxss/payload (local, sends nothing) and the page with the minted script tag to copy",
+	},
+	"/ui2/collaborator/server/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Collaborator interaction server set/unset: confirm holds the exact POST or DELETE /api/collaborator/server call with a one-time confirmation bound to its full body and renders the review; run spends it",
+	},
+	"/ui2/collaborator/interaction/{id}": {
+		methods: []string{"GET"}, subPath: "0", risk: riskAsset,
+		summary: "ui2 Collaborator interaction detail: correlation id, client IP and what it means, time and the raw bytes, read from /api/collaborator/interaction/{id}",
+	},
 	"/ui2/intruder": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Intruder page: running attacks, launch form, points",
@@ -1590,11 +1610,11 @@ var manifest = map[string]route{
 	},
 	"/ui2/decoder": {
 		methods: []string{"GET", "POST"}, risk: riskAsset,
-		summary: "ui2 Decoder: GET the form, POST /ui2/decoder/run runs one decode/encode/hash layer",
+		summary: "ui2 Decoder: GET the pipeline form (?msg_id= seeds the input with one stored message); POST is /ui2/decoder/run",
 	},
 	"/ui2/decoder/run": {
 		methods: []string{"POST"}, risk: riskAsset,
-		summary: "ui2 Decoder run: forwards to /api/tools/decode|encode|hash and renders the result",
+		summary: "ui2 Decoder pipeline: runs each decode/encode/hash step through /api/tools/decode|encode|hash on the previous step's output (whole input or a character span) and renders every result, or edits the step list",
 	},
 	"/ui2/engagement/clickbandit": {
 		methods: []string{"GET"}, risk: riskAsset,

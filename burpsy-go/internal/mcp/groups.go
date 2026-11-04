@@ -680,6 +680,11 @@ var notExposed = map[string]string{
 	"POST /ui2/intruder/settings/extract":            "ui2 Intruder define-extract helper for the operator's form; an agent writes grep_extract itself",
 	"POST /ui2/sequencer/settings/{action}":          "ui2 Sequencer analysis-settings review and apply steps; PUT /api/sequencer/settings is the agent-facing control",
 	"GET /ui2/sequencer/tokens/{id}":                 "ui2 Sequencer Save tokens download; GET /api/sequencer/capture/{id} is the agent-facing read",
+	"POST /ui2/collaborator/health":                  "ui2 Collaborator health-check review and run steps (server-held call); /api/collaborator/health is the agent-facing check",
+	"POST /ui2/collaborator/poll":                    "ui2 Collaborator poll-now button; /api/collaborator/poll is the agent-facing read",
+	"POST /ui2/collaborator/blindxss":                "ui2 Collaborator blind-XSS mint button; /api/blindxss/payload is the agent-facing mint",
+	"POST /ui2/collaborator/server/{action}":         "ui2 Collaborator interaction-server set/unset review and apply steps (minted one-time confirmation); /api/collaborator/server is the agent-facing control",
+	"GET /ui2/collaborator/interaction/{id}":         "ui2 Collaborator interaction detail pane; /api/collaborator/interaction/{id} is the agent-facing read",
 	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +
 		"/api/* routes a review mints (the gated ones through their own /confirm endpoints)",
 	"POST /ui2/intercept/{action}": "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",

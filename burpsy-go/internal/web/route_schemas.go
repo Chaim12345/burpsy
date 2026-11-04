@@ -70,8 +70,6 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/engagement/hidden-inputs/{action}": {raw: "application/x-www-form-urlencoded form: exchange_id, kinds, cache_buster, max_requests (confirm); same fields + one-time confirm token (run)"},
 
 	"POST /ui2/collaborator/mint":                {raw: "application/x-www-form-urlencoded form: count to preview, or mint_id to spend the held call"},
-	"POST /ui2/decoder":                          {raw: "application/x-www-form-urlencoded form: op, arg, input"},
-	"POST /ui2/decoder/run":                      {raw: "application/x-www-form-urlencoded form: op, arg, input"},
 	"POST /ui2/sitemap/scope/{action}":           {raw: "application/x-www-form-urlencoded: confirm takes the row key in the post URL's query and no form fields; run takes the reviewed rule's hidden fields (token/pattern/port/protocol/path)"},
 	"POST /ui2/scope/confirm":                    {raw: "application/x-www-form-urlencoded: scope_action rule-add takes kind/pattern/path/port/protocol; rule-toggle/rule-remove take the row tuple; drop-switch takes enabled"},
 	"POST /ui2/scope/run":                        {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
@@ -114,6 +112,12 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/comparer/run":                     {raw: "multipart/form-data or application/x-www-form-urlencoded workbench form: op, a, b, a_item/a_label/a_bin/a_sel and the b_ twins, a_msg/b_msg, a_file/b_file uploads, granularity, view, wrap, side"},
 	"POST /ui2/sequencer/analyse":                {raw: "multipart/form-data or application/x-www-form-urlencoded form: source, tokens, token_file upload, op=load, capture_id, redo/last_sample, encoding, significance, pad_mode, pad_byte"},
 	"POST /ui2/sequencer/settings/{action}":      {raw: "application/x-www-form-urlencoded: on_<key> switches and b64 (confirm); review id + one-time token only (run)"},
+	"POST /ui2/decoder":                          {raw: "application/x-www-form-urlencoded pipeline form: input, input_format, view, sel_start, sel_end, steps, s<i>_op/guess/key/key_enc/out, action (legacy: op, arg, input)"},
+	"POST /ui2/decoder/run":                      {raw: "application/x-www-form-urlencoded pipeline form: input, input_format, view, sel_start, sel_end, steps, s<i>_op/guess/key/key_enc/out, action (legacy: op, arg, input)"},
+	"POST /ui2/collaborator/health":              {raw: "application/x-www-form-urlencoded form: empty to preview, or review_id to spend the held call"},
+	"POST /ui2/collaborator/poll":                noBody,
+	"POST /ui2/collaborator/blindxss":            noBody,
+	"POST /ui2/collaborator/server/{action}":     {raw: "application/x-www-form-urlencoded: confirm takes op=set (server, client_path) or op=unset (discard); run takes review_id + one-time confirm token only"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{
