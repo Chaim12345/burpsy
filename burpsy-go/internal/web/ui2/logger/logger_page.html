@@ -1,0 +1,114 @@
+<div id="rows">
+<style>
+.lg-bar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; padding:6px 14px; }
+.lg-bar label { white-space:nowrap; }
+.lg-bar input[type=text], .lg-bar input[type=search] { max-width:160px; }
+.lg-split { display:flex; align-items:flex-start; }
+.lg-list { flex:3; min-width:0; }
+#logger-detail { flex:2; min-width:0; position:sticky; top:0; max-height:calc(100vh - 60px); overflow:auto; border-left:1px solid var(--line); padding:6px 12px; }
+.lg-detail dl { display:grid; grid-template-columns:110px minmax(0,1fr); gap:2px 8px; margin:6px 0; }
+.lg-detail dd { margin:0; overflow-wrap:anywhere; }
+.lg-detail dt { color:var(--muted); }
+.lg-actions { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.hl-sw { display:inline-block; width:10px; height:10px; border-radius:50%; border:1px solid var(--line); }
+.hl-sw-red { background:#e33; } .hl-sw-orange { background:#f80; } .hl-sw-yellow { background:#ec0; }
+.hl-sw-green { background:#3a3; } .hl-sw-cyan { background:#2bc; } .hl-sw-blue { background:#36e; }
+.hl-sw-pink { background:#f8b; } .hl-sw-magenta { background:#c3c; } .hl-sw-gray { background:#999; }
+.lg-capture { margin:0 14px; border:1px solid var(--line); border-radius:6px; }
+.lg-capture summary { padding:4px 8px; cursor:pointer; }
+.lg-ok { color:#080; } .lg-err { color:#c00; }
+@media (max-width:640px) {
+  .lg-split { display:block; }
+  #logger-detail { position:static; max-height:none; border-left:0; border-top:1px solid var(--line); }
+  table.lg-t td:nth-child(2), table.lg-t th:nth-child(2),
+  table.lg-t td:nth-child(4), table.lg-t th:nth-child(4),
+  table.lg-t td:nth-child(n+7), table.lg-t th:nth-child(n+7) { display:none; }
+  table.lg-t th:first-child { width:24px; }
+  table.lg-t th:nth-child(3) { width:62px; }
+  table.lg-t th:nth-child(6) { width:56px; }
+}
+</style>
+{{if .ActionDone}}<p class="meta lg-ok" role="status" id="logger-note">{{.ActionDone}}</p>{{end}}
+{{if .ActionError}}<p class="meta lg-err" role="alert" id="logger-note">Not applied: {{.ActionError}}</p>{{end}}
+{{if .ViewError}}<p class="meta lg-err" role="alert">View filter refused: {{.ViewError}}</p>{{end}}
+<p class="meta">{{.Matched}} of {{.Total}} entries shown{{if .Dropped}} · <strong>{{.Dropped}} dropped</strong> at the row limit{{end}}{{if .UncapturedTotal}} · <strong>{{.UncapturedTotal}} sent, not captured</strong>{{end}} · row limit {{.Capacity}}</p>
+<form id="logger-view" class="lg-bar" hx-get="/ui2/logger" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" hx-trigger="submit, change">
+<input type="search" name="search" value="{{.P.Search}}" aria-label="Search the tool log" placeholder="host, path, method, status">
+<select name="v_tool" aria-label="Tool filter"><option value="">All tools</option>{{range .Tools}}<option value="{{.Name}}"{{if eq .Name $.P.Tool}} selected{{end}}>{{.Name}} ({{.Count}})</option>{{end}}</select>
+<select name="v_method" aria-label="Method filter"><option value="">Any method</option>{{range .Methods}}<option value="{{.}}"{{if eq . $.P.Method}} selected{{end}}>{{.}}</option>{{end}}</select>
+<select name="v_status" aria-label="Status class filter"><option value="">Any status</option>
+<option value="2"{{if eq .P.StatusClass "2"}} selected{{end}}>2xx</option><option value="3"{{if eq .P.StatusClass "3"}} selected{{end}}>3xx</option>
+<option value="4"{{if eq .P.StatusClass "4"}} selected{{end}}>4xx</option><option value="5"{{if eq .P.StatusClass "5"}} selected{{end}}>5xx</option>
+<option value="0"{{if eq .P.StatusClass "0"}} selected{{end}}>no response</option></select>
+<label><input type="checkbox" name="v_annotated" value="1"{{if .P.Annotated}} checked{{end}}> annotated only</label>
+<label><input type="checkbox" name="v_scope" value="1"{{if .P.ScopeOnly}} checked{{end}}> in scope only</label>
+<label><input type="checkbox" name="v_has_response" value="1"{{if .P.HasResponse}} checked{{end}}> has response</label>
+<label><input type="checkbox" name="v_parameterized" value="1"{{if .P.Parameterized}} checked{{end}}> parameterized</label>
+<input type="text" name="v_mime" value="{{.P.Mime}}" aria-label="Show only these MIME types" placeholder="MIME: text/html,…">
+<input type="text" name="v_ext" value="{{.P.Ext}}" aria-label="Show only these file extensions" placeholder="ext: js,json">
+<button type="submit">Filter</button>
+<a class="btn" href="/ui2/logger" hx-get="/ui2/logger" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">Reset</a>
+</form>
+<div class="lg-bar">
+<span class="lg-presets" data-presets="logger" data-presets-form="logger-view" data-presets-url="/ui2/logger">
+<select data-presets-list aria-label="Saved view presets"><option value="">presets…</option></select>
+<button type="button" data-presets-apply>Apply</button>
+<input type="text" data-presets-name aria-label="Preset name" placeholder="preset name" size="10">
+<button type="button" data-presets-save>Save view</button>
+<button type="button" data-presets-delete>Delete</button>
+<span class="meta" data-presets-status aria-live="polite"></span>
+</span>
+<a class="btn" href="/ui2/logger/export?{{.ExportQuery}}" download="toollog.csv">Export CSV</a>
+<form hx-post="/ui2/logger/clear-review" method="post" action="/ui2/logger/clear-review" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view" style="display:inline">
+<button type="submit"{{if not .Total}} disabled{{end}}>Clear log…</button></form>
+</div>
+<details class="lg-capture"{{if or .Note .FilterNote}} open{{end}}>
+<summary>Capture settings{{if .Filter.Active}} (filter active){{end}}{{if .Filter.FilteredTotal}} · {{.Filter.FilteredTotal}} refused by filter{{end}}</summary>
+<div id="capture">
+{{if .Note}}<p class="meta"><strong>Capture unchanged: {{.Note}}</strong></p>{{end}}
+<p class="meta">Capture - recording per tool. Turning a tool off means its next requests are sent and deliberately not recorded; the not-captured counters keep the count honest.</p>
+{{range .CaptureRows}}<p class="meta"><strong>{{.Tool}}</strong> {{if .On}}on{{else}}off{{end}}{{if .Uncaptured}} &middot; {{.Uncaptured}} not captured{{end}}
+<form style="display:inline" hx-post="/ui2/logger/capture-{{.Tool}}-{{if .On}}off{{else}}on{{end}}" method="post" action="/ui2/logger/capture-{{.Tool}}-{{if .On}}off{{else}}on{{end}}" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view">
+<button type="submit">turn {{.Tool}} {{if .On}}off{{else}}on{{end}}</button></form></p>
+{{end}}</div>
+<div id="filter">
+<p class="meta">Capture filter - decides what gets recorded. Rows it refuses are not recorded; the filtered counter keeps the count honest.{{if .Filter.FilteredTotal}} {{.Filter.FilteredTotal}} filtered so far.{{end}}</p>
+{{if .FilterNote}}<p class="meta"><strong>Filter not applied: {{.FilterNote}}</strong></p>{{end}}
+<p class="meta">Now: {{if .Filter.Active}}{{.Filter.Summary}}{{else}}no capture filter - every captured request is recorded{{end}}</p>
+<form hx-post="/ui2/logger/filter-set" method="post" action="/ui2/logger/filter-set" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view">
+<p class="meta">status
+<label><input type="checkbox" name="status" value="2"{{if .Filter.S2}} checked{{end}}> 2xx</label>
+<label><input type="checkbox" name="status" value="3"{{if .Filter.S3}} checked{{end}}> 3xx</label>
+<label><input type="checkbox" name="status" value="4"{{if .Filter.S4}} checked{{end}}> 4xx</label>
+<label><input type="checkbox" name="status" value="5"{{if .Filter.S5}} checked{{end}}> 5xx</label></p>
+<p class="meta">term <input type="text" name="term" value="{{.Filter.Term}}" size="14">
+<label><input type="checkbox" name="regex"{{if .Filter.Regex}} checked{{end}}> regex</label>
+<label><input type="checkbox" name="case"{{if .Filter.Case}} checked{{end}}> case-sensitive</label>
+<label><input type="checkbox" name="negate"{{if .Filter.Negate}} checked{{end}}> negated</label>
+<label><input type="checkbox" name="scope_only"{{if .Filter.ScopeOnly}} checked{{end}}> in scope only{{if not .ScopeAttached}} (no scope loaded - inert){{end}}</label></p>
+<p class="meta">exclude MIME <input type="text" name="mime" value="{{.Filter.MimeJoined}}" size="20" placeholder="image/*, text/css">
+row limit <input type="text" name="capacity" value="" size="7" inputmode="numeric" aria-label="Capture limit in rows" placeholder="{{.Capacity}}">
+<button type="submit">review capture filter</button></p>
+</form>
+{{if .Filter.Active}}<form hx-post="/ui2/logger/filter-clear" method="post" action="/ui2/logger/filter-clear" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view">
+<p class="meta"><button type="submit">review filter clear</button></p>
+</form>{{end}}
+</div>
+</details>
+<div class="lg-split">
+<div class="lg-list">
+<table class="lg-t">
+<thead><tr><th scope="col" title="highlight">#</th><th scope="col">Tool</th><th scope="col">Method</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Len</th><th scope="col">ms</th><th scope="col">Comment</th><th scope="col">Age</th></tr></thead>
+<tbody id="rows-body">
+{{range .Entries}}{{template "logger_row" .}}
+{{else}}<tr><td colspan="10" class="meta">{{if $.Total}}No logged request matches the view filter.{{else}}Logger is empty.{{end}}</td></tr>{{end}}
+{{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="10" class="meta"
+     hx-get="/ui2/logger" hx-vals='{{.HxVals}}'
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<div id="logger-detail" role="region" aria-label="Selected log entry" aria-live="polite">{{if .Detail}}{{template "logger_detail.html" .Detail}}{{else}}<p class="meta">Select a row to read its timing, annotation and, where the send produced a stored exchange, its request and response.</p>{{end}}</div>
+</div>
+</div>

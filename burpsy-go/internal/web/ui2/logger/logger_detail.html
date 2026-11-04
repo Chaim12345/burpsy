@@ -1,0 +1,48 @@
+<div class="lg-detail" data-open="1">
+{{if .Missing}}<p class="meta">Log entry #{{.Missing}} is no longer in the log (it was cleared or dropped at the row limit).</p>{{else}}
+<h3>#{{.E.ID}} <span style="overflow-wrap:anywhere">{{.E.Method}} {{.URL}}</span></h3>
+<p class="meta"><span class="badge">{{.E.Tool}}</span> <span class="badge">{{if .E.Status}}{{.E.Status}}{{else}}no response{{end}}</span>
+{{with .E.Exchange}} <a class="btn" href="/ui2/exchange/{{.}}">exchange actions</a>{{end}}
+ <a class="btn" href="/ui2/logger{{if .ViewQuery}}?{{.ViewQuery}}{{end}}" hx-get="/ui2/logger{{if .ViewQuery}}?{{.ViewQuery}}{{end}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">close</a></p>
+<dl>
+<dt>Sent</dt><dd>{{if .Sent}}{{.Sent}}{{else}}—{{end}}</dd>
+<dt>Authority</dt><dd>{{.E.Host}}:{{.E.Port}}{{if .E.TLS}} (TLS){{end}}</dd>
+<dt>Path</dt><dd><code>{{.E.Path}}</code></dd>
+<dt>Duration</dt><dd>{{.E.DurationMs}} ms</dd>
+<dt>Response length</dt><dd>{{if .E.ResponseLen}}{{.E.ResponseLen}} bytes{{else}}no response received{{end}}</dd>
+<dt>MIME</dt><dd>{{if .E.Mime}}{{.E.Mime}}{{else}}—{{end}}</dd>
+<dt>Error</dt><dd>{{if .E.Error}}<span class="lg-err">{{.E.Error}}</span>{{else}}none reported{{end}}</dd>
+<dt>Highlight</dt><dd>{{if .E.Highlight}}<span class="hl-sw hl-sw-{{.E.Highlight}}"></span> {{.E.Highlight}}{{else}}none{{end}}</dd>
+<dt>Comment</dt><dd>{{if .E.Comment}}{{.E.Comment}}{{else}}—{{end}}</dd>
+</dl>
+<form class="lg-actions" hx-post="/ui2/logger/annotate" method="post" action="/ui2/logger/annotate" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view">
+<input type="hidden" name="id" value="{{.E.ID}}">
+<input type="text" name="comment" value="{{.E.Comment}}" aria-label="Comment on this log entry" placeholder="Add a comment…" style="flex:1; min-width:120px">
+<select name="highlight" aria-label="Highlight colour"><option value="">no highlight</option>{{range .Highlights}}<option value="{{.}}"{{if eq . $.E.Highlight}} selected{{end}}>{{.}}</option>{{end}}</select>
+<button type="submit">Save annotation</button>
+</form>
+<p class="meta">Row actions</p>
+<div class="lg-actions">
+<button type="button" class="copy-btn" data-label="Copy URL" data-copy="{{.URL}}">Copy URL</button>
+<button type="button" class="copy-btn" data-label="Copy as curl" data-copy="{{.Curl}}" title="request line only: the log stores no headers or body">Copy as curl</button>
+<form hx-post="/ui2/logger/scope-review" method="post" action="/ui2/logger/scope-review" hx-target="#rows" hx-swap="outerHTML" hx-include="#logger-view" style="display:inline">
+<input type="hidden" name="id" value="{{.E.ID}}"><button type="submit">Add {{.E.Host}} to scope…</button></form>
+<a class="btn" href="{{.HistHost}}">Show host in history</a>
+<a class="btn" href="{{.HistHostPath}}">Show host + path in history</a>
+</div>
+{{with .Panes}}
+{{if .Error}}<p class="meta">Message bytes unavailable: {{.Error}}</p>{{else}}
+<h3>Request
+ <span class="pane-toggle">{{if $.ReqPretty}}<span class="pt-on">Pretty</span> <a class="btn" href="/ui2/logger/entry/{{$.E.ID}}?view_req=raw{{if not $.RespPretty}}&view_resp=raw{{end}}" hx-get="/ui2/logger/entry/{{$.E.ID}}?view_req=raw{{if not $.RespPretty}}&view_resp=raw{{end}}" hx-target="#logger-detail" hx-swap="innerHTML">Raw</a>{{else}}<a class="btn" href="/ui2/logger/entry/{{$.E.ID}}{{if not $.RespPretty}}?view_resp=raw{{end}}" hx-get="/ui2/logger/entry/{{$.E.ID}}{{if not $.RespPretty}}?view_resp=raw{{end}}" hx-target="#logger-detail" hx-swap="innerHTML">Pretty</a> <span class="pt-on">Raw</span>{{end}}</span>
+ {{if .ReqPane.Kind}}<span class="badge">{{.ReqPane.Kind}}</span>{{end}}</h3>
+{{if .ReqPane.Note}}<p class="meta" role="note">{{.ReqPane.Note}}</p>{{end}}
+{{if .Request}}<pre class="msg">{{.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes captured.</p>{{end}}
+<h3>Response
+ <span class="pane-toggle">{{if $.RespPretty}}<span class="pt-on">Pretty</span> <a class="btn" href="/ui2/logger/entry/{{$.E.ID}}?view_resp=raw{{if not $.ReqPretty}}&view_req=raw{{end}}" hx-get="/ui2/logger/entry/{{$.E.ID}}?view_resp=raw{{if not $.ReqPretty}}&view_req=raw{{end}}" hx-target="#logger-detail" hx-swap="innerHTML">Raw</a>{{else}}<a class="btn" href="/ui2/logger/entry/{{$.E.ID}}{{if not $.ReqPretty}}?view_req=raw{{end}}" hx-get="/ui2/logger/entry/{{$.E.ID}}{{if not $.ReqPretty}}?view_req=raw{{end}}" hx-target="#logger-detail" hx-swap="innerHTML">Pretty</a> <span class="pt-on">Raw</span>{{end}}</span>
+ {{if .RespPane.Kind}}<span class="badge">{{.RespPane.Kind}}</span>{{end}}</h3>
+{{if .RespPane.Note}}<p class="meta" role="note">{{.RespPane.Note}}</p>{{end}}
+{{if .NoResponse}}<p class="meta">No response was captured for this exchange.</p>{{else if .Response}}<pre class="msg">{{.RespPane.Highlighted}}</pre>{{else}}<p class="meta">No response bytes captured.</p>{{end}}
+{{end}}
+{{else}}<p class="meta">No message bytes for this row: the send never produced a stored exchange (a transport failure, or a row standing for a whole run such as an audit).</p>{{end}}
+{{end}}
+</div>

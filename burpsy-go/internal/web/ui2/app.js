@@ -183,8 +183,11 @@ function liveGuarded(what) {
   if (liveScrolled()) return true;
   if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'dashboard') {
   if (what === 'intercept' || what === 'logger' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer' || what === 'issues') {
+  if (what === 'intercept' || what === 'logger' || what === 'ws' || what === 'scope' || what === 'sequencer' || what === 'session' || what === 'organizer') {
     var rows = document.getElementById(what === 'scope' ? 'srows' : 'rows');
     if (!rows) return false;
+    // An open Logger row / WS frame pane is something the operator is reading: hold the swap.
+    if ((what === 'logger' || what === 'ws') && rows.querySelector('#logger-detail [data-open], #ws-detail [data-open]')) return true;
     if (rows.querySelector('details.held-editor[open], details.scope-edit[open], details.collection-edit[open]')) return true;
     var ae = document.activeElement;
     if (ae && rows.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
@@ -266,11 +269,18 @@ function liveIssue(what) {
     url = '/ui2/intercept';
     target = '#rows';
   } else if (what === 'logger') {
+    // The whole rendered view state (search plus the v_* filters) rides the refresh.
+    var lv = document.getElementById('logger-view');
     var carried = document.querySelector('#rows input[name="search"]');
-    url = '/ui2/logger' + (carried && carried.value ? '?search=' + encodeURIComponent(carried.value) : '');
+    var lq = lv ? new URLSearchParams(new FormData(lv)).toString()
+      : (carried && carried.value ? 'search=' + encodeURIComponent(carried.value) : '');
+    url = '/ui2/logger' + (lq ? '?' + lq : '');
     target = '#rows';
   } else if (what === 'ws') {
-    url = '/ui2/ws';
+    // The selected connection and the frame filters ride the refresh.
+    var wf = document.getElementById('ws-filter');
+    var wq = wf ? new URLSearchParams(new FormData(wf)).toString() : '';
+    url = '/ui2/ws' + (wq ? '?' + wq : '');
     target = '#rows';
   } else if (what === 'organizer') {
     url = '/ui2/organizer';
@@ -924,11 +934,12 @@ function histParams() {
     var b = e.target && e.target.closest && e.target.closest('.copy-btn');
     if (!b) return;
     var text = b.getAttribute('data-copy') || '';
+    var label = b.getAttribute('data-label') || 'Copy';
     var report = function (ok) {
       // Never claim a copy that did not happen: on rejection the address is still
       // select-all in its <code> block, so point the operator at the manual path.
       b.textContent = ok ? 'Copied' : 'Select text';
-      setTimeout(function () { b.textContent = 'Copy'; }, 1600);
+      setTimeout(function () { b.textContent = label; }, 1600);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () { report(true); }, function () { report(false); });
@@ -1350,4 +1361,101 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
   function ready() { addButton(); revealSection(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
   window.addEventListener('hashchange', revealSection);
+// ---- Saved view presets (Logger) ----
+// A [data-presets] box saves the named form's current values as a query string in
+// localStorage and re-applies one with an htmx GET of its page. Storage can be unavailable
+// (private mode, quota, blocked site data): every access is guarded and the box says so.
+(function () {
+  var PREFIX = 'burpsy.ui2.presets.';
+  function load(key) {
+    try {
+      var v = JSON.parse(localStorage.getItem(PREFIX + key) || '{}');
+      return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    } catch (_) { return {}; }
+  }
+  function save(key, v) {
+    try { localStorage.setItem(PREFIX + key, JSON.stringify(v)); return true; } catch (_) { return false; }
+  }
+  function fill(box) {
+    var sel = box.querySelector('[data-presets-list]');
+    if (!sel) return;
+    while (sel.options.length > 1) sel.remove(1);
+    var all = load(box.getAttribute('data-presets'));
+    Object.keys(all).sort().forEach(function (k) {
+      var o = document.createElement('option');
+      o.value = k;
+      o.textContent = k;
+      sel.appendChild(o);
+    });
+  }
+  function fillUnder(root) {
+    if (!root || !root.querySelectorAll) return;
+    if (root.matches && root.matches('[data-presets]')) fill(root);
+    root.querySelectorAll('[data-presets]').forEach(fill);
+  }
+  document.body.addEventListener('htmx:load', function (e) { fillUnder(e.target); });
+  fillUnder(document.body);
+  document.addEventListener('click', function (e) {
+    var b = e.target && e.target.closest && e.target.closest('[data-presets-save],[data-presets-apply],[data-presets-delete]');
+    if (!b) return;
+    var box = b.closest('[data-presets]');
+    if (!box) return;
+    var key = box.getAttribute('data-presets');
+    var all = load(key);
+    var sel = box.querySelector('[data-presets-list]');
+    var status = box.querySelector('[data-presets-status]');
+    var say = function (t) { if (status) status.textContent = t; };
+    if (b.hasAttribute('data-presets-save')) {
+      var nameEl = box.querySelector('[data-presets-name]');
+      var name = nameEl ? nameEl.value.trim() : '';
+      var form = document.getElementById(box.getAttribute('data-presets-form'));
+      if (!name || !form) { say('name the preset first'); return; }
+      var qs = new URLSearchParams(new FormData(form));
+      qs.delete('sel');
+      qs.delete('offset');
+      all[name] = qs.toString();
+      if (save(key, all)) { say('saved ' + name); nameEl.value = ''; fill(box); } else say('browser storage unavailable - not saved');
+      return;
+    }
+    var chosen = sel ? sel.value : '';
+    if (!chosen || typeof all[chosen] !== 'string') { say('choose a preset'); return; }
+    if (b.hasAttribute('data-presets-delete')) {
+      delete all[chosen];
+      if (save(key, all)) { say('deleted ' + chosen); fill(box); } else say('browser storage unavailable - not deleted');
+      return;
+    }
+    // Re-encode: the stored text only ever becomes query parameters of the box's own page.
+    var url = box.getAttribute('data-presets-url') + '?' + new URLSearchParams(all[chosen]).toString();
+    htmx.ajax('GET', url, { target: '#rows', swap: 'outerHTML' });
+  });
+})();
+
+// ---- Payload seeds (WS frame -> Decoder, Comparer A/B) ----
+// A link with data-seed copies the text of its data-seed-src element into sessionStorage
+// before navigating; the Decoder / Comparer page fills its empty input from it. The payload
+// never travels in a URL. Comparer slots persist for the tab (A and B can come from two
+// frames); the Decoder seed is used once.
+(function () {
+  var KEY = 'burpsy.ui2.seed.';
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest && e.target.closest('a[data-seed]');
+    if (!a) return;
+    var src = document.getElementById(a.getAttribute('data-seed-src') || '');
+    if (!src) return;
+    try { sessionStorage.setItem(KEY + a.getAttribute('data-seed'), src.textContent); } catch (_) {}
+  });
+  function apply() {
+    var view = (document.body.dataset || {}).view || '';
+    var map = view === 'decoder' ? { 'decoder': 'input' } : view === 'comparer' ? { 'comparer.a': 'a', 'comparer.b': 'b' } : {};
+    Object.keys(map).forEach(function (k) {
+      var v = null;
+      try { v = sessionStorage.getItem(KEY + k); } catch (_) {}
+      if (v === null) return;
+      var ta = document.querySelector('#rows textarea[name="' + map[k] + '"]');
+      if (!ta || ta.value) return;
+      ta.value = v;
+      if (k === 'decoder') { try { sessionStorage.removeItem(KEY + k); } catch (_) {} }
+    });
+  }
+  apply();
 })();

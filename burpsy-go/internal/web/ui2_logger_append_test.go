@@ -31,7 +31,7 @@ func TestUI2LoggerAppendFragmentIsRowsOnly(t *testing.T) {
 	if strings.Contains(body, "<!doctype") || strings.Contains(body, "<thead") || strings.Contains(body, `id="capture"`) {
 		t.Errorf("append fragment carries the page chrome (doctype/thead/capture panel), want rows only")
 	}
-	if got := strings.Count(body, "<tr><td>"); got != 10 {
+	if got := strings.Count(body, `class="lg-row`); got != 10 {
 		t.Errorf("append carried %d entry rows, want 10", got)
 	}
 	if !strings.Contains(body, `class="sentinel-row"`) || !strings.Contains(body, `data-offset="20"`) {
@@ -44,7 +44,7 @@ func TestUI2LoggerAppendFragmentIsRowsOnly(t *testing.T) {
 	rec = httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, req)
 	body = rec.Body.String()
-	if got := strings.Count(body, "<tr><td>"); got != 10 {
+	if got := strings.Count(body, `class="lg-row`); got != 10 {
 		t.Errorf("last page carried %d entry rows, want 10", got)
 	}
 	if strings.Contains(body, "sentinel-row") {

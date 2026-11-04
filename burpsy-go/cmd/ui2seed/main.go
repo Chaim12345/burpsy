@@ -81,6 +81,19 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 		store.AddExchange(&core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
 			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: "/home", Status: &status, Source: core.SourceProxy})
 	}
+	{
+		// A WebSocket connection with a few frames (text both ways, binary, close), for the WS page.
+		reqID := put("GET /chat HTTP/1.1\r\nHost: "+*targetAddr+"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n\r\n", core.DirectionRequest)
+		respID := put("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", core.DirectionResponse)
+		status := uint16(101)
+		ex := &core.Exchange{Request: core.MsgPtr(core.MsgId(reqID)), Response: (*core.MsgId)(ptr(core.MsgId(respID))),
+			Host: "127.0.0.1", Port: targetPort, Method: "GET", Path: "/chat", Status: &status, Source: core.SourceProxy}
+		store.AddExchange(ex)
+		store.AddWsMessage(&core.WsMessage{Exchange: ex.ID, FromClient: true, Opcode: core.WsOpcodeText}, []byte(`{"op":"hello","user":"ada"}`))
+		store.AddWsMessage(&core.WsMessage{Exchange: ex.ID, FromClient: false, Opcode: core.WsOpcodeText}, []byte(`<b>welcome</b> ada`))
+		store.AddWsMessage(&core.WsMessage{Exchange: ex.ID, FromClient: false, Opcode: core.WsOpcodeBinary}, []byte{0, 1, 2, 0xff})
+		store.AddWsMessage(&core.WsMessage{Exchange: ex.ID, FromClient: true, Opcode: core.WsOpcodeClose}, []byte{0x03, 0xe8, 'b', 'y', 'e'})
+	}
 	srv := web.NewServer(store, core.NewScope())
 	// A wired scanner so the Collaborator channel can be configured (POST
 	// /api/collaborator/server refuses without one) and minted via the two-step page.
