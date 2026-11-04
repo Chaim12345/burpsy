@@ -145,8 +145,8 @@ func ui2StringList(v any) []string {
 	return out
 }
 
-// ui2Lines splits a textarea into trimmed, non-blank lines.
-func ui2Lines(raw string) []string {
+// ui2TrimmedLines splits a textarea into trimmed, non-blank lines.
+func ui2TrimmedLines(raw string) []string {
 	out := []string{}
 	for _, l := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
 		if l = strings.TrimSpace(l); l != "" {
@@ -371,7 +371,7 @@ func ui2ScanConfigPatch(r *http.Request, view map[string]any) (map[string]any, [
 		}
 	}
 	if ui2Present(r, "reset_test_identities") {
-		cur, want := ui2StringList(view["reset_test_identities"]), ui2Lines(r.PostFormValue("reset_test_identities"))
+		cur, want := ui2StringList(view["reset_test_identities"]), ui2TrimmedLines(r.PostFormValue("reset_test_identities"))
 		if !ui2SameStrings(cur, want) {
 			patch["reset_test_identities"] = want
 			changes = append(changes, fmt.Sprintf("reset_test_identities: %d -> %d identities", len(cur), len(want)))
@@ -395,7 +395,7 @@ func ui2ScanConfigPatch(r *http.Request, view map[string]any) (map[string]any, [
 		cur := ui2StringList(view["only_rows"])
 		want := []string{}
 		seen := map[string]bool{}
-		for _, n := range append(ui2Lines(r.PostFormValue("only_rows")), strings.TrimSpace(r.PostFormValue("only_rows_add"))) {
+		for _, n := range append(ui2TrimmedLines(r.PostFormValue("only_rows")), strings.TrimSpace(r.PostFormValue("only_rows_add"))) {
 			if n != "" && !seen[n] {
 				seen[n] = true
 				want = append(want, n)
@@ -1226,7 +1226,7 @@ func ui2SameMethods(a, b []scanner.IssueDetectionMethod) bool {
 func ui2SkipList(raw string) []string {
 	out := []string{}
 	seen := map[string]bool{}
-	for _, n := range ui2Lines(raw) {
+	for _, n := range ui2TrimmedLines(raw) {
 		if k := strings.ToLower(n); !seen[k] {
 			seen[k] = true
 			out = append(out, n)

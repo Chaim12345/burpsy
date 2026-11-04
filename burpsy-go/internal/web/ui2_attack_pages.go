@@ -21,6 +21,16 @@ import (
 //
 // ui2MintConfirm mints a confirmation for one internal call and returns the token + preview.
 func (s *Server) ui2MintConfirm(apiPattern, method, url string, body []byte) (token string, preview string, errText string) {
+	token, preview, full, errText := s.ui2MintConfirmBody(apiPattern, method, url, body)
+	if full != "" {
+		preview += " — body " + truncateForDisplay(full, 200)
+	}
+	return token, preview, errText
+}
+
+// ui2MintConfirmBody is ui2MintConfirm without the display truncation: the call line and the
+// minted body in full, for a review sheet that must show everything the token binds.
+func (s *Server) ui2MintConfirmBody(apiPattern, method, url string, body []byte) (token, callLine, fullBody, errText string) {
 	call := map[string]any{"method": method, "url": url}
 	if body != nil {
 		if isUTF8Bytes(body) {
@@ -47,13 +57,9 @@ func (s *Server) ui2MintConfirm(apiPattern, method, url string, body []byte) (to
 		} `json:"call"`
 	}
 	if err := ui2DecodeJSON(rec.Body.Bytes(), &minted); err != nil {
-		return "", "", "bad mint response: " + err.Error()
+		return "", "", "", "bad mint response: " + err.Error()
 	}
-	preview = fmt.Sprintf("%s %s", minted.Call.Method, minted.Call.URL)
-	if minted.Call.Body != "" {
-		preview += " — body " + truncateForDisplay(minted.Call.Body, 200)
-	}
-	return minted.Token, preview, ""
+	return minted.Token, fmt.Sprintf("%s %s", minted.Call.Method, minted.Call.URL), minted.Call.Body, ""
 }
 
 // ui2DispatchConfirmed runs one internal call with a confirmation token attached.
@@ -101,28 +107,38 @@ func truncateForDisplay(s string, n int) string {
 
 // ---- Intruder --------------------------------------------------------------------------------
 
-// handleUI2Intruder serves GET /ui2/intruder: running attacks + launch form (points from the
-// selected history exchange), and the run/confirm/run chain for launching an attack.
+// handleUI2Intruder serves GET /ui2/intruder: running attacks + the launch form. The base
+// request defaults to the newest proxy capture; ?msg_id= picks another stored request.
 func (s *Server) handleUI2Intruder(w http.ResponseWriter, r *http.Request) {
-	model := map[string]any{}
-	attacks, _ := s.ui2APIResult(http.MethodGet, "/api/intruder/attacks", nil)
-	model["attacks"] = attacks
-	wordlists, _ := s.ui2APIResult(http.MethodGet, "/api/wordlists", nil)
-	model["wordlists"] = wordlists
-	// Latest proxy exchange as the default base request for the launch form.
-	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
-	notice, seed, ok := s.ui2SeedFor(r, "Intruder", false)
-	if ok {
-		model["base_exchange"], model["base_msgid"], model["base_request"] = any("none"), seed.MsgID, seed.Raw
-		if seed.HasExchange {
-			model["base_exchange"] = seed.ExchangeID
+	form := url.Values{}
+	if v := r.URL.Query().Get("msg_id"); v != "" {
+		if _, err := strconv.ParseUint(v, 10, 64); err == nil {
+			form.Set("msg_id", v)
 		}
 	}
-	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", notice+ui2Exec("intruder.html", model))
+	// "Send to Intruder" from an exchange's menu arrives as a seed: it picks the base request.
+	notice, seed, ok := s.ui2SeedFor(r, "Intruder", false)
+	if ok {
+		form.Set("msg_id", strconv.FormatUint(seed.MsgID, 10))
+	}
+	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", notice+ui2Exec("intruder.html", s.ui2IntruderPageModel(form)))
+}
+
+// ui2IntruderPageModel is the Intruder page model: the attack list and the launch form,
+// re-filled from form (empty on a fresh page).
+func (s *Server) ui2IntruderPageModel(form url.Values) map[string]any {
+	attacks, _ := s.ui2APIResult(http.MethodGet, "/api/intruder/attacks", nil)
+	defMsg := ""
+	if _, id, raw := ui2LatestExchange(s); raw != "" {
+		defMsg = strconv.FormatUint(id, 10)
+	}
+	return map[string]any{"attacks": attacks, "launch": s.ui2IntruderFormModel(form, defMsg)}
 }
 
 // ui2LatestExchange returns the newest non-tool exchange id, the id of its stored request
-// message (the id /api/intruder/* takes as msg_id), and the raw request text.
+// message (the id /api/intruder/* takes as msg_id), and the raw request text. Intruder uses it
+// only to pick the form's default base request: an attack's target comes from the request it
+// names (ui2IntruderBaseTarget), never from whatever was captured last.
 func ui2LatestExchange(s *Server) (exchID, msgID uint64, raw string) {
 	exs := s.store.Exchanges()
 	for i := len(exs) - 1; i >= 0; i-- {
@@ -140,21 +156,21 @@ func ui2LatestExchange(s *Server) (exchID, msgID uint64, raw string) {
 	return 0, 0, ""
 }
 
-// handleUI2IntruderPoints serves POST /ui2/intruder/points: enumerate insertion points of the
-// given exchange (a read API) and render them as checkboxes.
+// handleUI2IntruderPoints serves POST /ui2/intruder/points: the positions section, re-rendered
+// after Find positions / Auto § / Clear § (op). Discovery is the read API /api/intruder/points.
 func (s *Server) handleUI2IntruderPoints(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
-	msgID := r.PostFormValue("msg_id")
-	all := r.PostFormValue("all") == "on" || r.PostFormValue("all") == "true"
-	points, errText := s.ui2APIResult(http.MethodPost, "/api/intruder/points",
-		map[string]any{"msg_id": ui2Atoi(msgID), "all": all})
-	model := map[string]any{"points": points, "error": errText, "msg_id": msgID}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(ui2Exec("intruder_points.html", model)))
+	op := r.PostFormValue("op")
+	if op != "auto" && op != "clear" {
+		op = "find"
+	}
+	model := s.ui2IntruderPositionsModel(r.PostForm, op)
+	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder_attack_positions.html", model))
 }
 
 // handleUI2IntruderConfirm serves POST /ui2/intruder/confirm: builds the /api/intruder/run
-// payload from the form, mints a confirmation for that exact call, and renders the confirm UI.
+// payload from the form, mints a confirmation for that exact call, and renders the review sheet
+// with the whole bound body.
 func (s *Server) handleUI2IntruderConfirm(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	run, selErr := s.ui2IntruderRunPayload(r)
@@ -162,74 +178,137 @@ func (s *Server) handleUI2IntruderConfirm(w http.ResponseWriter, r *http.Request
 	// "all points" without picking any): /api/intruder/run would refuse the launch, so say so
 	// on the confirm step instead of minting a token for a call that cannot succeed.
 	if selErr != "" {
-		model := map[string]any{
-			"error": selErr,
-			"run":   run, "form": r.PostForm,
-		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(ui2Exec("intruder_confirm.html", model)))
+		_, _ = w.Write([]byte(ui2Exec("intruder_attack_confirm.html", map[string]any{"error": selErr})))
 		return
 	}
 	payload, _ := ui2Marshal(run)
-	token, preview, errText := s.ui2MintConfirm("/api/intruder/run", http.MethodPost, "/api/intruder/run", payload)
+	token, callLine, fullBody, errText := s.ui2MintConfirmBody("/api/intruder/run", http.MethodPost, "/api/intruder/run", payload)
+	if fullBody == "" {
+		fullBody = string(payload)
+	}
 	model := map[string]any{
-		"token": token, "preview": preview, "error": errText,
-		"run": run, "form": r.PostForm,
+		"token": token, "call": callLine, "error": errText,
+		// The sheet binds the whole body, so it shows the whole body — never the 200-byte
+		// one-line preview the other confirm steps use.
+		"full_body":    fullBody,
+		"run":          run,
+		"mode_label":   ui2OptLabel(ui2IntruderModes, run["mode"]),
+		"point_labels": s.ui2IntruderPointLabels(run),
+		"echo":         ui2ConfirmEcho(r.PostForm, run),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(ui2Exec("intruder_confirm.html", model)))
+	_, _ = w.Write([]byte(ui2Exec("intruder_attack_confirm.html", model)))
 }
 
-// handleUI2IntruderRun serves POST /ui2/intruder/run: spends the token on the real call.
+func ui2OptLabel(opts []ui2Opt, v any) string {
+	for _, o := range opts {
+		if o.Value == v {
+			return o.Label
+		}
+	}
+	return fmt.Sprint(v)
+}
+
+// ui2IntruderPointLabels names every position the run body selects: discovered points by their
+// discovery label, manual spans by the bytes they cover.
+func (s *Server) ui2IntruderPointLabels(run map[string]any) []string {
+	var out []string
+	if pts, ok := run["points"].([]int); ok && len(pts) > 0 {
+		all, _ := run["all"].(bool)
+		placement, _ := run["payload_placement"].(string)
+		disc, _ := s.ui2APIResult(http.MethodPost, "/api/intruder/points", map[string]any{
+			"msg_id": run["msg_id"], "all": all, "payload_placement": placement,
+		})
+		list, _ := disc.([]any)
+		for _, p := range pts {
+			label := fmt.Sprintf("#%d", p)
+			if p >= 0 && p < len(list) {
+				if m, ok := list[p].(map[string]any); ok {
+					label += fmt.Sprintf(" %v %v = %v", m["kind"], m["label"], m["current"])
+				}
+			}
+			out = append(out, label)
+		}
+	}
+	if spans, ok := run["manual_points"].([]map[string]int); ok {
+		msgID, _ := run["msg_id"].(uint64)
+		raw, _, _ := s.ui2IntruderBase(msgID)
+		for _, sp := range spans {
+			text := ""
+			if sp["start"] >= 0 && sp["end"] <= len(raw) && sp["start"] <= sp["end"] {
+				text = string(raw[sp["start"]:sp["end"]])
+			}
+			out = append(out, fmt.Sprintf("§ bytes %d–%d = %s", sp["start"], sp["end"], text))
+		}
+	}
+	return out
+}
+
+// handleUI2IntruderRun serves POST /ui2/intruder/run: rebuilds the body from the reviewed form
+// with the same function the confirm step used, and spends the token on it.
 func (s *Server) handleUI2IntruderRun(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	token := r.PostFormValue("token")
-	run, selErr := s.ui2IntruderRunPayload(r)
-	attacks, _ := s.ui2APIResult(http.MethodGet, "/api/intruder/attacks", nil)
-	wordlists, _ := s.ui2APIResult(http.MethodGet, "/api/wordlists", nil)
-	model := map[string]any{"attacks": attacks, "wordlists": wordlists}
-	if selErr != "" {
-		// No dispatch at all without a real selection — spending the confirmation on a body
-		// the operator never reviewed is the failure this branch exists to prevent.
-		model["error"] = selErr
-	} else {
-		result, errText := s.ui2DispatchConfirmed(http.MethodPost, "/api/intruder/run", run, token)
-		model["result"] = result
-		model["error"] = errText
+	run, errText := s.ui2IntruderRunPayload(r)
+	var launched uint64
+	switch {
+	case errText != "":
+		// No dispatch at all without a valid body — spending the confirmation on a body the
+		// operator never reviewed is the failure this branch exists to prevent.
+	case token == "":
+		errText = "no confirmation token: review the attack first"
+	default:
+		var result any
+		result, errText = s.ui2DispatchConfirmed(http.MethodPost, "/api/intruder/run", run, token)
 		// /api/intruder/run answers when the attack is over, and its registry entry is gone by
 		// then — without this link the just-finished attack's results are unreachable from here.
 		if m, ok := result.(map[string]any); ok {
 			if id, ok := m["task_id"].(float64); ok && id > 0 {
-				model["launched_task"] = uint64(id)
+				launched = uint64(id)
 			}
 		}
 	}
-	// Re-seed the launch form: without the base request the re-rendered form goes blank.
-	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
+	model := s.ui2IntruderPageModel(r.PostForm)
+	model["error"] = errText
+	if launched > 0 {
+		model["launched_task"] = launched
+	}
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
+}
+
+// ui2IntruderAttackID parses the {id} path segment as an attack id.
+func ui2IntruderAttackID(r *http.Request) (string, bool) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	return strconv.FormatUint(id, 10), err == nil
 }
 
 // handleUI2IntruderControl serves POST /ui2/intruder/{id}/{action}: pause/resume/stop one attack.
 func (s *Server) handleUI2IntruderControl(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := ui2IntruderAttackID(r)
+	if !ok {
+		http.Error(w, "attack id must be a number", http.StatusBadRequest)
+		return
+	}
 	action := r.PathValue("action")
 	if action != "pause" && action != "resume" && action != "stop" {
 		http.Error(w, "unknown attack action", http.StatusBadRequest)
 		return
 	}
-	path := "/api/intruder/attacks/" + id + "/" + action
-	_, errText := s.ui2APIResult(http.MethodPost, path, map[string]any{})
-	attacks, _ := s.ui2APIResult(http.MethodGet, "/api/intruder/attacks", nil)
-	wordlists, _ := s.ui2APIResult(http.MethodGet, "/api/wordlists", nil)
-	model := map[string]any{"attacks": attacks, "wordlists": wordlists, "error": errText, "action": action, "id": id}
-	model["base_exchange"], model["base_msgid"], model["base_request"] = ui2LatestExchange(s)
+	_, errText := s.ui2APIResult(http.MethodPost, "/api/intruder/attacks/"+id+"/"+action, map[string]any{})
+	model := s.ui2IntruderPageModel(url.Values{})
+	model["error"] = errText
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
 }
 
 // handleUI2IntruderResults serves GET /ui2/intruder/{id}/results: the attack's sent requests
 // via the datasets table view.
 func (s *Server) handleUI2IntruderResults(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := ui2IntruderAttackID(r)
+	if !ok {
+		http.Error(w, "attack id must be a number", http.StatusBadRequest)
+		return
+	}
 	// The label says newest first, so ask for it (the dataset default is ascending ids), and
 	// forward the page offset: without it every page request returned the same first 200 rows.
 	q := "limit=200&sort_by=id&sort_order=desc"
@@ -246,77 +325,82 @@ func (s *Server) handleUI2IntruderResults(w http.ResponseWriter, r *http.Request
 	ui2RenderPage(w, "burpsy /ui2/ — Attack "+id, "intruder", ui2Exec("intruder_results.html", model))
 }
 
-// ui2IntruderRunPayload builds the /api/intruder/run body from the launch form.
+// ui2IntruderRunPayload builds the /api/intruder/run body from the launch form. The confirm step
+// and the run step both call it, so the body the token was minted for is rebuilt byte-for-byte.
 func (s *Server) ui2IntruderRunPayload(r *http.Request) (map[string]any, string) {
-	run := map[string]any{
-		"msg_id": ui2Atoi(r.PostFormValue("msg_id")),
-		"target": r.PostFormValue("target"),
-		"mode":   "sniper",
+	form := r.PostForm
+	msgID := ui2Atoi(form.Get("msg_id"))
+	run := map[string]any{"msg_id": msgID, "target": strings.TrimSpace(form.Get("target"))}
+	if run["target"] == "" {
+		// The default target is the base request's own Host — the request this attack
+		// replays — recomputed the same way at confirm and at run.
+		run["target"] = s.ui2IntruderBaseTarget(msgID)
 	}
-	if r.PostFormValue("target") == "" {
-		if _, _, raw := ui2LatestExchange(s); raw != "" {
-			run["target"] = ui2HostFromRequest(raw)
+	if errText := ui2IntruderAddLaunchFields(form, run); errText != "" {
+		return run, errText
+	}
+	// Positions marked by hand: § pairs in the operator's copy of the base request.
+	var manual []map[string]int
+	if marked := form.Get("marked"); strings.Contains(marked, "§") {
+		if mf := form.Get("marked_for"); mf != "" && mf != form.Get("msg_id") {
+			return run, "the § markers were placed on message " + mf + ", not on the base request " +
+				form.Get("msg_id") + " — find positions again before marking"
 		}
-	}
-	// Payloads: one per line from the textarea.
-	var payloads []string
-	for _, line := range strings.Split(r.PostFormValue("payloads"), "\n") {
-		if p := strings.TrimRight(line, "\r"); p != "" {
-			payloads = append(payloads, p)
+		raw, _, ok := s.ui2IntruderBase(msgID)
+		if !ok {
+			return run, "no stored message " + form.Get("msg_id")
 		}
+		spans, errText := ui2MarkedSpans(raw, marked)
+		if errText != "" {
+			return run, errText
+		}
+		manual = spans
+		run["manual_points"] = manual
 	}
-	if len(payloads) > 0 {
-		run["payloads"] = payloads
-	}
-	// Points: checkbox list points[].
+	// Points: checkbox list point[].
 	var points []int
-	for _, v := range r.PostForm["point"] {
+	for _, v := range form["point"] {
 		if n, err := strconv.Atoi(v); err == nil {
 			points = append(points, n)
 		}
 	}
-	if r.PostFormValue("all_points") == "on" {
+	all := form.Get("all_points") == "on"
+	if all {
 		// "all" selects the discovery CONFIG at run time (intruderPointConfig(true, ...) — the
 		// same config the points listing used); it does not select the points: selectPoints
-		// refuses a run without an explicit selection ("no insertion point selected"). So the
-		// payload needs both: all:true to keep the discovery config, and the selection as
-		// explicit indexes.
+		// refuses a run without an explicit selection. So the payload carries both.
 		run["all"] = true
-		if len(points) > 0 {
-			// The confirm fragment posts the minted selection back: those indexes ARE the
-			// confirmed set — the operator was shown exactly these, and the gate's digest
-			// binds the token to them. Re-resolving here would make the posted inputs inert
-			// and let a changed message silently widen the confirmed attack.
-			run["points"] = points
-		} else {
-			// A hand-built post without the fragment's fields: resolve the selection the way
-			// the confirm step would have.
-			n, errText := s.ui2DiscoveredPointCount(r)
-			if errText != "" {
-				return run, errText
-			}
-			if n == 0 {
-				// /api/intruder/run would refuse this launch with "no insertion point selected";
-				// say so on the form instead of minting a token for a call that cannot succeed.
-				return run, "no insertion points discovered on message " + r.PostFormValue("msg_id") +
-					" — pick a request whose parameters, cookies or body can carry payloads"
-			}
+	}
+	switch {
+	case len(points) > 0:
+		// Posted indexes ARE the confirmed set: the review sheet showed exactly these and the
+		// gate's digest binds the token to them. Re-resolving here would let a changed message
+		// silently widen the confirmed attack.
+		run["points"] = points
+	case all && form.Get("points_listed") == "":
+		// Every candidate, never listed: resolve the selection the way discovery sees it.
+		n, errText := s.ui2DiscoveredPointCount(r)
+		if errText != "" {
+			return run, errText
+		}
+		if n == 0 && len(manual) == 0 {
+			return run, "no insertion points discovered on message " + form.Get("msg_id") +
+				" — pick a request whose parameters, cookies or body can carry payloads, or mark positions with §"
+		}
+		if n > 0 {
 			idx := make([]int, n)
 			for i := range idx {
 				idx[i] = i
 			}
 			run["points"] = idx
 		}
-	} else if len(points) > 0 {
-		run["points"] = points
-	} else {
-		// An unchecked "all points" with no explicit indexes selected nothing. Resolving every
-		// point anyway — the previous behaviour — turned "I want to choose" into the widest
-		// possible attack without a word; refuse and name the ways to make a selection.
-		return run, `no insertion points selected: check "all points" or select at least one point`
+	case len(manual) == 0:
+		// Nothing checked and nothing marked selects nothing. Resolving every point anyway
+		// turned "I want to choose" into the widest possible attack without a word.
+		return run, `no insertion points selected: check "all points", select at least one point, or mark positions with §`
 	}
-	if r.PostFormValue("payload_placement") != "" {
-		run["payload_placement"] = r.PostFormValue("payload_placement")
+	if v := form.Get("payload_placement"); v != "" {
+		run["payload_placement"] = v
 	}
 	return run, ""
 }

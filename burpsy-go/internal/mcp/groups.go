@@ -666,6 +666,8 @@ var notExposed = map[string]string{
 	"POST /ui2/repeater/graphql/send":            "ui2 GraphQL send button; /api/repeater/send is the agent-facing send",
 	"POST /ui2/repeater/graphql/sitemap-confirm": "ui2 GraphQL save-to-site-map review step (holds the call); /api/graphql/sitemap is the agent-facing write",
 	"POST /ui2/repeater/graphql/sitemap-run":     "ui2 GraphQL save-to-site-map apply step (spends the held call); /api/graphql/sitemap is the agent-facing write",
+	"POST /ui2/intruder/payloads":                "ui2 Intruder payload-set editor re-render; an agent writes payload_sources into /api/intruder/run directly",
+	"POST /ui2/intruder/payloads/upload":         "ui2 Intruder wordlist upload button; /api/intruder/payload-files is the agent-facing upload",
 	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +
 		"/api/* routes a review mints (the gated ones through their own /confirm endpoints)",
 	"POST /ui2/intercept/{action}": "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",

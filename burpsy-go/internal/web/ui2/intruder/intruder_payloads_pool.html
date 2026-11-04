@@ -1,0 +1,16 @@
+<fieldset id="intruder-pool"><legend>Resource pool</legend>
+<label>Saved pool
+  <select name="pool">
+    <option value="">none — use the limits below</option>
+    {{range .pools}}<option value="{{.}}"{{if eq . $.pool}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+</label>
+<label>Max requests <input type="text" inputmode="numeric" name="max_requests" value="{{.max_requests}}" size="7" placeholder="default"></label>
+<div>
+<label>Concurrent requests <input type="text" inputmode="numeric" name="max_in_flight" value="{{.max_in_flight}}" size="5" placeholder="10"></label>
+<label>Requests per second <input type="text" inputmode="decimal" name="rps" value="{{.rps}}" size="6" placeholder="default"></label>
+<label>Delay variation ±% <input type="text" inputmode="decimal" name="delay_jitter_percent" value="{{.delay_jitter_percent}}" size="5" placeholder="0"></label>
+<label>Delay increase per request (ms) <input type="text" inputmode="numeric" name="delay_increment_ms" value="{{.delay_increment_ms}}" size="6" placeholder="0"></label>
+</div>
+<p class="meta">A saved pool states its own rate, concurrency and delay; the inline limits are not sent with one.</p>
+</fieldset>

@@ -29,16 +29,7 @@ func runUI2IntruderAttack(t *testing.T, s *Server, victim *httptest.Server) uint
 		t.Fatalf("confirm = %d", rec.Code)
 	}
 	frag := rec.Body.String()
-	runForm := "token=" + extractHiddenInput(t, frag, "token") + "&msg_id=" + extractHiddenInput(t, frag, "msg_id") +
-		"&target=" + extractHiddenInput(t, frag, "target") +
-		"&payload_placement=" + extractHiddenInput(t, frag, "payload_placement")
-	for _, pt := range extractHiddenInputs(frag, "point") {
-		runForm += "&point=" + pt
-	}
-	for _, ap := range extractHiddenInputs(frag, "all_points") {
-		runForm += "&all_points=" + ap
-	}
-	runForm += "&payloads=" + urlQueryEscape(extractTextarea(t, frag, "payloads"))
+	runForm := ui2RunFormFields(t, frag).Encode()
 	req2 := httptest.NewRequest(http.MethodPost, "/ui2/intruder/run", strings.NewReader(runForm))
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec2 := httptest.NewRecorder()

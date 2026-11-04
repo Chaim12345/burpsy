@@ -1,0 +1,37 @@
+<fieldset id="intruder-positions"><legend>Positions</legend>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+<label>Base request message <input type="text" inputmode="numeric" name="msg_id" value="{{.MsgID}}" size="8"></label>
+{{if .BaseExchange}}<span class="meta">exchange #{{.BaseExchange}}</span>{{end}}
+<label><input type="checkbox" name="all_points"{{if .AllPoints}} checked{{end}}> include every candidate</label>
+<label>Automatic payload placement
+  <select name="payload_placement">
+    <option value=""{{if ne .Placement "append"}} selected{{end}}>Replace base parameter value</option>
+    <option value="append"{{if eq .Placement "append"}} selected{{end}}>Append to base parameter value</option>
+  </select>
+</label>
+<div>
+  <button type="submit" name="op" value="find" formaction="/ui2/intruder/points" hx-post="/ui2/intruder/points" hx-target="#intruder-positions" hx-swap="outerHTML">Find positions</button>
+  <button type="submit" name="op" value="auto" formaction="/ui2/intruder/points" hx-post="/ui2/intruder/points" hx-target="#intruder-positions" hx-swap="outerHTML" title="Mark the standard positions and select them all; clears hand-placed § markers">Auto §</button>
+  <button type="submit" name="op" value="clear" formaction="/ui2/intruder/points" hx-post="/ui2/intruder/points" hx-target="#intruder-positions" hx-swap="outerHTML" title="Remove every hand-placed § marker">Clear §</button>
+</div>
+{{if .PointsListed}}
+<input type="hidden" name="points_listed" value="1">
+<p class="meta">{{len .Points}} positions in message {{.MsgID}} — the checked ones are attacked:</p>
+<ul class="intruder-points">
+{{range $i, $p := .Points}}<li><label><input type="checkbox" name="point" value="{{$i}}"{{if index $.Selected $i}} checked{{end}}> #{{$i}} {{$p.kind}} {{$p.label}} = <code>{{$p.current}}</code>{{if eq $p.placement "append"}} (append){{end}}</label></li>
+{{end}}
+</ul>
+{{else}}
+<p class="meta">Positions not listed yet. With "include every candidate" checked, every discovered position is attacked; Find positions to choose.</p>
+{{end}}
+{{if .Note}}<p class="meta">{{.Note}}</p>{{end}}
+<details><summary>Add § by hand</summary>
+{{if .MarkedOK}}
+<p class="meta">Wrap each value to attack in a pair of § markers. Only add markers: any other edit to the request is refused at review.</p>
+<input type="hidden" name="marked_for" value="{{.MsgID}}">
+<textarea name="marked" rows="8" aria-label="Base request with § position markers" spellcheck="false">{{.Marked}}</textarea>
+{{else}}
+<p class="meta">This base request cannot be shown in a text box; use Find positions instead.</p>
+{{end}}
+</details>
+</fieldset>

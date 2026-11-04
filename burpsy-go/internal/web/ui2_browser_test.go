@@ -49,11 +49,11 @@ func TestUI2IntruderLaunchBrowserFinalClick(t *testing.T) {
 		act  chromedp.Action
 	}{
 		{"navigate", chromedp.Navigate(srv.URL + "/ui2/intruder")},
-		{"wait points button", chromedp.WaitVisible(`form[hx-post="/ui2/intruder/points"] button`, chromedp.ByQuery)},
-		{"click list points", chromedp.Click(`form[hx-post="/ui2/intruder/points"] button`, chromedp.ByQuery)},
-		{"wait points out", chromedp.WaitVisible(`#points-out .badge`, chromedp.ByQuery)},
-		{"fill payloads", chromedp.SetValue(`form[hx-post="/ui2/intruder/confirm"] textarea[name="payloads"]`, "admin\nroot", chromedp.ByQuery)},
-		{"click prepare", chromedp.Click(`form[hx-post="/ui2/intruder/confirm"] button[type="submit"]`, chromedp.ByQuery)},
+		{"wait points button", chromedp.WaitVisible(`#intruder-positions button[value="find"]`, chromedp.ByQuery)},
+		{"click list points", chromedp.Click(`#intruder-positions button[value="find"]`, chromedp.ByQuery)},
+		{"wait points out", chromedp.WaitVisible(`#intruder-positions input[name="point"]`, chromedp.ByQuery)},
+		{"fill payloads", chromedp.SetValue(`#intruder-launch textarea[name="set0_items"]`, "admin\nroot", chromedp.ByQuery)},
+		{"click prepare", chromedp.Click(`#intruder-review`, chromedp.ByQuery)},
 		{"wait confirm", chromedp.WaitVisible(`#confirm-out form[hx-post="/ui2/intruder/run"] button[type="submit"]`, chromedp.ByQuery)},
 		// The launch button renders disabled (data-arm-on-load); app.js arms it from the
 		// button's own htmx:load, which fires only after htmx has bound the hx-post form.

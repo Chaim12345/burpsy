@@ -1674,6 +1674,8 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/intruder/points", s.handleUI2IntruderPoints)
 	s.route("/ui2/intruder/confirm", s.handleUI2IntruderConfirm)
 	s.route("/ui2/intruder/run", s.handleUI2IntruderRun)
+	s.route("/ui2/intruder/payloads", s.handleUI2IntruderPayloads)
+	s.route("/ui2/intruder/payloads/upload", s.handleUI2IntruderPayloadUpload)
 	s.route("/ui2/intruder/{id}/results", s.handleUI2IntruderResults)
 	s.route("/ui2/intruder/{id}/{action}", s.handleUI2IntruderControl)
 	s.route("/ui2/sequencer", s.handleUI2Sequencer)

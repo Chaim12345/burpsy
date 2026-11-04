@@ -79,7 +79,6 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/scope/run":                        {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
 	"POST /ui2/logger/{action}":                  {raw: "application/x-www-form-urlencoded: capture-<tool>-on/off takes search carryover; filter-set takes status/term/regex/case/negate/scope_only/mime"},
 	"POST /ui2/intruder/confirm":                 {raw: "application/x-www-form-urlencoded launch form"},
-	"POST /ui2/intruder/points":                  {raw: "application/x-www-form-urlencoded form: msg_id, all"},
 	"POST /ui2/intruder/run":                     {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
 	"POST /ui2/scanner/launch":                   {raw: "application/x-www-form-urlencoded launch form"},
 	"POST /ui2/scanner/run":                      {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
@@ -106,6 +105,9 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/organizer/annotate/{action}":      {raw: "application/x-www-form-urlencoded annotation form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/organizer/items/{action}":         {raw: "application/x-www-form-urlencoded item move/copy/delete form (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/session/rules/{action}":           {raw: "application/x-www-form-urlencoded form (confirm); review id + one-time confirm token only (run)"},
+	"POST /ui2/intruder/points":                  {raw: "application/x-www-form-urlencoded launch form; op: find, auto or clear"},
+	"POST /ui2/intruder/payloads":                {raw: "application/x-www-form-urlencoded launch form; op: add_set, remove_set:N, add_rule, remove_rule:N"},
+	"POST /ui2/intruder/payloads/upload":         {raw: "multipart/form-data: upload_set, upload_file_<set>, plus the launch form"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

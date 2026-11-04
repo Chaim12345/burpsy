@@ -165,21 +165,8 @@ func TestUI2IntruderConfirmedDispatchSpendsItsOwnToken(t *testing.T) {
 		t.Fatalf("confirm = %d", rec.Code)
 	}
 	frag := rec.Body.String()
-	token := extractHiddenInput(t, frag, "token")
-
-	// Step 2: rebuild the run POST from exactly the fields the fragment carries.
-	runForm := "token=" + token + "&msg_id=" + extractHiddenInput(t, frag, "msg_id") +
-		"&target=" + extractHiddenInput(t, frag, "target") +
-		"&payload_placement=" + extractHiddenInput(t, frag, "payload_placement")
-	for _, pt := range extractHiddenInputs(frag, "point") {
-		runForm += "&point=" + pt
-	}
-	// The browser posts every hidden input back; all_points carries the discovery config.
-	for _, ap := range extractHiddenInputs(frag, "all_points") {
-		runForm += "&all_points=" + ap
-	}
-	payloads := extractTextarea(t, frag, "payloads")
-	runForm += "&payloads=" + urlQueryEscape(payloads)
+	// Step 2: post back exactly the hidden fields the review sheet carries, as the browser does.
+	runForm := ui2RunFormFields(t, frag).Encode()
 	req2 := httptest.NewRequest(http.MethodPost, "/ui2/intruder/run", strings.NewReader(runForm))
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec2 := httptest.NewRecorder()
@@ -237,22 +224,6 @@ func extractHiddenInputs(html, name string) []string {
 		out = append(out, rest[:j])
 		rest = rest[j:]
 	}
-}
-
-func extractTextarea(t *testing.T, html, name string) string {
-	t.Helper()
-	marker := `<textarea name="` + name + `"`
-	i := strings.Index(html, marker)
-	if i < 0 {
-		t.Fatalf("no %q textarea in fragment", name)
-	}
-	rest := html[i+len(marker):]
-	j := strings.Index(rest, ">")
-	k := strings.Index(rest, "</textarea>")
-	if j < 0 || k < 0 || k < j {
-		t.Fatalf("malformed %q textarea in fragment", name)
-	}
-	return rest[j+1 : k]
 }
 
 // TestUI2IntruderConfirmRefusesAnEmptySelection: "all points" unchecked with no point[] selected

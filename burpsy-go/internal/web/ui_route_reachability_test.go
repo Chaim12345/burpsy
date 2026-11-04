@@ -118,6 +118,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/intruder/points":                "ui2 Intruder points button inside the /ui2/ page; the console calls /api/intruder/points",
 	"/ui2/intruder/confirm":               "ui2 Intruder confirm step inside the /ui2/ page; the console mints via /api/intruder/run/confirm",
 	"/ui2/intruder/run":                   "ui2 Intruder launch button inside the /ui2/ page; the console calls /api/intruder/run with a token",
+	"/ui2/intruder/payloads":              "ui2 Intruder payload-set editor inside the /ui2/ page; the console builds payload_sources itself",
+	"/ui2/intruder/payloads/upload":       "ui2 Intruder wordlist upload inside the /ui2/ page; the console calls /api/intruder/payload-files",
 	"/ui2/intruder/{id}/results":          "ui2 Intruder results page; the console reads /api/datasets/intruder/{task}",
 	"/ui2/intruder/{id}/{action}":         "ui2 Intruder control buttons inside the /ui2/ page; the console calls /api/intruder/attacks/{id}/{action}",
 	"/ui2/sequencer":                      "ui2 Sequencer page; the console calls /api/sequencer/*",
