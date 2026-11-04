@@ -1,0 +1,83 @@
+<div id="dom" class="ui2-dom">
+<style>
+.ui2-dom section { padding:6px 14px; }
+.ui2-dom .hint { color:var(--muted); font-size:11px; }
+.ui2-dom .scroll { overflow-x:auto; max-width:100%; }
+.ui2-dom .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0; }
+.ui2-dom input[type=text] { max-width:100%; }
+.ui2-dom td.excerpt code { display:inline-block; max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.ui2-dom .k-sink { color:#a60; font-weight:700; } .ui2-dom .k-source { color:#06c; }
+</style>
+<section>
+<h2 style="margin:6px 0">DOM auditor <button type="button" hx-get="/ui2/dominvader" hx-target="#dom" hx-swap="outerHTML">Refresh</button></h2>
+<p class="hint">Watch a canary through a page's own sources and sinks while you browse in burpsy's browser. Every change is shown for review before it is applied.</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">Could not load the DOM auditor: {{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="alert" style="color:#c00"><strong>{{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status"><strong>{{.Done}}</strong></p>{{end}}
+</section>
+<section id="dom-review" aria-live="polite"></section>
+<section>
+<h3>Canary watch</h3>
+<p>Currently: <strong>{{if .Enabled}}watching{{else}}off{{end}}</strong> · canary <code class="brk">{{.Canary}}</code> <button type="button" class="copy-btn" data-copy="{{.Canary}}">Copy canary</button></p>
+<form hx-post="/ui2/dominvader/review" method="post" action="/ui2/dominvader/review" hx-target="#dom-review" hx-swap="innerHTML">
+<input type="hidden" name="op" value="settings">
+<div class="row"><label><input type="checkbox" name="enabled" value="on"{{if .Enabled}} checked{{end}}> Watch pages for the canary</label></div>
+<div class="row"><label>Canary <input type="text" name="canary" value="{{.Canary}}" aria-label="Canary" style="width:22em"></label></div>
+<p class="hint">the marker the extension watches; put it in a parameter, hash or header and browse</p>
+<div class="row"><button type="submit">Review save…</button> <button type="submit" name="randomize" value="1" title="mint a fresh random canary and review saving it">Randomize…</button></div>
+</form>
+<p class="hint">{{.LaunchNote}}{{if .ReportURL}} Reports arrive at {{.ReportURL}}.{{end}}</p>
+</section>
+<section>
+<h3>Prototype pollution probes</h3>
+<p class="hint">Off by default. Each probe uses a fresh isolated browser context, not your operator login. Only the target origin and current engagement scope are allowed. Workers, frames, popups and fetch/XHR/WebSocket/WebTransport network are blocked; only their wrapped sink arguments are observed.</p>
+<form hx-post="/ui2/dominvader/review" method="post" action="/ui2/dominvader/review" hx-target="#dom-review" hx-swap="innerHTML">
+<input type="hidden" name="op" value="plan">
+<div class="row"><label><input type="checkbox" name="pollution_enabled" value="on"{{if .Pollution.Enabled}} checked{{end}}> Opt into active pollution probes</label></div>
+<div class="row"><label>Target document <input type="text" name="target" value="{{.Pollution.Target}}" placeholder="https://target.test/page" style="width:28em"></label></div>
+<p class="hint">absolute HTTP(S) URL inside explicit scope; empty scope is refused</p>
+<div class="row"><label>Gadget property vocabulary <input type="text" name="properties" value="{{.Props}}" placeholder="polluted,isAdmin" style="width:22em"></label></div>
+<p class="hint">comma-separated property names, 1 to 16; not an exhaustive gadget search</p>
+<div class="row">
+<label><input type="checkbox" name="query" value="on"{{if .Pollution.Query}} checked{{end}}> Try query inputs</label>
+<label><input type="checkbox" name="hash" value="on"{{if .Pollution.Hash}} checked{{end}}> Try hash inputs</label>
+<label><input type="checkbox" name="json" value="on"{{if .Pollution.JSON}} checked{{end}}> Try json inputs</label>
+<label><input type="checkbox" name="nested" value="on"{{if .Pollution.Nested}} checked{{end}}> Also try constructor.prototype nesting</label>
+</div>
+<button type="submit">Review probe plan…</button>
+</form>
+<form hx-post="/ui2/dominvader/review" method="post" action="/ui2/dominvader/review" hx-target="#dom-review" hx-swap="innerHTML" class="row">
+<input type="hidden" name="op" value="scan">
+<button type="submit"{{if not (and .Enabled .Pollution.Enabled)}} disabled title="turn on the canary watch and save an enabled probe plan first"{{end}}>Run saved probe plan…</button>
+</form>
+<p class="hint">Source proof and observed sink gadgets are separate hits. No gadget hit is not proof of safety. JSON mode modifies document-parsed JSON in the isolated probe only; AJAX-loaded JSON is not exercised.</p>
+{{with .Scan}}<div role="status">
+<p>{{.Probes}} probes; {{len .Hits}} hits; {{len .Blocked}} refused requests</p>
+<p class="hint">{{.Limitations}}</p>
+{{range .Errors}}<p style="color:#c00" class="brk">{{.}}</p>{{end}}
+{{range .Blocked}}<code class="brk" style="display:block">{{.}}</code>{{end}}
+</div>{{end}}
+</section>
+<section>
+<h3>Reported flows ({{len .Hits}})</h3>
+<form hx-post="/ui2/dominvader/review" method="post" action="/ui2/dominvader/review" hx-target="#dom-review" hx-swap="innerHTML" class="row">
+<input type="hidden" name="op" value="clear">
+<button type="submit"{{if not .Hits}} disabled{{end}}>Clear…</button>
+</form>
+{{if not .Hits}}
+<p class="meta">No flows reported yet. {{if .Enabled}}Open the browser, put the canary in a source (a query parameter, the URL hash, window.name), and browse. A flow appears here the moment the page reads it into a sink.{{else}}Turn the auditor on, then open the browser and browse with the canary in a source.{{end}}</p>
+{{else}}
+<div class="scroll"><table>
+<thead><tr><th scope="col">Kind</th><th scope="col">Sink / source</th><th scope="col">Carried by</th><th scope="col">Excerpt</th><th scope="col">Frame</th></tr></thead>
+<tbody>{{range .Hits}}
+<tr title="{{if .Stack}}{{.Stack}}{{else}}{{.URL}}{{end}}{{if .Property}}&#10;property {{.Property}}{{end}}{{if .Technique}}&#10;technique {{.Technique}}{{end}}{{if .Limitations}}&#10;{{.Limitations}}{{end}}">
+<td class="{{if eq .Kind "sink"}}k-sink{{else}}k-source{{end}}">{{.Kind}}</td>
+<td><code>{{.Sink}}</code></td>
+<td>{{if .Sources}}{{range $i, $src := .Sources}}{{if $i}}, {{end}}{{$src}}{{end}}{{else}}—{{end}}</td>
+<td class="excerpt"><code title="{{.Excerpt}}">{{.Excerpt}}</code></td>
+<td title="{{.URL}}">{{.Frame}}</td>
+</tr>{{end}}</tbody>
+</table></div>
+{{end}}
+</section>
+</div>

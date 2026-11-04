@@ -26,6 +26,10 @@ var routeSchemas = map[string]opSchema{
 
 	// ---- ui2 console (server-rendered pages; form-encoded bodies, not JSON) -------------------
 	"POST /ui2/collaborator/mint":              {raw: "application/x-www-form-urlencoded form: count to preview, or mint_id to spend the held call"},
+	"POST /ui2/discovery/review":               {raw: "application/x-www-form-urlencoded: op=start takes the sweep form (target, wordlist|wordlist_upload, lists, extensions, match_codes, rate, recurse_depth, variant_extensions, observed_names, derivations); op=browser takes task, idx"},
+	"POST /ui2/discovery/run":                  {raw: "application/x-www-form-urlencoded: review_id + token of one held review"},
+	"POST /ui2/dominvader/review":              {raw: "application/x-www-form-urlencoded: op=settings (enabled, canary, randomize), op=plan (pollution_enabled, target, properties, query, hash, json, nested), op=scan, op=clear"},
+	"POST /ui2/dominvader/run":                 {raw: "application/x-www-form-urlencoded: review_id + token of one held review"},
 	"POST /ui2/comparer":                       {raw: "application/x-www-form-urlencoded form: a, b"},
 	"POST /ui2/comparer/run":                   {raw: "application/x-www-form-urlencoded form: a, b"},
 	"POST /ui2/decoder":                        {raw: "application/x-www-form-urlencoded form: op, arg, input"},
