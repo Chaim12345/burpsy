@@ -221,10 +221,10 @@ table.scope-t details.scope-edit[open] form {
   <span id="busybadge" class="meta" hidden>working&hellip;</span>
   <button id="theme-toggle" class="btn" aria-label="Toggle light/dark theme" title="Toggle theme">◐</button>
   {{if eq .View "history"}}
-  <form hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="submit, keyup changed delay:400ms from:#q" hx-push-url="true">
+  <form id="hq" hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="submit, keyup changed delay:400ms from:#q" hx-push-url="true" hx-include="#hfilter">
     <input type="search" id="q" name="q" aria-label="Filter query (burpsy DSL, e.g. host~example.com)" placeholder="filter: host~example.com path~/api" autocomplete="off">
     <input type="search" name="search" aria-label="Search rows" placeholder="search…" autocomplete="off"
-      hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="keyup changed delay:400ms" hx-include="#q" hx-push-url="true">
+      hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-trigger="keyup changed delay:400ms" hx-include="#q, #hfilter" hx-push-url="true">
     <noscript><button>Filter</button></noscript>
   </form>
   {{end}}

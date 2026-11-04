@@ -118,7 +118,10 @@ type Server struct {
 	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
 	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
 	ui2SettingsWriteReviews sync.Map
-	sender                  *sender.Sender
+	// ui2HistoryScopeReviews holds the History bulk add-hosts-to-scope reviews: one minted gate
+	// token per host, held server-side and spent once (ui2_history_bulk.go).
+	ui2HistoryScopeReviews sync.Map
+	sender                 *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1529,6 +1532,13 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/exchange/{id}", s.handleUI2ExchangePage)
 	s.route("/ui2/exchange/{id}/menu", s.handleUI2ExchangeMenu)
 	s.route("/ui2/exchange/{id}/{action}", s.handleUI2ExchangeAction)
+	s.route("/ui2/history/export.csv", s.handleUI2HistoryExport)
+	s.route("/ui2/history/import", s.handleUI2HistoryImport)
+	s.route("/ui2/history/goto", s.handleUI2HistoryGoto)
+	s.route("/ui2/history/compare", s.handleUI2HistoryCompare)
+	s.route("/ui2/history/bulk/{action}", s.handleUI2HistoryBulk)
+	s.route("/ui2/history/extractors", s.handleUI2HistoryExtractors)
+	s.route("/ui2/history/extractors/{action}", s.handleUI2HistoryExtractorsAction)
 	s.route("/ui2/issues", s.handleUI2Issues)
 	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
 	s.route("/ui2/advisories/{typeIndex}", s.handleUI2AdvisoryDetail)

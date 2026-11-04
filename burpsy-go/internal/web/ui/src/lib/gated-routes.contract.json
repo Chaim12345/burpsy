@@ -209,6 +209,13 @@
   "/ui2/discover",
   "/ui2/extensions",
   "/ui2/history",
+  "/ui2/history/bulk/{action}",
+  "/ui2/history/compare",
+  "/ui2/history/export.csv",
+  "/ui2/history/extractors",
+  "/ui2/history/extractors/{action}",
+  "/ui2/history/goto",
+  "/ui2/history/import",
   "/ui2/history/{id}",
   "/ui2/htmx.min.js",
   "/ui2/intercept",
@@ -4211,6 +4218,66 @@
    "gated": false
   },
   {
+   "path": "/ui2/history/bulk/w",
+   "key": "/ui2/history/bulk/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/bulk/w/",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/bulk/w/extra",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/bulk/w/extra/more",
+   "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/compare",
+   "key": "/ui2/history/compare",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/compare/",
+   "key": "/ui2/history/compare",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/compare/extra",
+   "key": "/ui2/history/compare",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/compare/extra/more",
+   "key": "/ui2/history/compare",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/export.csv",
+   "key": "/ui2/history/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/export.csv/",
+   "key": "/ui2/history/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/export.csv/extra",
+   "key": "/ui2/history/export.csv",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/export.csv/extra/more",
+   "key": "/ui2/history/export.csv",
+   "gated": false
+  },
+  {
    "path": "/ui2/history/extra",
    "key": "/ui2/history/{id}",
    "gated": false
@@ -4218,6 +4285,86 @@
   {
    "path": "/ui2/history/extra/more",
    "key": "/ui2/history",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/extra",
+   "key": "/ui2/history/extractors/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/extra/more",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/w",
+   "key": "/ui2/history/extractors/{action}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/w/",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/w/extra",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/extractors/w/extra/more",
+   "key": "/ui2/history/extractors",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/goto",
+   "key": "/ui2/history/goto",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/goto/",
+   "key": "/ui2/history/goto",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/goto/extra",
+   "key": "/ui2/history/goto",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/goto/extra/more",
+   "key": "/ui2/history/goto",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/import",
+   "key": "/ui2/history/import",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/import/",
+   "key": "/ui2/history/import",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/import/extra",
+   "key": "/ui2/history/import",
+   "gated": false
+  },
+  {
+   "path": "/ui2/history/import/extra/more",
+   "key": "/ui2/history/import",
    "gated": false
   },
   {
