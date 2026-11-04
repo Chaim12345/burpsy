@@ -150,6 +150,8 @@ var uiRouteExempt = map[string]string{
 	"/ui2/extensions":                     "ui2 Extensions page; the console's Extender tabs call /api/extensions*",
 	"/ui2/scanner":                        "ui2 Scanner page; the console's Scanner/Issues tabs call /api/scanner/* and /api/issues",
 	"/ui2/scanner/crawl-watch":            "ui2 crawl-watch view, rendered server-side and swapped by htmx inside the /ui2/scanner page; the React SPA never fetches it - its reads of crawl state are /api/crawl/live",
+	"/ui2/newscan":                        "ui2 New scan page, linked from the /ui2/ nav; the React console's New scan dialog calls /api/crawl, /api/audit/selected and /api/apiscan",
+	"/ui2/newscan/{kind}/{action}":        "ui2 New scan review/launch steps, fired by htmx forms inside the /ui2/newscan page; the React console calls the /api routes directly",
 	"/ui2/advisories":                     "ui2 issue-definitions page; the console calls /api/advisories",
 	"/ui2/organizer/collections/{action}": "server-rendered Organizer create/edit confirmation forms outside ui/src; the SPA uses /api/tools/organizer/collections",
 	"/ui2/organizer/status/{action}":      "server-rendered Organizer workflow status confirmation forms outside ui/src; the SPA uses /api/tools/organizer/collections",

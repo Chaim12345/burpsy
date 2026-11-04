@@ -1,0 +1,36 @@
+<section id="newscan-logins" style="margin-top:16px">
+<h3>Recorded logins</h3>
+<p class="meta" style="padding:0">Recorded login sequences (Burp's Login Recorder, Chrome's Recorder or burpsy JSON). A crawl picks one above and replays it in an isolated, scope-gated browser before the first request. Typed passwords and TOTP secrets are stored but never shown here.</p>
+{{if .note}}<p role="alert" style="color:#c00"><strong>Not done: {{.note}}</strong></p>{{end}}
+{{if .done}}<p role="status"><strong>{{.done}}</strong></p>{{end}}
+{{with .replay}}<div style="border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin:8px 0">
+<p><strong>{{if .replay.verified}}Logged in with “{{.label}}” (verified by its status check){{else if .replay.succeeded}}“{{.label}}” ran every step — the login was not verified (no status check){{else}}The recorded login “{{.label}}” failed{{end}}</strong>{{with .replay.reason}} — {{.}}{{end}}</p>
+<ol>{{range .replay.steps}}<li>{{if .ok}}ok{{else}}<strong>failed</strong>{{end}} · {{.description}}{{with .error}} — {{.}}{{end}}</li>{{end}}</ol>
+<p class="meta" style="padding:0">Ended on <code class="brk">{{.replay.final_url}}</code> · cookies earned: {{range $i, $c := .cookie_names}}{{if $i}}, {{end}}{{$c}}{{else}}none{{end}} · requests refused by scope: {{with .replay.blocked}}{{len .}}{{else}}0{{end}}</p>
+{{with .screenshot_url}}<img src="{{.}}" alt="The page when the replay ended" style="max-width:100%; border:1px solid var(--line)">{{end}}
+</div>{{end}}
+{{if .load_error}}<p class="meta" style="padding:0">The recorded logins could not be read: {{.load_error}}</p>{{end}}
+{{with .logins}}{{if .restore_note}}<p class="meta" style="padding:0"><strong>{{.restore_note}}</strong></p>{{end}}
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Label</th><th scope="col">Steps</th><th scope="col">Status check</th><th scope="col">Source</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .logins}}<tr><td>{{.label}}{{if .has_totp}} <span class="badge">TOTP</span>{{end}}</td><td><details><summary>{{len .steps}}</summary><ol>{{range .steps}}<li>{{.description}}</li>{{end}}</ol></details></td><td>{{with .status_check}}{{.url}} contains “{{.text}}”{{else}}none{{end}}</td><td>{{.source}}</td>
+<td style="white-space:normal"><form style="display:inline" method="post" hx-post="/ui2/newscan/logins/confirm" hx-target="#logins-review" hx-swap="innerHTML"><input type="hidden" name="op" value="replay"><input type="hidden" name="id" value="{{.id}}"><button type="submit" aria-label="Replay {{.label}}">Replay</button></form>
+<form style="display:inline" method="post" hx-post="/ui2/newscan/logins/confirm" hx-target="#logins-review" hx-swap="innerHTML"><input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{{.id}}"><button type="submit" aria-label="Delete {{.label}}">Delete</button></form></td></tr>
+{{else}}<tr><td colspan="5" class="meta">No recorded logins are saved.</td></tr>{{end}}
+</tbody>
+</table></div>{{end}}
+<div id="logins-review" aria-live="polite"></div>
+<details style="margin:8px 0"><summary><strong>Import a recorded login</strong></summary>
+<form method="post" hx-post="/ui2/newscan/logins/confirm" hx-target="#logins-review" hx-swap="innerHTML">
+<input type="hidden" name="op" value="save">
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px 12px">
+<label>Label<br><input type="text" name="label" style="width:100%" placeholder="the recording's own name if blank"></label>
+<label>Status check URL<br><input type="text" name="check_url" style="width:100%" placeholder="https://demo.local/account"></label>
+<label>Confirmation text<br><input type="text" name="check_text" style="width:100%" placeholder="Sign out"></label>
+</div>
+<label>Recorder script<br><textarea name="script" rows="6" style="width:100%; font:12px/1.4 ui-monospace, monospace" spellcheck="false" autocomplete="off"></textarea></label>
+<p class="meta" style="padding:0">A status check is required when the sequence has a TOTP step. The review shows the steps the script imports to, never its typed values.</p>
+<button type="submit">Review import</button>
+</form></details>
+</section>

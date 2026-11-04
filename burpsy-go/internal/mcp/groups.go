@@ -591,6 +591,8 @@ var notExposed = map[string]string{
 	"GET /ui2/scanner/crawl-watch":             "ui2 crawl watch page; /api/crawl and /api/crawl/live are the agent-facing reads",
 	"POST /ui2/scanner/crawl-launch":           "ui2 crawl launch review step (mints a one-time confirmation); /api/crawl is the agent-facing crawl",
 	"POST /ui2/scanner/crawl-run":              "ui2 crawl launch dispatch (spends the confirmation); /api/crawl is the agent-facing crawl",
+	"GET /ui2/newscan":                         "ui2 New scan page; /api/crawl, /api/audit/selected, /api/apiscan and /api/crawl/logins are the agent-facing controls",
+	"POST /ui2/newscan/{kind}/{action}":        "ui2 New scan review and launch steps (mint then spend a one-time confirmation); /api/crawl, /api/audit/selected, /api/apiscan, /api/apiscan/fetch and /api/crawl/logins* are the agent-facing controls",
 	"POST /ui2/scanner/config-confirm":         "ui2 Scanner configuration review step (mints a one-time confirmation); /api/scanner/config is the agent-facing control",
 	"POST /ui2/scanner/config-run":             "ui2 Scanner configuration apply step (spends the confirmation); /api/scanner/config is the agent-facing control",
 	"GET /ui2/shell/status":                    "ui2 status bar fragment; /api/stats, /api/scope and /api/proxy/ca are the agent-facing reads",

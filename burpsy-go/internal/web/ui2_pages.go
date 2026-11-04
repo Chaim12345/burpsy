@@ -827,9 +827,12 @@ func (s *Server) handleUI2ScannerLaunch(w http.ResponseWriter, r *http.Request) 
 		model["error"] = errText
 	} else {
 		body, _ := ui2Marshal(payload)
-		token, preview, errText := s.ui2MintConfirm("/api/scanner/audit", http.MethodPost, "/api/scanner/audit", body)
+		token, _, errText := s.ui2MintConfirm("/api/scanner/audit", http.MethodPost, "/api/scanner/audit", body)
 		model["token"] = token
-		model["preview"] = preview
+		// The FULL bound body, not ui2MintConfirm's 200-character abbreviation: the sheet says the
+		// confirmation covers exactly this call (the scope and sequencer reviews' rule).
+		model["preview"] = http.MethodPost + " /api/scanner/audit"
+		model["full_body"] = string(body)
 		model["error"] = errText
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1015,9 +1018,11 @@ func (s *Server) handleUI2ScannerCrawlLaunch(w http.ResponseWriter, r *http.Requ
 		model["error"] = errText
 	} else {
 		body, _ := ui2Marshal(payload)
-		token, preview, errText := s.ui2MintConfirm("/api/crawl", http.MethodPost, "/api/crawl", body)
+		token, _, errText := s.ui2MintConfirm("/api/crawl", http.MethodPost, "/api/crawl", body)
 		model["token"] = token
-		model["preview"] = preview
+		// The FULL bound body: a long seed list ran past the 200-character preview cut.
+		model["preview"] = http.MethodPost + " /api/crawl"
+		model["full_body"] = string(body)
 		model["error"] = errText
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

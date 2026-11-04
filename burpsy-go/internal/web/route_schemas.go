@@ -54,6 +54,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/scanner/run":                    {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
 	"POST /ui2/scanner/crawl-launch":           {raw: "application/x-www-form-urlencoded crawl form"},
 	"POST /ui2/scanner/crawl-run":              {raw: "application/x-www-form-urlencoded form + one-time confirm token"},
+	"POST /ui2/newscan/{kind}/{action}":        {raw: "application/x-www-form-urlencoded (crawl, audit, logins) or multipart/form-data (api: definition text or definition_file upload) form; run steps take the carried fields + one-time confirm token (crawl, audit) or review id + token only (api, logins)"},
 	"POST /ui2/scanner/config-confirm":         {raw: "application/x-www-form-urlencoded configuration form"},
 	"POST /ui2/scanner/config-run":             {raw: "application/x-www-form-urlencoded reviewed patch + one-time confirm token"},
 	"POST /ui2/intruder/{id}/{action}":         noBody,
