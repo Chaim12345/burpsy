@@ -1,6 +1,6 @@
 <div id="rows" data-review="1">
 {{if .error}}<p class="meta"><strong>Not applied: {{.error}}</strong></p>
-<p class="meta"><a href="/ui2/sitemap" hx-get="/ui2/sitemap" hx-target="#rows" hx-swap="outerHTML">back to site map</a></p>{{else}}
+<p class="meta"><a href="/ui2/sitemap" hx-get="/ui2/sitemap" hx-target="#rows" hx-select="#rows" hx-swap="outerHTML">back to site map</a></p>{{else}}
 <p><strong>Review before applying:</strong> add the site-map row <span class="brk">{{.node}}</span> to the target scope.</p>
 <table>
 <tbody>
@@ -21,6 +21,6 @@
 <input type="hidden" name="path" value="{{.path}}">
 <button>Confirm and add rule</button>
 </form>
-<p class="meta"><a href="/ui2/sitemap" hx-get="/ui2/sitemap" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+<p class="meta"><a href="/ui2/sitemap" hx-get="/ui2/sitemap" hx-target="#rows" hx-select="#rows" hx-swap="outerHTML">cancel</a></p>
 {{end}}
 </div>

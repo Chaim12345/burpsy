@@ -1735,6 +1735,26 @@ var manifest = map[string]route{
 		summary: "ui2 configuration import: import-confirm reviews the bundle's replaced and untouched sections and mints a " +
 			"one-time confirmation for the exact /api/config/import call; import-run spends it and lists what was applied",
 	},
+	"/ui2/sitemap/children": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Site map: one tree node's children rendered lazily (mode=kids), its whole branch expanded (mode=branch) or the node collapsed (mode=node), under the page's filter params - reads the map and sends nothing",
+	},
+	"/ui2/sitemap/detail": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Site map: one node's detail pane - the requests captured under it, the findings on those exchanges, its URLs and its review actions - reads only",
+	},
+	"/ui2/sitemap/message": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Site map: one captured exchange's request and response panes (pretty/raw) - reads the store only",
+	},
+	"/ui2/sitemap/export": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Site map: the engagement-tools search results (comments, scripts, references) as CSV - reads the stored responses only",
+	},
+	"/ui2/sitemap/review/{action}": {
+		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,
+		summary: "ui2 Site map: two-step review for delete host/branch/item (DELETE /api/sitemap), passive branch sweep (POST /api/scanner/passive-branch) and branch crawl (POST /api/crawl) - confirm builds the exact call from the live node and holds its bytes (minting the gate token when the route needs one), run spends the held review once",
+	},
 	"/ui2/sitemap/repeater": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "ui2 Site map: loads the newest stored request under one row into the Repeater editor as an editable draft - reads the store and sends nothing; the send stays on the Repeater page's own path",
@@ -1770,7 +1790,7 @@ var manifest = map[string]route{
 	},
 	"/ui2/sitemap": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 site map page: host→path tree flattened with counts, scope dimming and issue markers",
+		summary: "ui2 site map page: filtered host→path tree (lazy children), node detail, engagement tools, target analyzer and crawl paths views",
 	},
 	"/ui2/sse.min.js": {
 		methods: []string{"GET"}, risk: riskAsset,

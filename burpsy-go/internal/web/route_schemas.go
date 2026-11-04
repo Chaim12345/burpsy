@@ -42,6 +42,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/dashboard/tasks/{action}":       {raw: "application/x-www-form-urlencoded: optional filter; the action (pause|resume) is in the path"},
 	"POST /ui2/dashboard/live/{action}":        {raw: "application/x-www-form-urlencoded: mode=toggle takes enabled (on|off); mode=task takes query/config/pool; optional back; run adds the one-time token"},
 	"POST /ui2/dashboard/events/{action}":      {raw: "application/x-www-form-urlencoded: optional back; run adds the one-time token"},
+	"POST /ui2/sitemap/review/{action}":        {raw: "application/x-www-form-urlencoded: confirm takes key and op (delete-host/delete-branch/delete-item/passive/crawl) in the post URL's query, plus extensions/noparams for passive; run takes review_id and token only"},
 	"POST /ui2/sitemap/scope/{action}":         {raw: "application/x-www-form-urlencoded: confirm takes the row key in the post URL's query and no form fields; run takes the reviewed rule's hidden fields (token/pattern/port/protocol/path)"},
 	"POST /ui2/scope/confirm":                  {raw: "application/x-www-form-urlencoded: scope_action rule-add takes kind/pattern/path/port/protocol; rule-toggle/rule-remove take the row tuple; drop-switch takes enabled"},
 	"POST /ui2/scope/run":                      {raw: "application/x-www-form-urlencoded form + one-time confirm token"},

@@ -1,0 +1,33 @@
+{{if .Gone}}<li class="meta">That node is gone — the map changed; reload the site map.</li>{{else}}{{range .Rows}}{{template "sitemap_row" .}}{{else}}<li class="meta">Nothing under this node matches.</li>{{end}}{{end}}
+{{define "sitemap_row"}}<li class="sm-node{{if .Selected}} sm-sel{{end}}" role="treeitem"{{if .HasKids}} aria-expanded="{{if .Open}}true{{else}}false{{end}}"{{end}}>
+{{if .HasKids}}<details class="sm-d"{{if .Open}} open{{end}}{{if not .Loaded}} hx-get="{{.KidsURL}}" hx-trigger="toggle once" hx-target="find ul.sm-kids" hx-swap="innerHTML"{{end}}>
+<summary>{{template "sitemap_rowline" .}}</summary>
+<ul class="sm-kids" role="group">{{if .Loaded}}{{range .Kids}}{{template "sitemap_row" .}}{{end}}{{else}}<li class="meta">loading…</li>{{end}}</ul>
+</details>{{else}}<div class="sm-leaf">{{template "sitemap_rowline" .}}</div>{{end}}
+</li>{{end}}
+{{define "sitemap_rowline"}}<span class="sm-line">
+<a class="sm-label{{if or .Unrequested (and (not .IsHost) (not .Requested))}} sm-dim{{end}}{{if not .InScope}} sm-oos{{end}}" href="{{.PageURL}}" hx-get="{{.SelectURL}}" hx-target="#sm-detail" hx-swap="innerHTML" hx-push-url="{{.PageURL}}" title="{{.Title}}">{{.Label}}</a>
+{{if .Inserted}}<span class="badge" title="Added to the site map by you. No traffic has been observed here.">added by you</span>{{end}}
+{{if .Unrequested}}<span class="badge" title="Linked from a proxied page; nothing has requested it yet.">unrequested</span>{{end}}
+{{if and .IsHost (not .InScope)}}<span class="badge">out of scope</span>{{end}}
+{{if .Issues}}<span class="sev sev-{{.Worst | lower}}" title="{{.Issues}} finding(s) here or below — worst: {{.Worst}}">{{.Worst}} {{.Issues}}</span>{{end}}
+{{if .Params}}<span class="meta sm-params" title="Query parameters: {{.Params}}">?{{.Params}}</span>{{end}}
+{{if .Count}}<span class="sm-count" title="exchanges in this subtree">{{.Count}}</span>{{end}}
+<details class="sm-menu"><summary class="btn" aria-label="Actions for {{.Title}}">⋯</summary><div class="sm-menu-body">
+{{if .HasKids}}<button type="button" hx-get="{{.BranchURL}}" hx-target="closest li.sm-node" hx-swap="outerHTML">{{if .IsHost}}Expand host{{else}}Expand branch{{end}}</button>
+<button type="button" hx-get="{{.CollapseURL}}" hx-target="closest li.sm-node" hx-swap="outerHTML">{{if .IsHost}}Collapse host{{else}}Collapse branch{{end}}</button>{{end}}
+<form hx-post="{{.ScopeURL}}" hx-target="#rows" hx-swap="outerHTML" aria-label="Review adding {{.Title}} to the target scope"><button type="submit">Add to scope</button></form>
+{{if .Count}}<a class="btn" href="{{.RepeaterURL}}">Send to Repeater</a>{{else}}<span class="meta" title="Nothing has been captured under this row yet, so there is no stored request to load into Repeater">no request</span>{{end}}
+<button type="button" hx-get="{{.SelectURL}}&panel=passive" hx-target="#sm-detail" hx-swap="innerHTML">{{if .IsHost}}Passively scan this host…{{else}}Passively scan this branch…{{end}}</button>
+<form hx-post="{{.ReviewURL}}crawl" hx-target="#sm-detail" hx-swap="innerHTML"><button type="submit">{{if .IsHost}}Actively scan this host (crawl)…{{else}}Actively scan this branch (crawl)…{{end}}</button></form>
+{{if .HasActions}}<a class="btn" href="/ui2/exchange/{{.ActionsExchange}}" title="This row's newest exchange: send it to a tool, copy, annotate, audit">Actions</a>{{end}}
+<a class="btn" href="{{.CommentsURL}}">Find comments</a>
+<a class="btn" href="{{.ScriptsURL}}">Find scripts</a>
+<a class="btn" href="{{.RefsURL}}">Find references</a>
+<a class="btn" href="{{.AnalyzeURL}}">Target analyzer</a>
+<button type="button" hx-get="{{.SelectURL}}&panel=urls" hx-target="#sm-detail" hx-swap="innerHTML">{{if .IsHost}}Copy URLs in this host…{{else}}Copy URLs in this branch…{{end}}</button>
+{{if .IsHost}}<form hx-post="{{.ReviewURL}}delete-host" hx-target="#sm-detail" hx-swap="innerHTML"><button type="submit">Delete host…</button></form>
+{{else}}<form hx-post="{{.ReviewURL}}delete-branch" hx-target="#sm-detail" hx-swap="innerHTML"><button type="submit">Delete branch…</button></form>
+<form hx-post="{{.ReviewURL}}delete-item" hx-target="#sm-detail" hx-swap="innerHTML"><button type="submit">Delete this item only…</button></form>{{end}}
+</div></details>
+</span>{{end}}

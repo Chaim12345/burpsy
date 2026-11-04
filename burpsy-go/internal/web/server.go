@@ -137,6 +137,10 @@ type Server struct {
 	// replace; ui2_proxy_settings.go): single-use, capped by ui2ProxyReviewCap, ConfirmTTL.
 	ui2ProxyReviews sync.Map
 
+	// ui2SitemapReviews holds the site-map writes (delete, passive sweep, branch crawl) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim. Single-use LoadAndDelete, bounded by ui2SitemapReviewCap, ConfirmTTL.
+	ui2SitemapReviews sync.Map
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1571,6 +1575,11 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/sitemap", s.handleUI2Sitemap)
 	s.route("/ui2/sitemap/scope/{action}", s.handleUI2SitemapScope)
 	s.route("/ui2/sitemap/repeater", s.handleUI2SitemapRepeater)
+	s.route("/ui2/sitemap/children", s.handleUI2SitemapChildren)
+	s.route("/ui2/sitemap/detail", s.handleUI2SitemapDetail)
+	s.route("/ui2/sitemap/message", s.handleUI2SitemapMessage)
+	s.route("/ui2/sitemap/export", s.handleUI2SitemapExport)
+	s.route("/ui2/sitemap/review/{action}", s.handleUI2SitemapReview)
 	s.route("/ui2/scope", s.handleUI2Scope)
 	s.route("/ui2/scope/confirm", s.handleUI2ScopeConfirm)
 	s.route("/ui2/scope/run", s.handleUI2ScopeRun)

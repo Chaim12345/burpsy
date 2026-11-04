@@ -295,8 +295,9 @@ func (s *Server) ui2SitemapRows(w http.ResponseWriter, note, done string) {
 		_, _ = w.Write([]byte(ui2Exec("error.html", ui2Error{Message: errText})))
 		return
 	}
-	flat := flattenSitemap(tree.Tree, 0, nil)
-	_, _ = w.Write([]byte(ui2Exec("sitemap.html", ui2SitemapModel{Tree: *tree, Flat: flat, Note: note, Done: done})))
+	model := s.ui2SitemapTreeModel(tree, ui2SitemapFilter{}, "")
+	model.Note, model.Done = note, done
+	_, _ = w.Write([]byte(ui2Exec("sitemap.html", model)))
 }
 
 // ---- Send to Repeater ------------------------------------------------------------------------

@@ -719,7 +719,7 @@ func (s *Server) ui2SeedFor(r *http.Request, tool string, needsText bool) (templ
 
 // ActionsID is the newest exchange recorded at this site-map row itself, for its Actions link;
 // ok is false for a row with none of its own (exchange 0 is a real id, hence the flag).
-func (n ui2SitemapNode) ActionsID() (uint64, bool) {
+func (n ui2SitemapRow) ActionsID() (uint64, bool) {
 	if len(n.Recent) == 0 {
 		return 0, false
 	}
@@ -733,10 +733,10 @@ func (n ui2SitemapNode) ActionsID() (uint64, bool) {
 }
 
 // HasActions reports whether the row has an exchange of its own to act on.
-func (n ui2SitemapNode) HasActions() bool { _, ok := n.ActionsID(); return ok }
+func (n ui2SitemapRow) HasActions() bool { _, ok := n.ActionsID(); return ok }
 
 // ActionsExchange is ActionsID's id alone, for the template.
-func (n ui2SitemapNode) ActionsExchange() uint64 { id, _ := n.ActionsID(); return id }
+func (n ui2SitemapRow) ActionsExchange() uint64 { id, _ := n.ActionsID(); return id }
 
 // ui2ExchangeIDs converts a node's recent exchange ids for the flattened site-map row.
 func ui2ExchangeIDs(ids []core.ExchangeID) []uint64 {
