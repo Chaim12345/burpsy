@@ -1,0 +1,57 @@
+<div id="bchecks">
+<h3>Custom scan checks</h3>
+<p class="meta">The BCheck corpus this process loaded, both buckets, and a per-row switch the audit engine reads.</p>
+<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:0 14px">
+  <span>New check:</span>
+  {{range .Templates}}<a class="btn" href="/ui2/bchecks/editor?template={{.ID}}">{{.Label}}</a>{{end}}
+</div>
+<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:6px 14px">
+  <form hx-post="/ui2/bchecks/upload" hx-encoding="multipart/form-data" method="post" action="/ui2/bchecks/upload" enctype="multipart/form-data" hx-target="#bchecks" hx-swap="outerHTML" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+    <label>Import .bcheck <input type="file" name="file" accept=".bcheck,text/plain" aria-label="Import a BCheck file" required></label>
+    <button type="submit">Open in editor</button>
+  </form>
+  <form hx-post="/ui2/bchecks/reload" method="post" action="/ui2/bchecks/reload" hx-target="#bchecks" hx-swap="outerHTML">
+    <button type="submit">Reload --bchecks directory</button>
+  </form>
+  <a class="btn" href="/ui2/bchecks" hx-get="/ui2/bchecks" hx-target="#bchecks" hx-swap="outerHTML">Refresh</a>
+</div>
+{{if .Note}}<p class="meta" role="alert" style="color:#c00">{{.Note}}</p>{{end}}
+{{if .Done}}<p class="meta" role="status"><strong>{{.Done}}</strong></p>{{end}}
+<div id="bcheck-review">{{.Review}}</div>
+{{if .LoadError}}<p class="meta" role="alert" style="color:#c00">Corpus unavailable: {{.LoadError}}</p>
+{{else if not .Corpus.Enabled}}<p class="meta">No BCheck corpus is loaded. Write or import a check here, or start burpsy with <code>--bchecks DIR</code>; until then the scanner audits with the built-in checks alone.</p>
+{{else}}
+<p class="meta">Loaded corpus: {{.Corpus.ActiveCount}} active, {{.Corpus.PassiveCount}} passive — counted from the corpus loader, the same set the audit engine dispatches. Run count is the passive coverage counter; an active check reads 0.</p>
+<div style="overflow-x:auto">
+<table class="bcheck-t">
+<thead><tr><th scope="col">Check</th><th scope="col">Bucket</th><th scope="col">Status</th><th scope="col">Run count</th><th scope="col">Severity</th><th scope="col">Source</th><th scope="col">Enabled</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .Corpus.Checks}}
+<tr class="{{if .Disabled}}meta{{end}}" data-check="{{.Name}}">
+<td title="{{.Description}}">{{.Name}}</td>
+<td>{{if .Passive}}<span class="badge">passive</span>{{else}}<span class="badge">active</span>{{end}}</td>
+<td>loaded</td>
+<td>{{.RunCount}}</td>
+<td>{{if .Severity}}{{.Severity}}{{else}}—{{end}}</td>
+<td>{{if eq .Origin "console"}}<span class="badge">console</span>{{else if eq .Origin "bundled"}}<span class="badge">bundled</span>{{else}}<span title="{{.File}}">{{if .File}}{{.File}}{{else}}file{{end}}</span>{{end}}</td>
+<td>{{if .Passive}}<span class="meta" title="the per-check switch governs audit dispatch; a passive check runs on every response">always on</span>{{else}}
+<form hx-post="/ui2/bchecks/enable" method="post" action="/ui2/bchecks/enable" hx-target="#bchecks" hx-swap="outerHTML" style="display:inline">
+<input type="hidden" name="name" value="{{.Name}}">
+<input type="hidden" name="enabled" value="{{if .Disabled}}true{{else}}false{{end}}">
+<button type="submit" role="switch" aria-checked="{{if .Disabled}}false{{else}}true{{end}}" aria-label="{{if .Disabled}}Enable{{else}}Disable{{end}} {{.Name}}">{{if .Disabled}}off{{else}}on{{end}}</button>
+</form>{{end}}</td>
+<td>
+<a class="btn" href="/ui2/bchecks/editor?name={{.Name}}" aria-label="{{if eq .Origin "console"}}Edit{{else}}View{{end}} {{.Name}}">{{if eq .Origin "console"}}Edit{{else}}View{{end}}</a>
+<a class="btn" href="/ui2/bchecks/export?name={{.Name}}" download aria-label="Export {{.Name}}">Export</a>
+{{if eq .Origin "console"}}<form hx-post="/ui2/bchecks/review/delete" method="post" action="/ui2/bchecks/review/delete" hx-target="#bcheck-review" hx-swap="innerHTML" style="display:inline">
+<input type="hidden" name="name" value="{{.Name}}">
+<button type="submit" aria-label="Delete {{.Name}}">Delete</button>
+</form>{{end}}
+</td>
+</tr>
+{{else}}<tr><td colspan="8" class="meta">The loader classified no checks; see the server log for parse errors.</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+{{end}}
+</div>

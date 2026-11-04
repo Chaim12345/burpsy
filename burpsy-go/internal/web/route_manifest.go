@@ -1762,6 +1762,44 @@ var manifest = map[string]route{
 	"/ui2/scanner/review-run": {
 		methods: []string{"POST"}, risk: riskAsset,
 		summary: "ui2 Scanner review run: spends one held review (single use, constant-time token check, live-audit drift check) and dispatches the held call verbatim",
+	"/ui2/bchecks": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks page: the loaded BCheck corpus with enable switches, Edit/View, Export, Delete, Import and Reload",
+	},
+	"/ui2/bchecks/editor": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Custom scan check editor: ?name= opens a loaded check (console checks editable, file and bundled ones read-only), ?template= starts a new draft",
+	},
+	"/ui2/bchecks/export": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks Export: one loaded check's BCheck source as a .bcheck download, read through /api/scanner/checks/source",
+	},
+	"/ui2/bchecks/enable": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks per-row switch: PUT /api/scanner/checks/enable and re-render the corpus with the state read back",
+	},
+	"/ui2/bchecks/reload": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks Reload: POST /api/scanner/checks/reload and re-render the corpus with the summary",
+	},
+	"/ui2/bchecks/validate": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Custom scan check editor Validate: parse the draft through /api/scanner/checks/validate and render its diagnostics; nothing changes",
+	},
+	"/ui2/bchecks/upload": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks Import: open an uploaded .bcheck file in the editor as a draft; nothing is loaded until a reviewed Save",
+	},
+	"/ui2/bchecks/review/{op}": {
+		// riskAsset like the other ui2 review routes: the class belongs to the API call the review
+		// holds, which runs only through /ui2/bchecks/run with the one-time token.
+		methods: []string{"POST"}, risk: riskAsset, subPath: "save",
+		summary: "ui2 Custom scan checks review step: holds the exact save (import), delete or test-run call and renders the review sheet; " +
+			"a test run (riskAttack) is minted a gate token, the riskLocal calls a one-time local review",
+	},
+	"/ui2/bchecks/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Custom scan checks apply step: spends the held review and dispatches the reviewed call verbatim, rendering the corpus or the test results",
 	},
 	"/ui2/sitemap/scope/{action}": {
 		methods: []string{"POST"}, subPath: "confirm", risk: riskAsset,

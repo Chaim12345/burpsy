@@ -149,6 +149,11 @@ type Server struct {
 	// configuration library) a ui2 operator has reviewed but not yet confirmed; same single-use
 	// LoadAndDelete semantics, bounded by ui2ScanReviewCap, expiring with ConfirmTTL.
 	ui2ScannerReviews sync.Map
+	// ui2BCheckReviews holds the custom scan check calls (save/import, delete, test run) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim (ui2_bcheck.go), single-use, bounded by ui2BCheckReviewCap.
+	ui2BCheckReviews sync.Map
+	sender           *sender.Sender
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1669,6 +1674,17 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/discover", s.handleUI2Discover)
 
 	// The console root: "/" is the ui2 dashboard, /legacy/ the React SPA (see handleUI).
+	s.route("/ui2/bchecks", s.handleUI2BChecks)
+	s.route("/ui2/bchecks/editor", s.handleUI2BCheckEditor)
+	s.route("/ui2/bchecks/export", s.handleUI2BCheckExport)
+	s.route("/ui2/bchecks/enable", s.handleUI2BCheckEnable)
+	s.route("/ui2/bchecks/reload", s.handleUI2BCheckReload)
+	s.route("/ui2/bchecks/validate", s.handleUI2BCheckValidate)
+	s.route("/ui2/bchecks/upload", s.handleUI2BCheckUpload)
+	s.route("/ui2/bchecks/review/{op}", s.handleUI2BCheckReview)
+	s.route("/ui2/bchecks/run", s.handleUI2BCheckRun)
+
+	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
 
 	// The cross-site gate, installed over the finished mux (burpsy-react-ui-s19k). LAST, so it wraps

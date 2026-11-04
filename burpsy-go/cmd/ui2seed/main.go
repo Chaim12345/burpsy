@@ -85,6 +85,8 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 	// A wired scanner so the Collaborator channel can be configured (POST
 	// /api/collaborator/server refuses without one) and minted via the two-step page.
 	srv.WithScanner(scanner.NewActiveScanner(store, zap.NewNop()))
+	// A passive scanner so the BCheck editor (/ui2/bchecks) can import, test and delete checks.
+	srv.WithPassiveScanner(scanner.NewPassiveScanner(store, zap.NewNop()))
 	t := srv.Tasks().Start(dash.KindCrawl, "https://shop.test/", 10)
 	t.Advance(4)
 	go func() {
