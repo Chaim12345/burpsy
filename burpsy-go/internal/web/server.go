@@ -157,6 +157,10 @@ type Server struct {
 	// but not yet confirmed (ui2_discovery.go): the exact method, path and bytes the run step
 	// dispatches verbatim. Single-use (LoadAndDelete), capped at 8, expiring with ConfirmTTL.
 	ui2HeldCalls sync.Map
+	// ui2IntruderReports holds the RunViews of attacks the ui2 run step launched, keyed by task id
+	// (ui2_intruder_results.go): /api/intruder/run keeps nothing once it answers, and the results
+	// page, exports and row actions read the report from here. Bounded by ui2IntruderKeptCap.
+	ui2IntruderReports sync.Map
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -1678,6 +1682,16 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/intruder/payloads/upload", s.handleUI2IntruderPayloadUpload)
 	s.route("/ui2/intruder/{id}/results", s.handleUI2IntruderResults)
 	s.route("/ui2/intruder/{id}/{action}", s.handleUI2IntruderControl)
+	s.route("/ui2/intruder/{id}/item/{ordinal}", s.handleUI2IntruderItem)
+	s.route("/ui2/intruder/{id}/item/{ordinal}/repeater", s.handleUI2IntruderItemRepeater)
+	s.route("/ui2/intruder/{id}/compare", s.handleUI2IntruderCompare)
+	s.route("/ui2/intruder/{id}/export", s.handleUI2IntruderExport)
+	s.route("/ui2/intruder/{id}/comment", s.handleUI2IntruderComment)
+	s.route("/ui2/intruder/{id}/again/{step}", s.handleUI2IntruderAgain)
+	s.route("/ui2/intruder/config/save", s.handleUI2IntruderConfigSave)
+	s.route("/ui2/intruder/config/load", s.handleUI2IntruderConfigLoad)
+	s.route("/ui2/intruder/config/default", s.handleUI2IntruderDefaultSettings)
+	s.route("/ui2/intruder/settings/extract", s.handleUI2IntruderExtract)
 	s.route("/ui2/sequencer", s.handleUI2Sequencer)
 	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
 	s.route("/ui2/sequencer/capture/{action}", s.handleUI2SequencerCapture)

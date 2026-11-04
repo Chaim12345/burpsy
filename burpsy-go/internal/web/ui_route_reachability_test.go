@@ -227,6 +227,16 @@ var uiRouteExempt = map[string]string{
 	"/ui2/repeater/graphql/send":             "ui2 GraphQL send button inside the /ui2/ page",
 	"/ui2/repeater/graphql/sitemap-confirm":  "ui2 GraphQL save-to-site-map review button inside the /ui2/ page",
 	"/ui2/repeater/graphql/sitemap-run":      "ui2 GraphQL save-to-site-map confirm button inside the /ui2/ page",
+	"/ui2/intruder/{id}/item/{ordinal}":          "ui2 Intruder results row pane inside the /ui2/ page; the console renders attempts from /api/intruder/run's answer",
+	"/ui2/intruder/{id}/item/{ordinal}/repeater": "ui2 Intruder send-to-Repeater link inside the /ui2/ page; the console's Repeater tab holds its own drafts",
+	"/ui2/intruder/{id}/compare":                 "ui2 Intruder Comparer link inside the /ui2/ page; the console calls /api/tools/compare",
+	"/ui2/intruder/{id}/export":                  "ui2 Intruder export links inside the /ui2/ page; the console builds exports in the browser",
+	"/ui2/intruder/{id}/comment":                 "ui2 Intruder comment form inside the /ui2/ page; the console keeps comments in the browser",
+	"/ui2/intruder/{id}/again/{step}":            "ui2 Intruder request-again review inside the /ui2/ page; the console calls /api/intruder/again",
+	"/ui2/intruder/config/save":                  "ui2 Intruder save-config button inside the /ui2/ page; the console writes the file in the browser",
+	"/ui2/intruder/config/load":                  "ui2 Intruder load-config form inside the /ui2/ page; the console reads the file in the browser",
+	"/ui2/intruder/config/default":               "ui2 Intruder default-configuration button inside the /ui2/ page; the console resets its store",
+	"/ui2/intruder/settings/extract":             "ui2 Intruder define-extract helper inside the /ui2/ page; the console builds the rule in the browser",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each

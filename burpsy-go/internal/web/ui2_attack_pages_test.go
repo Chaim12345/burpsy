@@ -195,9 +195,9 @@ func TestUI2IntruderConfirmedDispatchSpendsItsOwnToken(t *testing.T) {
 	if rec3.Code != http.StatusOK {
 		t.Fatalf("results page %s = %d", path, rec3.Code)
 	}
-	// The attack's sends — payloads spliced into the query string — are the page's rows. An
-	// empty table here was the pre-recordIntruderExchanges state: real attack, no results.
-	if rows := rec3.Body.String(); !strings.Contains(rows, "a=admin") || !strings.Contains(rows, "a=root") {
+	// The attack's attempts — one row per payload — are the page's rows. An empty table here
+	// was the pre-recordIntruderExchanges state: real attack, no results.
+	if rows := rec3.Body.String(); !strings.Contains(rows, ">admin<") || !strings.Contains(rows, ">root<") {
 		t.Fatalf("results page does not list the attack's sent requests: %s", rows[:ui2Min(300, len(rows))])
 	}
 }

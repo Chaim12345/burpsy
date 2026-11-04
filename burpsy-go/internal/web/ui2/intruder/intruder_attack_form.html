@@ -26,6 +26,7 @@
 {{template "intruder_attack_positions.html" .positions}}
 {{template "intruder_payloads_sets.html" .}}
 {{template "intruder_payloads_pool.html" .}}
+{{if .settings}}{{template "intruder_settings_form.html" .settings}}{{end}}
 <p class="meta"><button type="submit" id="intruder-review">Review attack…</button></p>
 </form>
 <!-- Wordlist uploads: the file inputs sit in the payload sets (form="intruder-upload"); the

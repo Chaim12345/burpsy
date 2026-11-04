@@ -108,6 +108,11 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/intruder/points":                  {raw: "application/x-www-form-urlencoded launch form; op: find, auto or clear"},
 	"POST /ui2/intruder/payloads":                {raw: "application/x-www-form-urlencoded launch form; op: add_set, remove_set:N, add_rule, remove_rule:N"},
 	"POST /ui2/intruder/payloads/upload":         {raw: "multipart/form-data: upload_set, upload_file_<set>, plus the launch form"},
+	"POST /ui2/intruder/{id}/comment":          {raw: "application/x-www-form-urlencoded form: ordinal, comment"},
+	"POST /ui2/intruder/{id}/again/{step}":     {raw: "application/x-www-form-urlencoded form: ordinal; run adds the one-time confirm token"},
+	"POST /ui2/intruder/config/save":           {raw: "application/x-www-form-urlencoded launch form plus positions=with|without, or config=<saved document> to download"},
+	"POST /ui2/intruder/config/load":           {raw: "multipart/form-data: config_file (or a config field) holding a saved attack configuration"},
+	"POST /ui2/intruder/settings/extract":      {raw: "application/x-www-form-urlencoded form: extract_response_id, extract_text"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

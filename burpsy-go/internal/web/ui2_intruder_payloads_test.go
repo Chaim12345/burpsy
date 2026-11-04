@@ -103,7 +103,7 @@ func TestUI2IntruderReviewShowsTheFullBody(t *testing.T) {
 	if strings.Contains(body, "…") {
 		t.Errorf("review body was truncated")
 	}
-	if !strings.Contains(frag, "#0 query a = 1") {
+	if !strings.Contains(frag, "#1 url_param_value a = 1") {
 		t.Errorf("review sheet does not name the selected position: %.600s", frag)
 	}
 }

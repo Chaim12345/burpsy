@@ -1439,6 +1439,46 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAsset, subPath: "1/stop",
 		summary: "ui2 Intruder control: pause/resume/stop one attack",
 	},
+	"/ui2/intruder/{id}/item/{ordinal}": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/item/0",
+		summary: "ui2 Intruder results row: the attempt's request, response, Collaborator interactions and row actions",
+	},
+	"/ui2/intruder/{id}/item/{ordinal}/repeater": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/item/0/repeater",
+		summary: "ui2 Intruder results row: the Repeater editor with the attempt's stored request as its draft (sends nothing)",
+	},
+	"/ui2/intruder/{id}/compare": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/compare",
+		summary: "ui2 Intruder results: two picked attempt messages diffed in the Comparer via /api/tools/compare",
+	},
+	"/ui2/intruder/{id}/export": {
+		methods: []string{"GET"}, risk: riskAsset, subPath: "1/export",
+		summary: "ui2 Intruder results export: the kept report as a CSV sheet (formula-guarded) or the RunView JSON",
+	},
+	"/ui2/intruder/{id}/comment": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/comment",
+		summary: "ui2 Intruder results: set one attempt's comment on the console's kept report (no API, no target)",
+	},
+	"/ui2/intruder/{id}/again/{step}": {
+		methods: []string{"POST"}, risk: riskAsset, subPath: "1/again/confirm",
+		summary: "ui2 Intruder request item again: confirm mints a one-time confirmation for the exact /api/intruder/again body; run spends it",
+	},
+	"/ui2/intruder/config/save": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder attack config: render the launch form as a config document to copy, or answer a posted one as a download",
+	},
+	"/ui2/intruder/config/load": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder attack config: restore an uploaded config into the launch form, refusing one that cannot be fully restored",
+	},
+	"/ui2/intruder/config/default": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Intruder settings section at the default configuration",
+	},
+	"/ui2/intruder/settings/extract": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Intruder define-extract helper: build a Grep - Extract rule from text in a stored response",
+	},
 	"/ui2/sequencer": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "ui2 Sequencer page: captures list + paste-and-analyse form",

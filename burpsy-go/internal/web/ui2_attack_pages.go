@@ -132,7 +132,9 @@ func (s *Server) ui2IntruderPageModel(form url.Values) map[string]any {
 	if _, id, raw := ui2LatestExchange(s); raw != "" {
 		defMsg = strconv.FormatUint(id, 10)
 	}
-	return map[string]any{"attacks": attacks, "launch": s.ui2IntruderFormModel(form, defMsg)}
+	launch := s.ui2IntruderFormModel(form, defMsg)
+	launch["settings"] = s.ui2IntruderSettingsForPage(form)
+	return map[string]any{"attacks": attacks, "launch": launch}
 }
 
 // ui2LatestExchange returns the newest non-tool exchange id, the id of its stored request
@@ -268,6 +270,7 @@ func (s *Server) handleUI2IntruderRun(w http.ResponseWriter, r *http.Request) {
 				launched = uint64(id)
 			}
 		}
+		s.ui2IntruderKeepReport(run, result)
 	}
 	model := s.ui2IntruderPageModel(r.PostForm)
 	model["error"] = errText
@@ -299,30 +302,6 @@ func (s *Server) handleUI2IntruderControl(w http.ResponseWriter, r *http.Request
 	model := s.ui2IntruderPageModel(url.Values{})
 	model["error"] = errText
 	ui2Fragment(w, r, "burpsy /ui2/ — Intruder", "intruder", ui2Exec("intruder.html", model))
-}
-
-// handleUI2IntruderResults serves GET /ui2/intruder/{id}/results: the attack's sent requests
-// via the datasets table view.
-func (s *Server) handleUI2IntruderResults(w http.ResponseWriter, r *http.Request) {
-	id, ok := ui2IntruderAttackID(r)
-	if !ok {
-		http.Error(w, "attack id must be a number", http.StatusBadRequest)
-		return
-	}
-	// The label says newest first, so ask for it (the dataset default is ascending ids), and
-	// forward the page offset: without it every page request returned the same first 200 rows.
-	q := "limit=200&sort_by=id&sort_order=desc"
-	if off := r.URL.Query().Get("offset"); off != "" {
-		q += "&offset=" + url.QueryEscape(off)
-	}
-	res, errText := s.ui2APIResult(http.MethodGet, "/api/datasets/intruder/"+id+"?"+q, nil)
-	model := map[string]any{"task": id, "results": res, "error": errText}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if r.Header.Get("HX-Request") == "true" {
-		_, _ = w.Write([]byte(ui2Exec("intruder_results.html", model)))
-		return
-	}
-	ui2RenderPage(w, "burpsy /ui2/ — Attack "+id, "intruder", ui2Exec("intruder_results.html", model))
 }
 
 // ui2IntruderRunPayload builds the /api/intruder/run body from the launch form. The confirm step
@@ -401,6 +380,9 @@ func (s *Server) ui2IntruderRunPayload(r *http.Request) (map[string]any, string)
 	}
 	if v := form.Get("payload_placement"); v != "" {
 		run["payload_placement"] = v
+	}
+	if errText := ui2IntruderApplySettings(run, r.PostForm); errText != "" {
+		return run, errText
 	}
 	return run, ""
 }

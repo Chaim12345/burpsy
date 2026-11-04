@@ -1,0 +1,19 @@
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+{{if .full_body}}
+<p class="meta">This re-sends attempt {{.ordinal}}'s exact stored request to the target (riskAttack). Review the exact call:</p>
+<pre class="msg">POST /api/intruder/again
+{{.full_body}}</pre>
+{{if or .token .ready}}
+<form hx-post="/ui2/intruder/{{.task}}/again/run" method="post" action="/ui2/intruder/{{.task}}/again/run" hx-target="#again-out" hx-swap="innerHTML">
+  <input type="hidden" name="ordinal" value="{{.ordinal}}">
+  {{if .token}}<input type="hidden" name="token" value="{{.token}}">{{end}}
+  <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and send again</button>
+</form>
+{{end}}
+{{end}}
+{{with .again}}
+<h4>Sent again</h4>
+<p class="meta">status {{if .status}}{{.status}}{{else}}—{{end}} · {{.response_len}} bytes · {{.duration_ms}} ms{{if .error}} · error: {{.error}}{{end}} · request #{{.request_id}} · response #{{.response_id}}</p>
+<p class="meta">Grep and capture settings of the original attack are not re-applied to a re-sent item.</p>
+{{end}}
+{{if .again_pane}}<pre class="msg">{{.again_pane.Highlighted}}</pre>{{end}}
