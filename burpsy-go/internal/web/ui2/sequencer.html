@@ -18,8 +18,8 @@
 {{end}}
 <h3>Start live capture</h3>
 <form hx-post="/ui2/sequencer/capture/confirm" hx-target="#rows" hx-swap="outerHTML">
-  <p class="meta">Target <input type="text" name="target" size="22" aria-label="Target host" placeholder="host or host:port"> protocol
-  <select name="protocol" aria-label="Protocol"><option value="http" selected>http</option><option value="https">https</option></select>
+  <p class="meta">Target <input type="text" name="target" size="22" aria-label="Target host" placeholder="host or host:port" value="{{.base_target}}"> protocol
+  <select name="protocol" aria-label="Protocol"><option value="http"{{if not .base_tls}} selected{{end}}>http</option><option value="https"{{if .base_tls}} selected{{end}}>https</option></select>
   count <input type="number" name="count" size="6" min="1" max="20000" placeholder="100" aria-label="Token count">
   delay ms <input type="number" name="delay_ms" size="5" min="0" placeholder="0" aria-label="Delay between requests in milliseconds">
   threads <input type="number" name="threads" size="3" min="1" max="32" placeholder="1" aria-label="Threads"></p>
