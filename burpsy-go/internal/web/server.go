@@ -1588,6 +1588,9 @@ func (s *Server) setupRoutes() {
 	s.route("/ui2/shell/project/{action}", s.handleUI2ShellProjectAction)
 	s.route("/ui2/shell/config", s.handleUI2ShellConfig)
 	s.route("/ui2/shell/config/{action}", s.handleUI2ShellConfigAction)
+	s.route("/ui2/search", s.handleUI2Search)
+	s.route("/ui2/search/message/{id}", s.handleUI2SearchMessage)
+	s.route("/ui2/discover", s.handleUI2Discover)
 
 	// The console root: "/" is the ui2 dashboard, /legacy/ the React SPA (see handleUI).
 	s.mux.HandleFunc("/", s.handleUI)

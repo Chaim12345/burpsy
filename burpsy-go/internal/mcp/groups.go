@@ -526,6 +526,9 @@ var notExposed = map[string]string{
 	"GET /api/repeater/ws-handshake-preview": "the console's live preview while the operator edits a WS handshake; " +
 		"a read-only render of state the operator already owns, with no agent edit-preview loop to serve",
 	"GET /ui2/":                                "the server-rendered console shell; the operator's browser navigates to it, an agent reads state through the JSON API",
+	"GET /ui2/search":                          "the ui2 Search page; /api/search is the agent-facing search",
+	"GET /ui2/search/message/{id}":             "the ui2 Search preview pane; /api/message/{id} is the agent-facing read",
+	"GET /ui2/discover":                        "the ui2 Discover reference page; static operator documentation, not an operation",
 	"GET /ui2/history":                         "the ui2 history page; the JSON /api/history is the agent-facing list",
 	"GET /ui2/history/{id}":                    "the ui2 exchange detail pane; /api/exchange/{id} and /api/message/{id} are the agent-facing reads",
 	"GET /ui2/issues":                          "the ui2 issues page; /api/issues is the agent-facing list",

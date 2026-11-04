@@ -3995,6 +3995,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/ui2/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Discover page: the in-app reference (limits, query language, BCheck syntax, per-tool panels, hotkeys, shipped docs), filtered by q */
+        get: operations["getUi2Discover"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ui2/extensions": {
         parameters: {
             query?: never;
@@ -4585,6 +4602,40 @@ export type paths = {
         put?: never;
         /** ui2 Scope editing: spends the confirmation token on the exact /api/scope call reviewed and re-renders the rules; scope decides where senders may reach and persists */
         post: operations["postUi2ScopeRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Search page: suite-wide search over stored traffic through /api/search (term, case, regex, negate, in-scope, location, within, tools); a blank term renders the form and tool list */
+        get: operations["getUi2Search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ui2/search/message/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ui2 Search preview: one matched message read through /api/message/{id}, rendered raw with the server's match offsets shown in context */
+        get: operations["getUi2SearchMessageById"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15435,6 +15486,33 @@ export interface operations {
             };
         };
     };
+    getUi2Discover: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     getUi2Extensions: {
         parameters: {
             query?: never;
@@ -16485,6 +16563,62 @@ export interface operations {
                 "application/json": unknown;
             };
         };
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2Search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description JSON result; no verified shape is declared for this route yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description the refusal: plain text (http.Error) or an {"error": "..."} object, naming what was rejected */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getUi2SearchMessageById: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description JSON result; no verified shape is declared for this route yet */
             200: {

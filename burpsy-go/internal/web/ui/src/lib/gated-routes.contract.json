@@ -206,6 +206,7 @@
   "/ui2/dashboard",
   "/ui2/decoder",
   "/ui2/decoder/run",
+  "/ui2/discover",
   "/ui2/extensions",
   "/ui2/history",
   "/ui2/history/{id}",
@@ -241,6 +242,8 @@
   "/ui2/scope",
   "/ui2/scope/confirm",
   "/ui2/scope/run",
+  "/ui2/search",
+  "/ui2/search/message/{id}",
   "/ui2/sequencer",
   "/ui2/sequencer/analyse",
   "/ui2/sequencer/capture/{action}",
@@ -4148,6 +4151,26 @@
    "gated": false
   },
   {
+   "path": "/ui2/discover",
+   "key": "/ui2/discover",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discover/",
+   "key": "/ui2/discover",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discover/extra",
+   "key": "/ui2/discover",
+   "gated": false
+  },
+  {
+   "path": "/ui2/discover/extra/more",
+   "key": "/ui2/discover",
+   "gated": false
+  },
+  {
    "path": "/ui2/extensions",
    "key": "/ui2/extensions",
    "gated": false
@@ -4855,6 +4878,46 @@
   {
    "path": "/ui2/scope/run/extra/more",
    "key": "/ui2/scope/run",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/extra",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/extra/more",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/message/w",
+   "key": "/ui2/search/message/{id}",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/message/w/",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/message/w/extra",
+   "key": "/ui2/search",
+   "gated": false
+  },
+  {
+   "path": "/ui2/search/message/w/extra/more",
+   "key": "/ui2/search",
    "gated": false
   },
   {

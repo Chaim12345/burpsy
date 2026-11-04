@@ -596,6 +596,7 @@ document.addEventListener('click', function (e) {
     'alt+T — toggle interception',
     'j/k or ↑/↓ — move row selection, Enter — open detail',
     'mod+A (in table) — select all rows',
+    'mod+K — command palette: every page and settings section, fuzzy filter, Enter opens, Esc closes',
     '? — this list'
   ];
   var sel = -1;
@@ -873,4 +874,252 @@ ui2HeaderMedia.addEventListener('change', () => ui2SyncExpandableHeaders(documen
     reader.onload = function () { box.value = String(reader.result || ''); };
     reader.readAsText(file);
   });
+// ---- Command palette (mod+K) ----
+// Lists every ui2 page (read from the header nav, so a page added there appears here with no
+// second list to maintain) plus the Settings page's sections (its headings, read from the
+// served fragment on first open). Fuzzy subsequence filter; Enter opens, Esc closes. Recent
+// picks persist per browser in localStorage, which may be unavailable (private mode): every
+// access is guarded and the palette works without it. Entries are built with textContent only.
+(function () {
+  var RECENT_KEY = 'burpsy.ui2.palette.recent';
+  var MAX_RECENT = 8;
+  var overlay = null, input = null, list = null, opener = null;
+  var entries = [], shown = [], active = 0, settings = null;
+
+  function loadRecent() {
+    try {
+      var v = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+      return Array.isArray(v) ? v.filter(function (x) { return x && typeof x.href === 'string' && typeof x.label === 'string'; }) : [];
+    } catch (_) { return []; }
+  }
+  function saveRecent(entry) {
+    var next = [{ label: entry.label, href: entry.href }].concat(loadRecent().filter(function (x) { return x.href !== entry.href; })).slice(0, MAX_RECENT);
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch (_) {}
+  }
+  function pages() {
+    var seen = {}, out = [];
+    document.querySelectorAll('header nav a[href^="/ui2/"]').forEach(function (a) {
+      var href = a.getAttribute('href');
+      if (seen[href]) return;
+      seen[href] = true;
+      out.push({ label: a.textContent.trim(), href: href, group: 'Page' });
+    });
+    return out;
+  }
+  function headingEntries(root) {
+    var out = [];
+    root.querySelectorAll('h2, h3').forEach(function (h) {
+      var text = h.textContent.replace(/\s+/g, ' ').trim();
+      if (!text) return;
+      out.push({ label: 'Settings › ' + text, href: '/ui2/settings#' + (h.id ? h.id : 'section=' + encodeURIComponent(text)), group: 'Settings' });
+    });
+    return out;
+  }
+  // The section list is cached for the browser session: every ui2 navigation is a full page
+  // load, and re-rendering the whole Settings page per palette open would be waste.
+  var SETTINGS_KEY = 'burpsy.ui2.palette.settings';
+  function loadSettings() {
+    if (settings) return;
+    try {
+      var cached = JSON.parse(sessionStorage.getItem(SETTINGS_KEY) || 'null');
+      if (Array.isArray(cached)) { settings = cached; return; }
+    } catch (_) {}
+    settings = [];
+    fetch('/ui2/settings', { headers: { 'HX-Request': 'true' }, credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .then(function (t) {
+        if (!t) return;
+        settings = headingEntries(new DOMParser().parseFromString(t, 'text/html'));
+        try { sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+        if (overlay && !overlay.hidden) { collect(); render(); }
+      })
+      .catch(function () {});
+  }
+  function collect() {
+    entries = pages().concat(settings || []);
+  }
+  // Subsequence score: -1 when q is not a subsequence of the label; higher is better, rewarding
+  // consecutive runs and word starts, penalising long labels slightly.
+  function score(label, q) {
+    if (!q) return 0;
+    var l = label.toLowerCase(), s = 0, li = 0, run = 0;
+    for (var qi = 0; qi < q.length; qi++) {
+      var c = q.charAt(qi);
+      if (c === ' ') continue;
+      var at = l.indexOf(c, li);
+      if (at < 0) return -1;
+      run = at === li ? run + 1 : 1;
+      s += run * 2;
+      if (at === 0 || /[\s›\/(-]/.test(l.charAt(at - 1))) s += 3;
+      li = at + 1;
+    }
+    return s - l.length / 100;
+  }
+  function filter() {
+    var q = input.value.trim().toLowerCase();
+    var recent = loadRecent();
+    var rank = {};
+    recent.forEach(function (r, i) { rank[r.href] = MAX_RECENT - i; });
+    if (!q) {
+      var byHref = {};
+      entries.forEach(function (e) { byHref[e.href] = e; });
+      var first = recent.filter(function (r) { return byHref[r.href]; }).map(function (r) {
+        return { label: byHref[r.href].label, href: r.href, group: 'Recent' };
+      });
+      var rest = entries.filter(function (e) { return !rank[e.href]; });
+      shown = first.concat(rest);
+    } else {
+      shown = entries.map(function (e) {
+        var sc = score(e.label, q);
+        return { e: e, s: sc < 0 ? sc : sc + (rank[e.href] || 0) / 4 };
+      }).filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .map(function (x) { return x.e; });
+    }
+    active = 0;
+  }
+  function render() {
+    filter();
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!shown.length) {
+      var none = document.createElement('li');
+      none.className = 'palette-none';
+      none.textContent = 'No page or section matches.';
+      list.appendChild(none);
+      input.removeAttribute('aria-activedescendant');
+      return;
+    }
+    shown.forEach(function (e, i) {
+      var li = document.createElement('li');
+      li.id = 'palette-opt-' + i;
+      li.setAttribute('role', 'option');
+      li.dataset.index = String(i);
+      li.dataset.href = e.href;
+      var label = document.createElement('span');
+      label.textContent = e.label;
+      var group = document.createElement('span');
+      group.className = 'palette-group';
+      group.textContent = e.group;
+      li.appendChild(label);
+      li.appendChild(group);
+      list.appendChild(li);
+    });
+    highlight();
+  }
+  function highlight() {
+    list.querySelectorAll('[role=option]').forEach(function (li, i) {
+      var on = i === active;
+      li.classList.toggle('active', on);
+      li.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on) { li.scrollIntoView({ block: 'nearest' }); input.setAttribute('aria-activedescendant', li.id); }
+    });
+  }
+  function go(i) {
+    var e = shown[i];
+    if (!e) return;
+    saveRecent(e);
+    close();
+    location.href = e.href;
+  }
+  function build() {
+    var style = document.createElement('style');
+    style.textContent =
+      '#ui2-palette{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100;display:flex;justify-content:center;align-items:flex-start;padding-top:12vh}' +
+      '#ui2-palette[hidden]{display:none}' +
+      '#ui2-palette .palette-box{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;width:min(560px,calc(100vw - 32px));box-shadow:0 8px 30px rgba(0,0,0,.35);overflow:hidden}' +
+      '#ui2-palette input{width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 12px;font-size:15px}' +
+      '#ui2-palette ul{list-style:none;margin:0;padding:4px 0;max-height:min(50vh,420px);overflow-y:auto}' +
+      '#ui2-palette li{display:flex;justify-content:space-between;gap:12px;padding:6px 12px;cursor:pointer}' +
+      '#ui2-palette li.active{background:var(--sel)}' +
+      '#ui2-palette .palette-group,#ui2-palette .palette-none{color:var(--muted);font-size:12px}';
+    document.head.appendChild(style);
+    overlay = document.createElement('div');
+    overlay.id = 'ui2-palette';
+    overlay.hidden = true;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', 'Command palette');
+    var box = document.createElement('div');
+    box.className = 'palette-box';
+    input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'palette-input';
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', 'true');
+    input.setAttribute('aria-controls', 'palette-list');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-label', 'Go to a page or settings section');
+    input.placeholder = 'Go to… (type to filter, Enter opens, Esc closes)';
+    input.autocomplete = 'off';
+    list = document.createElement('ul');
+    list.id = 'palette-list';
+    list.setAttribute('role', 'listbox');
+    box.appendChild(input);
+    box.appendChild(list);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.addEventListener('input', render);
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { active = Math.min(shown.length - 1, active + 1); highlight(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { active = Math.max(0, active - 1); highlight(); e.preventDefault(); }
+      else if (e.key === 'Enter') { go(active); e.preventDefault(); }
+      else if (e.key === 'Escape') { close(); e.preventDefault(); }
+      else if (e.key === 'Tab') { e.preventDefault(); } // focus stays in the dialog
+    });
+    list.addEventListener('click', function (e) {
+      var li = e.target.closest && e.target.closest('[role=option]');
+      if (li) go(parseInt(li.dataset.index, 10));
+    });
+    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+  }
+  function open() {
+    if (!overlay) build();
+    if (!overlay.hidden) { input.focus(); return; }
+    opener = document.activeElement;
+    loadSettings();
+    collect();
+    input.value = '';
+    overlay.hidden = false;
+    render();
+    input.focus();
+  }
+  function close() {
+    if (!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    if (opener && opener.focus) { try { opener.focus(); } catch (_) {} }
+  }
+  document.addEventListener('keydown', function (e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      open();
+    }
+  });
+  // A touch-only device has no mod+K: a header button opens the same palette.
+  function addButton() {
+    var theme = document.getElementById('theme-toggle');
+    if (!theme || document.getElementById('palette-open')) return;
+    var b = document.createElement('button');
+    b.id = 'palette-open';
+    b.className = 'btn';
+    b.type = 'button';
+    b.title = 'Go to… (mod+K)';
+    b.setAttribute('aria-label', 'Open the command palette');
+    b.textContent = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘K' : 'Ctrl+K';
+    b.addEventListener('click', open);
+    theme.parentNode.insertBefore(b, theme);
+  }
+  // A palette pick for a settings heading with no id lands as #section=<text>: scroll to it.
+  function revealSection() {
+    var h = location.hash;
+    if (h.indexOf('#section=') !== 0) return;
+    var want;
+    try { want = decodeURIComponent(h.slice(9)); } catch (_) { return; }
+    var found = Array.prototype.find.call(document.querySelectorAll('main h2, main h3'), function (x) {
+      return x.textContent.replace(/\s+/g, ' ').trim() === want;
+    });
+    if (found) found.scrollIntoView({ block: 'start' });
+  }
+  function ready() { addButton(); revealSection(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ready); else ready();
+  window.addEventListener('hashchange', revealSection);
 })();
