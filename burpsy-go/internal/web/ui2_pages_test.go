@@ -41,6 +41,9 @@ var ui2Pages = []struct {
 	{"/ui2/proxy/options", "proxy-options", "Proxy history logging"},
 	{"/ui2/proxy/match-replace", "match-replace", "Request rules"},
 	{"/ui2/extensions", "extensions", "JSON-RPC API"},
+	{"/ui2/extensions", "extensions", "Allowlist"},
+	{"/ui2/extensions/options", "extensions-options", "Admission"},
+	{"/ui2/extensions/apis", "extensions-apis", "What a plugin cannot do"},
 	{"/ui2/scanner", "scanner", "Scan configurations"},
 	{"/ui2/scanner/config", "scanconfig", "Scanner configuration"},
 	{"/ui2/scanner/library", "scanlibrary", "Scan configuration library"},
@@ -744,12 +747,12 @@ func TestUI2ExtensionsAPIRowsRenderMethodNames(t *testing.T) {
 	if len(apis.Methods) == 0 {
 		t.Fatal("no API methods registered to render")
 	}
-	body := get(t, s, "/ui2/extensions").Body.String()
+	body := get(t, s, "/ui2/extensions/apis").Body.String()
 	if strings.Contains(body, "<td></td>") {
 		t.Fatal("extensions page renders empty method cells")
 	}
 	for _, m := range apis.Methods {
-		if !strings.Contains(body, "<td>"+m.Name+"</td>") {
+		if !strings.Contains(body, `<td data-label="Method"><code>`+m.Name+"</code></td>") {
 			t.Fatalf("method %q missing from the rendered API table", m.Name)
 		}
 	}

@@ -695,6 +695,12 @@ var notExposed = map[string]string{
 	"POST /ui2/session/editor/{action}":        "ui2 Session rule editor draft steps and save review (minted one-time confirmation); /api/session/rules are the agent-facing controls",
 	"POST /ui2/session/call/{action}":          "ui2 Session tool review and apply steps (minted one-time confirmations); /api/session/* are the agent-facing controls",
 	"GET /ui2/session/prompts":                 "ui2 pending session-prompt banner fragment; /api/session/prompts is the agent-facing read",
+	"GET /ui2/extensions/options":              "ui2 Extender options page; /api/extensions carries the policy for agents",
+	"GET /ui2/extensions/apis":                 "ui2 Extender APIs page; /api/extensions/apis is the agent-facing read",
+	"GET /ui2/extensions/plugin":               "ui2 one plugin's detail page; /api/extensions and /api/extensions/console are the agent-facing reads",
+	"GET /ui2/extensions/console":              "ui2 plugin console fragment; /api/extensions/console is the agent-facing read",
+	"POST /ui2/extensions/confirm":             "ui2 Extensions review step (holds the call, runs nothing); agents call /api/extensions/* directly",
+	"POST /ui2/extensions/run":                 "ui2 Extensions run step spending a held review; the extensions_run/extensions_manage tools are the agent-facing controls",
 	"POST /ui2/settings/write/{area}/{action}": "the ui2 Settings write confirm/run review steps; the agent-facing writes are the " +
 		"/api/* routes a review mints (the gated ones through their own /confirm endpoints)",
 	"POST /ui2/intercept/{action}": "ui2 intercept action buttons (POST); the JSON /api/intercept/* routes are the agent-facing controls",

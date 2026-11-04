@@ -121,6 +121,8 @@ var routeSchemas = map[string]opSchema{
 	"POST /ui2/organizer/add/{action}":           {raw: "application/x-www-form-urlencoded exchange id (confirm); review id and one-time payload-bound token only (run)"},
 	"POST /ui2/session/editor/{action}":          {raw: "application/x-www-form-urlencoded editor form naming a server-held draft id"},
 	"POST /ui2/session/call/{action}":            {raw: "application/x-www-form-urlencoded tool form (review); review id + one-time review nonce only (run)"},
+	"POST /ui2/extensions/confirm":               {raw: "application/x-www-form-urlencoded form: action (load/unload/up/down/invoke), name, optional registration/exchange/from"},
+	"POST /ui2/extensions/run":                   {raw: "application/x-www-form-urlencoded form: review id + one-time token only"},
 	// ---- reads with query parameters ----------------------------------------------------------
 	"GET /api/advisories": {
 		query: []queryParam{

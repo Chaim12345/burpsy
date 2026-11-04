@@ -1,0 +1,22 @@
+<div id="ext-review" data-review="1">
+{{if .Error}}<p class="meta" role="alert"><strong>Not run: {{.Error}}</strong></p>{{else}}
+<p class="ext-sec"><strong>Review before running:</strong> {{.Title}}</p>
+<table class="ext-t">
+<tbody>
+<tr><th scope="row">Plugin key</th><td><code>{{.Name}}</code></td></tr>
+{{range .Facts}}<tr><th scope="row">{{.K}}</th><td>{{.V}}</td></tr>{{end}}
+</tbody>
+</table>
+<details open class="ext-sec"><summary>exact call (held server-side; runs once, exactly as shown)</summary>
+<pre>{{.Projection}}</pre>
+</details>
+{{range .Consequences}}<p class="meta">{{.}}</p>{{end}}
+<p class="meta">Risk class: {{.Risk}}. {{if .Gated}}This route is in the confirmation gate's set: the token below is the gate's one-time confirmation for exactly this call.{{else}}This route is not in the confirmation gate's set: the review is held server-side, expires with the confirmation window and runs once.{{end}}</p>
+<form class="ext-sec" method="post" action="/ui2/extensions/run" hx-post="/ui2/extensions/run" hx-target="{{.Target}}" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.ReviewID}}">
+<input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">{{.Button}}</button>
+<a href="{{.Back}}" hx-get="{{.Back}}" hx-target="{{.Target}}" hx-swap="outerHTML">cancel</a>
+</form>
+{{end}}
+</div>

@@ -344,21 +344,6 @@ func (s *Server) handleUI2Proxy(w http.ResponseWriter, r *http.Request) {
 	ui2Fragment(w, r, "burpsy /ui2/ — Proxy settings", "proxy", ui2Exec("proxy.html", model))
 }
 
-// ---- Extensions ------------------------------------------------------------------------------
-
-// handleUI2Extensions serves GET /ui2/extensions: the plugin list, state breakdown and allowlist.
-func (s *Server) handleUI2Extensions(w http.ResponseWriter, r *http.Request) {
-	rec := newRecorder()
-	s.handleExtensions(rec, newReq(http.MethodGet, "/api/extensions"))
-	var view any
-	_ = ui2DecodeJSON(rec.Body.Bytes(), &view)
-	apisRec := newRecorder()
-	s.handleExtensionAPIs(apisRec, newReq(http.MethodGet, "/api/extensions/apis"))
-	var apis any
-	_ = ui2DecodeJSON(apisRec.Body.Bytes(), &apis)
-	ui2Fragment(w, r, "burpsy /ui2/ — Extensions", "extensions", ui2Exec("extensions.html", map[string]any{"extensions": view, "apis": apis}))
-}
-
 // ---- Scanner: launch configs, checks, coverage, live ----------------------------------------
 
 // handleUI2Scanner serves GET /ui2/scanner: saved configurations, the corpus inventory and

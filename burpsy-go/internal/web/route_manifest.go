@@ -1642,7 +1642,31 @@ var manifest = map[string]route{
 	},
 	"/ui2/extensions": {
 		methods: []string{"GET"}, risk: riskAsset,
-		summary: "ui2 Extensions page: plugin list, state breakdown, JSON-RPC API table",
+		summary: "ui2 Extensions Installed page: allowlist metrics and the ordered plugin table; ?exchange= lists loaded plugins' exchange-taking items",
+	},
+	"/ui2/extensions/options": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Extender options: the admission rule and every bound in force, read from /api/extensions",
+	},
+	"/ui2/extensions/apis": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 Extender APIs: the plugin protocol contract read from /api/extensions/apis",
+	},
+	"/ui2/extensions/plugin": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 one plugin's detail: metrics, registrations with reviewed Run, live consoles (?name=, optional ?exchange= context)",
+	},
+	"/ui2/extensions/console": {
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "ui2 one plugin's output and error consoles fragment (?name=&limit=&live=), re-polled while live",
+	},
+	"/ui2/extensions/confirm": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Extensions review step: holds the exact load/unload/order/invoke call server-side and renders the review sheet; nothing runs",
+	},
+	"/ui2/extensions/run": {
+		methods: []string{"POST"}, risk: riskAsset,
+		summary: "ui2 Extensions run step: spends one held review and dispatches its exact /api/extensions/* call (load and invoke run plugin code)",
 	},
 	"/ui2/search": {
 		methods: []string{"GET"}, risk: riskAsset,
