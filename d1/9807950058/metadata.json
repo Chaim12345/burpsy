@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "d19807950058",
+  "strategy": "manual-commit",
+  "branch": "ui2-migration",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "burpsy-go/cmd/ui2seed/main.go",
+    "burpsy-go/internal/proxy/client_end_test.go",
+    "burpsy-go/internal/proxy/head_response_test.go",
+    "burpsy-go/internal/proxy/proxy.go",
+    "burpsy-go/internal/proxy/reused_tunnel_test.go",
+    "burpsy-go/internal/proxy/tls_chunked_relay_test.go",
+    "burpsy-go/internal/proxy/tunnel_upstream.go",
+    "burpsy-go/internal/scanner/triage_redirect_test.go",
+    "burpsy-go/internal/web/api_authz_test.go",
+    "burpsy-go/internal/web/api_dom_engine.go",
+    "burpsy-go/internal/web/ui2.go",
+    "burpsy-go/internal/web/ui2_authz_test.go",
+    "burpsy-go/internal/web/ui2_bcheck.go",
+    "burpsy-go/internal/web/ui2_dashboard.go",
+    "burpsy-go/internal/web/ui2_exchange_actions.go",
+    "burpsy-go/internal/web/ui2_exchange_actions_test.go",
+    "burpsy-go/internal/web/ui2_history_bulk.go",
+    "burpsy-go/internal/web/ui2_intercept_actions.go",
+    "burpsy-go/internal/web/ui2_intruder_payloads.go",
+    "burpsy-go/internal/web/ui2_intruder_results.go",
+    "burpsy-go/internal/web/ui2_logger.go",
+    "burpsy-go/internal/web/ui2_organizer_add.go",
+    "burpsy-go/internal/web/ui2_pages.go",
+    "burpsy-go/internal/web/ui2_scanner_config.go",
+    "burpsy-go/internal/web/ui2_search.go",
+    "burpsy-go/internal/web/ui2_sequencer_capture_test.go",
+    "burpsy-go/internal/web/ui2_sitemap.go",
+    "burpsy-go/internal/web/ui2_ws.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d1/9807950058/0/metadata.json",
+      "transcript": "/d1/9807950058/0/full.jsonl",
+      "compact_transcript": "/d1/9807950058/0/transcript.jsonl",
+      "content_hash": "/d1/9807950058/0/content_hash.txt",
+      "prompt": "/d1/9807950058/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 512050,
+    "cache_read_tokens": 12299055,
+    "output_tokens": 15574,
+    "api_call_count": 27,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  },
+  "redaction": {
+    "replacements": 189,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 7,
+      "credentialed_uri": 12,
+      "entropy": 106,
+      "key_context": 50,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
