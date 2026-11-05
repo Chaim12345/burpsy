@@ -1,0 +1,43 @@
+<div id="rows">
+<h3>Project</h3>
+{{if .error}}<p class="meta" role="alert"><strong>{{.error}}</strong></p>{{end}}
+{{if .done}}<p class="meta" id="project-note">{{.done}}</p>{{end}}
+{{with .backup}}<p class="meta" id="project-note">Project copy written to <span class="brk">{{.path}}</span> ({{.bytes}} bytes; kept {{.kept}}, pruned {{.pruned}}).{{if .warning}} Note: {{.warning}}{{end}}</p>{{end}}
+{{with .switched}}<p class="meta" id="project-note">Switched to project "{{.name}}" at <span class="brk">{{.database}}</span>. Background tasks were paused for the switch; resume them from the dashboard.{{if .restore_error}} <strong>The restore was partial: {{.restore_error}}</strong>{{end}}</p>{{end}}
+{{with .project}}
+<p>Project file: {{if .Persisted}}<code class="brk">{{.Database}}</code>{{else}}<span class="meta">{{.DatabaseNote}}</span>{{end}}</p>
+<p>Name: <strong>{{.Name}}</strong>{{if .Unnamed}} <span class="meta">(never named)</span>{{end}}</p>
+{{if .Persisted}}
+<form hx-post="/ui2/shell/project/rename" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/rename">
+<label>Rename project <input type="text" name="name" value="{{if not .Unnamed}}{{.Name}}{{end}}" required></label>
+<button type="submit">Rename</button>
+<span class="meta">The name is stored in the project database and survives a restart.</span>
+</form>
+{{end}}
+{{if .Backupable}}
+<form hx-post="/ui2/shell/project/backup-confirm" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/backup-confirm">
+<button type="submit">Save copy…</button>
+<span class="meta">Writes a complete snapshot of this project to a new database file; you review it first.</span>
+</form>
+{{end}}
+{{end}}
+<h3>Open or create project</h3>
+{{if .projects_error}}<p class="meta">Project list unavailable: {{.projects_error}}</p>{{end}}
+{{with .projects}}
+{{if .note}}<p class="meta">{{.note}}</p>{{end}}
+{{if .project_dir}}<p class="meta">Project files in <code class="brk">{{.project_dir}}</code>:</p>{{end}}
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">File</th><th scope="col">Action</th></tr></thead>
+<tbody>
+{{range .projects}}<tr><td>{{.name}}{{if not .named}} <span class="meta">(file name)</span>{{end}}</td><td class="brk">{{.path}}</td>
+<td>{{if .active}}<span class="badge">open</span>{{else}}<form hx-post="/ui2/shell/project/open-confirm" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/open-confirm"><input type="hidden" name="path" value="{{.path}}"><button type="submit">Open…</button></form>{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No project files listed.</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+<form hx-post="/ui2/shell/project/open-confirm" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/project/open-confirm">
+<p><label>Open or create by path <input type="text" name="path" placeholder="engagement-2.db" required></label>
+<button type="submit">Review switch…</button></p>
+<p class="meta">A relative path resolves next to the current project; a missing file is created.</p>
+</form>
+</div>

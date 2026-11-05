@@ -1,0 +1,92 @@
+<fieldset id="intruder-settings" style="margin:8px 0">
+<legend>Settings</legend>
+<input type="hidden" name="settings_present" value="1">
+{{if .Loaded}}<p class="meta" role="status">Attack configuration loaded — review the form, then prepare the attack.</p>{{end}}
+{{if .RestoredPoints}}<p class="meta">Insertion points restored from the configuration:
+  {{range .RestoredPoints}}<label><input type="checkbox" name="point" value="{{.}}" checked> #{{.}}</label> {{end}}</p>{{end}}
+<p>
+  <button type="button" hx-get="/ui2/intruder/config/default" hx-target="#intruder-settings" hx-swap="outerHTML">Use default configuration</button>
+  <button type="button" hx-post="/ui2/intruder/config/save" hx-vals='{"positions":"with"}' hx-target="#intruder-config-out" hx-swap="innerHTML">Save or copy attack config…</button>
+  <button type="button" hx-post="/ui2/intruder/config/save" hx-vals='{"positions":"without"}' hx-target="#intruder-config-out" hx-swap="innerHTML">Copy config without positions</button>
+</p>
+<details open><summary>Error handling</summary>
+  <label>Retries on network failure <input type="text" inputmode="numeric" name="retries" value="{{.Retries}}" placeholder="3" size="5"></label>
+  <label>Pause before retry (ms) <input type="text" inputmode="numeric" name="retry_delay_ms" value="{{.RetryDelayMS}}" placeholder="2000" size="7"></label>
+</details>
+<details><summary>Attack results</summary>
+  <label><input type="checkbox" name="store_requests"{{if .StoreRequests}} checked{{end}}> Store requests</label>
+  <label><input type="checkbox" name="store_responses"{{if .StoreResponses}} checked{{end}}> Store responses</label>
+  <label><input type="checkbox" name="baseline"{{if .Baseline}} checked{{end}}> Make unmodified baseline request</label>
+  <label><input type="checkbox" name="set_connection_close"{{if .SetConnectionClose}} checked{{end}}> Set Connection: close</label>
+  <label><input type="checkbox" name="store_full_payloads"{{if .StorePayloads}} checked{{end}}> Store full payloads</label>
+</details>
+<details><summary>Grep - Match</summary>
+  <textarea name="grep_match_list" rows="3" style="width:100%" placeholder="one expression per line; each becomes a results column" aria-label="Grep match expressions">{{.GrepMatchList}}</textarea>
+  <label><input type="radio" name="grep_match_mode" value="simple"{{if not .GrepMatchRegex}} checked{{end}}> Simple string</label>
+  <label><input type="radio" name="grep_match_mode" value="regex"{{if .GrepMatchRegex}} checked{{end}}> Regex</label>
+  <label><input type="checkbox" name="grep_match_case"{{if .GrepMatchCase}} checked{{end}}> Case sensitive</label>
+  <label><input type="checkbox" name="grep_match_exclude_headers"{{if .GrepMatchExcludeHeaders}} checked{{end}}> Exclude HTTP headers</label>
+</details>
+<details><summary>Grep - Extract</summary>
+  <input type="text" name="grep_extract" value="{{.GrepExtract}}" style="width:100%" placeholder="regex; the first capture group becomes the Extract column" aria-label="Grep extract regex">
+  <p class="meta">Define from a response: paste the text to extract from stored response
+    <input type="text" inputmode="numeric" name="extract_response_id" value="{{if .ExtractResponseID}}{{.ExtractResponseID}}{{end}}" size="6" aria-label="Response message id"> (message id; defaults to the base exchange's response)</p>
+  <textarea name="extract_text" rows="2" style="width:100%" aria-label="Text to extract"></textarea>
+  <button type="button" hx-post="/ui2/intruder/settings/extract" hx-target="#extract-out" hx-swap="innerHTML">Build rule</button>
+  <div id="extract-out"></div>
+</details>
+<details><summary>Grep - Payloads</summary>
+  <label><input type="checkbox" name="grep_payloads_enabled"{{if .GrepPayloadsEnabled}} checked{{end}}> Search responses for payload strings</label>
+  <label><input type="checkbox" name="grep_payloads_case"{{if .GrepPayloadsCase}} checked{{end}}> Case sensitive</label>
+  <label><input type="checkbox" name="grep_payloads_exclude_headers"{{if .GrepPayloadsExcludeHeaders}} checked{{end}}> Exclude HTTP headers</label>
+  <label><input type="checkbox" name="grep_payloads_pre_encoded"{{if .GrepPayloadsPreEncoded}} checked{{end}}> Match against pre-URL-encoded payloads</label>
+</details>
+<details><summary>Capture filter</summary>
+  <label><input type="checkbox" name="capture_enabled"{{if .CaptureEnabled}} checked{{end}}> Filter what is captured</label>
+  <label><input type="checkbox" name="capture_discard_no_response"{{if .CaptureNoResponse}} checked{{end}}> Discard items without responses</label>
+  <input type="text" name="capture_term" value="{{.CaptureTerm}}" placeholder="capture by search term" aria-label="Capture term">
+  <label><input type="checkbox" name="capture_regex"{{if .CaptureRegex}} checked{{end}}> Regex</label>
+  <label><input type="checkbox" name="capture_case"{{if .CaptureCase}} checked{{end}}> Case sensitive</label>
+  <label><input type="checkbox" name="capture_negate"{{if .CaptureNegate}} checked{{end}}> Negate</label>
+  <span>Statuses:
+  {{with .CaptureStatuses}}
+  <label><input type="checkbox" name="capture_status" value="2xx"{{if index . "2xx"}} checked{{end}}> 2xx</label>
+  <label><input type="checkbox" name="capture_status" value="3xx"{{if index . "3xx"}} checked{{end}}> 3xx</label>
+  <label><input type="checkbox" name="capture_status" value="4xx"{{if index . "4xx"}} checked{{end}}> 4xx</label>
+  <label><input type="checkbox" name="capture_status" value="5xx"{{if index . "5xx"}} checked{{end}}> 5xx</label>
+  {{else}}
+  <label><input type="checkbox" name="capture_status" value="2xx"> 2xx</label>
+  <label><input type="checkbox" name="capture_status" value="3xx"> 3xx</label>
+  <label><input type="checkbox" name="capture_status" value="4xx"> 4xx</label>
+  <label><input type="checkbox" name="capture_status" value="5xx"> 5xx</label>
+  {{end}}</span>
+</details>
+<details><summary>Auto-pause</summary>
+  <label><input type="checkbox" name="auto_pause_enabled"{{if .AutoPauseEnabled}} checked{{end}}> Pause the attack when</label>
+  <select name="auto_pause_mode" aria-label="Auto-pause condition">
+    <option value="appears"{{if not .AutoPauseMissing}} selected{{end}}>an expression appears</option>
+    <option value="missing"{{if .AutoPauseMissing}} selected{{end}}>no expression appears</option>
+  </select>
+  <textarea name="auto_pause_expressions" rows="2" style="width:100%" placeholder="one expression per line" aria-label="Auto-pause expressions">{{.AutoPauseExpressions}}</textarea>
+  <label><input type="checkbox" name="auto_pause_simple"{{if .AutoPauseSimple}} checked{{end}}> Simple strings (unticked: regex)</label>
+  <label><input type="checkbox" name="auto_pause_case"{{if .AutoPauseCase}} checked{{end}}> Case sensitive</label>
+</details>
+<details><summary>Connections and redirections</summary>
+  <label>Follow redirections
+  <select name="follow_redirects">
+    <option value=""{{if eq .FollowRedirects ""}} selected{{end}}>standing network policy</option>
+    <option value="never"{{if eq .FollowRedirects "never"}} selected{{end}}>never</option>
+    <option value="on_site"{{if eq .FollowRedirects "on_site"}} selected{{end}}>on-site only</option>
+    <option value="in_scope"{{if eq .FollowRedirects "in_scope"}} selected{{end}}>in-scope only</option>
+    <option value="always"{{if eq .FollowRedirects "always"}} selected{{end}}>always</option>
+  </select></label>
+  <label>Response timeout (ms) <input type="text" inputmode="numeric" name="response_timeout_ms" value="{{.ResponseTimeoutMS}}" placeholder="standing read timeout" size="9"></label>
+  <label>HTTP version
+  <select name="http_version">
+    <option value=""{{if eq .HTTPVersion ""}} selected{{end}}>negotiate</option>
+    <option value="http1"{{if eq .HTTPVersion "http1"}} selected{{end}}>HTTP/1.1</option>
+    <option value="http2"{{if eq .HTTPVersion "http2"}} selected{{end}}>HTTP/2</option>
+  </select></label>
+  <label><input type="checkbox" name="http1_connection_reuse"{{if .HTTP1Reuse}} checked{{end}}> HTTP/1 connection reuse</label>
+</details>
+</fieldset>

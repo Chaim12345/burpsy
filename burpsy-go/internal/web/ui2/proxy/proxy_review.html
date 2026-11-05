@@ -1,0 +1,16 @@
+{{if .wrap}}<div id="rows">{{template "proxy_subnav" ""}}<div class="pxs-review">{{end}}
+{{if .error}}<p class="meta pxs-err" role="alert"><strong>Not reviewed: {{.error}}</strong></p>{{else}}
+<p class="meta"><strong>Review before saving ({{.title}}):</strong></p>
+<details open><summary class="meta">exact call{{if .gated}} (what the confirmation token binds){{end}}</summary>
+<pre class="brk" style="margin:0 14px">{{.projection}}</pre>
+</details>
+{{range .consequences}}<p class="meta">{{.}}</p>{{end}}
+{{if .snapshotted}}<p class="meta">Not atomic: the current state is re-read when you confirm and the save is refused if it changed since this review; a change landing inside that instant is not locked out.</p>{{end}}
+<form method="post" action="/ui2/proxy/{{.area}}/run" hx-post="/ui2/proxy/{{.area}}/run" hx-target="#rows" hx-swap="outerHTML" style="padding:0 14px">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">Confirm and save</button>
+</form>
+<p class="meta">To change something, edit the form and review again; this pending review expires on its own.</p>
+{{end}}
+{{if .wrap}}</div></div>{{end}}

@@ -1,0 +1,30 @@
+{{define "proxy_subnav"}}<style>
+.pxs-sub { display:flex; flex-wrap:wrap; gap:4px; padding:6px 14px; border-bottom:1px solid var(--line); }
+.pxs-sub a { padding:2px 8px; border-radius:6px; color:var(--fg); text-decoration:none; }
+.pxs-sub a.active { background:var(--sel); }
+.pxs-sec { padding:4px 14px 10px; }
+.pxs-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:6px 10px; align-items:end; }
+.pxs-grid label, .pxs-stack label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted); min-width:0; }
+.pxs-grid input[type=text], .pxs-grid select, .pxs-sec textarea { width:100%; min-width:0; }
+.pxs-grid label.pxs-check, .pxs-stack label.pxs-check { flex-direction:row; align-items:flex-start; gap:6px; color:var(--fg); font-size:13px; }
+.pxs-rule { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; }
+.pxs-rule.off { opacity:.7; }
+.pxs-acts { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+.pxs-ok { color:#080; } .pxs-err { color:#c00; }
+.pxs-t td, .pxs-t th { white-space:normal; overflow-wrap:anywhere; }
+.pxs-t tbody tr { cursor:default; }
+.pxs-review { border:2px solid var(--accent); border-radius:6px; margin:6px 14px; padding:4px 0; }
+.pxs-review:empty { display:none; }
+.pxs-two { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:8px; }
+</style>
+<nav class="pxs-sub" aria-label="Proxy settings">
+<a href="/ui2/proxy" class="{{if eq . "overview"}}active{{end}}">Overview</a>
+<a href="/ui2/proxy/listeners" class="{{if eq . "listeners"}}active{{end}}">Listeners</a>
+<a href="/ui2/proxy/options" class="{{if eq . "options"}}active{{end}}">Options</a>
+<a href="/ui2/proxy/match-replace" class="{{if eq . "match-replace"}}active{{end}}">Match &amp; Replace</a>
+</nav>{{end}}
+{{define "proxy_note"}}{{if .OK}}<p class="meta pxs-ok" role="status">{{.OK}}</p>{{end}}{{if .Error}}<p class="meta pxs-err" role="alert"><strong>Not saved: {{.Error}}</strong></p>{{end}}{{end}}
+{{define "proxy_counters"}}{{if .}}<table class="pxs-t">
+<thead><tr><th scope="col">Outcome</th><th scope="col">Count</th><th scope="col">Meaning</th></tr></thead>
+<tbody>{{range .}}<tr><td>{{.Label}}</td><td><span class="badge">{{.Value}}</span></td><td class="meta">{{.Detail}}</td></tr>{{end}}</tbody>
+</table>{{else}}<p class="meta">No outcome counters: no proxy option set is attached.</p>{{end}}{{end}}

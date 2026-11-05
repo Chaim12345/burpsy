@@ -1,0 +1,49 @@
+<div id="rows" class="issues-consolidation" style="padding:6px 14px; max-width:900px">
+<h2>Issue consolidation</h2>
+<p class="meta">What happens when a scan reports an issue that is already reported at the same place. A change applies to issues reported after it; a merge already made is not undone. <a href="/ui2/issues">back to issues</a></p>
+{{if .Error}}<p class="meta" role="alert"><strong>Not saved: {{.Error}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status"><strong>{{.Done}}</strong></p>{{end}}
+<form method="post" action="/ui2/issues/consolidation/confirm" hx-post="/ui2/issues/consolidation/confirm" hx-target="#rows" hx-swap="outerHTML">
+  <p><label>For every issue type
+    <select name="default" aria-label="Default consolidation action">
+      {{range .Actions}}<option value="{{.Value}}"{{if eq .Value $.View.Default}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select></label></p>
+  <ul class="meta">{{range .Actions}}<li><strong>{{.Label}}</strong>: {{.Hint}}</li>{{end}}</ul>
+  <h3>Exceptions by issue type</h3>
+  <table>
+    <thead><tr><th scope="col">Issue type</th><th scope="col">Action</th></tr></thead>
+    <tbody>
+    {{range .Rows}}
+    <tr>
+      <td title="{{.Name}}">{{.Name}}<input type="hidden" name="row_name" value="{{.Name}}">{{if .NeverMerge}}<span class="meta"> - never merged, so this has no effect</span>{{end}}</td>
+      <td><select name="row_action" aria-label="Action for {{.Name}}">
+        {{$cur := .Action}}{{range $.Actions}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Label}}</option>{{end}}
+        <option value="remove">Remove this exception</option>
+      </select></td>
+    </tr>
+    {{else}}
+    <tr><td colspan="2" class="meta">No exceptions: every issue type uses the action above.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  <p><label>Exception for issue type <input type="text" name="new_name" list="consolidation-issue-names" placeholder="e.g. Strict transport security not enforced" aria-label="New exception issue type"></label>
+    <select name="new_action" aria-label="Action for the new exception">
+      {{range .Actions}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+    </select></p>
+  <datalist id="consolidation-issue-names">{{range .IssueNames}}<option value="{{.}}"></option>{{end}}</datalist>
+  <button type="submit">Review and save policy…</button>
+</form>
+<h3>What consolidation has done</h3>
+{{if gt .View.Tally.Collisions 0}}
+<p class="meta">{{.View.Tally.Collisions}} duplicate report(s) this session: {{.View.Tally.Merged}} merged, {{.View.Tally.KeptBoth}} kept as separate issues, {{.View.Tally.Replaced}} replaced the issue they duplicated.</p>
+<table>
+  <thead><tr><th scope="col">Run</th><th scope="col">Duplicates</th><th scope="col">Merged</th><th scope="col">Kept both</th><th scope="col">Replaced</th></tr></thead>
+  <tbody>
+  {{range .View.ByTask}}<tr><td>{{if eq .TaskID 0}}untracked (proxy, imports){{else}}task {{.TaskID}}{{end}}</td><td>{{.Collisions}}</td><td>{{.Merged}}</td><td>{{.KeptBoth}}</td><td>{{.Replaced}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{else}}
+<p class="meta">No duplicate has been reported this session, so nothing has been consolidated yet.</p>
+{{end}}
+{{if .View.NeverMerge}}<p class="meta">Never merged, whatever the action: {{range $i, $n := .View.NeverMerge}}{{if $i}}, {{end}}{{$n}}{{end}}.</p>{{end}}
+</div>

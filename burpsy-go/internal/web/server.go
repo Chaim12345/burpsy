@@ -44,8 +44,14 @@ type Server struct {
 	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
 	serverCerts *servercerts.Store
 	store       *core.TrafficStore
-	scope       *core.Scope
-	logger      *zap.Logger
+	// exchangeSnapshots counts full-history ExchangeBriefs snapshots built for finding
+	// resolution; tests assert expensive paths skip it when there is nothing to resolve.
+	exchangeSnapshots atomic.Int64
+	// exchangeSnapshotBriefs counts briefs copied across those snapshots: the targeted
+	// snapshot must stay proportional to referenced exchanges, not to history size.
+	exchangeSnapshotBriefs atomic.Int64
+	scope                  *core.Scope
+	logger                 *zap.Logger
 	// proxyBind and webBind are the -proxy and -web flag values the binary was
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
@@ -57,6 +63,10 @@ type Server struct {
 	reissue browserReissueTokens
 	// domEngine is the -dom flag value, reported by /api/stats. Empty means no engine was named.
 	domEngine string
+	// domSwitch is the DOM engine the scanners hold, settable at runtime (PUT /api/scanner/dom);
+	// domBuild turns a -dom value into an engine for it. Both nil when the process wired none.
+	domSwitch *scanner.SwitchableBrowsers
+	domBuild  DOMEngineBuilder
 	// tlsInterception reports whether the server is configured for TLS
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
@@ -82,7 +92,88 @@ type Server struct {
 	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
 	// /confirm suffix and so the patterns do not enter the route manifest's remit.
 	confirmMux http.Handler
-	sender     *sender.Sender
+	// ui2NewScanReviews holds the New-scan page's API-scan and recorded-login calls a ui2
+	// operator has reviewed but not yet confirmed (ui2_newscan.go): single-use, capped at
+	// ui2NewScanReviewCap, expiring with ConfirmTTL.
+	ui2NewScanReviews sync.Map
+	// ui2Mints holds the collaborator mint calls a ui2 operator has reviewed but not yet confirmed
+	// (ui2_attack_pages.go, handleUI2CollaboratorMint): the confirm form carries only the id, so
+	// ui2Mints holds the Collaborator calls (mint, health check, server set/unset) a ui2 operator
+	// has reviewed but not yet confirmed (ui2_collaborator.go, bounded by ui2MintCap): the confirm
+	// form carries only the id, so
+	// the call that runs is the call the preview showed, not whatever fields a re-submitted form
+	// happens to carry. A sync.Map because LoadAndDelete makes single-use atomic, and the zero
+	// value is ready — a Server built by struct literal in a test has a working store.
+	ui2Mints sync.Map
+	// ui2TriageReviews holds the minted triage-settings PUT bodies a ui2 operator has reviewed
+	// but not yet confirmed (the gate's own store is digest-only, so the bytes live here for the
+	// review sheet and the verbatim dispatch). Same single-use LoadAndDelete semantics as
+	// ui2Mints, bounded by ui2TriageReviewCap, expiring with ConfirmTTL.
+	ui2TriageReviews     sync.Map
+	ui2CollectionReviews sync.Map
+	ui2WorkflowReviews   sync.Map
+	ui2AnnotateReviews   sync.Map
+	ui2ItemReviews       sync.Map
+	ui2OrgAddReviews     sync.Map
+	// ui2SessionRuleReviews holds the minted session-rule calls (add/toggle/edit/remove) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim. Same single-use LoadAndDelete semantics as ui2TriageReviews, bounded
+	// by ui2SessionRuleReviewCap, expiring with ConfirmTTL.
+	ui2SessionRuleReviews sync.Map
+	// ui2InterceptRuleReviews holds reviewed-but-unconfirmed intercept rule-list PUTs (the exact
+	// body plus the list snapshot it was built from); single-use, capped, ConfirmTTL.
+	ui2InterceptRuleReviews sync.Map
+	// ui2SessionDrafts holds the ui2 rule editor's server-side drafts (*ui2SessionDraft): the
+	// rule being edited lives here, so stored credentials never round-trip through a form.
+	ui2SessionDrafts sync.Map
+	// ui2SessionCalls holds the minted session tool calls (test, analyze, login, cookie writes,
+	// prompt resolution, ...) a ui2 operator has reviewed but not yet confirmed.
+	ui2SessionCalls sync.Map
+	// ui2SettingsWriteReviews holds the minted settings write calls (TLS passthrough, upstream
+	// proxy rules and default, backup config, pools) a ui2 operator has reviewed but not yet
+	// confirmed: the exact method, path, query and bytes the run step dispatches verbatim, plus
+	// the drift snapshot for whole-document writes. Same single-use LoadAndDelete semantics as
+	// ui2TriageReviews, bounded by ui2SettingsWriteReviewCap, expiring with ConfirmTTL.
+	ui2SettingsWriteReviews sync.Map
+	// ui2HistoryScopeReviews holds the History bulk add-hosts-to-scope reviews: one minted gate
+	// token per host, held server-side and spent once (ui2_history_bulk.go).
+	ui2HistoryScopeReviews sync.Map
+	// ui2ReflectReviews holds reviewed gRPC reflection fetches (ui2_message_views.go): capped,
+	// single-use, expiring with ConfirmTTL.
+	ui2ReflectReviews sync.Map
+	sender            *sender.Sender
+
+	// ui2ProxyReviews holds the reviewed proxy-settings writes (listeners, options, match &
+	// replace; ui2_proxy_settings.go): single-use, capped by ui2ProxyReviewCap, ConfirmTTL.
+	ui2ProxyReviews sync.Map
+
+	// ui2SitemapReviews holds the site-map writes (delete, passive sweep, branch crawl) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim. Single-use LoadAndDelete, bounded by ui2SitemapReviewCap, ConfirmTTL.
+	ui2SitemapReviews sync.Map
+	// ui2IssueReviews holds the ungated issue, consolidation and audit-queue calls a ui2 operator
+	// has reviewed but not yet confirmed (ui2_issues.go): exact bytes, single-use, bounded by
+	// ui2IssueReviewCap, expiring with ConfirmTTL.
+	ui2IssueReviews sync.Map
+	// ui2ScannerReviews holds the scanner-page calls (live audit, secret detection, scan
+	// configuration library) a ui2 operator has reviewed but not yet confirmed; same single-use
+	// LoadAndDelete semantics, bounded by ui2ScanReviewCap, expiring with ConfirmTTL.
+	ui2ScannerReviews sync.Map
+	// ui2BCheckReviews holds the custom scan check calls (save/import, delete, test run) a ui2
+	// operator has reviewed but not yet confirmed: the exact method, path and bytes the run step
+	// dispatches verbatim (ui2_bcheck.go), single-use, bounded by ui2BCheckReviewCap.
+	ui2BCheckReviews sync.Map
+	// ui2HeldCalls holds the content-discovery and DOM-auditor writes a ui2 operator has reviewed
+	// but not yet confirmed (ui2_discovery.go): the exact method, path and bytes the run step
+	// dispatches verbatim. Single-use (LoadAndDelete), capped at 8, expiring with ConfirmTTL.
+	ui2HeldCalls sync.Map
+	// ui2IntruderReports holds the RunViews of attacks the ui2 run step launched, keyed by task id
+	// (ui2_intruder_results.go): /api/intruder/run keeps nothing once it answers, and the results
+	// page, exports and row actions read the report from here. Bounded by ui2IntruderKeptCap.
+	ui2IntruderReports sync.Map
+	// ui2SequencerSettingsReviews holds the reviewed PUT /api/sequencer/settings bodies a ui2
+	// operator has not yet confirmed (ui2_sequencer.go): single-use, expiring with ConfirmTTL.
+	ui2SequencerSettingsReviews sync.Map
 	// scanner is the active scanner, read only through wiredScanner and activeScanner
 	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
 	// builds it lazily from inside request handlers while other handlers read it concurrently; a
@@ -113,6 +204,9 @@ type Server struct {
 	repeaterH2         *sender.H2Sessions
 	repeaterH2Once     sync.Once
 	sessionCoordinator *session.Coordinator
+	// scopeHookInstalled makes the scope-watch install in followLive one-time: the scope keeps
+	// a handler list, not a single slot, and followLive re-runs on every With*.
+	scopeHookInstalled bool
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
 	// seam, and the answer arrives here from the console's modal. Constructed in NewServer like
@@ -142,6 +236,10 @@ type Server struct {
 	domInvader *dominvader.Store
 	// authz holds the project's access-control test identities (burpsy-react-ui-cr37).
 	authz authzState
+	// ui2AuthzReviews holds reviewed-but-unconfirmed identity saves for /ui2/authz (the full PUT
+	// body, credentials included, so they never round-trip through the form). Single-use via
+	// LoadAndDelete, bounded by ui2AuthzReviewCap, expiring with ConfirmTTL.
+	ui2AuthzReviews sync.Map
 	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
 	// launch rewrites it so the temp area does not accumulate one per launch.
 	domExtDir string
@@ -246,6 +344,8 @@ type Server struct {
 	// rather than the bytes this process started with — an operator who imports a CA and then
 	// downloads the certificate must receive the one that is actually signing.
 	tlsEngine *proxy.TlsEngine
+	// caMu guards tlsEngine, which the interception switch (PUT /api/proxy/interception) sets at runtime.
+	caMu sync.RWMutex
 	// caDir is where an imported CA is persisted, so it survives a restart. Empty means the
 	// import endpoint installs the CA for this process only and says so.
 	caDir string
@@ -385,6 +485,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 // is not worth an unsubscribe protocol.
 func (s *Server) followLive() {
 	s.findings.OnChange(func() { s.live.notify(changeIssues) })
+	s.matchReplace.OnChange(func() { s.live.notify(changeProxy) })
 	// Installed here for the same reason as the hooks around it: it is a single slot on a store that
 	// a With* may have just replaced, so it has to follow the store rather than the constructor. It
 	// tells the finding store which catalog rows dedup per host rather than per path, knowledge that
@@ -395,6 +496,24 @@ func (s *Server) followLive() {
 	s.domInvader.OnChange(func() { s.live.notify(changeDomInvader) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
+	// Session movement the ui2 Session page renders — rule edits, jar writes and absorbs that
+	// change a jar's content, and the opt-in tracer's flips and entries — announces on the same
+	// session kind the pending-prompt registry already uses (941c6dd wired the consumer), so the
+	// open page follows every section of what it shows. Installed here, not in
+	// WithSessionCoordinator, because the hook is a single slot that must follow the store: the
+	// server's default coordinator announces too, and a With* replacement gets the hook on the
+	// new instance. Silence rules (unchanged rule PUT, no-op move, repeated identical
+	// Set-Cookie) live in internal/session/onchange.go.
+	s.sessionCoordinator.OnChange(func() { s.live.notify(changeSession) })
+	// Scope edits from any surface - this page, the React console, the API - announce on their
+	// own kind so the open Scope page follows them. The core watcher fires after the scope's
+	// locks and filters edits that change nothing. Installed once: unlike the single-slot
+	// hooks above, the scope keeps a handler LIST, and followLive re-runs on every With*, so an
+	// unguarded install would stack a duplicate notification per replacement.
+	if s.scope != nil && !s.scopeHookInstalled {
+		s.scopeHookInstalled = true
+		s.scope.OnChange(func(core.ScopeChange) { s.live.notify(changeScope) })
+	}
 }
 
 // WithLogger sets the logger.
@@ -514,6 +633,11 @@ func (s *Server) WithFindings(fs *core.FindingStore) *Server {
 // attached rather than pretending to manage one.
 func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 	s.tlsPolicy = policy
+	if policy != nil {
+		// The policy announces its own passthrough-list movement (an add, a removal, an
+		// auto-add after a failed negotiation); the console's part is only to carry it.
+		policy.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -523,6 +647,12 @@ func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 // would do nothing — the same honesty WithTlsPolicy's nil state holds.
 func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 	s.proxyOptions = options
+	if options != nil {
+		// The option set announces its own movement (a flipped flag, a moved counter); the
+		// console's part is only to carry it. Single slot on the Options side, so a replaced
+		// set needs this re-run - the same follow-the-store rule followLive documents.
+		options.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -531,6 +661,15 @@ func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 // listener is attached rather than an address nothing serves.
 func (s *Server) WithProxyServer(server *proxy.Server) *Server {
 	s.proxyServer = server
+	if server != nil {
+		// Listener movement (add, remove, rebind, a spec-changing update) announces on the
+		// same proxy kind as the option panel: the Proxy page is one view over both.
+		server.OnListenersChange(func() { s.live.notify(changeProxy) })
+		// The store's OnWsChange announces captured frames; a socket's open and close are not
+		// frames, so without this the WS view's live refresh never saw a connection leave the
+		// live registry and its Live cell went stale the moment the socket closed.
+		server.OnWsLiveChange(func() { s.live.notify(changeWS) })
+	}
 	return s
 }
 
@@ -559,16 +698,26 @@ func (s *Server) WithLiveAudit(la *LiveAuditState) *Server {
 // /ca.crt from the PEM it was given and refuses imports, which is the correct behaviour when TLS
 // interception is off.
 func (s *Server) WithTLSEngine(engine *proxy.TlsEngine, caDir string) *Server {
+	s.caMu.Lock()
 	s.tlsEngine = engine
+	s.caMu.Unlock()
 	s.caDir = caDir
 	return s
+}
+
+// caEngine is the CA engine, read under caMu: PUT /api/proxy/interception creates it at runtime when the
+// process started without -intercept-tls, so a handler must not read the field while the switch writes it.
+func (s *Server) caEngine() *proxy.TlsEngine {
+	s.caMu.RLock()
+	defer s.caMu.RUnlock()
+	return s.tlsEngine
 }
 
 // currentCACertPEM is the CA to serve at /ca.crt: the engine's, when there is one, because it may
 // have been replaced since startup. Falls back to the PEM passed at construction.
 func (s *Server) currentCACertPEM() []byte {
-	if s.tlsEngine != nil {
-		if live := s.tlsEngine.CertPEM(); len(live) > 0 {
+	if engine := s.caEngine(); engine != nil {
+		if live := engine.CertPEM(); len(live) > 0 {
 			return live
 		}
 	}
@@ -973,6 +1122,7 @@ func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	sc.AttachAbsorptionSource(session.SourceIntruder)
 	sc.AttachAbsorptionSource(session.SourceScanner)
 	s.installSuiteScopePredicate()
+	s.followLive()
 	// A rule's "Invoke an extension" action is wired here, beside the scope predicate and for the
 	// same reason: the seam has match sites inside internal/session where no host is in reach, and a
 	// rule that named an extension must not be reachable from one call path and refused from
@@ -1018,6 +1168,11 @@ func (s *Server) installSuiteScopePredicate() {
 // WithMatchReplace sets the match/replace rule set.
 func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
 	s.matchReplace = mr
+	if mr != nil {
+		// The rule set announces its own movement (a rule added, a replacement set that
+		// differs); single slot on its side, so a replaced set needs this re-run.
+		mr.OnChange(func() { s.live.notify(changeProxy) })
+	}
 	return s
 }
 
@@ -1275,6 +1430,8 @@ func (s *Server) setupRoutes() {
 	// Intercept (condition lists + held queue)
 	s.route("/api/intercept", s.handleIntercept)
 	s.route("/api/proxy/passthrough", s.handleTlsPassthrough)
+	s.route("/api/proxy/interception", s.handleInterception)
+	s.route("/api/scanner/dom", s.handleDOMEngine)
 	s.route("/api/proxy/options", s.handleProxyOptions)
 	s.route("/api/proxy/listener", s.handleProxyListener)
 
@@ -1422,6 +1579,200 @@ func (s *Server) setupRoutes() {
 
 	// Scanner report export: /api/report/{json|sarif|html}
 	s.route("/api/report/{rest...}", s.handleReport)
+	// The /ui2/ console: server-rendered HTML + vendored htmx, served beside the SPA.
+	// Registered before the "/" catch-all so ServeMux's longest-match picks them; every
+	// pattern is a literal so the route-manifest AST walk covers them.
+	s.route("/ui2/", s.handleUI2)
+	s.route("/ui2/history", s.handleUI2History)
+	s.route("/ui2/history/{id}", s.handleUI2HistoryDetail)
+	s.route("/ui2/exchange/{id}", s.handleUI2ExchangePage)
+	s.route("/ui2/exchange/{id}/menu", s.handleUI2ExchangeMenu)
+	s.route("/ui2/exchange/{id}/{action}", s.handleUI2ExchangeAction)
+	s.route("/ui2/history/export.csv", s.handleUI2HistoryExport)
+	s.route("/ui2/history/import", s.handleUI2HistoryImport)
+	s.route("/ui2/history/goto", s.handleUI2HistoryGoto)
+	s.route("/ui2/history/compare", s.handleUI2HistoryCompare)
+	s.route("/ui2/history/bulk/{action}", s.handleUI2HistoryBulk)
+	s.route("/ui2/history/extractors", s.handleUI2HistoryExtractors)
+	s.route("/ui2/history/extractors/{action}", s.handleUI2HistoryExtractorsAction)
+	s.route("/ui2/message/render/{id}", s.handleUI2MessageRender)
+	s.route("/ui2/message/protobuf/{id}/{action}", s.handleUI2MessageProtobuf)
+	s.route("/ui2/issues", s.handleUI2Issues)
+	s.route("/ui2/issues/{id}", s.handleUI2IssueDetail)
+	s.route("/ui2/issues/action/{step}", s.handleUI2IssueAction)
+	s.route("/ui2/issues/consolidation", s.handleUI2IssueConsolidation)
+	s.route("/ui2/issues/consolidation/{step}", s.handleUI2IssueConsolidationAction)
+	s.route("/ui2/issues/report", s.handleUI2IssueReport)
+	s.route("/ui2/auditqueue", s.handleUI2AuditQueue)
+	s.route("/ui2/auditqueue/item/{id}", s.handleUI2AuditQueueItem)
+	s.route("/ui2/auditqueue/action/{step}", s.handleUI2AuditQueueAction)
+	s.route("/ui2/advisories/{typeIndex}", s.handleUI2AdvisoryDetail)
+	s.route("/ui2/htmx.min.js", serveUI2Asset)
+	s.route("/ui2/sse.min.js", serveUI2Asset)
+	s.route("/ui2/app.js", serveUI2Asset)
+	s.route("/ui2/dashboard", s.handleUI2Dashboard)
+	s.route("/ui2/dashboard/task/{id}", s.handleUI2DashboardTask)
+	s.route("/ui2/dashboard/task/{id}/{action}", s.handleUI2DashboardTaskAction)
+	s.route("/ui2/dashboard/tasks/{action}", s.handleUI2DashboardTasksAll)
+	s.route("/ui2/dashboard/live/{action}", s.handleUI2DashboardLive)
+	s.route("/ui2/dashboard/events/{action}", s.handleUI2DashboardEvents)
+	s.route("/ui2/sitemap", s.handleUI2Sitemap)
+	s.route("/ui2/sitemap/scope/{action}", s.handleUI2SitemapScope)
+	s.route("/ui2/sitemap/repeater", s.handleUI2SitemapRepeater)
+	s.route("/ui2/sitemap/children", s.handleUI2SitemapChildren)
+	s.route("/ui2/sitemap/detail", s.handleUI2SitemapDetail)
+	s.route("/ui2/sitemap/message", s.handleUI2SitemapMessage)
+	s.route("/ui2/sitemap/export", s.handleUI2SitemapExport)
+	s.route("/ui2/sitemap/review/{action}", s.handleUI2SitemapReview)
+	s.route("/ui2/scope", s.handleUI2Scope)
+	s.route("/ui2/scope/confirm", s.handleUI2ScopeConfirm)
+	s.route("/ui2/scope/run", s.handleUI2ScopeRun)
+	s.route("/ui2/intercept", s.handleUI2Intercept)
+	s.route("/ui2/intercept/{action}", s.handleUI2InterceptAction)
+	s.route("/ui2/intercept/rules", s.handleUI2InterceptRules)
+	s.route("/ui2/intercept/rules/{action}", s.handleUI2InterceptRulesAction)
+	s.route("/ui2/intercept/send", s.handleUI2InterceptSend)
+	s.route("/ui2/logger", s.handleUI2Logger)
+	s.route("/ui2/logger/{action}", s.handleUI2LoggerAction)
+	s.route("/ui2/logger/entry/{id}", s.handleUI2LoggerEntry)
+	s.route("/ui2/logger/export", s.handleUI2LoggerExport)
+	s.route("/ui2/ws", s.handleUI2WS)
+	s.route("/ui2/ws/frame/{id}", s.handleUI2WSFrame)
+	s.route("/ui2/ws/handshake/{id}", s.handleUI2WSHandshake)
+	s.route("/ui2/proxy", s.handleUI2Proxy)
+	s.route("/ui2/proxy/listeners", s.handleUI2ProxyListeners)
+	s.route("/ui2/proxy/listeners/{action}", s.handleUI2ProxyListenersAction)
+	s.route("/ui2/proxy/options", s.handleUI2ProxyOptions)
+	s.route("/ui2/proxy/options/{action}", s.handleUI2ProxyOptionsAction)
+	s.route("/ui2/proxy/history-logging", s.handleUI2ProxyHistoryLogging)
+	s.route("/ui2/proxy/match-replace", s.handleUI2MatchReplace)
+	s.route("/ui2/proxy/match-replace/{action}", s.handleUI2MatchReplaceAction)
+	s.route("/ui2/extensions", s.handleUI2Extensions)
+	s.route("/ui2/extensions/options", s.handleUI2ExtensionsOptions)
+	s.route("/ui2/extensions/apis", s.handleUI2ExtensionsAPIs)
+	s.route("/ui2/extensions/plugin", s.handleUI2ExtensionsPlugin)
+	s.route("/ui2/extensions/console", s.handleUI2ExtensionsConsole)
+	s.route("/ui2/extensions/confirm", s.handleUI2ExtensionsConfirm)
+	s.route("/ui2/extensions/run", s.handleUI2ExtensionsRun)
+	s.route("/ui2/scanner", s.handleUI2Scanner)
+	s.route("/ui2/scanner/launch", s.handleUI2ScannerLaunch)
+	s.route("/ui2/scanner/run", s.handleUI2ScannerRun)
+	s.route("/ui2/scanner/crawl-launch", s.handleUI2ScannerCrawlLaunch)
+	s.route("/ui2/scanner/crawl-run", s.handleUI2ScannerCrawlRun)
+	s.route("/ui2/scanner/crawl-watch", s.handleUI2ScannerCrawlWatch)
+	s.route("/ui2/newscan", s.handleUI2NewScan)
+	s.route("/ui2/newscan/{kind}/{action}", s.handleUI2NewScanAction)
+	s.route("/ui2/scanner/config-confirm", s.handleUI2ScannerConfigConfirm)
+	s.route("/ui2/scanner/config-run", s.handleUI2ScannerConfigRun)
+	s.route("/ui2/scanner/config", s.handleUI2ScannerConfig)
+	s.route("/ui2/scanner/live", s.handleUI2ScannerLive)
+	s.route("/ui2/scanner/library", s.handleUI2ScannerLibrary)
+	s.route("/ui2/scanner/review", s.handleUI2ScannerReview)
+	s.route("/ui2/scanner/review-run", s.handleUI2ScannerReviewRun)
+	s.route("/ui2/advisories", s.handleUI2Advisories)
+	s.route("/ui2/organizer", s.handleUI2Organizer)
+	s.route("/ui2/organizer/collections/{action}", s.handleUI2OrganizerCollections)
+	s.route("/ui2/organizer/status/{action}", s.handleUI2OrganizerStatus)
+	s.route("/ui2/organizer/annotate/{action}", s.handleUI2OrganizerAnnotate)
+	s.route("/ui2/organizer/items/{action}", s.handleUI2OrganizerItems)
+	s.route("/ui2/organizer/add/{action}", s.handleUI2OrganizerAdd)
+	s.route("/ui2/organizer/export.csv", s.handleUI2OrganizerExport)
+	s.route("/ui2/session", s.handleUI2Session)
+	s.route("/ui2/session/rules/{action}", s.handleUI2SessionRules)
+	s.route("/ui2/session/editor", s.handleUI2SessionEditorPage)
+	s.route("/ui2/session/editor/{action}", s.handleUI2SessionEditor)
+	s.route("/ui2/session/call/{action}", s.handleUI2SessionCall)
+	s.route("/ui2/session/prompts", s.handleUI2SessionPrompts)
+	s.route("/ui2/decoder", s.handleUI2Decoder)
+	s.route("/ui2/decoder/run", s.handleUI2DecoderRun)
+	s.route("/ui2/comparer", s.handleUI2Comparer)
+	s.route("/ui2/comparer/run", s.handleUI2ComparerRun)
+	s.route("/ui2/repeater", s.handleUI2Repeater)
+	s.route("/ui2/repeater/send", s.handleUI2RepeaterSend)
+	s.route("/ui2/repeater/send-group", s.handleUI2RepeaterSendGroup)
+	s.route("/ui2/repeater/tabs/{action}", s.handleUI2RepeaterTabs)
+	s.route("/ui2/repeater/ws", s.handleUI2RepeaterWS)
+	s.route("/ui2/repeater/ws/send", s.handleUI2RepeaterWSSend)
+	s.route("/ui2/repeater/h2", s.handleUI2RepeaterH2)
+	s.route("/ui2/repeater/h2/preview", s.handleUI2RepeaterH2Preview)
+	s.route("/ui2/repeater/h2/send", s.handleUI2RepeaterH2Send)
+	s.route("/ui2/repeater/graphql", s.handleUI2RepeaterGraphQL)
+	s.route("/ui2/repeater/graphql/validate", s.handleUI2RepeaterGraphQLValidate)
+	s.route("/ui2/repeater/graphql/query", s.handleUI2RepeaterGraphQLQuery)
+	s.route("/ui2/repeater/graphql/send", s.handleUI2RepeaterGraphQLSend)
+	s.route("/ui2/repeater/graphql/sitemap-confirm", s.handleUI2RepeaterGraphQLSitemapConfirm)
+	s.route("/ui2/repeater/graphql/sitemap-run", s.handleUI2RepeaterGraphQLSitemapRun)
+	s.route("/ui2/settings", s.handleUI2Settings)
+	s.route("/ui2/intruder", s.handleUI2Intruder)
+	s.route("/ui2/intruder/points", s.handleUI2IntruderPoints)
+	s.route("/ui2/intruder/confirm", s.handleUI2IntruderConfirm)
+	s.route("/ui2/intruder/run", s.handleUI2IntruderRun)
+	s.route("/ui2/intruder/payloads", s.handleUI2IntruderPayloads)
+	s.route("/ui2/intruder/payloads/upload", s.handleUI2IntruderPayloadUpload)
+	s.route("/ui2/intruder/{id}/results", s.handleUI2IntruderResults)
+	s.route("/ui2/intruder/{id}/{action}", s.handleUI2IntruderControl)
+	s.route("/ui2/intruder/{id}/item/{ordinal}", s.handleUI2IntruderItem)
+	s.route("/ui2/intruder/{id}/item/{ordinal}/repeater", s.handleUI2IntruderItemRepeater)
+	s.route("/ui2/intruder/{id}/compare", s.handleUI2IntruderCompare)
+	s.route("/ui2/intruder/{id}/export", s.handleUI2IntruderExport)
+	s.route("/ui2/intruder/{id}/comment", s.handleUI2IntruderComment)
+	s.route("/ui2/intruder/{id}/again/{step}", s.handleUI2IntruderAgain)
+	s.route("/ui2/intruder/config/save", s.handleUI2IntruderConfigSave)
+	s.route("/ui2/intruder/config/load", s.handleUI2IntruderConfigLoad)
+	s.route("/ui2/intruder/config/default", s.handleUI2IntruderDefaultSettings)
+	s.route("/ui2/intruder/settings/extract", s.handleUI2IntruderExtract)
+	s.route("/ui2/sequencer", s.handleUI2Sequencer)
+	s.route("/ui2/sequencer/analyse", s.handleUI2SequencerAnalyse)
+	s.route("/ui2/sequencer/capture/{action}", s.handleUI2SequencerCapture)
+	s.route("/ui2/sequencer/settings/{action}", s.handleUI2SequencerSettings)
+	s.route("/ui2/sequencer/tokens/{id}", s.handleUI2SequencerTokens)
+	s.route("/ui2/settings/triage/{action}", s.handleUI2SettingsTriage)
+	s.route("/ui2/settings/write/{area}", s.handleUI2SettingsWriteFragment)
+	s.route("/ui2/settings/write/{area}/{action}", s.handleUI2SettingsWrite)
+	s.route("/ui2/collaborator", s.handleUI2Collaborator)
+	s.route("/ui2/collaborator/mint", s.handleUI2CollaboratorMint)
+	s.route("/ui2/shell/status", s.handleUI2ShellStatus)
+	s.route("/ui2/shell/project", s.handleUI2ShellProject)
+	s.route("/ui2/shell/project/{action}", s.handleUI2ShellProjectAction)
+	s.route("/ui2/shell/config", s.handleUI2ShellConfig)
+	s.route("/ui2/shell/config/{action}", s.handleUI2ShellConfigAction)
+	s.route("/ui2/search", s.handleUI2Search)
+	s.route("/ui2/search/message/{id}", s.handleUI2SearchMessage)
+	s.route("/ui2/discover", s.handleUI2Discover)
+
+	// The console root: "/" is the ui2 dashboard, /legacy/ the React SPA (see handleUI).
+	s.route("/ui2/bchecks", s.handleUI2BChecks)
+	s.route("/ui2/bchecks/editor", s.handleUI2BCheckEditor)
+	s.route("/ui2/bchecks/export", s.handleUI2BCheckExport)
+	s.route("/ui2/bchecks/enable", s.handleUI2BCheckEnable)
+	s.route("/ui2/bchecks/reload", s.handleUI2BCheckReload)
+	s.route("/ui2/bchecks/validate", s.handleUI2BCheckValidate)
+	s.route("/ui2/bchecks/upload", s.handleUI2BCheckUpload)
+	s.route("/ui2/bchecks/review/{op}", s.handleUI2BCheckReview)
+	s.route("/ui2/bchecks/run", s.handleUI2BCheckRun)
+	s.route("/ui2/discovery", s.handleUI2Discovery)
+	s.route("/ui2/discovery/runs", s.handleUI2DiscoveryRuns)
+	s.route("/ui2/discovery/repeater", s.handleUI2DiscoveryRepeater)
+	s.route("/ui2/discovery/review", s.handleUI2DiscoveryReview)
+	s.route("/ui2/discovery/run", s.handleUI2DiscoveryRun)
+	s.route("/ui2/dominvader", s.handleUI2DomInvader)
+	s.route("/ui2/dominvader/review", s.handleUI2DomInvaderReview)
+	s.route("/ui2/dominvader/run", s.handleUI2DomInvaderRun)
+	s.route("/ui2/authz", s.handleUI2Authz)
+	s.route("/ui2/authz/identities/{action}", s.handleUI2AuthzIdentities)
+	s.route("/ui2/authz/test/{action}", s.handleUI2AuthzTest)
+	s.route("/ui2/authz/diff/{a}/{b}", s.handleUI2AuthzDiff)
+	s.route("/ui2/engagement/csrf", s.handleUI2EngagementCSRF)
+	s.route("/ui2/engagement/csrf/test", s.handleUI2EngagementCSRFTest)
+	s.route("/ui2/engagement/csrf/{id}/download", s.handleUI2EngagementCSRFDownload)
+	s.route("/ui2/engagement/hidden-inputs", s.handleUI2EngagementHiddenInputs)
+	s.route("/ui2/engagement/hidden-inputs/{action}", s.handleUI2EngagementHiddenInputsAction)
+	s.route("/ui2/engagement/clickbandit", s.handleUI2EngagementClickbandit)
+	s.route("/ui2/collaborator/health", s.handleUI2CollaboratorHealth)
+	s.route("/ui2/collaborator/poll", s.handleUI2CollaboratorPoll)
+	s.route("/ui2/collaborator/blindxss", s.handleUI2CollaboratorBlindXSS)
+	s.route("/ui2/collaborator/server/{action}", s.handleUI2CollaboratorServer)
+	s.route("/ui2/collaborator/interaction/{id}", s.handleUI2CollaboratorInteraction)
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
@@ -1443,11 +1794,6 @@ func (s *Server) setupRoutes() {
 	// reaches the authorisation check at all. In the other order a cross-site caller got a 428
 	// naming the route and the header to try — which tells an attacker probing the control exactly
 	// what to send next, and means a request from a hostile page got as far as asking for
-	// permission.
-	//
-	// s.registerConfirmationRoutes is called from here but lives in confirm_gate.go, because the
-	// mint patterns are DERIVED from the manifest and the route-manifest test refuses a
-	// non-literal HandleFunc argument in this file. The test is right to refuse it: a variable
 	// pattern is invisible to the manifest. The mint endpoints are not manifest routes — they are
 	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
 	// to keep them out of this file rather than to weaken the test.
@@ -1547,8 +1893,21 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	return nil
 }
 
+// handleUI is the catch-all. The console root renders the server-side ui2 dashboard with the
+// same headers every /ui2/ page carries; everything else is the React SPA's /legacy/ tree and
+// its asset paths (uiHandler).
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	// Serve the static web UI, embedded at build time.
+	if r.URL.Path == "/" || r.URL.Path == "" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		ui2SecurityHeaders(w)
+		s.handleUI2Dashboard(w, r)
+		return
+	}
 	uiHandler(w, r)
 }
 

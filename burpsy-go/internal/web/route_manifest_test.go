@@ -479,8 +479,12 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// burpsy-react-ui-gf68 it was DELETE /api/history under the read route's riskRead and passed the
 	// gate unconfirmed.
 	equal("destructive", destructive, []string{"/api/backup", "/api/browser/clear", "/api/dashboard/events", "/api/history/rows", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
-	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
-	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
-	// something new can reach exec, which is a decision to make on purpose.
-	equal("execute", execute, []string{"/api/extensions/invoke", "/api/extensions/load"})
+	// Three routes execute operator-supplied code. Two are on the Extender surface: one starts a plugin,
+	// one invokes something a running plugin registered. The third, /api/scanner/dom, is the runtime
+	// form of -dom: a PUT naming a browser binary becomes the ChromePath this process launches for the
+	// next DOM check (cmd/burpsy domEngineOptions), so an unattended caller could make burpsy run any
+	// executable on the host — the same reach as loading a plugin, and why e2cda670 classed it
+	// riskExecute. A fourth appearing here means something new can reach exec, which is a decision to
+	// make on purpose.
+	equal("execute", execute, []string{"/api/extensions/invoke", "/api/extensions/load", "/api/scanner/dom"})
 }

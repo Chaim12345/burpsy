@@ -1,0 +1,29 @@
+<div id="rows">
+{{template "extensions_tabs" "options"}}
+<p class="meta">How a plugin is admitted, and every bound this process holds it to — the values in force here, read from the running server rather than the defaults in the source.</p>
+{{if .error}}<p class="meta" role="alert"><strong>Could not read the plugin policy: {{.error}}</strong></p>{{else}}
+<h3 class="ext-sec">Admission</h3>
+<p class="meta">A plugin runs only if the operator named it on the command line. There is no path in any request body: every route takes an allowlist name, and a name that is not on the list cannot be loaded.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Setting</th><th scope="col">Value</th><th scope="col">Why</th></tr></thead>
+<tbody>
+<tr><td data-label="Setting">Allowlist flag</td><td data-label="Value"><code>{{.policy.Flag}}</code></td><td data-label="Why">The only way a plugin is admitted. Restart burpsy to change it.</td></tr>
+<tr><td data-label="Setting">Plugins allowlisted</td><td data-label="Value">{{.policy.Allowlisted}}</td><td data-label="Why">Nothing is started at boot; a load is an act the operator performs.</td></tr>
+<tr><td data-label="Setting">Shell</td><td data-label="Value">{{if .policy.Shell}}<span class="ext-bad">used</span>{{else}}never used{{end}}</td><td data-label="Why">The executable is run directly, so an argument containing shell metacharacters is data.</td></tr>
+<tr><td data-label="Setting">Environment passed to a plugin</td><td data-label="Value"><code>{{if .env}}{{.env}}{{else}}nothing{{end}}</code></td><td data-label="Why">What a language runtime needs to start, and no more — an operator's shell routinely holds credentials for services that have nothing to do with the engagement.</td></tr>
+<tr><td data-label="Setting">Protocol version</td><td data-label="Value">{{.policy.ProtocolVersion}}</td><td data-label="Why">A plugin answering with a different number is refused rather than half-supported.</td></tr>
+</tbody>
+</table>
+<h3 class="ext-sec">Bounds</h3>
+<p class="meta">A plugin is code this process cannot reason about, so nothing it produces is unbounded. Every limit here is enforced and every overflow is counted, never silently dropped.</p>
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Bound</th><th scope="col">Value in force</th></tr></thead>
+<tbody>
+{{range .bounds}}<tr><td data-label="Bound">{{.K}}</td><td data-label="Value">{{.V}}</td></tr>{{end}}
+</tbody>
+</table>
+<h3 class="ext-sec">There is no store</h3>
+<p class="meta"><strong>{{.policy.RegistryDetail}}</strong></p>
+<p class="meta">The server reports <code>registry: null</code> on this surface rather than leaving the absence to be inferred from a missing field.</p>
+{{end}}
+</div>

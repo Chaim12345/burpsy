@@ -1,0 +1,42 @@
+{{if .Empty}}<p class="meta" style="padding:0">Nothing to scan yet. As soon as a document is in the box above it is read here — the endpoint count, the host the paths resolve against, and how many values this build would have to invent. Nothing is sent while you review.</p>
+{{else if .Error}}<p role="alert" style="color:#c00"><strong>This document cannot be read:</strong> {{.Error}}</p>
+{{else}}{{with .Summary}}<p><strong>{{len .Operations}}</strong> endpoint(s){{if .Title}} · {{.Title}}{{if .Version}} {{.Version}}{{end}}{{end}} · {{.Format}} {{.SpecVersion}} · values invented <strong>{{.PlaceholderValues}}</strong> / {{.DeclaredValues}}</p>
+{{if .PlaceholderNote}}<p class="meta" style="padding:0">{{.PlaceholderNote}}</p>{{end}}
+<p class="meta" style="padding:0">Base URL <code class="brk">{{.BaseURL}}</code>. Every request is re-authorised against the current scope before it is sent, exactly as a crawl's is.</p>{{end}}
+{{range .Excluded}}<input type="hidden" name="exclude" value="{{.}}">{{end}}
+{{range .Shared}}<input type="hidden" name="shared" value="{{.}}">{{end}}
+<h4 style="margin:8px 0 2px">Endpoints</h4>
+<p class="meta" style="padding:0">{{.Kept}} of {{len .Endpoints}} endpoint(s) will be scanned. A removed endpoint is not sent and not audited; it stays listed so it can be restored.</p>
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Method</th><th scope="col">Document path</th><th scope="col">Request</th><th scope="col">Parameters</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .Endpoints}}<tr{{if .Removed}} class="meta"{{end}}><td>{{.Method}}</td><td><code>{{.Template}}</code></td><td>{{if .Removed}}not sent{{else}}<code>{{.Request}}</code>{{end}}</td><td>{{.Params}}</td><td><button type="button" name="toggle" value="{{.Key}}" hx-post="/ui2/newscan/api/check" hx-target="#apicheck" hx-swap="innerHTML" aria-label="{{if .Removed}}Restore{{else}}Remove{{end}} {{.Key}}">{{if .Removed}}Restore{{else}}Remove{{end}}</button></td></tr>
+{{end}}
+</tbody>
+</table></div>
+{{if .Excluded}}<p><button type="button" name="restore_all" value="1" hx-post="/ui2/newscan/api/check" hx-target="#apicheck" hx-swap="innerHTML">Restore all endpoints</button></p>{{end}}
+<h4 style="margin:8px 0 2px">Parameters</h4>
+{{if not .Rows}}<p class="meta" style="padding:0">The endpoints declare no path, query, header or form parameters. A request body synthesised from a schema is not editable here.</p>
+{{else}}<p class="meta" style="padding:0">Dynamic values are sent and audited like any other. Fixed values are sent as set and kept out of the audit's insertion points on the endpoints the row applies to: this endpoint, or every endpoint carrying the parameter. * marks a parameter the document requires.{{if .Filtered}} The filter hides {{.Filtered}} row(s) from view only; every override still applies.{{end}}</p>
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Endpoint</th><th scope="col">Parameter</th><th scope="col">Source</th><th scope="col">Value</th><th scope="col">Mode</th><th scope="col">Applies to</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .Rows}}<tr{{if .Hidden}} hidden{{end}}>
+<td><code>{{.Endpoint}}</code><input type="hidden" name="pk_{{.Index}}" value="{{.Key}}"></td>
+<td>{{.In}} <code>{{.Name}}</code>{{if .Required}} *{{end}}</td>
+<td>{{if eq .Scope "document"}}{{.Source}}{{else}}operator{{end}}</td>
+{{if .Locked}}<td><code>{{.Value}}</code> <small>{{.Locked}}</small></td><td>Dynamic</td><td>—</td><td></td>
+{{else}}<td><input type="text" name="pv_{{.Index}}" value="{{.Value}}" aria-label="Value of {{.In}} parameter {{.Name}} on {{.Endpoint}}" hx-post="/ui2/newscan/api/check" hx-trigger="change" hx-target="#apicheck" hx-swap="innerHTML"><input type="hidden" name="ppv_{{.Index}}" value="{{.PrevValue}}"></td>
+<td><select name="pm_{{.Index}}" aria-label="Mode of {{.In}} parameter {{.Name}} on {{.Endpoint}}" hx-post="/ui2/newscan/api/check" hx-trigger="change" hx-target="#apicheck" hx-swap="innerHTML"><option value="dynamic">Dynamic</option><option value="fixed"{{if eq .Mode "fixed"}} selected{{end}}>Fixed</option></select><input type="hidden" name="ppm_{{.Index}}" value="{{.Mode}}"></td>
+<td><select name="ps_{{.Index}}" aria-label="Scope of {{.In}} parameter {{.Name}} on {{.Endpoint}}" hx-post="/ui2/newscan/api/check" hx-trigger="change" hx-target="#apicheck" hx-swap="innerHTML"><option value="endpoint">This endpoint</option><option value="all"{{if eq .Scope "all"}} selected{{end}}>All endpoints</option></select><input type="hidden" name="pps_{{.Index}}" value="{{.Scope}}"></td>
+<td>{{if ne .Scope "document"}}<button type="button" name="reset" value="{{.Index}}" hx-post="/ui2/newscan/api/check" hx-target="#apicheck" hx-swap="innerHTML">{{if eq .Scope "all"}}Reset all{{else}}Reset{{end}}</button>{{end}}</td>{{end}}
+</tr>
+{{end}}
+</tbody>
+</table></div>{{end}}
+{{if .Stale}}<p class="meta" style="padding:0">Held back because the definition no longer describes them: {{range $i, $s := .Stale}}{{if $i}}; {{end}}{{$s}}{{end}}.</p>{{end}}
+{{if .ReviewErr}}<p role="alert" style="color:#c00"><strong>The server refused this review:</strong> {{.ReviewErr}}</p>{{end}}
+{{end}}
+{{if .Missing}}<p class="meta" style="padding:0"><strong>Not ready to start:</strong> {{.Missing}}</p>{{else if .Summary}}<p class="meta" style="padding:0"><strong>Ready:</strong> {{.Kept}} endpoint(s) will be sent. Review the API scan below to start it.</p>{{end}}
+{{if .DefinitionSet}}<textarea id="api-definition" hx-swap-oob="true" name="definition" rows="8" style="width:100%; font:12px/1.4 ui-monospace, monospace" spellcheck="false" hx-post="/ui2/newscan/api/check" hx-trigger="keyup changed delay:700ms, change" hx-target="#apicheck" hx-swap="innerHTML">{{.Definition}}</textarea>
+<input type="file" id="api-definition-file" hx-swap-oob="true" name="definition_file" accept=".json,.yaml,.yml,application/json,text/yaml" hx-post="/ui2/newscan/api/check" hx-trigger="change" hx-target="#apicheck" hx-swap="innerHTML" title="Loaded {{.FileName}}">{{end}}

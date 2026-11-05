@@ -1,0 +1,17 @@
+<section id="audit-result" aria-label="Audit outcome">
+<h3>Audit outcome - exchange #{{.ExchangeID}}</h3>
+<p class="meta">{{.Summary}} · configuration {{if .ConfigName}}{{.ConfigName}}{{else}}server default{{end}}{{if .Outcome.Error}} · refused: {{.Outcome.Error}}{{end}}</p>
+<table><tbody>
+<tr><td>Outcome</td><td><strong>{{.Outcome.State}}</strong>{{if .Outcome.TimedOut}} · timed out{{end}}{{if .Outcome.Cancelled}} · cancelled{{end}}</td></tr>
+<tr><td>Checks</td><td>{{.ActiveChecks}} in this run · {{.Outcome.Ran}} ran · {{.Unimplemented}} unimplemented · {{.CapabilityMissing}} missing a capability</td></tr>
+<tr><td>Findings</td><td>{{.Outcome.Findings}}</td></tr>
+<tr><td>Probes</td><td>{{.Outcome.RequestsSent}} sent · {{.Outcome.RequestsRefused}} refused · {{.Outcome.SendFailures}} send failures</td></tr>
+<tr><td>Budget</td><td>time {{.TimeBudget}} · max requests {{if .Config.MaxRequests}}{{.Config.MaxRequests}}{{else}}uncapped{{end}}</td></tr>
+<tr><td>Breakdown</td><td>{{.Breakdown.Breakdown.Found}} {{.Breakdown.Unit}} found · {{.Breakdown.Breakdown.Skipped}} skipped · {{.Breakdown.Breakdown.Errored}} errored · {{.Breakdown.Breakdown.Gated}} gated ({{.Breakdown.WorkUnit}})</td></tr>
+</tbody></table>
+{{if .Breakdown.Reasons}}<ul class="meta">{{range .Breakdown.Reasons}}<li>{{.Count}} {{.Bucket}}: {{.Detail}}</li>{{end}}</ul>{{end}}
+<h4 class="meta">Dispositions</h4>
+<table><thead><tr><th scope="col">Disposition</th><th scope="col">Checks</th><th scope="col">Meaning</th></tr></thead><tbody>
+{{range .Dispositions}}{{if .Count}}<tr><td>{{.Disposition}}{{if .StoppedLooking}} <span class="badge">not admitted</span>{{end}}</td><td>{{.Count}}</td><td class="meta brk" style="white-space:normal">{{.Reason}}</td></tr>{{end}}{{end}}
+</tbody></table>
+</section>

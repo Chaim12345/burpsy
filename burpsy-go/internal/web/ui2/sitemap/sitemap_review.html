@@ -1,0 +1,20 @@
+{{if .Error}}<p class="meta" role="alert"><strong>Not applied: {{.Error}}</strong></p>
+{{else if .Done}}<p role="status" class="sm-done"><strong>{{.Message}}</strong></p>
+{{if .Watch}}<p><a class="btn" href="{{.Watch}}">Watch the crawl</a> <a class="btn" href="/ui2/sitemap?view=paths">Crawl paths</a></p>{{end}}
+{{if .ResultText}}<details><summary>API response</summary><pre class="brk">{{.ResultText}}</pre></details>{{end}}
+{{.Tree}}
+{{else}}
+<h3>Review before running: {{.Title}}</h3>
+<p class="brk"><strong>{{.Call.Label}}</strong></p>
+<p class="meta">{{.Call.Explain}}</p>
+<pre class="brk" aria-label="The exact call">{{.Call.Method}} {{.Call.Path}}
+{{.BodyText}}</pre>
+{{if .Gated}}<p class="meta">This route is classed {{.Risk}}, so a one-time confirmation bound to exactly the body above has been minted for it.</p>{{end}}
+<p class="meta">Exactly the call shown runs — if the site map changes after this review, the reviewed call is still what runs. This confirmation is one-time and expires in a minute.</p>
+<form hx-post="/ui2/sitemap/review/run" method="post" action="/ui2/sitemap/review/run" hx-target="#sm-detail" hx-swap="innerHTML">
+<input type="hidden" name="review_id" value="{{.ReviewID}}">
+<input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and run</button>
+</form>
+<p class="meta"><a href="{{.Cancel}}" hx-get="{{.Cancel}}" hx-target="#sm-detail" hx-swap="innerHTML">cancel</a></p>
+{{end}}

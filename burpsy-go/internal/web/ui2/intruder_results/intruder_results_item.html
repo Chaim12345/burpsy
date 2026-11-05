@@ -1,0 +1,55 @@
+<div id="intruder-item">
+{{with .row}}<h3>Attack {{$.task}} · attempt {{.Ordinal}}</h3>
+<p class="meta">payload {{if .Payload}}{{.Payload}}{{else}}—{{end}} · status {{.Status}} · {{.Length}} bytes · {{.Duration}} ms{{if .Anomaly}} · anomaly rank {{.Anomaly}}{{end}}{{if .Error}} · error: {{.Error}}{{end}}</p>{{end}}
+{{if .note}}<p class="meta" role="status">{{.note}}</p>{{end}}
+<div class="toolbar" style="margin:6px 0">
+  {{if .request}}
+  <a class="btn" href="/ui2/intruder/{{.task}}/item/{{.row.Ordinal}}/repeater">Send to Repeater</a>
+  <button type="button" class="btn copy-btn" data-copy="{{.request}}">Copy request</button>
+  <a class="btn" href="{{.req_a}}" hx-get="{{.req_a}}" hx-target="#rows" hx-swap="outerHTML">Request → Comparer A</a>
+  <a class="btn" href="{{.req_b}}" hx-get="{{.req_b}}" hx-target="#rows" hx-swap="outerHTML">Request → Comparer B</a>
+  {{end}}
+  {{if .response}}
+  <a class="btn" href="{{.resp_a}}" hx-get="{{.resp_a}}" hx-target="#rows" hx-swap="outerHTML">Response → Comparer A</a>
+  <a class="btn" href="{{.resp_b}}" hx-get="{{.resp_b}}" hx-target="#rows" hx-swap="outerHTML">Response → Comparer B</a>
+  {{end}}
+</div>
+{{if .request}}
+<form hx-post="/ui2/intruder/{{.task}}/again/confirm" method="post" action="/ui2/intruder/{{.task}}/again/confirm" hx-target="#again-out" hx-swap="innerHTML" style="display:inline">
+  <input type="hidden" name="ordinal" value="{{.row.Ordinal}}">
+  <button type="submit">Request item again…</button>
+</form>
+{{end}}
+<div id="again-out"></div>
+<form hx-post="/ui2/intruder/{{.task}}/comment{{if .item_query}}?{{.item_query}}{{end}}" method="post" action="/ui2/intruder/{{.task}}/comment" hx-target="#detail" hx-swap="innerHTML" style="margin:6px 0">
+  <input type="hidden" name="ordinal" value="{{.row.Ordinal}}">
+  <input type="text" name="comment" value="{{.comment}}" maxlength="1000" placeholder="Add a comment" aria-label="Comment for this attempt">
+  <button type="submit">Save comment</button>
+</form>
+<h3>Request</h3>
+{{if .request}}<pre class="msg">{{.req_pane.Highlighted}}</pre>{{else}}<p class="meta">No request was stored for this attempt.</p>{{end}}
+<h3>Response</h3>
+{{if .response}}{{if .resp_pane.Note}}<p class="meta" role="note">{{.resp_pane.Note}}</p>{{end}}<pre class="msg">{{.resp_pane.Highlighted}}</pre>
+<details><summary>Define extract grep from this response</summary>
+<form hx-post="/ui2/intruder/settings/extract" method="post" action="/ui2/intruder/settings/extract" hx-target="#item-extract-out" hx-swap="innerHTML">
+  <input type="hidden" name="extract_response_id" value="{{.row.ResponseID}}">
+  <textarea name="extract_text" rows="2" style="width:100%" placeholder="paste the part of the response to extract" aria-label="Text to extract"></textarea>
+  <button type="submit">Build rule</button>
+</form>
+<div id="item-extract-out"></div>
+</details>
+{{else if .exemplar}}<p class="meta">Only each bucket's first response is stored. This attempt's bucket exemplar is <a href="/ui2/intruder/{{.task}}/item/{{.exemplar}}" hx-get="/ui2/intruder/{{.task}}/item/{{.exemplar}}{{if .item_query}}?{{.item_query}}{{end}}" hx-target="#detail" hx-swap="innerHTML">attempt {{.exemplar}}</a> (same status, length and reflection — not a claim the bodies are equal).</p>
+{{else}}<p class="meta">No response was stored for this attempt.</p>{{end}}
+{{if .collab}}
+<h3>Collaborator interactions</h3>
+<p class="meta">Addresses sent: {{range .collab}}<code>{{.}}</code> {{end}}</p>
+{{if .interactions_error}}<p class="meta" role="alert">{{.interactions_error}}</p>{{end}}
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Query</th><th scope="col">Client</th><th scope="col">At</th><th scope="col">Payload</th></tr></thead>
+<tbody>
+{{range .interactions}}<tr><td>{{.id}}</td><td>{{.type}}</td><td>{{.q_type}}</td><td>{{.client_ip}}</td><td>{{ms .at_ms}}</td><td>{{.payload}}</td></tr>
+{{else}}<tr><td colspan="6" class="meta">No interactions recorded for this attempt yet.</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+</div>

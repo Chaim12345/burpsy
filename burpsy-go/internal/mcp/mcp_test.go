@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -166,8 +167,8 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 	for _, r := range manifest {
 		byRoute[r.Pattern] = r
 	}
-	if len(listed.Tools) != len(manifest)+2 {
-		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm and task-status tools",
+	if len(listed.Tools) != len(manifest)+3 {
+		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm, task-status and screenshot tools",
 			len(listed.Tools), len(manifest))
 	}
 
@@ -178,7 +179,7 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 			t.Fatalf("two tools are named %q; an MCP tool name is an address and has to name one tool", tl.Name)
 		}
 		names[tl.Name] = true
-		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName || tl.Name == screenshotToolName {
 			continue
 		}
 
@@ -288,6 +289,58 @@ func TestToolsListMarksExactlyTheConfirmationWorthyRoutes(t *testing.T) {
 	}
 	if flagged != len(gated) {
 		t.Fatalf("%d tools are marked confirmation-worthy, want %d", flagged, len(gated))
+	}
+}
+
+// ---- hint honesty ----------------------------------------------------------------------------
+
+// The routes surface lists every manifest pattern, including the /ui2/* POST routes classed
+// riskAsset. The class hints describe the usual call; a route that answers a mutating verb is not
+// read-only or idempotent, whatever its class says. Before annotationsForRoute derived the two
+// hints from the verb set, the ui2 capture toggles were published as readOnlyHint=true here.
+func TestTheRouteSurfacePublishesMutatingRoutesAsMutating(t *testing.T) {
+	_, base := newConsole(t)
+	replies := ask(t, base, rpcRequest(t, 1, "tools/list", nil))
+	var listed toolList
+	if err := json.Unmarshal(replies[0].Result, &listed); err != nil {
+		t.Fatalf("decoding tools/list: %v", err)
+	}
+	routes := map[string]web.MCPRouteInfo{}
+	for _, r := range web.MCPRoutes() {
+		routes[r.Pattern] = r
+	}
+	seenMutatingUi2 := false
+	seenReadOnlyGet := false
+	for _, tl := range listed.Tools {
+		route, _ := tl.Annotations["route"].(string)
+		r, ok := routes[route]
+		if !ok {
+			continue
+		}
+		mutating := len(mutatingMethods(r.Methods)) > 0
+		readOnly, _ := tl.Annotations["readOnlyHint"].(bool)
+		idempotent, _ := tl.Annotations["idempotentHint"].(bool)
+		if mutating && (readOnly || idempotent) {
+			t.Fatalf("tool %q (%s) answers %v and is published readOnlyHint=%v idempotentHint=%v", tl.Name, route, r.Methods, readOnly, idempotent)
+		}
+		if mutating && route == "/ui2/sequencer/capture/{action}" {
+			seenMutatingUi2 = true
+		}
+		if !mutating && readOnly && idempotent {
+			seenReadOnlyGet = true
+		}
+		// destructive and the confirmation flag stay class-derived even on a mutating route.
+		if route == "/api/tools/log" {
+			if tl.Annotations["destructiveHint"] != true || tl.Annotations["requiresConfirmation"] != true {
+				t.Fatalf("tool %q (%s) lost its class hints: %v", tl.Name, route, tl.Annotations)
+			}
+		}
+	}
+	if !seenMutatingUi2 {
+		t.Fatal("no /ui2/sequencer/capture/{action} tool listed; this test cannot mean anything")
+	}
+	if !seenReadOnlyGet {
+		t.Fatal("no GET-only read-only tool listed; the read half of the contract is untestable")
 	}
 }
 
@@ -878,5 +931,68 @@ func TestAThirdCollisionIsNumberedRatherThanDuplicated(t *testing.T) {
 	got = uniqueToolName(web.MCPRouteInfo{Pattern: "/api-x/"}, used)
 	if got != "api_x_subtree" {
 		t.Fatalf("the subtree half of a collision became %q, want api_x_subtree", got)
+	}
+}
+
+// Only must bind tools/call, not just tools/list: callTool resolves through byName, so pruning
+// the published list alone left every hidden tool executable (caught live: Only=[api_history]
+// answered tools/call api_sitemap with HTTP 200). The keep-set (Only + the always-stay pair)
+// now filters byName too, so a hidden call is an unknown tool and the console sees zero hits.
+func TestAnOnlyHiddenToolIsNotCallable(t *testing.T) {
+	var hits int32
+	console := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(console.Close)
+
+	replies := askWith(t, Options{BaseURL: console.URL, Surface: SurfaceRoutes, Only: []string{"api_history"}},
+		rpcRequest(t, 1, "tools/list", nil),
+		rpcRequest(t, 2, "tools/call", map[string]any{"name": "api_sitemap"}),
+		rpcRequest(t, 3, "tools/call", map[string]any{"name": "burpsy_task_status", "arguments": map[string]any{}}))
+	// Replies and async notifications share the stream, so match by id, never by position.
+	byID := map[int]rpcReply{}
+	for _, r := range replies {
+		var id int
+		if json.Unmarshal(r.ID, &id) == nil {
+			byID[id] = r
+		}
+	}
+	if len(byID) != 3 {
+		t.Fatalf("expected replies to ids 1-3, got %v", func() []int {
+			ids := []int{}
+			for id := range byID {
+				ids = append(ids, id)
+			}
+			return ids
+		}())
+	}
+	var listed toolList
+	if err := json.Unmarshal(byID[1].Result, &listed); err != nil {
+		t.Fatalf("decoding tools/list: %v", err)
+	}
+	seenHistory, seenSitemap := false, false
+	for _, tl := range listed.Tools {
+		seenHistory = seenHistory || tl.Name == "api_history"
+		seenSitemap = seenSitemap || tl.Name == "api_sitemap"
+	}
+	if !seenHistory || seenSitemap {
+		t.Fatalf("Only=[api_history] must list api_history and hide api_sitemap: %+v", listed.Tools)
+	}
+	if byID[2].Error == nil {
+		var res callResult
+		_ = json.Unmarshal(byID[2].Result, &res)
+		t.Fatalf("a hidden tool answered tools/call instead of an unknown-tool error: %.200s", textOf(res))
+	}
+	if !strings.Contains(byID[2].Error.Message, "no tool named") {
+		t.Fatalf("hidden call must read as an unknown tool, got: %s", byID[2].Error.Message)
+	}
+	// The always-stay pair survives the keep-set at dispatch too, not only in the list.
+	if byID[3].Error != nil {
+		t.Fatalf("burpsy_task_status must stay callable under Only: %v", byID[3].Error)
+	}
+	if got := atomic.LoadInt32(&hits); got != 0 {
+		t.Fatalf("hidden and status calls must never reach the console, got %d hit(s)", got)
 	}
 }

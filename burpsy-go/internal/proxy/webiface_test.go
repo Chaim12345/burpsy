@@ -84,13 +84,33 @@ func TestTheWebInterfaceServesTheCACertificateAndIsNotRecorded(t *testing.T) {
 	}
 }
 
+// Switching the interface off withdraws the page; it does not turn a name for the proxy into an origin.
+// The disabled listener used to forward http://burpsuite upstream: a real DNS lookup of "burpsuite"
+// (this test's own intermittent goleak failure, the lookup still in flight when the package ended) and,
+// for the listener's own address, a request relayed back into the listener. Both are now refused
+// locally, so the answer is burpsy's own refusal rather than whatever a forward produced.
 func TestDisablingTheWebInterfaceStopsItAnswering(t *testing.T) {
 	opts := NewOptions()
 	setFlag(t, opts, OptDisableWebInterface, true)
-	_, addr, _ := newInterfaceProxy(t, opts)
-	got := rawExchange(t, addr, "GET http://burpsuite/ HTTP/1.1\r\nHost: burpsuite\r\n\r\n")
-	if bytes.Contains(got, []byte("burpsy proxy listener")) {
-		t.Errorf("the disabled interface still answered: %q", got)
+	_, addr, store := newInterfaceProxy(t, opts)
+	for _, req := range []string{
+		"GET http://burpsuite/ HTTP/1.1\r\nHost: burpsuite\r\n\r\n",
+		"GET http://burpsy/cert HTTP/1.1\r\nHost: burpsy\r\n\r\n",
+		// Absolute-form: NewOptions has invisible proxying off, so an origin-form request would be
+		// refused as unattributable before it reached the own-address match this case is for.
+		"GET http://" + addr + "/ HTTP/1.1\r\nHost: " + addr + "\r\n\r\n",
+	} {
+		got := rawExchange(t, addr, req)
+		if bytes.Contains(got, []byte("burpsy proxy listener")) {
+			t.Errorf("the disabled interface still answered: %q", got)
+		}
+		if !bytes.HasPrefix(got, []byte("HTTP/1.1 404")) || !bytes.Contains(got, []byte("disable_web_interface")) {
+			t.Errorf("a request for the proxy itself was not refused locally — it was forwarded as if the "+
+				"name were an origin (resolved, dialled, or relayed back into the listener): %q", got)
+		}
+	}
+	if n := len(store.Exchanges()); n != 0 {
+		t.Errorf("%d refused interface request(s) were recorded as traffic", n)
 	}
 }
 

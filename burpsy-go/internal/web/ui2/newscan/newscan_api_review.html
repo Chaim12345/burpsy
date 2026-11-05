@@ -1,0 +1,13 @@
+<div class="newscan-sheet" style="border:1px solid var(--line); border-left:3px solid #c60; border-radius:6px; padding:8px 12px; margin:10px 0">
+{{if .error}}<p role="alert" style="color:#c00"><strong>Not started: {{.error}}</strong></p>
+{{else}}<p><strong>Review before the API scan:</strong> {{.kept}} of {{.total}} endpoint(s) against <code class="brk">{{.base_url}}</code>, {{if .audit}}then an audit of the exchanges they return (two tasks){{else}}sent and captured only, with no audit (one task){{end}}.</p>
+<details open><summary>Exact call (the full body the one-time confirmation binds{{if .auth}}; the authentication secret is bound but not shown{{end}})</summary>
+<pre class="brk" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:50vh; overflow:auto">{{.projection}}</pre></details>
+<p class="meta" style="padding:0">An API scan sends every listed endpoint to the target; each request is re-authorised against scope before it is sent. This confirmation is one-time and covers exactly the call above.</p>
+<form method="post" hx-post="/ui2/newscan/api/run" hx-target="#newscan-review" hx-swap="innerHTML">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and start API scan</button>
+</form>
+<p class="meta" style="padding:0">To change anything, edit the form above and review again; this review expires with the confirmation window on its own.</p>{{end}}
+</div>

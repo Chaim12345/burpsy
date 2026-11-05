@@ -27,6 +27,7 @@ var rawDialAllowed = map[string]string{
 	"internal/vulnapp/vulnapp_ssrf.go":               "the intentionally vulnerable test app",
 	"cmd/live-test/main.go":                          "dev harness against a local target",
 	"cmd/xsschallenge/main.go":                       "dev harness against a local challenge server",
+	"cmd/ui2seed/main.go":                            "dev harness seeding a local fixture server",
 }
 
 var rawDialCalls = map[string]bool{"net.Dial": true, "net.DialTimeout": true, "tls.Dial": true, "tls.DialWithDialer": true,

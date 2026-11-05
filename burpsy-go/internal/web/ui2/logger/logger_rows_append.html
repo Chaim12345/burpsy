@@ -1,0 +1,6 @@
+{{range .Entries}}{{template "logger_row" .}}
+{{end}}
+{{if .HasMore}}<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="10" class="meta"
+     hx-get="/ui2/logger" hx-vals='{{.HxVals}}'
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
+{{end}}

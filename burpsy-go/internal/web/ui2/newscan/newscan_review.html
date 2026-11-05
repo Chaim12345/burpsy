@@ -1,0 +1,14 @@
+<div class="newscan-sheet" style="border:1px solid var(--line); border-left:3px solid #c60; border-radius:6px; padding:8px 12px; margin:10px 0">
+{{if .error}}<p role="alert" style="color:#c00"><strong>Not started: {{.error}}</strong></p>
+{{else}}<p><strong>Review before {{if eq .what "audit"}}auditing{{else}}crawling{{end}}:</strong> <code>{{.preview}}</code></p>
+<details open><summary>Exact body (what the one-time confirmation binds, in full)</summary>
+<pre class="brk" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:50vh; overflow:auto">{{.full_body}}</pre></details>
+{{if eq .what "audit"}}<p class="meta" style="padding:0">An audit sends active attack probes for every listed exchange. The engine refuses an out-of-scope exchange before any probe is planned. This confirmation is one-time and covers exactly the call above.</p>
+{{else}}<p class="meta" style="padding:0">A crawl sends its own requests to the target within the engagement scope and records what it finds. A seed the scope refuses is named before anything is sent. This confirmation is one-time and covers exactly the call above.</p>{{end}}
+<form method="post" hx-post="{{.run}}" hx-target="#newscan-review" hx-swap="innerHTML">
+{{range .fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+{{end}}<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and start</button>
+</form>
+<p class="meta" style="padding:0">To change anything, edit the form above and review again; an edited field no longer matches this confirmation.</p>{{end}}
+</div>

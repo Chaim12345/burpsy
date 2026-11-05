@@ -1,0 +1,29 @@
+<div id="rows">
+<p class="meta">{{if .error}}<span role="alert" style="color:#c00">{{.error}}</span>{{end}}</p>
+{{if .launched_task}}<p class="meta">Attack finished — <a class="btn" href="/ui2/intruder/{{.launched_task}}/results">view results</a></p>{{end}}
+<h3>Running attacks</h3>
+<table>
+<thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Planned</th><th scope="col">Sent</th><th scope="col">Failed</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{range .attacks.attacks}}
+<tr>
+  <td>{{.task_id}}</td><td>{{.kind}}</td><td>{{.target}}</td><td>{{.planned}}</td>
+  <td>{{.sent}}</td><td>{{.failed}}</td><td>{{.status}}{{if .stop_reason}} ({{.stop_reason}}){{end}}</td>
+  <td>
+    <a class="btn" href="/ui2/intruder/{{.task_id}}/results">results</a>
+    {{if eq .status "running"}}
+    <form hx-post="/ui2/intruder/{{.task_id}}/pause" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>pause</button></form>
+    <form hx-post="/ui2/intruder/{{.task_id}}/stop" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>stop</button></form>
+    {{end}}
+    {{if eq .status "paused"}}
+    <form hx-post="/ui2/intruder/{{.task_id}}/resume" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>resume</button></form>
+    <form hx-post="/ui2/intruder/{{.task_id}}/stop" hx-target="#rows" hx-swap="outerHTML" style="display:inline"><button>stop</button></form>
+    {{end}}
+  </td>
+</tr>
+{{else}}<tr><td colspan="8" class="meta">No attacks running.</td></tr>{{end}}
+</tbody>
+</table>
+{{template "intruder_attack_form.html" .launch}}
+{{template "intruder_settings_load.html" .}}
+</div>

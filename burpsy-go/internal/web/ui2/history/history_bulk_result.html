@@ -1,0 +1,7 @@
+<div class="hresult" role="status">
+{{if .error}}<p><strong>{{.error}}</strong></p>{{end}}
+{{if .done}}<p>{{.done}}</p>{{end}}
+{{if .lines}}<ul>{{range .lines}}<li class="brk">{{.}}</li>{{end}}</ul>{{end}}
+{{if .copy}}<p><button type="button" class="btn copy-btn" data-copy="{{.copy}}">Copy</button></p>
+<textarea readonly rows="8" style="width:100%" aria-label="Selected URLs">{{.copy}}</textarea>{{end}}
+</div>

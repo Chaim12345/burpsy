@@ -1,0 +1,14 @@
+<div class="xa-review" data-review="1">
+{{if .error}}<p class="meta" role="alert" style="color:#c00"><strong>Not applied: {{.error}}</strong></p>{{else}}
+<p><strong>Review before running:</strong> {{.title}}</p>
+<p class="meta">{{.effect}}</p>
+<p class="meta">The exact call this one-time confirmation is bound to:</p>
+<pre class="brk">{{.method}} {{.path}}
+{{.body}}</pre>
+<form hx-post="/ui2/exchange/{{.id}}/{{.kind}}.run" method="post" action="/ui2/exchange/{{.id}}/{{.kind}}.run" hx-target="#xa-out" hx-swap="innerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and run</button>
+</form>
+<p class="meta">The run rebuilds this call from the stored exchange; a different body is refused by the token.</p>
+{{end}}
+</div>

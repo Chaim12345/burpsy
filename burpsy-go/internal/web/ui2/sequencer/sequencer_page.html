@@ -1,0 +1,173 @@
+<div id="seq" class="seq">
+{{.Notice}}
+<style>
+.seq { padding:0 14px 24px; max-width:1200px; }
+.seq h3 { margin:14px 0 6px; }
+.seq section, .seq details.seq-card { border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:10px 0; }
+.seq .seq-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+.seq .seq-row label { display:inline-flex; gap:4px; align-items:center; }
+.seq textarea { width:100%; font:12px/1.4 ui-monospace, monospace; }
+.seq input[type=number] { width:7em; }
+.seq select, .seq input[type=number], .seq input[type=file] { max-width:100%; }
+.seq table td, .seq table th { white-space:normal; max-width:none; }
+.seq table { margin:6px 0; }
+.seq tbody tr { cursor:default; }
+.seq-good { color:#080; font-weight:700; }
+.seq-bad { color:#c00; font-weight:700; }
+.seq-warn { color:#a60; font-weight:700; }
+.seq-grade { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; margin:8px 0; }
+.seq-grade strong { font-size:22px; }
+.seq-metrics { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin:8px 0; }
+.seq-metric { border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+.seq-metric b { display:block; font-size:16px; }
+.seq-metric span { color:var(--muted); font-size:11px; }
+.seq-notice { border-left:3px solid var(--accent); padding:4px 8px; margin:6px 0; }
+.seq-notice.warn { border-color:#a60; }
+.seq-chip { display:inline-block; border:1px solid var(--line); border-radius:8px; padding:0 5px; margin:1px; font:11px ui-monospace, monospace; }
+tr.seq-dead td { background:rgba(204,0,0,.08); }
+.seq svg { display:block; width:100%; height:auto; overflow:visible; }
+.seq svg .ax { stroke:var(--muted); }
+.seq svg .ceil { stroke:var(--line); stroke-dasharray:3 3; }
+.seq svg .gap { stroke:var(--muted); stroke-dasharray:2 4; opacity:.6; }
+.seq svg .curve { fill:none; stroke:var(--accent); stroke-width:2; }
+.seq svg .mark { fill:var(--accent); }
+.seq svg .mark.chosen { fill:#fa0; stroke:var(--fg); }
+.seq svg text { fill:var(--muted); font-size:10px; }
+.seq svg .pass { fill:#2a2; }
+.seq svg .fail { fill:#c22; }
+.seq svg .passline { stroke:var(--fg); stroke-dasharray:4 3; }
+.seq figcaption { color:var(--muted); font-size:12px; }
+@media (max-width:640px) { .seq { padding:0 8px 24px; } .seq .seq-row > * { max-width:100%; } }
+</style>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+
+<h3>Captures</h3>
+{{template "sequencer_captures" .}}
+
+<details class="seq-card" open>
+<summary><strong>Token source: live capture</strong></summary>
+<p class="meta">Send one request repeatedly and pull a token out of every response. The token location is declared, not guessed.{{if .Start.Seeded}} Seeded from {{.Start.Seeded}}.{{end}}</p>
+<form hx-post="/ui2/sequencer/capture/confirm" method="post" action="/ui2/sequencer/capture/confirm" hx-target="#seq" hx-swap="outerHTML">
+  <div class="seq-row">
+  <label>Target <input type="text" name="target" size="22" aria-label="Target host" placeholder="host or host:port" value="{{.Start.Target}}"></label>
+  <label>Protocol <select name="protocol" aria-label="Protocol"><option value="http" {{if ne .Start.Protocol "https"}}selected{{end}}>http</option><option value="https" {{if eq .Start.Protocol "https"}}selected{{end}}>https</option></select></label>
+  <label>Requests <input type="number" name="count" min="1" max="20000" placeholder="100" aria-label="Token count" value="{{.Start.Count}}"></label>
+  <label>Delay ms <input type="number" name="delay_ms" min="0" placeholder="0" aria-label="Delay between requests in milliseconds" value="{{.Start.DelayMs}}"></label>
+  <label>Threads <input type="number" name="threads" min="1" max="32" placeholder="1" aria-label="Threads" value="{{.Start.Threads}}"></label>
+  </div>
+  <div class="seq-row">
+  <label>Token location <select name="kind" aria-label="Token location kind">
+    <option value="cookie" {{if eq .Start.Kind "cookie"}}selected{{end}}>Set-Cookie value</option>
+    <option value="header" {{if eq .Start.Kind "header"}}selected{{end}}>Response header value</option>
+    <option value="form_field" {{if eq .Start.Kind "form_field"}}selected{{end}}>Form field value</option>
+    <option value="body_regex" {{if eq .Start.Kind "body_regex"}}selected{{end}}>Body, by pattern</option></select></label>
+  <label>Name <input type="text" name="name" size="16" list="seq-names" aria-label="Cookie, header or form field name" placeholder="SESSIONID" value="{{.Start.Name}}"></label>
+  <label>or body pattern <input type="text" name="pattern" size="24" aria-label="Body pattern (RE2; group 1 is the token)" placeholder="token&quot;:&quot;([^&quot;]+)" value="{{.Start.Pattern}}"></label>
+  </div>
+  {{if .Start.Names}}<datalist id="seq-names">{{range .Start.Names}}<option value="{{.Name}}" label="{{.Kind}}: {{.Excerpt}}"></option>{{end}}</datalist>
+  <p class="meta">Found in the seeded response (pick one; nothing is auto-selected): {{range .Start.Names}}<span class="seq-chip" title="{{.Excerpt}}">{{.Kind}}: {{.Name}}</span> {{end}}</p>{{end}}
+  <div class="seq-row">
+  <label>Ignore tokens whose length deviates by ± <input type="number" name="deviates" min="1" max="1000" placeholder="off" aria-label="Ignore tokens whose length deviates by this many characters" value="{{.Start.Deviates}}"></label>
+  <label><input type="checkbox" name="auto" value="1" {{if .Start.Auto}}checked{{end}}> Auto-analyse while capturing</label>
+  </div>
+  <textarea name="request" rows="7" aria-label="Request to repeat" placeholder="GET / HTTP/1.1&#10;Host: example.com">{{.Start.Request}}</textarea>
+  <div class="seq-row"><button type="submit">Review capture</button>
+  <span class="meta">A capture sends the request up to the count above; it starts only after you confirm the exact call.</span></div>
+</form>
+<form class="seq-row" method="get" action="/ui2/sequencer" hx-get="/ui2/sequencer" hx-target="#seq" hx-swap="outerHTML" hx-push-url="true">
+  <label>Follow capture id <input type="number" name="capture" min="0" aria-label="Follow an existing capture by id" value="{{.FollowID}}"></label>
+  <label><input type="checkbox" name="auto" value="1" {{if .Auto}}checked{{end}}> auto-analyse</label>
+  <button type="submit">Follow</button>
+</form>
+{{if .FollowErr}}<p class="meta" role="alert">Cannot follow capture {{.FollowID}}: {{.FollowErr}}</p>{{end}}
+{{with .Follow}}
+<div id="seq-progress" class="seq-card"{{if .Capturing}} hx-get="{{$.PollURL}}" hx-trigger="every 2s" hx-select="#seq-progress" hx-target="this" hx-swap="outerHTML"{{end}}>
+  <p><strong>Capture {{.ID}} {{if .Capturing}}{{if .Paused}}paused{{else}}running{{end}}{{else}}finished{{end}}</strong> <span class="meta">{{.Target}} · {{.Location}}</span></p>
+  <div class="seq-metrics">
+    <div class="seq-metric"><b id="seq-total">{{.Total}}</b><span>tokens</span></div>
+    <div class="seq-metric"><b>{{.Attempts}} of {{.Requested}}</b><span>requests sent</span></div>
+    <div class="seq-metric"><b class="{{if .Misses}}seq-warn{{end}}">{{.Misses}}</b><span>attempts without a token</span></div>
+  </div>
+  {{if and (not .Capturing) (lt .Total .Requested)}}<p class="seq-notice warn">This sample is {{.Total}} of the {{.Requested}} tokens asked for.{{if .StopReason}} {{.StopReason}}.{{end}} Any verdict describes these tokens only.</p>{{end}}
+  {{if .MissExamples}}<table><thead><tr><th scope="col">Attempt</th><th scope="col">Why no token</th></tr></thead><tbody>
+  {{range .MissExamples}}<tr><td>{{.Attempt}}</td><td>{{.Reason}}</td></tr>{{end}}
+  {{if .MissesTruncated}}<tr><td colspan="2" class="meta">…and more. The count is exact; the examples are a sample.</td></tr>{{end}}
+  </tbody></table>{{end}}
+  <div class="seq-row">
+  {{if .Capturing}}
+  <form hx-post="/ui2/sequencer/capture/{{if .Paused}}resume{{else}}pause{{end}}" method="post" action="/ui2/sequencer/capture/{{if .Paused}}resume{{else}}pause{{end}}" hx-target="#seq" hx-swap="outerHTML"><input type="hidden" name="capture_id" value="{{.ID}}">{{if $.Auto}}<input type="hidden" name="auto" value="1">{{end}}<button type="submit">{{if .Paused}}Resume{{else}}Pause{{end}}</button></form>
+  <form hx-post="/ui2/sequencer/capture/stop" method="post" action="/ui2/sequencer/capture/stop" hx-target="#seq" hx-swap="outerHTML"><input type="hidden" name="capture_id" value="{{.ID}}">{{if $.Auto}}<input type="hidden" name="auto" value="1">{{end}}<button type="submit">Stop capture</button></form>
+  {{end}}
+  {{if .Tokens}}<button type="button" class="copy-btn" data-copy="{{$.CopyText}}">Copy tokens</button>
+  <a class="btn" href="/ui2/sequencer/tokens/{{.ID}}" download="sequencer-tokens-{{.ID}}.txt">Save tokens (.txt)</a>{{end}}
+  {{if $.Auto}}<a class="btn" href="{{$.AutoOffURL}}" hx-get="{{$.AutoOffURL}}" hx-target="#seq" hx-swap="outerHTML" hx-push-url="true">Auto-analyse: on (turn off)</a>{{else}}<a class="btn" href="{{$.AutoOnURL}}" hx-get="{{$.AutoOnURL}}" hx-target="#seq" hx-swap="outerHTML" hx-push-url="true">Auto-analyse: off (turn on)</a>{{end}}
+  </div>
+</div>
+{{end}}
+</details>
+
+<details class="seq-card" open>
+<summary><strong>Token source: paste or load a file, and analysis options</strong></summary>
+<form id="seq-analyse" hx-post="/ui2/sequencer/analyse" hx-encoding="multipart/form-data" method="post" enctype="multipart/form-data" action="/ui2/sequencer/analyse" hx-target="#seq" hx-swap="outerHTML">
+  <div id="seq-opts" class="seq-row">
+    <label>Read bits as <select name="encoding" aria-label="Read token bits as">
+      <option value="" {{if eq .Opts.Encoding ""}}selected{{end}}>detect encoding</option>
+      <option value="hex" {{if eq .Opts.Encoding "hex"}}selected{{end}}>hex</option>
+      <option value="base64" {{if eq .Opts.Encoding "base64"}}selected{{end}}>base64</option>
+      <option value="raw" {{if eq .Opts.Encoding "raw"}}selected{{end}}>raw bytes</option></select></label>
+    <label>Significance <select name="significance" aria-label="Significance level">
+      <option value="" {{if eq .Opts.Significance ""}}selected{{end}}>default (1%)</option>
+      {{range .Levels}}<option value="{{.Value}}" {{if eq $.Opts.Significance .Value}}selected{{end}}>{{.Label}}{{if .Band}} — {{.Band}}{{end}}</option>{{end}}</select></label>
+    <label>Padding <select name="pad_mode" aria-label="Pad short tokens">
+      <option value="" {{if eq .Opts.PadMode ""}}selected{{end}}>none</option>
+      <option value="start" {{if eq .Opts.PadMode "start"}}selected{{end}}>pad short tokens at start</option>
+      <option value="end" {{if eq .Opts.PadMode "end"}}selected{{end}}>pad short tokens at end</option></select></label>
+    <label>Pad char <input type="text" name="pad_byte" size="2" maxlength="1" aria-label="Pad character" placeholder="0" value="{{.Opts.PadByte}}"></label>
+    <span class="meta">Base64-decode first is a saved setting: {{if .Settings.Base64}}on{{else}}off{{end}} (see Analysis settings).</span>
+  </div>
+  <textarea name="tokens" rows="7" aria-label="Tokens, one per line" placeholder="paste tokens, one per line">{{.Tokens}}</textarea>
+  {{if .LoadNote}}<p class="meta" role="status">{{.LoadNote}}</p>{{end}}
+  <div class="seq-row">
+    <label>Load from file <input type="file" name="token_file" aria-label="Token file to load"></label>
+    <button type="submit" name="op" value="load">Load file</button>
+    <button type="submit" name="source" value="paste">Analyse pasted tokens</button>
+    {{with .Follow}}<input type="hidden" name="capture_id" value="{{.ID}}"><button type="submit" name="source" value="capture">Analyse capture {{.ID}} ({{.Total}} tokens)</button>{{end}}
+  </div>
+</form>
+</details>
+
+{{template "sequencer_settings" .Settings}}
+
+<div id="seq-report"{{if and .Auto .Follow}}{{if .Follow.Capturing}} hx-get="{{.AutoURL}}" hx-trigger="every 30s" hx-select="#seq-report" hx-target="this" hx-swap="outerHTML"{{end}}{{end}}>
+{{with .Report}}
+<h3>Report{{if eq $.Source "capture"}} <span class="badge">capture {{$.FollowID}}</span>{{end}}</h3>
+<form class="seq-row" hx-post="/ui2/sequencer/analyse" method="post" action="/ui2/sequencer/analyse" hx-include="#seq-opts" hx-target="#seq" hx-swap="outerHTML">
+  <input type="hidden" name="redo" value="1"><input type="hidden" name="source" value="{{$.Source}}">
+  {{if $.FollowID}}<input type="hidden" name="capture_id" value="{{$.FollowID}}">{{end}}
+  <textarea name="last_sample" hidden aria-hidden="true">{{$.Sample}}</textarea>
+  <button type="submit">Redo analysis</button><span class="meta">re-runs this sample under the current options and saved settings</span>
+</form>
+{{template "sequencer_report" .}}
+{{else}}<p class="meta">No analysis yet. Paste a representative sample of session ids or CSRF tokens - a hundred is the conventional floor - then analyse it.</p>{{end}}
+</div>
+</div>
+
+{{define "sequencer_captures"}}<div id="rows">
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Location</th><th scope="col">Tokens</th><th scope="col">Requests</th><th scope="col">State</th></tr></thead>
+<tbody>
+{{range .Captures}}
+<tr><td><a href="/ui2/sequencer?capture={{.ID}}" hx-get="/ui2/sequencer?capture={{.ID}}" hx-target="#seq" hx-swap="outerHTML" hx-push-url="true" title="follow this capture">{{.ID}}</a></td><td>{{.Target}}</td><td>{{.Location}}</td><td>{{.Total}}</td><td>{{.Attempts}} / {{.Requested}}</td>
+<td>{{if .Capturing}}{{if .Paused}}paused{{else}}capturing{{end}}{{else}}done{{end}}{{if .StopReason}} ({{.StopReason}}){{end}}</td></tr>
+{{else}}<tr><td colspan="6" class="meta">No captures.</td></tr>{{end}}
+</tbody>
+</table>
+{{if .AnyRunning}}
+<p class="meta">A capture is running. Pause and resume act on the newest running capture; stop ends every running capture.</p>
+<div class="seq-row">
+<form hx-post="/ui2/sequencer/capture/pause" method="post" action="/ui2/sequencer/capture/pause" hx-target="#seq" hx-swap="outerHTML">{{if .FollowID}}<input type="hidden" name="capture_id" value="{{.FollowID}}">{{end}}<button type="submit">pause</button></form>
+<form hx-post="/ui2/sequencer/capture/resume" method="post" action="/ui2/sequencer/capture/resume" hx-target="#seq" hx-swap="outerHTML">{{if .FollowID}}<input type="hidden" name="capture_id" value="{{.FollowID}}">{{end}}<button type="submit">resume</button></form>
+<form hx-post="/ui2/sequencer/capture/stop" method="post" action="/ui2/sequencer/capture/stop" hx-target="#seq" hx-swap="outerHTML">{{if .FollowID}}<input type="hidden" name="capture_id" value="{{.FollowID}}">{{end}}<button type="submit">stop all</button></form>
+</div>
+{{end}}
+</div>{{end}}

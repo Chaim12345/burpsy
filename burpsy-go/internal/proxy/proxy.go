@@ -87,6 +87,25 @@ type TlsPolicy struct {
 	// autoAdded counts the hosts auto-add has written, so the behaviour is visible on the panel rather
 	// than a list that silently grows.
 	autoAdded int
+
+	// onChange holds the signal installed by OnChange: one call after the rendered
+	// passthrough host list moves.
+	onChange atomic.Value
+}
+
+// OnChange installs the signal called after the passthrough host list visibly moves: a host
+// added, removed, or auto-added after a failed negotiation. Single slot, mirroring
+// Options.OnChange; the hook runs synchronously on the caller's path, so it must stay as cheap
+// as the hub increment it feeds.
+func (p *TlsPolicy) OnChange(fn func()) {
+	p.onChange.Store(fn)
+}
+
+// noteChange invokes the installed hook, if any.
+func (p *TlsPolicy) noteChange() {
+	if fn, ok := p.onChange.Load().(func()); ok {
+		fn()
+	}
 }
 
 // NewTlsPolicy creates a new TLS policy.
@@ -97,11 +116,13 @@ func NewTlsPolicy() *TlsPolicy {
 	}
 }
 
-// AddPassthrough adds a host pattern to passthrough.
+// AddPassthrough adds a host pattern to passthrough. Every add moves the rendered list -
+// duplicates included, since the panel shows the list as written - so every add announces.
 func (p *TlsPolicy) AddPassthrough(pattern string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.passthrough = append(p.passthrough, pattern)
+	p.mu.Unlock()
+	p.noteChange()
 }
 
 // WithEngine sets the TLS engine for interception.
@@ -113,6 +134,15 @@ func (p *TlsPolicy) WithEngine(engine *TlsEngine) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.engine = engine
+}
+
+// Engine is the engine interception signs with, nil when interception is off. Read under the lock: the
+// engine is switched at runtime (PUT /api/proxy/interception), so a connection deciding whether to
+// intercept must not read the field while the switch writes it.
+func (p *TlsPolicy) Engine() *TlsEngine {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.engine
 }
 
 // AddPassthroughPort adds a port to passthrough. Same unlock-before-write defect as WithEngine.
@@ -137,14 +167,19 @@ func (p *TlsPolicy) Passthrough() []string {
 // deliberately, and removing by wildcard equality would delete a rule they did not select.
 func (p *TlsPolicy) RemovePassthrough(pattern string) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	removed := false
 	for i, existing := range p.passthrough {
 		if existing == pattern {
 			p.passthrough = append(p.passthrough[:i], p.passthrough[i+1:]...)
-			return true
+			removed = true
+			break
 		}
 	}
-	return false
+	p.mu.Unlock()
+	if removed {
+		p.noteChange()
+	}
+	return removed
 }
 
 // ApplyOutOfScope reports whether an out-of-scope host is passed through. The scope check itself is
@@ -206,17 +241,22 @@ func (p *TlsPolicy) NoteFailedNegotiation(host string) bool {
 		return false
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if !p.autoAddOnFailure {
+		p.mu.Unlock()
 		return false
 	}
 	for _, existing := range p.passthrough {
 		if existing == host {
+			p.mu.Unlock()
 			return false
 		}
 	}
 	p.passthrough = append(p.passthrough, host)
 	p.autoAdded++
+	p.mu.Unlock()
+	// The auto-add moves the rendered passthrough list with no API call anywhere near it, so
+	// it announces exactly like an operator's own add.
+	p.noteChange()
 	return true
 }
 
@@ -1272,6 +1312,10 @@ type Server struct {
 	listenerMu    sync.Mutex
 	rebindMu      sync.Mutex
 
+	// listenersChange holds the signal installed by OnListenersChange: one call after the
+	// listener table visibly moves (add, remove, rebind, spec-changing update).
+	listenersChange atomic.Value
+
 	// wsLive is every WebSocket this relay is pumping right now, by handshake exchange, so Repeater
 	// can attach to one (burpsy-react-ui-wuwf). See ws_live.go.
 	wsLive wsLiveRegistry
@@ -1416,6 +1460,7 @@ func (s *Server) Rebind(addr string) (string, error) {
 			s.listeners[bootListenerID].spec.Bind = addr
 		}
 		s.listenerMu.Unlock()
+		s.noteListenersChange()
 		return "", nil
 	}
 
@@ -1617,7 +1662,7 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 	// host the client asked for, judged at the host level, the same name the passthrough list matches.
 	outOfScopePassthrough := s.config.tls.ApplyOutOfScope() && s.config.scope != nil &&
 		!s.config.scope.MayContainHost(certName, uint16(port), true)
-	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.engine == nil || outOfScopePassthrough {
+	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.Engine() == nil || outOfScopePassthrough {
 		s.tunnelConnection(clientConn, net.JoinHostPort(host, strconv.Itoa(int(port16))))
 		return
 	}
@@ -1663,7 +1708,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		s.config.logger.Error("upstream TLS dial failed", zap.String("host", host), zap.Error(err))
 		return
 	}
-	defer upstream.Close()
+	// A closure, not `defer upstream.Close()`: the HTTP/1.1 loop below re-dials when the origin ends
+	// the connection (tunnel_upstream.go), and the deferred close must reach the connection in use
+	// at return, not the first one.
+	defer func() { _ = upstream.Close() }()
 
 	protocol, err := NegotiatedProtocol(negotiated)
 	if err != nil {
@@ -1732,6 +1780,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// connection, is the beginning of the next response — and it is what lets
 	// the WebSocket handoff below keep the frame bytes that arrived with a 101.
 	upstreamBR := bufio.NewReader(upstream)
+	// The client keeps this tunnel open across requests, but the upstream connection behind it can
+	// end after any response (tunnel_upstream.go). upstreamFresh skips the liveness check on a
+	// connection no request has used yet; upstreamEnded records that the last response said the
+	// connection ends.
+	upstreamFresh, upstreamEnded := true, false
 	for {
 		requestLine, err := readHeadLine(br, maxRequestHeadBytes)
 		if err == errRequestHeadTooLarge {
@@ -1918,7 +1971,24 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// requestData — the forward, the record, the operator's own view in history — is the same
 		// bytes that went out. Rewriting it after the forward instead would make the row and the
 		// wire disagree, which is the one thing this proxy's record is not allowed to do.
+		//
+		// A connection a previous request used is checked first, and replaced when the origin has
+		// ended it (tunnel_upstream.go): writing into a dead socket read EOF and closed the client's
+		// tunnel with no response at all.
+		if !upstreamFresh && (upstreamEnded || !upstreamStillUsable(upstream, upstreamBR)) {
+			fresh, err := s.redialTunnelUpstream(host, addr, negotiated)
+			if err != nil {
+				s.config.logger.Warn("re-dialling the tunnel's upstream failed", zap.String("host", host), zap.Error(err))
+				s.writeProxyError(tlsClient, upstreamGoneResponse("could not reconnect to the origin: "+err.Error()))
+				return
+			}
+			_ = upstream.Close()
+			upstream, upstreamBR = fresh, bufio.NewReader(fresh)
+		}
+		upstreamFresh = false
 		if _, err := upstream.Write(s.forForwarding(requestData, reqHost, method, path)); err != nil {
+			s.config.logger.Warn("forward failed: upstream write", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+			s.writeProxyError(tlsClient, upstreamGoneResponse("the request could not be written to the origin: "+err.Error()))
 			return
 		}
 
@@ -1934,8 +2004,11 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			// carries an ordinary response and must be measured like one.
 			head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 			if err != nil {
+				s.config.logger.Warn("upstream closed before answering", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+				s.writeProxyError(tlsClient, upstreamGoneResponse("the origin closed the connection before answering: "+err.Error()))
 				return
 			}
+			upstreamEnded = responseEndsConnection(head)
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
 				// The same salvage the plaintext leg has (stream_response.go): a short or
@@ -2028,8 +2101,15 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// single total cannot say (burpsy-react-ui-jcdm).
 		head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 		if err != nil {
+			// The origin closed (or reset) the connection without answering — a keep-alive close that
+			// raced the request past the liveness check. The request is not re-sent: whether the origin
+			// acted on it is unknowable, and replaying a non-idempotent write is worse than an error.
+			// The client gets a 502 saying so, never a silent close it reads as the proxy dying.
+			s.config.logger.Warn("upstream closed before answering", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
+			s.writeProxyError(tlsClient, upstreamGoneResponse("the origin closed the connection before answering: "+err.Error()))
 			return
 		}
+		upstreamEnded = responseEndsConnection(head)
 
 		// A 401's challenge is the nonce a Digest credential has to be computed against, so it is
 		// recorded here and the NEXT request on this connection can answer it. This is the whole of
@@ -2049,14 +2129,16 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// forwarded live and NOT held for editing — which is the correct trade, because holding it
 		// would mean holding the stream open for the operator, and an operator cannot edit bytes that
 		// have not been sent yet. The alternative — buffering — is the defect.
-		if s.streamsResponse(reqHost, head) {
+		if s.streamsResponse(method, reqHost, head) {
 			if !s.streamTLSResponse(tlsClient, upstream, upstreamBR, method, reqHost, reqPort, reqTLS, path, head, requestData, reqStages, inScope, startTime, firstByte, requestEdited, downgrade) {
 				return
 			}
 			continue
 		}
 
-		body, err := httputil.ReadResponseBody(upstreamBR, head)
+		// method is the one that went upstream (re-read from the final bytes above), so a HEAD reads no
+		// body whatever its head declares and upstreamBR stays at the next response on this tunnel.
+		body, err := httputil.ReadResponseBodyFor(upstreamBR, head, method)
 		// Truncation and cap salvage, TLS leg (arch review: the TLS leg kept the old
 		// drop-the-exchange shape after the plaintext leg was fixed). A short body's
 		// declared framing is false, so its head goes out close-delimited; a capped one
@@ -2209,6 +2291,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// whether or not the client was still listening.
 	if keepServing && !alreadyWritten {
 		if _, err := clientConn.Write(responseData); err != nil {
+			keepServing = false
+		} else if endsWithClose(method, responseData) {
+			// A close-delimited response (a salvaged short or capped body) ends the tunnel: the
+			// client gets that end now, not after the record's passive scan (client_end.go).
+			endClientWrite(clientConn)
 			keepServing = false
 		}
 	}
@@ -2386,8 +2473,14 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// Answered here, before the listener's redirect, the scope gate and the dial, because none of them
 	// apply to the proxy describing itself, and forwarding a request for the listener would loop. The
 	// own-address match is skipped on a redirecting listener, whose clients name the listener on every
-	// request and must be redirected, not shown this page; isWebInterfaceTarget says why.
-	if s.isWebInterfaceTarget(host, port, clientConn, spec) {
+	// request and must be redirected, not shown this page; addressesTheProxy says why. With the
+	// interface switched off the request is refused here rather than forwarded: the switch withdraws
+	// the page, it does not turn a name for the proxy into an origin to resolve and dial.
+	if s.addressesTheProxy(host, port, clientConn, spec) {
+		if s.config.options.Get(OptDisableWebInterface) {
+			s.writeProxyError(clientConn, webInterfaceDisabledResponse())
+			return
+		}
 		s.serveWebInterface(clientConn, method, path)
 		return
 	}
@@ -2729,6 +2822,11 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// about what a row means. See stream_response.go.
 	if !dropped && !alreadyWritten {
 		clientConn.Write(responseData)
+		// A close-delimited response ends when the connection does: end it now, not after the
+		// record's passive scan (client_end.go).
+		if endsWithClose(method, responseData) {
+			endClientWrite(clientConn)
+		}
 	}
 
 	s.record(scanner.CapturedExchange{
@@ -3645,7 +3743,7 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	// A body cut at the cap is forwarded as far as it was read (readHTTPResponse made its head
 	// honest); this path serves one response, so the connection ends with it.
 	var capped *httputil.BodyCapError
-	if resp, _, err := readHTTPResponse(upstreamConn); err == nil || errors.As(err, &capped) {
+	if resp, _, err := readHTTPResponse(upstreamConn, method); err == nil || errors.As(err, &capped) {
 		// Match & Replace first, then the blanket response modification rules — the same order, and
 		// for the same reason, as handleTLSResponse and completeResponse: a Match & Replace rule is
 		// written against the origin's own bytes, and running "remove all JavaScript" first would
@@ -3735,7 +3833,8 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	// forForwarding runs once, up front, so an h3 attempt and the h1 leg write the same
 	// bytes: the platform-auth headers it injects belong to the exchange whichever carrier
 	// rides it (PR #363 review).
-	forwardBytes := s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))
+	method := requestMethod(requestData)
+	forwardBytes := s.forForwarding(requestData, host, method, requestURI(requestData))
 	var h3Note *string
 	// h3EgressPossible: QUIC dials the advertised endpoint directly, so with an upstream
 	// proxy or the SOCKS carrier in force the Alt-Svc table is not ridden at all - the h1
@@ -3790,7 +3889,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	if n := s.config.network; n != nil {
 		understand100 = n.Continue.Understand100
 	}
-	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, understand100)
+	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, method, understand100)
 	// A body cut at the cap is still the answer: forwarded as far as it was read, noted, and the
 	// client connection ended after it (burpsy-react-ui-h1-cap-silent).
 	var capped *httputil.BodyCapError
@@ -3902,8 +4001,11 @@ func (s *Server) forwardH3(requestData []byte, host string, port uint16, endpoin
 // A body cut at the cap comes back as the response with a *httputil.BodyCapError, its head made
 // honest for forwarding (salvageResponseBody): the caller forwards it, notes it, and ends the
 // connection.
-func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
-	return readHTTPResponseSkippingInterim(conn, false)
+//
+// method is the forwarded request's: the answer to a HEAD has no body whatever its head declares
+// (httputil.ResponseHasBodyFor), and reading one would wait on bytes that never come.
+func readHTTPResponse(conn net.Conn, method string) ([]byte, time.Time, error) {
+	return readHTTPResponseSkippingInterim(conn, method, false)
 }
 
 // readHTTPResponseSkippingInterim is readHTTPResponse with the operator's 100-continue handling
@@ -3919,7 +4021,7 @@ func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
 // from a slow one.
 //
 // With understand100 off it reads exactly one response, interim or not, which is readHTTPResponse.
-func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte, time.Time, error) {
+func readHTTPResponseSkippingInterim(conn net.Conn, method string, understand100 bool) ([]byte, time.Time, error) {
 	br := bufio.NewReader(conn)
 	firstByte := time.Time{}
 	for interim := 0; ; interim++ {
@@ -3930,7 +4032,7 @@ func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte,
 		if firstByte.IsZero() {
 			firstByte = at
 		}
-		body, err := httputil.ReadResponseBody(br, head)
+		body, err := httputil.ReadResponseBodyFor(br, head, method)
 		var capped *httputil.BodyCapError
 		if err != nil && !errors.As(err, &capped) {
 			return nil, time.Time{}, err

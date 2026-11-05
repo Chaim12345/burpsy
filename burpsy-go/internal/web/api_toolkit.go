@@ -2318,20 +2318,8 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("No exchange %d has been captured", req.Exchange), http.StatusNotFound)
 			return
 		}
-		item := s.organizer.Add(req.Exchange)
-		// Burp copies notes and highlights across when a message is sent to another tool
-		// (burpsy-react-ui-jva5) — a Repeater tab's note rides its exchange's comment, and this is
-		// where it reaches Organizer. Copied once, at add time: the item's note is the Organizer's
-		// own from then on, and later edits to either side do not overwrite the other.
-		if note, highlight := organizerSeedFrom(ex); note != "" || highlight != "" {
-			s.organizer.Update(item.ID, item.Title, note, highlight)
-			for _, listed := range s.organizer.List() {
-				if listed.ID == item.ID {
-					item = listed
-					break
-				}
-			}
-		}
+		note, highlight := organizerSeedFrom(ex)
+		item := s.organizerAddSeeded(req.Exchange, note, highlight)
 		s.organizerChanged()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(item)
@@ -2705,6 +2693,26 @@ func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request
 	s.organizerChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"moved": moved})
+}
+
+// organizerAddSeeded saves one exchange and applies the note and highlight it inherits.
+// Burp copies notes and highlights across when a message is sent to another tool
+// (burpsy-react-ui-jva5) — a Repeater tab's note rides its exchange's comment, and this is
+// where it reaches Organizer. Copied once, at add time: the item's note is the Organizer's
+// own from then on, and later edits to either side do not overwrite the other. Shared by the
+// JSON API and the /ui2/ reviewed add so the two cannot drift.
+func (s *Server) organizerAddSeeded(exchange int, note, highlight string) organizer.Item {
+	item := s.organizer.Add(exchange)
+	if note != "" || highlight != "" {
+		s.organizer.Update(item.ID, item.Title, note, highlight)
+		for _, listed := range s.organizer.List() {
+			if listed.ID == item.ID {
+				item = listed
+				break
+			}
+		}
+	}
+	return item
 }
 
 // organizerSeedFrom is what an Organizer item inherits from the exchange it is made from: the

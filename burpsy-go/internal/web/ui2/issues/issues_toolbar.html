@@ -1,0 +1,28 @@
+{{define "issues_toolbar"}}
+<form class="issues-filter meta" method="get" action="/ui2/issues" hx-get="/ui2/issues" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">
+  <label>Source <select name="source" aria-label="Filter by source">
+    <option value=""{{if eq .Filter.Source ""}} selected{{end}}>All sources</option>
+    <option value="scan"{{if eq .Filter.Source "scan"}} selected{{end}}>Scan only</option>
+    <option value="manual"{{if eq .Filter.Source "manual"}} selected{{end}}>Manual only</option>
+  </select></label>
+  <label>Severity <select name="severity" aria-label="Filter by severity">
+    <option value="">Any</option>
+    {{range .SeverityOptions}}<option value="{{.}}"{{if eq . $.Filter.Severity}} selected{{end}}>{{.}}</option>{{end}}
+  </select></label>
+  <label>Confidence <select name="confidence" aria-label="Filter by confidence">
+    <option value="">Any</option>
+    {{range .ConfidenceOptions}}<option value="{{.}}"{{if eq . $.Filter.Confidence}} selected{{end}}>{{.}}</option>{{end}}
+  </select></label>
+  <input type="search" name="q" value="{{.Filter.Text}}" placeholder="text…" aria-label="Filter issues by text" autocomplete="off">
+  <button type="submit">Filter</button>
+  {{if .Filter.Active}}<a href="/ui2/issues" hx-get="/ui2/issues" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">clear</a>{{end}}
+</form>
+<p class="meta issues-links">
+  <a href="/ui2/issues/report">Report settings and export</a>
+  · <a href="/ui2/issues/consolidation">Consolidation</a>
+  · <form method="post" action="/ui2/issues/action/confirm" hx-post="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML" style="display:inline">
+      <input type="hidden" name="op" value="llm_all"><input type="hidden" name="id" value=""><input type="hidden" name="value" value="">
+      <button type="submit">LLM triage all…</button>
+    </form>
+</p>
+{{end}}

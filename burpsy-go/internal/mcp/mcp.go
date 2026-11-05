@@ -157,6 +157,13 @@ type Options struct {
 	// Policy, when set, is the project's agent policy, read on every tools/list and tools/call so a
 	// change takes effect without a restart. Nil means no policy: every tool is listed.
 	Policy func() agent.Policy
+	// Only, when set, keeps just these tool names in tools/list and tools/call (burpsy_confirm and burpsy_task_status always stay):
+	// a client that needs a handful of tools does not pay for the whole surface's definitions on every model call.
+	Only []string
+	// Renderer draws burpsy_message_screenshot's picture from the console's stored records. Nil
+	// means the console's own History message section, built from the UI source and rasterised
+	// headless (snapshot_render.go).
+	Renderer MessageRenderer
 }
 
 // Surface is which tool list tools/list publishes.
@@ -205,6 +212,10 @@ type Server struct {
 	levelMu   sync.Mutex
 	level     string
 	policy    func() agent.Policy
+	// render is burpsy_message_screenshot's renderer; renderOnce installs the default on first use,
+	// so a server whose caller never asks for a picture never looks for bun or Chrome.
+	render     MessageRenderer
+	renderOnce sync.Once
 }
 
 // New builds a server. It validates the options that would otherwise fail on the first tool call,
@@ -277,6 +288,7 @@ func New(opts Options) (*Server, error) {
 		events:     &http.Client{},
 		notify:     !opts.NoNotifications,
 		policy:     opts.Policy,
+		render:     opts.Renderer,
 		level:      "info",
 		baseURL:    base,
 		http:       client,
@@ -293,6 +305,28 @@ func New(opts Options) (*Server, error) {
 	tools, err := s.buildTools()
 	if err != nil {
 		return nil, err
+	}
+	if len(opts.Only) > 0 {
+		keep := map[string]bool{"burpsy_confirm": true, "burpsy_task_status": true}
+		for _, n := range opts.Only {
+			keep[strings.TrimSpace(n)] = true
+		}
+		kept := tools[:0:0]
+		for _, t := range tools {
+			if keep[t.Name] {
+				kept = append(kept, t)
+			}
+		}
+		tools = kept
+		// The keep-set must bind tools/call too, not just tools/list: callTool resolves
+		// through byName, so pruning only the published list left every hidden tool
+		// callable (caught live: Only=[api_history] still executed api_sitemap). The
+		// always-stay pair (burpsy_confirm, burpsy_task_status) is in keep above.
+		for name := range s.byName {
+			if !keep[name] {
+				delete(s.byName, name)
+			}
+		}
 	}
 	s.tools = tools
 	return s, nil
