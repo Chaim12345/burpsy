@@ -158,7 +158,7 @@ type ui2DashKV struct {
 }
 
 func ui2DashDuration(ms uint64) string {
-	d := time.Duration(ms) * time.Millisecond
+	d := time.Duration(ms) * time.Millisecond //nolint:gosec // G115: a duration in ms is far below 2^63
 	switch {
 	case d < time.Second:
 		return fmt.Sprintf("%dms", ms)
@@ -174,7 +174,7 @@ func ui2DashClock(ms uint64) string {
 	if ms == 0 {
 		return ""
 	}
-	return time.UnixMilli(int64(ms)).Format("2006-01-02 15:04:05")
+	return time.UnixMilli(int64(ms)).Format("2006-01-02 15:04:05") //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 }
 
 // ui2DashEventSource names what an event is about: the task, by the name the list shows, or no

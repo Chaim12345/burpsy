@@ -62,7 +62,7 @@ func ui2HeldURL(scheme, host string, port int, path string) string {
 	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
 		authority = "[" + host + "]"
 	}
-	if port > 0 && !(scheme == "https" && port == 443) && !(scheme == "http" && port == 80) {
+	if port > 0 && (scheme != "https" || port != 443) && (scheme != "http" || port != 80) {
 		authority += ":" + strconv.Itoa(port)
 	}
 	return scheme + "://" + authority + path

@@ -114,7 +114,7 @@ func openInterceptTunnel(t *testing.T, proxyAddr, origin string, pool *x509.Cert
 	}
 	t.Cleanup(func() { raw.Close() })
 	fmt.Fprintf(raw, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", origin, origin)
-	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != http.StatusOK {
+	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != http.StatusOK { //nolint:bodyclose // a CONNECT answer carries no body
 		t.Fatalf("CONNECT through the proxy failed: %v", err)
 	}
 	host, _, _ := net.SplitHostPort(origin)
@@ -137,7 +137,7 @@ func TestTheAnswerToAHeadCarriesNoBodyWhateverItsHeadDeclares(t *testing.T) {
 		t.Helper()
 		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 		fmt.Fprintf(conn, "HEAD %s HTTP/1.1\r\nHost: %s\r\nTus-Resumable: 1.0.0\r\n\r\n", target, host)
-		resp, err := http.ReadResponse(br, &http.Request{Method: "HEAD"})
+		resp, err := http.ReadResponse(br, &http.Request{Method: "HEAD"}) //nolint:bodyclose // a HEAD answer carries no body
 		if err != nil {
 			t.Fatalf("HEAD %s: no answer — the relay is waiting for a body a HEAD answer never has: %v", path, err)
 		}
@@ -164,7 +164,7 @@ func TestTheAnswerToAHeadCarriesNoBodyWhateverItsHeadDeclares(t *testing.T) {
 			// side read past the HEAD answer's head.
 			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 			fmt.Fprintf(conn, "GET /after HTTP/1.1\r\nHost: %s\r\n\r\n", origin)
-			resp, err := http.ReadResponse(br, &http.Request{Method: "GET"})
+			resp, err := http.ReadResponse(br, &http.Request{Method: "GET"}) //nolint:bodyclose // closed by the loop below
 			if err != nil {
 				t.Fatalf("after HEAD %s, the next request on the tunnel got no answer: %v", path, err)
 			}
@@ -241,7 +241,7 @@ func TestAChunkedAnswerThatAlsoDeclaresAContentLengthIsForwardedWithoutIt(t *tes
 			if strings.Contains(strings.ToLower(head.String()), "\ncontent-length:") {
 				t.Errorf("the forwarded head still declares the origin's Content-Length beside its chunked framing:\n%s", head.String())
 			}
-			resp, err := http.ReadResponse(bufio.NewReader(io.MultiReader(strings.NewReader(head.String()), br)), &http.Request{Method: "GET"})
+			resp, err := http.ReadResponse(bufio.NewReader(io.MultiReader(strings.NewReader(head.String()), br)), &http.Request{Method: "GET"}) //nolint:bodyclose // the answer is read, not kept
 			if err != nil {
 				t.Fatalf("parse the forwarded response: %v", err)
 			}

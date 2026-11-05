@@ -273,7 +273,7 @@ func (s *Server) handleUI2BCheckExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+ui2BCheckFileName(file)+`"`)
-	_, _ = io.WriteString(w, body)
+	_, _ = io.WriteString(w, body) //nolint:gosec // G705: text/plain, nosniff, attachment — the operator's own check source, never rendered
 }
 
 var ui2BCheckUnsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]+`)

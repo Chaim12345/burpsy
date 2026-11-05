@@ -140,7 +140,7 @@ func (s *Server) ui2WSFrameFor(id uint64) *ui2WSPageFrame {
 	if f.IsText {
 		f.Payload = f.Msg.Text
 	}
-	at := time.UnixMilli(int64(f.Msg.AtMs))
+	at := time.UnixMilli(int64(f.Msg.AtMs)) //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 	f.At = at.Format("2006-01-02 15:04:05") + " (" + ui2Age(f.Msg.AtMs) + " ago)"
 	f.Summary = "#" + strconv.FormatUint(f.Msg.ID, 10) + " " + f.Msg.Direction + " " + f.Msg.Opcode + " " +
 		strconv.Itoa(f.Msg.Len) + "B " + at.UTC().Format("2006-01-02T15:04:05.000Z")

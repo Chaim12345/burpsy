@@ -39,7 +39,7 @@ func main() {
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("victim-ok"))
 		})
-		_ = http.ListenAndServe(*targetAddr, mux)
+		_ = (&http.Server{Addr: *targetAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}).ListenAndServe()
 	}()
 
 	store := core.NewTrafficStore()
@@ -122,7 +122,7 @@ function f(){return a}</script></body></html>`, core.DirectionResponse)
 		post("/api/issues/record", map[string]any{"name": "Weak password policy", "description": "prose", "severity": "high", "exchange_id": 0})
 	}()
 	fmt.Println("listening on", *webAddr, "victim on", *targetAddr)
-	if err := http.ListenAndServe(*webAddr, srv.MCPGuarded()); err != nil {
+	if err := (&http.Server{Addr: *webAddr, Handler: srv.MCPGuarded(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe(); err != nil {
 		panic(err)
 	}
 }

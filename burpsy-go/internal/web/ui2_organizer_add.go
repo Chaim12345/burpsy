@@ -107,7 +107,7 @@ func (s *Server) ui2AddRun(w http.ResponseWriter, r *http.Request) {
 		s.ui2OrganizerRender(w, r, "held change is unreadable")
 		return
 	}
-	ex, err := s.store.GetExchange(core.ExchangeID(change.Exchange))
+	ex, err := s.store.GetExchange(core.ExchangeID(change.Exchange)) //nolint:gosec // G115: the id was parsed from digits and checked against the store
 	if err != nil || ex == nil {
 		s.ui2OrganizerRender(w, r, fmt.Sprintf("exchange %d is no longer captured - nothing saved", change.Exchange))
 		return

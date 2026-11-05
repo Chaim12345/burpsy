@@ -1711,7 +1711,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// A closure, not `defer upstream.Close()`: the HTTP/1.1 loop below re-dials when the origin ends
 	// the connection (tunnel_upstream.go), and the deferred close must reach the connection in use
 	// at return, not the first one.
-	defer func() { upstream.Close() }()
+	defer func() { _ = upstream.Close() }()
 
 	protocol, err := NegotiatedProtocol(negotiated)
 	if err != nil {
@@ -1982,10 +1982,10 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				s.writeProxyError(tlsClient, upstreamGoneResponse("could not reconnect to the origin: "+err.Error()))
 				return
 			}
-			upstream.Close()
+			_ = upstream.Close()
 			upstream, upstreamBR = fresh, bufio.NewReader(fresh)
 		}
-		upstreamFresh, upstreamEnded = false, false
+		upstreamFresh = false
 		if _, err := upstream.Write(s.forForwarding(requestData, reqHost, method, path)); err != nil {
 			s.config.logger.Warn("forward failed: upstream write", zap.String("host", reqHost), zap.String("path", path), zap.Error(err))
 			s.writeProxyError(tlsClient, upstreamGoneResponse("the request could not be written to the origin: "+err.Error()))

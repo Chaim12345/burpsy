@@ -246,7 +246,7 @@ func ui2Age(ms uint64) string {
 	if ms == 0 {
 		return "—"
 	}
-	d := time.Since(time.UnixMilli(int64(ms)))
+	d := time.Since(time.UnixMilli(int64(ms))) //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 	switch {
 	case d < 0:
 		return "0s"
@@ -497,7 +497,7 @@ func (s *Server) ui2LoggerDetailFor(id uint64, p ui2LoggerParams, reqPretty, res
 	}
 	d.Curl = "curl -i -X " + method + " " + ui2ShellQuote(d.URL)
 	if e.StartedMs > 0 {
-		d.Sent = time.UnixMilli(int64(e.StartedMs)).Format("2006-01-02 15:04:05") + " (" + ui2Age(e.StartedMs) + " ago)"
+		d.Sent = time.UnixMilli(int64(e.StartedMs)).Format("2006-01-02 15:04:05") + " (" + ui2Age(e.StartedMs) + " ago)" //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 	}
 	d.HistHost = ui2HistoryQueryHref("host = " + ui2QueryQuote(e.Host))
 	d.HistHostPath = ui2HistoryQueryHref("host = " + ui2QueryQuote(e.Host) + " AND path ~ " + ui2QueryQuote(e.Path))
@@ -582,7 +582,7 @@ func (s *Server) handleUI2LoggerExport(w http.ResponseWriter, r *http.Request) {
 		}
 		cells := []string{
 			strconv.FormatUint(e.ID, 10),
-			time.UnixMilli(int64(e.StartedMs)).UTC().Format("2006-01-02T15:04:05.000Z"),
+			time.UnixMilli(int64(e.StartedMs)).UTC().Format("2006-01-02T15:04:05.000Z"), //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 			e.Tool, e.Host, strconv.Itoa(int(e.Port)), e.Method, e.Path, status, length,
 			strconv.FormatUint(e.DurationMs, 10), e.Comment,
 		}

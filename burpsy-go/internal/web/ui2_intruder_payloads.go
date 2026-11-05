@@ -498,7 +498,7 @@ func (s *Server) ui2IntruderBaseTarget(msgID uint64) string {
 	host := ui2HostFromRequest(string(raw))
 	if host == "" && ex != nil && ex.Host != "" {
 		host = ex.Host
-		if ex.Port != 0 && !(ex.TLS && ex.Port == 443) && !(!ex.TLS && ex.Port == 80) {
+		if ex.Port != 0 && (!ex.TLS || ex.Port != 443) && (ex.TLS || ex.Port != 80) {
 			host += ":" + strconv.Itoa(int(ex.Port))
 		}
 	}

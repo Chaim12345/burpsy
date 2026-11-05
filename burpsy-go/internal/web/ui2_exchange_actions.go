@@ -81,7 +81,7 @@ func ui2ShellWord(s string) string {
 		return ui2ShellQuote(s)
 	}
 	for _, c := range s {
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 			return ui2ShellQuote(s)
 		}
 	}
@@ -135,7 +135,7 @@ func ui2RawToCurl(raw, u string) string {
 func ui2RawToSqlmap(raw, u string) string {
 	method, headers, body := ui2SplitRequest(raw)
 	parts := []string{"sqlmap -u " + ui2ShellQuote(u)}
-	if method != "GET" && !(method == "POST" && body != "") {
+	if method != "GET" && (method != "POST" || body == "") {
 		parts = append(parts, "  --method="+ui2ShellWord(method))
 	}
 	for _, line := range headers {

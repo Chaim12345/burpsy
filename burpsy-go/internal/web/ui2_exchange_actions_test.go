@@ -183,7 +183,7 @@ func TestUI2ToolPagesAcceptAMsgIDSeed(t *testing.T) {
 	q := "?msg_id=" + strconv.FormatUint(msgID, 10)
 	for _, p := range []string{"/ui2/repeater", "/ui2/intruder", "/ui2/sequencer", "/ui2/decoder", "/ui2/comparer"} {
 		body := getUI2(t, s, p+q+"&slot=b").Body.String()
-		if !(strings.Contains(body, "GET /seeded") || strings.Contains(body, `name="msg_id" value="`+strconv.FormatUint(msgID, 10)+`"`)) || !strings.Contains(body, "Loaded request message") {
+		if (!strings.Contains(body, "GET /seeded") && !strings.Contains(body, `name="msg_id" value="`+strconv.FormatUint(msgID, 10)+`"`)) || !strings.Contains(body, "Loaded request message") {
 			t.Errorf("%s did not load the seeded request", p)
 		}
 	}

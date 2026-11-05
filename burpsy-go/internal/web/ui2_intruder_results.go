@@ -1469,7 +1469,7 @@ func (s *Server) handleUI2IntruderExtract(w http.ResponseWriter, r *http.Request
 	}
 	m := re.FindStringSubmatchIndex(raw)
 	switch {
-	case m == nil || len(m) < 4 || m[2] < 0:
+	case len(m) < 4 || m[2] < 0:
 		model["warning"] = "the rule matches nothing in this response"
 	case m[2] != at || raw[m[2]:m[3]] != sel:
 		model["warning"] = "the rule extracts something else from this response: " + truncateForDisplay(raw[m[2]:m[3]], 200)

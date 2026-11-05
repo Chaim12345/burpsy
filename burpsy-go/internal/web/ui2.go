@@ -490,7 +490,7 @@ func (s *Server) handleUI2AdvisoryDetail(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	for _, ref := range v.References {
-		model.References = append(model.References, ui2AdvisoryLink{Title: ref.Title, URL: ref.URL})
+		model.References = append(model.References, ui2AdvisoryLink(ref))
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ui2Templates.ExecuteTemplate(w, "advisory_detail.html", model); err != nil {

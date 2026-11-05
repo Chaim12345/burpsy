@@ -110,7 +110,7 @@ func TestUI2SequencerCaptureFlow(t *testing.T) {
 		good[k] = v
 	}
 	good.Set("token", token)
-	rec = postUI2Form(t, s, "/ui2/sequencer/capture/run", good)
+	postUI2Form(t, s, "/ui2/sequencer/capture/run", good)
 	if strings.Contains(rec.Body.String(), "<strong>Not") || strings.Contains(rec.Body.String(), "confirmation required") {
 		t.Fatalf("run with the minted token failed: %s", rec.Body.String()[:ui2Min(300, rec.Body.Len())])
 	}
@@ -144,7 +144,7 @@ func TestUI2SequencerCaptureFlow(t *testing.T) {
 		good[k] = v
 	}
 	good.Set("token", m[1])
-	rec = postUI2Form(t, s, "/ui2/sequencer/capture/run", good)
+	postUI2Form(t, s, "/ui2/sequencer/capture/run", good)
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) && len(s.captureSet().running()) == 0 {
 		time.Sleep(10 * time.Millisecond)

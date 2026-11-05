@@ -34,7 +34,7 @@ func TestAuthzTestFlagsBypassAndEnforced(t *testing.T) {
 	_ = guard
 	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, _ = fmt.Sscanf(portStr, "%d", &port)
 
 	s := newTestServer()
 	cfg := sender.DefaultSenderConfig()
@@ -176,7 +176,7 @@ func TestAuthzVerdictIsAmbiguousWhenTheBaselineIsNoReference(t *testing.T) {
 	defer srv.Close()
 	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, _ = fmt.Sscanf(portStr, "%d", &port)
 
 	s := newTestServer()
 	cfg := sender.DefaultSenderConfig()

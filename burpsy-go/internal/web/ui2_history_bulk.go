@@ -395,9 +395,10 @@ func (s *Server) handleUI2HistoryExport(w http.ResponseWriter, r *http.Request) 
 		if v.Status != nil {
 			status = strconv.Itoa(int(*v.Status))
 		}
+		started := time.UnixMilli(int64(v.StartedMs)).UTC().Format("2006-01-02T15:04:05.000Z") //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 		lines = append(lines, cells([]string{
 			strconv.FormatUint(uint64(v.ID), 10),
-			time.UnixMilli(int64(v.StartedMs)).UTC().Format("2006-01-02T15:04:05.000Z"),
+			started,
 			v.Method, v.Host, strconv.Itoa(int(v.Port)), v.Path, ui2PathExt(v.Path),
 			strconv.Itoa(ui2PathQueryCount(v.Path)), ui2YesNo(v.TLS), ui2YesNo(v.Variants.Edited),
 			status, strconv.Itoa(v.ResponseLen), v.Mime, strconv.FormatUint(v.DurationMs, 10), ptrString(v.Notes),

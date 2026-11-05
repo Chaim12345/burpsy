@@ -87,7 +87,7 @@ func TestTheNextRequestOnATunnelSurvivesTheOriginClosingTheUpstream(t *testing.T
 				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 				fmt.Fprintf(conn, "PUT /api/jobs/7 HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n%s",
 					origin, len(body), body)
-				resp, err := http.ReadResponse(br, &http.Request{Method: "PUT"})
+				resp, err := http.ReadResponse(br, &http.Request{Method: "PUT"}) //nolint:bodyclose // the answer is read, not kept
 				if err != nil {
 					t.Fatalf("PUT #%d on the reused tunnel: no response — the proxy closed the client's tunnel when the upstream was gone: %v", i, err)
 				}
@@ -139,7 +139,7 @@ func openReusedTunnel(t *testing.T, origin string) (*tls.Conn, *bufio.Reader) {
 	}
 	t.Cleanup(func() { raw.Close() })
 	fmt.Fprintf(raw, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", origin, origin)
-	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != 200 {
+	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != 200 { //nolint:bodyclose // a CONNECT answer carries no body
 		t.Fatalf("CONNECT: %v", err)
 	}
 	host, _, _ := net.SplitHostPort(origin)
@@ -161,7 +161,7 @@ func TestARequestTheOriginDropsIsAnswered502NotASilentClose(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		fmt.Fprintf(conn, "PUT /api/jobs/7 HTTP/1.1\r\nHost: %s\r\nContent-Length: 2\r\n\r\n{}", origin)
-		resp, err := http.ReadResponse(br, &http.Request{Method: "PUT"})
+		resp, err := http.ReadResponse(br, &http.Request{Method: "PUT"}) //nolint:bodyclose // the answer is read, not kept
 		if err != nil {
 			t.Fatalf("PUT #%d: the client's tunnel was closed with no response: %v", i, err)
 		}

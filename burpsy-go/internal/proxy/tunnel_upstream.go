@@ -70,7 +70,7 @@ func (s *Server) redialTunnelUpstream(host, addr, negotiated string) (net.Conn, 
 		return nil, err
 	}
 	if protocol, perr := NegotiatedProtocol(got); perr != nil || protocol != core.ProtocolHTTP1 {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("the origin negotiated %q on reconnect, not HTTP/1.1", got)
 	}
 	return conn, nil

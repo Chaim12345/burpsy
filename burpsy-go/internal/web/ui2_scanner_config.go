@@ -1168,7 +1168,7 @@ func (d ui2SelDraft) methodEnabled(t uint32, m string) bool {
 func (d ui2SelDraft) setMethodEnabled(t uint32, m string, on bool) ui2SelDraft {
 	rest := []scanner.IssueDetectionMethod{}
 	for _, e := range d.disabledMethods {
-		if !(e.TypeIndex == t && e.Method == m) {
+		if e.TypeIndex != t || e.Method != m {
 			rest = append(rest, e)
 		}
 	}
@@ -1352,7 +1352,7 @@ func (s *Server) ui2ScanDetailModel(name string, shipped bool, v auditConfigView
 				}
 			}
 			dec := strconv.FormatUint(uint64(row.TypeIndex), 10)
-			if !match && !(len(words) == 1 && (words[0] == hex || words[0] == hex[2:] || words[0] == dec)) {
+			if !match && (len(words) != 1 || (words[0] != hex && words[0] != hex[2:] && words[0] != dec)) {
 				continue
 			}
 		}

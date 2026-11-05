@@ -234,7 +234,7 @@ func (s *Server) ui2SearchModel(f ui2SearchForm) ui2SearchModel {
 			row.Source = "unattributed"
 		}
 		if v.StartedMs > 0 {
-			row.Started = time.UnixMilli(int64(v.StartedMs)).Format("2006-01-02 15:04:05")
+			row.Started = time.UnixMilli(int64(v.StartedMs)).Format("2006-01-02 15:04:05") //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 		}
 		if r.MatchesTruncated {
 			row.Matches = fmt.Sprintf("%d of %d", len(r.Matches), r.MatchCount)

@@ -76,8 +76,7 @@ func TestTriageRedirectKeyPolicy(t *testing.T) {
 // keeps the bearer header (hostname comparison ignores the scheme), which is why the ui2
 // settings page refuses to mint remote http base URLs at all.
 func TestTriageRedirectKeyPolicyHTTPSDowngrade(t *testing.T) {
-	var plain *httptest.Server
-	plain = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "auth=%q", r.Header.Get("Authorization"))
 	}))
 	defer plain.Close()

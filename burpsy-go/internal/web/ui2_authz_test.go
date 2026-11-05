@@ -113,7 +113,7 @@ func TestUI2AuthzTestReviewRunAndDiff(t *testing.T) {
 	defer srv.Close()
 	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	var port uint16
-	fmt.Sscanf(portStr, "%d", &port)
+	_, _ = fmt.Sscanf(portStr, "%d", &port)
 	s := newTestServer()
 	s.WithSender(sender.NewSender(sender.DefaultSenderConfig()))
 	s.scope.AddInclude("*")

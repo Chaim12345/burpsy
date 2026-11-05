@@ -47,7 +47,7 @@ func TestACloseDelimitedResponseEndsBeforeTheRecordFinishes(t *testing.T) {
 								break
 							}
 						}
-						c.Write([]byte(tc.answer))
+						_, _ = c.Write([]byte(tc.answer))
 					}(c)
 				}
 			}()
@@ -89,7 +89,7 @@ func TestACloseDelimitedResponseEndsBeforeTheRecordFinishes(t *testing.T) {
 			}
 			defer conn.Close()
 			fmt.Fprintf(conn, "GET /page HTTP/1.1\r\nHost: %s\r\n\r\n", ln.Addr().String())
-			conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			start := time.Now()
 			var got bytes.Buffer
 			_, _ = got.ReadFrom(conn)

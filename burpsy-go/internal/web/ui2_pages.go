@@ -454,9 +454,7 @@ func (s *Server) handleUI2ScannerRun(w http.ResponseWriter, r *http.Request) {
 // validation on dispatch.
 func ui2CrawlPayload(r *http.Request) (map[string]any, string) {
 	seeds := []string{}
-	for _, f := range strings.Fields(r.PostFormValue("seeds")) {
-		seeds = append(seeds, f)
-	}
+	seeds = append(seeds, strings.Fields(r.PostFormValue("seeds"))...)
 	if len(seeds) == 0 {
 		return nil, "at least one seed URL is required"
 	}

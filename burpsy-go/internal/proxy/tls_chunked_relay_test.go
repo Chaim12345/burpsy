@@ -111,7 +111,7 @@ func TestAChunkedResponseThroughTheTLSInterceptStaysReadableByAStrictHTTP1Client
 	defer raw.Close()
 	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
 	fmt.Fprintf(raw, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", origin, origin)
-	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != http.StatusOK {
+	if resp, err := http.ReadResponse(bufio.NewReader(raw), &http.Request{Method: "CONNECT"}); err != nil || resp.StatusCode != http.StatusOK { //nolint:bodyclose // a CONNECT answer carries no body
 		t.Fatalf("CONNECT through the proxy failed: %v", err)
 	}
 	host, _, _ := net.SplitHostPort(origin)
@@ -131,7 +131,7 @@ func TestAChunkedResponseThroughTheTLSInterceptStaysReadableByAStrictHTTP1Client
 		{"/api", http.StatusOK, gz.Bytes()},
 	} {
 		fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nAccept-Encoding: gzip\r\n\r\n", tc.path, origin)
-		resp, err := http.ReadResponse(br, &http.Request{Method: "GET"})
+		resp, err := http.ReadResponse(br, &http.Request{Method: "GET"}) //nolint:bodyclose // the answer is read, not kept
 		if err != nil {
 			t.Fatalf("%s: a strict client could not parse the response head — the tunnel lost its framing: %v", tc.path, err)
 		}

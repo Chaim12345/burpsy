@@ -571,7 +571,7 @@ func ui2SitemapAge(startedMs uint64) string {
 	if startedMs == 0 {
 		return ""
 	}
-	d := time.Since(time.UnixMilli(int64(startedMs)))
+	d := time.Since(time.UnixMilli(int64(startedMs))) //nolint:gosec // G115: a millisecond timestamp is far below 2^63
 	switch {
 	case d < time.Minute:
 		return strconv.Itoa(int(d.Seconds())) + "s ago"
@@ -1240,7 +1240,8 @@ func (s *Server) ui2SitemapReviewConfirm(w http.ResponseWriter, r *http.Request)
 	if json.Indent(&pretty, call.Body, "", "  ") != nil {
 		pretty.Write(call.Body)
 	}
-	titles := map[string]string{"delete-host": "Delete host", "delete-branch": "Delete branch", "delete-item": "Delete this item only",
+	titles := map[string]string{ //nolint:gosec // G101: review-sheet titles, not credentials
+		"delete-host": "Delete host", "delete-branch": "Delete branch", "delete-item": "Delete this item only",
 		"passive": "Passively scan branch", "crawl": "Actively scan branch (crawl)"}
 	s.ui2SitemapReviewSheet(w, map[string]any{
 		"Title": titles[call.Op], "Call": call, "BodyText": pretty.String(), "ReviewID": id, "Token": token, "Gated": gated,
