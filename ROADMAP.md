@@ -68,7 +68,7 @@ There are two consoles over the same JSON API (381 routes):
 
 ### Next
 
-- **ui2 settings pages** not yet migrated: network and TLS (DNS, timeouts, HTTP/2 and HTTP/3,
+- **ui2 settings pages** not yet migrated (the runtime TLS-interception and DOM-engine switches are in): network and TLS (DNS, timeouts, HTTP/2 and HTTP/3,
   upstream proxy and SOCKS, platform authentication, client certificates), scheduled tasks,
   skills, browser, per-tool logging, CA import/regenerate/export, backup, diagnostics, hotkeys.
 - **ui2 end-to-end suite in CI**: a browser smoke test of every page plus one write per domain.

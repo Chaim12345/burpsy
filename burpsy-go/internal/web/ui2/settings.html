@@ -34,6 +34,8 @@
 <p class="meta">data dir={{.browser.browser_data_directory}} sandbox={{.browser.allow_running_without_sandbox}}</p>
 <h3>Upstream proxy</h3>
 <div id="settings-proxy" hx-get="/ui2/settings/write/proxy" hx-trigger="load" hx-target="#settings-proxy" hx-swap="outerHTML"><p class="meta">loading…</p></div>
+<h3>TLS interception and DOM engine</h3>
+<div id="settings-engines" hx-get="/ui2/settings/write/engines" hx-trigger="load" hx-target="#settings-engines" hx-swap="outerHTML"><p class="meta">loading…</p></div>
 <h3>TLS passthrough</h3>
 <div id="settings-passthrough" hx-get="/ui2/settings/write/passthrough" hx-trigger="load" hx-target="#settings-passthrough" hx-swap="outerHTML"><p class="meta">loading…</p></div>
 <h3>Automatic backup</h3>

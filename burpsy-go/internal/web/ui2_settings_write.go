@@ -497,6 +497,51 @@ var ui2SettingsWriteParsers = map[string]func(*Server, *http.Request) (ui2Settin
 	"proxy-default": ui2ParseProxyDefaultCall,
 	"backup":        ui2ParseBackupCall,
 	"pools":         ui2ParsePoolsCall,
+	"engines":       ui2ParseEnginesCall,
+}
+
+// ui2ParseEnginesCall builds the runtime switches' calls: TLS interception on/off
+// (/api/proxy/interception) and the DOM engine (/api/scanner/dom). Both replace a flag that used
+// to need a restart; the DOM value is checked here with the route's own rule, so a refused value
+// is named on the form rather than after a review.
+func ui2ParseEnginesCall(s *Server, r *http.Request) (ui2SettingsCall, string) {
+	c := ui2SettingsCall{container: "settings-engines", method: http.MethodPut}
+	switch r.PostFormValue("op") {
+	case "interception":
+		on := r.PostFormValue("enabled") == "on"
+		c.apiBase, c.title = "/api/proxy/interception", "TLS interception"
+		c.body, _ = json.Marshal(map[string]bool{"enabled": on})
+		if on {
+			c.consequences = []string{"New HTTPS tunnels are decrypted and recorded: the CA in the CA directory is loaded, or generated if there is none. Clients must trust that CA."}
+		} else {
+			c.consequences = []string{"New HTTPS tunnels pass through opaque: nothing inside them is recorded or scanned. The CA stays on disk. Tunnels already open keep their current mode."}
+		}
+	case "dom":
+		value := strings.TrimSpace(r.PostFormValue("engine"))
+		if value == "off" {
+			value = ""
+		}
+		if value != "" {
+			if err := s.domEngineAllowed(value); err != nil {
+				return c, err.Error()
+			}
+		}
+		c.apiBase, c.title = "/api/scanner/dom", "DOM engine"
+		c.body, _ = json.Marshal(map[string]string{"engine": value})
+		if value == "" {
+			c.consequences = []string{"The DOM engine is removed and its browser closed: DOM-based checks report a missing capability until one is set again."}
+		} else {
+			c.consequences = []string{"A browser is started (or attached to) for DOM-based checks, and the DOM check families are switched on. A binary path starts that program with this process's privileges."}
+		}
+	default:
+		return c, "unknown engine operation"
+	}
+	c.callURL, c.snapshotPath = c.apiBase, c.apiBase
+	c.driftMsg = "the setting changed between your review and this confirmation - review the current state and save again"
+	if _, risk, ok := routeRiskFor(c.apiBase); ok {
+		c.gated = needsConfirmation(risk)
+	}
+	return c, ""
 }
 
 // ui2SettingsWriteContainer maps a write area to the settings-page container its answers swap
@@ -785,6 +830,21 @@ func (s *Server) handleUI2SettingsWriteArea(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		ui2Fragment(w, r, "burpsy /ui2/ — Settings", "settings", ui2Exec("settings_write_backup.html", model))
+	case "engines":
+		model := map[string]any{}
+		rec := newRecorder()
+		s.mux.ServeHTTP(rec, newReq(http.MethodGet, "/api/proxy/interception"))
+		var tlsView interceptionView
+		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &tlsView) == nil {
+			model["tls"] = tlsView
+		}
+		rec = newRecorder()
+		s.mux.ServeHTTP(rec, newReq(http.MethodGet, "/api/scanner/dom"))
+		var domView domEngineView
+		if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &domView) == nil {
+			model["dom"] = domView
+		}
+		ui2Fragment(w, r, "burpsy /ui2/ — Settings", "settings", ui2Exec("settings_write_engines.html", model))
 	case "pools":
 		view := s.ui2PoolsView()
 		model := map[string]any{
