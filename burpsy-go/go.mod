@@ -6,13 +6,13 @@ require (
 	github.com/BishopFox/jsluice v0.0.0-20240110145140-0ddfab153e06
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/PuerkitoBio/goquery v1.12.0
-	github.com/andybalholm/brotli v1.2.0
+	github.com/andybalholm/brotli v1.3.0
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/chromedp/cdproto v0.0.0-20260714215040-dc233986426f
 	github.com/chromedp/chromedp v0.16.0
 	github.com/dop251/goja v0.0.0-20260806115107-493f22071ef6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/klauspost/compress v1.18.7
+	github.com/klauspost/compress v1.20.4
 	github.com/projectdiscovery/wappalyzergo v0.2.93
 	github.com/quic-go/quic-go v0.64.1
 	github.com/refraction-networking/utls v1.8.2
