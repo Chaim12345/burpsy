@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "fac557158283",
+  "strategy": "manual-commit",
+  "branch": "ui2-migration",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "burpsy-go/internal/web/poc_host.go",
+    "burpsy-go/internal/web/server.go",
+    "burpsy-go/internal/web/ui2_pages.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fa/c557158283/0/metadata.json",
+      "transcript": "/fa/c557158283/0/full.jsonl",
+      "compact_transcript": "/fa/c557158283/0/transcript.jsonl",
+      "content_hash": "/fa/c557158283/0/content_hash.txt",
+      "prompt": "/fa/c557158283/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 21937,
+    "cache_read_tokens": 11646857,
+    "output_tokens": 7451,
+    "api_call_count": 19
+  },
+  "redaction": {
+    "replacements": 193,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 7,
+      "credentialed_uri": 12,
+      "entropy": 108,
+      "key_context": 52,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}

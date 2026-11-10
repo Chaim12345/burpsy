@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bomjjf277</task-id>
+<tool-use-id>toolu_01UpEzUYi6QEnmfDgQU7jzz7</tool-use-id>
+<output-file>/tmp/claude-0/-home-user-burpsy/66b7b689-6882-5e3a-8187-823ee0e17adf/tasks/bomjjf277.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the whole Go test suite to find failures" completed (exit code 0)</summary>
+</task-notification>
