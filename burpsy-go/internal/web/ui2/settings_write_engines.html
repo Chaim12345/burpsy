@@ -9,8 +9,8 @@
 <p class="meta">DOM engine: <strong>{{.dom.Engine}}</strong> · DOM checks {{if .dom.DOMChecks}}on{{else}}off{{end}}</p>
 <form hx-post="/ui2/settings/write/engines/confirm" hx-target="#settings-engines" hx-swap="outerHTML">
 <input type="hidden" name="op" value="dom">
-<label>Engine <input type="text" name="engine" size="40" placeholder="chrome, a browser path, ws://127.0.0.1:9222/…, or off" autocomplete="off"></label>
+<label>Engine <input type="text" name="engine" size="40" placeholder="chrome, ws://127.0.0.1:9222/…, or off" autocomplete="off"></label>
 <button>Review and set</button>
-<p class="meta">"chrome" launches and discovers a browser; a path must name a browser binary; a ws:// CDP endpoint must be on this machine. Anything else needs the -dom flag at startup.</p></form>
+<p class="meta">"chrome" launches and discovers a browser; a ws:// CDP endpoint must be on this machine. A browser path is accepted only as the -dom flag at startup.</p></form>
 {{else}}<p class="meta">This process has no switchable DOM engine; restart with -dom to use one.</p>{{end}}
 </div>

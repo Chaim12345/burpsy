@@ -910,9 +910,11 @@ var manifest = map[string]route{
 			"POST {id}/cancel stops it before dispatch and sends nothing (auditItemContextMenuCancel)",
 	},
 	"/api/scanner/dom": {
-		// riskExecute: a browser path names a program this process starts.
+		// riskExecute: setting an engine starts a browser. Like the plugin loader it names no path
+		// of its own: only "chrome" (burpsy's discovery), the -dom startup value or a local CDP
+		// endpoint (domEngineAllowed), so the operator's command line authorised any binary.
 		methods: []string{"GET", "PUT"}, risk: riskExecute,
-		summary: "the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on",
+		summary: "the DOM engine, live (the runtime form of -dom): none, chrome, the -dom startup value or a local ws:// CDP endpoint; setting one switches the DOM families on",
 	},
 	"/api/scanner/config": {
 		methods: []string{"GET", "PUT"}, risk: riskScope,

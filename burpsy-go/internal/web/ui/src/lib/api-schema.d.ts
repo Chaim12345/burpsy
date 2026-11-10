@@ -2570,9 +2570,9 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on */
+        /** the DOM engine, live (the runtime form of -dom): none, chrome, the -dom startup value or a local ws:// CDP endpoint; setting one switches the DOM families on */
         get: operations["getApiScannerDom"];
-        /** the DOM engine, live (the runtime form of -dom): none, chrome, a ws:// CDP endpoint or a browser binary; setting one switches the DOM families on */
+        /** the DOM engine, live (the runtime form of -dom): none, chrome, the -dom startup value or a local ws:// CDP endpoint; setting one switches the DOM families on */
         put: operations["putApiScannerDom"];
         post?: never;
         delete?: never;

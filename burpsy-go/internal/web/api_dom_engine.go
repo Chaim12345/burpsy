@@ -62,19 +62,12 @@ func (s *Server) domEngineLabel() string {
 	return label
 }
 
-// domBrowserNames are the program names a runtime PUT may start. The route runs a binary in this
-// process's privileges, so it starts browsers and nothing else; any other path needs -dom.
-var domBrowserNames = map[string]bool{
-	"chrome": true, "google-chrome": true, "google-chrome-stable": true, "chromium": true,
-	"chromium-browser": true, "headless_shell": true, "chrome-headless-shell": true,
-	"msedge": true, "microsoft-edge": true, "brave": true, "brave-browser": true,
-	"obscura": true, "lightpanda": true,
-}
-
 // domEngineAllowed says whether a runtime value may be set. The -dom flag is the operator's own
-// command line and takes anything; this route is reachable by every API client, so it takes less:
-// the value -dom was started with, "chrome", a known browser binary, or a CDP endpoint on this
-// machine. A remote endpoint would render in-scope pages (cookies included) on another host.
+// command line and takes anything; this route is reachable by every API client, so it names no
+// program of its own: the value -dom was started with, "chrome" (burpsy's own discovery), or a
+// CDP endpoint on this machine. A path is refused whatever it is called — a file named chrome in
+// a directory someone else can write is still their program — and a remote endpoint would render
+// in-scope pages (cookies included) on another host.
 func (s *Server) domEngineAllowed(value string) error {
 	if value == "chrome" || (s.domEngine != "" && value == strings.TrimSpace(s.domEngine)) {
 		return nil
@@ -90,11 +83,7 @@ func (s *Server) domEngineAllowed(value string) error {
 		}
 		return fmt.Errorf("a CDP endpoint on another host (%s) is refused at runtime: in-scope pages would be rendered there; restart with -dom to use it", host)
 	}
-	name := strings.TrimSuffix(strings.ToLower(filepath.Base(value)), ".exe")
-	if domBrowserNames[name] {
-		return nil
-	}
-	return fmt.Errorf("%q is not a known browser binary; this route starts browsers only - restart with -dom to use another program", filepath.Base(value))
+	return fmt.Errorf("a browser path is not accepted at runtime (%q): this route starts no program by path - use \"chrome\", or restart with -dom to name a binary", filepath.Base(value))
 }
 
 func (s *Server) viewDOMEngine() domEngineView {

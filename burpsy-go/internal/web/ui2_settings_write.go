@@ -531,7 +531,7 @@ func ui2ParseEnginesCall(s *Server, r *http.Request) (ui2SettingsCall, string) {
 		if value == "" {
 			c.consequences = []string{"The DOM engine is removed and its browser closed: DOM-based checks report a missing capability until one is set again."}
 		} else {
-			c.consequences = []string{"A browser is started (or attached to) for DOM-based checks, and the DOM check families are switched on. A binary path starts that program with this process's privileges."}
+			c.consequences = []string{"A browser is started (or attached to) for DOM-based checks, and the DOM check families are switched on."}
 		}
 	default:
 		return c, "unknown engine operation"

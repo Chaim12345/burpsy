@@ -104,9 +104,10 @@ func TestDOMEngineRefusesABadBodyAndAProcessWithoutASwitch(t *testing.T) {
 func TestDOMEngineRuntimeValuesAreRestricted(t *testing.T) {
 	s := newTestServer().WithDOMEngine("/opt/custom/renderer")
 	for value, ok := range map[string]bool{
-		"chrome": true, "/usr/bin/chromium": true, "/opt/custom/renderer": true,
+		"chrome": true, "/opt/custom/renderer": true, // "chrome" and the -dom startup value
 		"ws://127.0.0.1:9222/devtools/browser/abc": true, "wss://localhost:9222/x": true,
 		"/bin/sh": false, "/usr/bin/python3": false,
+		"/usr/bin/chromium": false, "/tmp/x/chrome": false, // a path is refused whatever its name
 		"ws://attacker.example:9222/devtools/browser/abc": false,
 	} {
 		if err := s.domEngineAllowed(value); (err == nil) != ok {

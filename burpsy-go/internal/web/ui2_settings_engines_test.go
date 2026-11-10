@@ -13,7 +13,7 @@ func TestUI2SettingsEnginesRendersAndRefusesABadEngine(t *testing.T) {
 		t.Fatalf("engines section did not render: %.200s", body)
 	}
 	out := postUI2Form(t, s, "/ui2/settings/write/engines/confirm", url.Values{"op": {"dom"}, "engine": {"/bin/sh"}}).Body.String()
-	if !strings.Contains(out, "not a known browser binary") {
+	if !strings.Contains(out, "a browser path is not accepted at runtime") {
 		t.Fatalf("a non-browser engine was not refused at review: %.300s", out)
 	}
 }
