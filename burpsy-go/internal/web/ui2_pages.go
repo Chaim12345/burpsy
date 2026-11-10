@@ -534,7 +534,9 @@ func (s *Server) handleUI2ScannerCrawlWatch(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleUI2Advisories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	rec := newRecorder()
-	s.mux.ServeHTTP(rec, newReq(http.MethodGet, "/api/advisories?q="+q.Get("q")+"&severity="+q.Get("severity")))
+	// Encoded: a raw term carrying & or # would add or cut parameters of the inner call.
+	inner := url.Values{"q": {q.Get("q")}, "severity": {q.Get("severity")}}
+	s.mux.ServeHTTP(rec, newReq(http.MethodGet, "/api/advisories?"+inner.Encode()))
 	var view any
 	_ = ui2DecodeJSON(rec.Body.Bytes(), &view)
 	ui2Fragment(w, r, "burpsy /ui2/ — Issue definitions", "advisories", ui2Exec("advisories.html", view))

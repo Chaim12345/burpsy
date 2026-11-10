@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -1872,6 +1873,9 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	server := &http.Server{
 		Addr:    addr,
 		Handler: handler,
+		// Headers only: a client that never finishes its request head cannot hold a connection
+		// open forever. No write timeout — /api/events is a stream that never ends.
+		ReadHeaderTimeout: 15 * time.Second,
 	}
 
 	go func() {

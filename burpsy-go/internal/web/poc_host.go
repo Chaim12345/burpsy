@@ -68,7 +68,7 @@ func (s *Server) startPocHost() (string, error) {
 	mux.HandleFunc("/poc/", func(w http.ResponseWriter, r *http.Request) {
 		host.serve(w, r)
 	})
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 15 * time.Second}
 	go func() { _ = server.Serve(ln) }()
 
 	s.logger.Info("poc host listening", zap.String("addr", host.baseURL), zap.String("reason", "one-shot CSRF PoC pages, off the console origin"))
