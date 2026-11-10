@@ -32,6 +32,11 @@ import (
 // connection, which is what it is there to confirm.
 const upstreamLivenessWait = time.Millisecond
 
+// upstreamFreshFor is how long a newly dialled upstream is trusted without a liveness check. Past
+// it the first request is checked like any later one: it waited (an intercept hold, a slow
+// client), and an origin's idle timeout may have closed the connection meanwhile.
+const upstreamFreshFor = time.Second
+
 // upstreamStillUsable reports whether an upstream connection a previous request used can carry the
 // next one: it is open and has nothing pending. Bytes waiting on an idle HTTP/1.1 connection are not
 // a response to anything this proxy sent (a 408 an origin writes before it closes, for one), and

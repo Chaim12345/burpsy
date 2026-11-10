@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -192,7 +193,21 @@ type authzRawSender struct {
 	ids       map[string]authzIdentity // label -> identity, so the engine's AuthContext.Label resolves
 	lastReqID map[string]uint64
 	lastRspID map[string]uint64
-	mu        sync.Mutex
+	// lastLocation is each label's last redirect destination ("" when the answer was not a redirect).
+	lastLocation map[string]string
+	mu           sync.Mutex
+}
+
+// authzLoginRedirect reports whether a redirect destination is a login or denial page: a baseline
+// sent there holds no valid session, and matching it would read "both were bounced" as a bypass.
+func authzLoginRedirect(location string) bool {
+	l := strings.ToLower(location)
+	for _, word := range []string{"login", "signin", "sign-in", "sign_in", "logon", "/auth", "sso", "session/new", "unauthori", "denied", "forbidden"} {
+		if strings.Contains(l, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *authzRawSender) Send(ctx context.Context, auth scanner.AuthContext) (int, string, time.Duration, error) {
@@ -230,6 +245,18 @@ func (a *authzRawSender) Send(ctx context.Context, auth scanner.AuthContext) (in
 	// framed differently read as different bodies, and an empty collection behind gzip is opaque bytes
 	// the no-data rule cannot see. The stored message above keeps the wire bytes for the Comparer.
 	body := string(scanner.ReadableBody(respBytes))
+	// A redirect's answer is its destination: fold it into the compared body, so a bounce to the
+	// login page and a redirect to the result page read as different answers.
+	location := ""
+	if status >= 300 && status < 400 {
+		if i := bytes.Index(respBytes, []byte("\r\n\r\n")); i >= 0 {
+			location = firstHeaderValue(respBytes[:i+4], "Location")
+		}
+		body = "Location: " + location + "\n" + body
+	}
+	a.mu.Lock()
+	a.lastLocation[auth.Label] = location
+	a.mu.Unlock()
 	return status, body, elapsed, nil
 }
 
@@ -300,7 +327,7 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 		idMap[id.Label] = id
 	}
 	raw := append([]byte(nil), reqMsg.Raw()...)
-	snd := &authzRawSender{s: s, ex: ex, rawReq: raw, ids: idMap, lastReqID: map[string]uint64{}, lastRspID: map[string]uint64{}}
+	snd := &authzRawSender{s: s, ex: ex, rawReq: raw, ids: idMap, lastReqID: map[string]uint64{}, lastRspID: map[string]uint64{}, lastLocation: map[string]string{}}
 	// Access control is a question about CONTENT, not latency: a role that gets the baseline's body
 	// and status has bypassed the control however fast the server answered. Timing deviation is noise
 	// here (it flagged a faster low-priv response as "different" and so Enforced), so it is neutered —
@@ -354,6 +381,10 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		dev := base.DiffAccessControl(ex.Method, scanner.NewBaselineSample(status, bodyText, duration), threshold)
+		if loc := snd.lastLocation[baseline.Label]; !dev.Ambiguous && base.ModalStatus() >= 300 && base.ModalStatus() < 400 && authzLoginRedirect(loc) {
+			dev.Ambiguous, dev.Matched = true, false
+			dev.Reason = "baseline was redirected to a login or denial page (" + loc + ") — its session is not valid; pick a privileged baseline"
+		}
 		v.Status = status
 		v.BodyLen = len(bodyText)
 		v.Reasons = dev.Comparison.Reasons

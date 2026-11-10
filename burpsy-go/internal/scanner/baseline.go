@@ -80,10 +80,10 @@ func NewBaselineSample(status int, body string, duration time.Duration) Baseline
 	}
 }
 
-// noDataByteFloor is the fallback for a body that is not JSON: at most this many bytes, after
-// trimming whitespace, carry no data ("", "OK", "done"). Deliberately tiny — four bytes cannot hold an
-// identifier and a value, while anything longer might be a record the comparison must see.
-const noDataByteFloor = 4
+// noDataWords is the fallback for a body that is not JSON: only a bare acknowledgement carries no
+// data. A length floor did this before and called any four bytes empty, so a 4-character code or
+// PIN a privileged identity was shown read as "no data" and a real bypass as Ambiguous.
+var noDataWords = map[string]bool{"ok": true, "done": true, "success": true, "none": true, "n/a": true, "-": true}
 
 // noDataParseCap bounds the structural check: a body longer than this is not parsed and counts as
 // data. An empty collection, envelope included, is a few dozen bytes; a document this size carries
@@ -106,7 +106,7 @@ const noDataParseCap = 4096
 //     (a string member: a record) carry data.
 //   - A top-level number or boolean carries data (a PIN, a balance, a flag).
 //
-// A body that is not JSON falls back to noDataByteFloor. A body that could not be decoded (an unknown
+// A body that is not JSON carries no data only when it is a bare acknowledgement (noDataWords). A body that could not be decoded (an unknown
 // Content-Encoding) is opaque bytes and so counts as data, which is the safe direction.
 func bodyCarriesNoData(body string) bool {
 	trimmed := strings.TrimSpace(body)
@@ -118,7 +118,7 @@ func bodyCarriesNoData(body string) bool {
 	}
 	var doc any
 	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
-		return len(trimmed) <= noDataByteFloor
+		return noDataWords[strings.ToLower(trimmed)]
 	}
 	return jsonCarriesNoData(doc)
 }
@@ -459,7 +459,8 @@ type AccessControlDeviation struct {
 //
 // The verdict is only as good as the baseline, so two baselines yield Ambiguous instead:
 //
-//   - One that was not served (its modal status is not 2xx: a 400, 403 or 500, or a redirect).
+//   - One that was not served (its modal status is not 2xx: a 400, 403 or 500, or a redirected
+//     read; a redirect answering a write is a served form post and stays a reference).
 //     Matching it means the other identity was refused or failed the same way, not that it got
 //     privileged content, and differing from it says nothing about enforcement. Every verdict
 //     against it is Ambiguous, whatever the other identity received.
@@ -472,7 +473,11 @@ type AccessControlDeviation struct {
 //     function-level bypass this verdict exists to report.
 func (b *Baseline) DiffAccessControl(method string, other BaselineSample, threshold DeviationThreshold) AccessControlDeviation {
 	dev := b.Compare(other, threshold)
-	if s := b.modalStatus; s < 200 || s > 299 {
+	// A redirect answering a write is how a form post is served (Post/Redirect/Get), so it is a
+	// usable reference: the caller folds the Location into the compared body, and a different
+	// destination reads as a different answer. A redirected read was not served.
+	servedWrite := b.modalStatus >= 300 && b.modalStatus < 400 && !isReadMethod(method)
+	if s := b.modalStatus; (s < 200 || s > 299) && !servedWrite {
 		reason := fmt.Sprintf("baseline was not authorised (status %d) — pick a privileged baseline", s)
 		if s >= 300 && s < 400 {
 			reason = fmt.Sprintf("baseline was redirected (status %d), not served — pick a privileged baseline", s)

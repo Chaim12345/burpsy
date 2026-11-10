@@ -1782,9 +1782,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	upstreamBR := bufio.NewReader(upstream)
 	// The client keeps this tunnel open across requests, but the upstream connection behind it can
 	// end after any response (tunnel_upstream.go). upstreamFresh skips the liveness check on a
-	// connection no request has used yet; upstreamEnded records that the last response said the
-	// connection ends.
+	// connection no request has used yet, but only while it is newly dialled (upstreamFreshFor): a
+	// first request held in Intercept can outlast the origin's idle timeout, and writing it into
+	// the closed socket lost the operator's request. upstreamEnded records that the last response
+	// said the connection ends.
 	upstreamFresh, upstreamEnded := true, false
+	upstreamDialled := time.Now()
 	for {
 		requestLine, err := readHeadLine(br, maxRequestHeadBytes)
 		if err == errRequestHeadTooLarge {
@@ -1975,7 +1978,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// A connection a previous request used is checked first, and replaced when the origin has
 		// ended it (tunnel_upstream.go): writing into a dead socket read EOF and closed the client's
 		// tunnel with no response at all.
-		if !upstreamFresh && (upstreamEnded || !upstreamStillUsable(upstream, upstreamBR)) {
+		if (!upstreamFresh || time.Since(upstreamDialled) > upstreamFreshFor) && (upstreamEnded || !upstreamStillUsable(upstream, upstreamBR)) {
 			fresh, err := s.redialTunnelUpstream(host, addr, negotiated)
 			if err != nil {
 				s.config.logger.Warn("re-dialling the tunnel's upstream failed", zap.String("host", host), zap.Error(err))

@@ -58,7 +58,7 @@ const maxStreamingBodyBytes = 8 * 1024 * 1024
 // there (burpsy-react-ui-h1-cap-silent): raw is the head as the origin sent it plus the prefix that
 // fit, err is nil, and the caller must put capped.Note() on the record and must not reuse the
 // connection — the unread remainder is still on it.
-func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(head []byte) bool) (raw []byte, capped *httputil.BodyCapError, err error) {
+func readResponse(br *bufio.Reader, method string, understand100, streaming bool, promote func(head []byte) bool) (raw []byte, capped *httputil.BodyCapError, err error) {
 	for interim := 0; ; interim++ {
 		head, err := httputil.ReadResponseHead(br)
 		if err != nil {
@@ -75,7 +75,9 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 			return append(raw, body...), streamCapped, nil
 		}
 
-		body, err := httputil.ReadResponseBody(br, head)
+		// The request's method is part of the framing rule: a HEAD answer ends at its head, and
+		// reading the Content-Length it describes waited out the deadline and failed the send.
+		body, err := httputil.ReadResponseBodyFor(br, head, method)
 		if err != nil {
 			// A body that stopped short of its declared Content-Length is not a
 			// failed response: the peer answered, and the bytes are the answer.
@@ -231,4 +233,14 @@ func headDeclaresEventStream(head []byte) bool {
 		return strings.EqualFold(strings.TrimSpace(mt), "text/event-stream")
 	}
 	return false
+}
+
+// requestMethod is the method token of a raw request ("" when there is none).
+func requestMethod(raw []byte) string {
+	line, _, _ := bytes.Cut(raw, []byte("\n"))
+	method, _, ok := bytes.Cut(line, []byte(" "))
+	if !ok {
+		return ""
+	}
+	return string(method)
 }
