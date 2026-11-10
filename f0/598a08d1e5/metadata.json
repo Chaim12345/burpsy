@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.2",
+  "checkpoint_id": "f0598a08d1e5",
+  "strategy": "manual-commit",
+  "branch": "ui2-migration",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "burpsy-go/internal/proxy/held_first_request_test.go",
+    "burpsy-go/internal/proxy/proxy.go",
+    "burpsy-go/internal/proxy/tunnel_upstream.go",
+    "burpsy-go/internal/scanner/baseline.go",
+    "burpsy-go/internal/scanner/baseline_redirect_test.go",
+    "burpsy-go/internal/sender/connpool.go",
+    "burpsy-go/internal/sender/head_response_read_test.go",
+    "burpsy-go/internal/sender/malformed_response_head_test.go",
+    "burpsy-go/internal/sender/read.go",
+    "burpsy-go/internal/sender/sender.go",
+    "burpsy-go/internal/sender/sync_send.go",
+    "burpsy-go/internal/web/api_authz.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/598a08d1e5/0/metadata.json",
+      "transcript": "/f0/598a08d1e5/0/full.jsonl",
+      "compact_transcript": "/f0/598a08d1e5/0/transcript.jsonl",
+      "content_hash": "/f0/598a08d1e5/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 38788,
+    "cache_read_tokens": 12814011,
+    "output_tokens": 15894,
+    "api_call_count": 22
+  },
+  "redaction": {
+    "replacements": 193,
+    "layers": {
+      "betterleaks": 16,
+      "connection_string": 4,
+      "credential_key": 0,
+      "credential_value": 7,
+      "credentialed_uri": 12,
+      "entropy": 108,
+      "key_context": 52,
+      "provider_token": 0,
+      "shell_stdin": 0
+    }
+  }
+}
