@@ -2478,7 +2478,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// the page, it does not turn a name for the proxy into an origin to resolve and dial.
 	if s.addressesTheProxy(host, port, clientConn, spec) {
 		if s.config.options.Get(OptDisableWebInterface) {
-			s.writeProxyError(clientConn, webInterfaceDisabledResponse())
+			s.writeProxyError(clientConn, webInterfaceDisabledResponse(method))
 			return
 		}
 		s.serveWebInterface(clientConn, method, path)

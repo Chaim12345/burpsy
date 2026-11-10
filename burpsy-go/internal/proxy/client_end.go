@@ -13,7 +13,7 @@ import (
 // frameless answer, or a truncated or capped one the salvage re-headed close-delimited). A HEAD
 // response has no body whatever its head says, so it never ends that way.
 func endsWithClose(method string, forwarded []byte) bool {
-	if strings.EqualFold(method, "HEAD") {
+	if method == "HEAD" { // exact: methods are case-sensitive, and "head" answers with a body
 		return false
 	}
 	head := forwarded

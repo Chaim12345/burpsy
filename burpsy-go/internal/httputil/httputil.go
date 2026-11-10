@@ -137,13 +137,19 @@ func ResponseIsFrameless(head []byte) bool {
 		return false
 	}
 	te, cl := ResponseFraming(head)
-	if cl != "" {
-		return false
-	}
 	if te != "" {
-		return false
+		// A transfer coding whose last entry is not chunked ends only when the connection closes,
+		// whatever Content-Length says beside it (RFC 9112 §6.3 rules 3-4).
+		return !TransferCodingIsChunked(te)
 	}
-	return true
+	return cl == ""
+}
+
+// TransferCodingIsChunked reports whether chunked is the final transfer coding of a
+// Transfer-Encoding value. "gzip, chunked" is chunk-framed; "gzip" alone, or "chunked, gzip", is
+// not, and such a body runs to the close of the connection.
+func TransferCodingIsChunked(te string) bool {
+	return strings.EqualFold(strings.TrimSpace(te[strings.LastIndexByte(te, ',')+1:]), "chunked")
 }
 
 // ResponseIsChunked reports whether a response head declares chunked transfer encoding.
@@ -159,7 +165,7 @@ func ResponseIsChunked(head []byte) bool {
 		return false
 	}
 	te, _ := ResponseFraming(head)
-	return strings.EqualFold(te, "chunked")
+	return TransferCodingIsChunked(te)
 }
 
 // responseHasBody reports whether a response head can be followed by a body at all.
@@ -194,7 +200,10 @@ func responseHasBody(head []byte) bool {
 // A caller with no method keeps responseHasBody's status-only answer through ReadResponseBody; a
 // caller relaying a request whose method it can read must ask this instead.
 func ResponseHasBodyFor(method string, head []byte) bool {
-	return !strings.EqualFold(method, "HEAD") && responseHasBody(head)
+	// Exact match: methods are case-sensitive (RFC 9110 §9.1). "head" is some other method whose
+	// answer carries its body, and skipping that body would leave it on the connection to be read
+	// as the next response.
+	return method != "HEAD" && responseHasBody(head)
 }
 
 // ReadResponseBodyFor is ReadResponseBody for a response whose request method is known: the answer to
@@ -257,8 +266,14 @@ func ResponseFraming(head []byte) (transferEncoding, contentLength string) {
 		}
 		value = bytes.TrimSpace(value)
 		switch {
-		case strings.EqualFold(string(name), "Transfer-Encoding") && transferEncoding == "":
-			transferEncoding = string(value)
+		case strings.EqualFold(string(name), "Transfer-Encoding"):
+			// Repeated field lines are one comma-separated list (RFC 9110 §5.3): the final coding
+			// is the last line's, and reading only the first let "gzip" hide a later "chunked".
+			if transferEncoding == "" {
+				transferEncoding = string(value)
+			} else if len(value) > 0 {
+				transferEncoding += ", " + string(value)
+			}
 			continued = &transferEncoding
 		case strings.EqualFold(string(name), "Content-Length") && contentLength == "":
 			contentLength = string(value)
@@ -304,7 +319,7 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 	}
 
 	switch {
-	case strings.EqualFold(te, "chunked"):
+	case TransferCodingIsChunked(te):
 		// The body keeps its chunk framing verbatim: callers forward and record
 		// the wire bytes, and dechunk later where they need the payload.
 		for {
@@ -355,7 +370,7 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 			}
 			body.Write(crlf[:])
 		}
-	case cl != "":
+	case cl != "" && te == "": // a non-chunked transfer coding overrides Content-Length: read to close
 		n, err := strconv.ParseInt(cl, 10, 64)
 		if err != nil || n < 0 {
 			return nil, fmt.Errorf("bad Content-Length %q", cl)

@@ -98,3 +98,23 @@ func TestDOMEngineRefusesABadBodyAndAProcessWithoutASwitch(t *testing.T) {
 		t.Fatalf("bad body: status %d, want 400", rec.Code)
 	}
 }
+
+// The runtime route starts browsers only, attaches only to a local CDP endpoint, and never echoes
+// an endpoint's path (the browser id is the capability to drive it).
+func TestDOMEngineRuntimeValuesAreRestricted(t *testing.T) {
+	s := newTestServer().WithDOMEngine("/opt/custom/renderer")
+	for value, ok := range map[string]bool{
+		"chrome": true, "/usr/bin/chromium": true, "/opt/custom/renderer": true,
+		"ws://127.0.0.1:9222/devtools/browser/abc": true, "wss://localhost:9222/x": true,
+		"/bin/sh": false, "/usr/bin/python3": false,
+		"ws://attacker.example:9222/devtools/browser/abc": false,
+	} {
+		if err := s.domEngineAllowed(value); (err == nil) != ok {
+			t.Errorf("domEngineAllowed(%q) = %v, want allowed=%v", value, err, ok)
+		}
+	}
+	s.domEngine = "ws://127.0.0.1:9222/devtools/browser/secret-id"
+	if got := s.domEngineLabel(); got != "ws://127.0.0.1:9222/…" {
+		t.Errorf("label = %q, want the endpoint without its path", got)
+	}
+}

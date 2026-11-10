@@ -2,7 +2,11 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -42,11 +46,54 @@ func (s *Server) WithDOMSwitch(sw *scanner.SwitchableBrowsers, build DOMEngineBu
 }
 
 // domEngineLabel is the engine in force: the switch's when one is attached, else the -dom value.
+// A CDP endpoint is shown as scheme://host:port only: its path carries the browser id, which is
+// the capability to drive that browser, and this view is read by every API client.
 func (s *Server) domEngineLabel() string {
+	label := s.domEngine
 	if s.domSwitch != nil {
-		return s.domSwitch.Label()
+		label = s.domSwitch.Label()
 	}
-	return s.domEngine
+	if strings.HasPrefix(label, "ws://") || strings.HasPrefix(label, "wss://") {
+		if u, err := url.Parse(label); err == nil {
+			return u.Scheme + "://" + u.Host + "/…"
+		}
+	}
+	return label
+}
+
+// domBrowserNames are the program names a runtime PUT may start. The route runs a binary in this
+// process's privileges, so it starts browsers and nothing else; any other path needs -dom.
+var domBrowserNames = map[string]bool{
+	"chrome": true, "google-chrome": true, "google-chrome-stable": true, "chromium": true,
+	"chromium-browser": true, "headless_shell": true, "chrome-headless-shell": true,
+	"msedge": true, "microsoft-edge": true, "brave": true, "brave-browser": true,
+	"obscura": true, "lightpanda": true,
+}
+
+// domEngineAllowed says whether a runtime value may be set. The -dom flag is the operator's own
+// command line and takes anything; this route is reachable by every API client, so it takes less:
+// the value -dom was started with, "chrome", a known browser binary, or a CDP endpoint on this
+// machine. A remote endpoint would render in-scope pages (cookies included) on another host.
+func (s *Server) domEngineAllowed(value string) error {
+	if value == "chrome" || (s.domEngine != "" && value == strings.TrimSpace(s.domEngine)) {
+		return nil
+	}
+	if strings.HasPrefix(value, "ws://") || strings.HasPrefix(value, "wss://") {
+		u, err := url.Parse(value)
+		if err != nil {
+			return fmt.Errorf("unreadable CDP endpoint: %w", err)
+		}
+		host := u.Hostname()
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("a CDP endpoint on another host (%s) is refused at runtime: in-scope pages would be rendered there; restart with -dom to use it", host)
+	}
+	name := strings.TrimSuffix(strings.ToLower(filepath.Base(value)), ".exe")
+	if domBrowserNames[name] {
+		return nil
+	}
+	return fmt.Errorf("%q is not a known browser binary; this route starts browsers only - restart with -dom to use another program", filepath.Base(value))
 }
 
 func (s *Server) viewDOMEngine() domEngineView {
@@ -89,6 +136,10 @@ func (s *Server) handleDOMEngine(w http.ResponseWriter, r *http.Request) {
 		value := strings.TrimSpace(*req.Engine)
 		var p scanner.BrowserProvider
 		if value != "" && value != "off" {
+			if err := s.domEngineAllowed(value); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			built, err := s.domBuild(value)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)

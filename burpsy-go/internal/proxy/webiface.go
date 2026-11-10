@@ -83,14 +83,18 @@ func (s *Server) addressesTheProxy(host string, port uint16, clientConn net.Conn
 // CA certificate, which is what the switch promises, and no forward either, because the name is the
 // proxy's and no origin's. It goes out through writeProxyError, so "Suppress Burp error messages in
 // browser" turns it into a bare close like every other burpsy refusal.
-func webInterfaceDisabledResponse() []byte {
+func webInterfaceDisabledResponse(method string) []byte {
 	body := "the burpsy proxy interface is disabled on this listener (disable_web_interface). " +
 		"http://burpsy, http://burpsuite and the listener's own address name the proxy, not an origin, " +
 		"so this request was not forwarded.\n"
-	return []byte("HTTP/1.1 404 Not Found\r\n" +
+	head := "HTTP/1.1 404 Not Found\r\n" +
 		"Content-Type: text/plain; charset=utf-8\r\n" +
 		"Content-Length: " + strconv.Itoa(len(body)) + "\r\n" +
-		"Cache-Control: no-store\r\nConnection: close\r\n\r\n" + body)
+		"Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+	if method == "HEAD" { // a HEAD answer carries no body
+		return []byte(head)
+	}
+	return []byte(head + body)
 }
 
 // serveWebInterface answers one request to the interface. Nothing is forwarded or recorded: this is

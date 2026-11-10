@@ -75,6 +75,11 @@ func (l *lazyBrowser) Browser(ctx context.Context) (*domexec.Browser, error) {
 			l.err = errors.New("browser: the headless browser is no longer available")
 			return nil, l.err
 		}
+		// Closed (the runtime DOM switch closes the old engine): an error, never (nil, nil) —
+		// a caller that got no browser and no error dereferences nil.
+		if l.browser == nil {
+			return nil, errors.New("browser: the DOM engine was closed")
+		}
 		return l.browser, nil
 	}
 	l.started = true

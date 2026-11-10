@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 )
 
 // This file is the streaming half of the framing helpers. ReadResponseBody buffers a response that
@@ -107,10 +106,10 @@ func StreamResponse(br *bufio.Reader, head []byte, onChunk func([]byte)) (Stream
 		onChunk(chunk)
 	}
 
-	if strings.EqualFold(te, "chunked") {
+	if TransferCodingIsChunked(te) {
 		return streamChunked(br, &out, remaining, emit)
 	}
-	if cl != "" {
+	if cl != "" && te == "" { // a non-chunked transfer coding overrides Content-Length: read to close
 		n, err := strconv.ParseInt(cl, 10, 64)
 		if err != nil || n < 0 {
 			return StreamResult{}, fmt.Errorf("bad Content-Length %q", cl)
