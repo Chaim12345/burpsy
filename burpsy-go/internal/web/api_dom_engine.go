@@ -54,7 +54,8 @@ func (s *Server) domEngineLabel() string {
 		label = s.domSwitch.Label()
 	}
 	if strings.HasPrefix(label, "ws://") || strings.HasPrefix(label, "wss://") {
-		if u, err := url.Parse(label); err == nil {
+		// Only a path is withheld: a bare ws://host:port names no browser and is shown as given.
+		if u, err := url.Parse(label); err == nil && (len(u.Path) > 1 || u.RawQuery != "") {
 			return u.Scheme + "://" + u.Host + "/…"
 		}
 	}
