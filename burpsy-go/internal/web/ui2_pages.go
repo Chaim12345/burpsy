@@ -23,14 +23,14 @@ func ui2RenderPage(w http.ResponseWriter, title, view string, body templateHTML)
 		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
-	_, _ = w.Write([]byte(sb.String()))
+	_, _ = w.Write([]byte(sb.String())) //nolint:gosec // G705: the layout rendered by html/template
 }
 
 // ui2Fragment answers an htmx request with just the fragment, or renders the full shell.
 func ui2Fragment(w http.ResponseWriter, r *http.Request, title, view string, body templateHTML) {
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(body)) //nolint:gosec // G705: body is html/template output (templateHTML), escaped by the engine
 		return
 	}
 	ui2RenderPage(w, title, view, body)
