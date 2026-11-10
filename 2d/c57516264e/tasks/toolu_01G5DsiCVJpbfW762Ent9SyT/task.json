@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01G5DsiCVJpbfW762Ent9SyT",
+  "agent_id": "af81634a6db32be8c",
+  "subagent_type": "general-purpose",
+  "task_description": "Independent review-gate reviewer",
+  "token_usage": {
+    "input_tokens": 162,
+    "cache_creation_tokens": 323827,
+    "cache_read_tokens": 17729456,
+    "output_tokens": 58343,
+    "api_call_count": 81
+  },
+  "started_at": "2026-11-10T09:32:34.234129753Z",
+  "completed_at": "2026-11-10T09:49:02.795624986Z"
+}
