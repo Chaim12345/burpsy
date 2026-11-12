@@ -1,0 +1,3 @@
+## 2026-08-12 - [Decoder Clipboard Access]
+**Learning:** Adding user-friendly, semantic copy buttons to data-heavy or tool-oriented tabs (like the Decoder) dramatically improves operational efficiency. Standard browser APIs (`navigator.clipboard.writeText`) are safe and can be elegantly wrapped inside temporary visual states (disabling and showing a transient "Copied!" feedback text) to satisfy accessible keyboard and screen-reader workflows.
+**Action:** Always include temporary accessible feedback (such as transient text states and ARIA labels) on interactive utility widgets, and test clipboard APIs in Playwright by explicitly granting browser permissions.
