@@ -857,20 +857,42 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 // store with no capture directory — comes back resident, as it must: there is
 // nowhere else for those bytes to live.
 func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error) {
-	rows, err := s.db.Query(`SELECT id, direction, raw, segment, offset, length, shape FROM messages ORDER BY id`)
+	// The raw column is deliberately not selected up front. SaveMessage stores X'' for a row whose
+	// bytes already live in a segment file, so selecting raw for those rows makes SQLite hand back a
+	// blob handle per row and database/sql copy it through convertAssignRows ? hundreds of megabytes
+	// of garbage on a large history, spent on bytes the span already points at. The reader asks for
+	// length(raw) instead, and fetches the bytes only for the rows that have nowhere else to keep
+	// them: a row with no segment, or one written before shapes were persisted.
+	rows, err := s.db.Query(`SELECT id, direction, length(raw), segment, offset, length, shape FROM messages ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	// One close for every exit path below: rows.Close is idempotent, and the error paths used to
+	// call it directly, which golangci-lint's gosec G104 correctly reads as an unhandled error.
+	defer func() { _ = rows.Close() }()
+
+	// deferred holds only the rows whose bytes are genuinely required, in id order. Everything else
+	// becomes a disk-backed message in the loop below, so a capture-dir history allocates nothing
+	// proportional to its size here.
+	type deferredRow struct {
+		id      uint64
+		dir     int
+		segment sql.NullString
+		offset  sql.NullInt64
+		length  sql.NullInt64
+		shape   []byte
+	}
+	var pending []deferredRow
+
 	var out []*core.StoredMessage
 	for rows.Next() {
 		var id uint64
 		var dir int
-		var raw []byte
+		var rawLen sql.NullInt64
 		var segment sql.NullString
 		var offset, length sql.NullInt64
 		var encodedShape []byte
-		if err := rows.Scan(&id, &dir, &raw, &segment, &offset, &length, &encodedShape); err != nil {
+		if err := rows.Scan(&id, &dir, &rawLen, &segment, &offset, &length, &encodedShape); err != nil {
 			return nil, err
 		}
 
@@ -881,17 +903,47 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 		}
 		loc := core.Location{Segment: segment.String, Offset: offset.Int64, Length: length.Int64}
 
-		shape, err := s.shapeFor(id, encodedShape, raw, dir, onDisk, loc, src)
+		// A segment row that already carries a shape needs neither its bytes nor a second pass.
+		if onDisk && len(encodedShape) > 0 {
+			shape, err := core.DecodeShape(encodedShape)
+			if err != nil {
+				return nil, fmt.Errorf("message %d shape: %w", id, err)
+			}
+			out = append(out, core.NewDiskMessage(core.MsgId(id), shape, loc, src))
+			continue
+		}
+
+		// Either the row is resident (SQLite is the only copy of its bytes) or it predates shapes
+		// and the shape has to be re-derived from them. Both need raw, fetched after the loop.
+		pending = append(pending, deferredRow{
+			id: id, dir: dir, segment: segment, offset: offset, length: length, shape: encodedShape,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fetch the bytes only now, outside the row iteration: db.SetMaxOpenConns(1) means a query
+	// issued while the cursor was open would deadlock against that same connection.
+	for _, r := range pending {
+		onDisk := r.segment.Valid && r.segment.String != ""
+		loc := core.Location{Segment: r.segment.String, Offset: r.offset.Int64, Length: r.length.Int64}
+
+		var raw []byte
+		if err := s.db.QueryRow(`SELECT raw FROM messages WHERE id = ?`, r.id).Scan(&raw); err != nil {
+			return nil, err
+		}
+		shape, err := s.shapeFor(r.id, r.shape, raw, r.dir, onDisk, loc, src)
 		if err != nil {
 			return nil, err
 		}
 		if onDisk {
-			out = append(out, core.NewDiskMessage(core.MsgId(id), shape, loc, src))
+			out = append(out, core.NewDiskMessage(core.MsgId(r.id), shape, loc, src))
 			continue
 		}
-		out = append(out, core.NewResidentMessage(core.MsgId(id), raw, shape))
+		out = append(out, core.NewResidentMessage(core.MsgId(r.id), raw, shape))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // shapeFor decodes the persisted shape, or re-derives it from the bytes for a row
