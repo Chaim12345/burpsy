@@ -39,23 +39,32 @@ export function initRepeater(): void {
   const section = $("#repeater");
   if (!section) return;
   section.innerHTML = `
-    <div class="tabstrip" id="rep-tabs"></div>
+    <div class="tabstrip" id="rep-tabs" aria-label="Repeater tabs"></div>
     <div class="row">
-      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" />
-      <select id="rep-protocol" title="protocol to send this request over (H2-01)">
+      <input id="rep-target" placeholder="http://host:port or https://host" style="width:340px" aria-label="Target URL" />
+      <select id="rep-protocol" title="protocol to send this request over (H2-01)" aria-label="Protocol">
         <option value="Http1">HTTP/1.1</option>
         <option value="Http2">HTTP/2</option>
       </select>
-      <button class="go" id="rep-send">Send</button>
+      <button class="go" id="rep-send" aria-label="Send request (Ctrl+Enter)" title="Send request (Ctrl+Enter)">Send</button>
       <span id="rep-meta" class="hint"></span>
     </div>
     <div class="two">
-      <textarea id="rep-raw" spellcheck="false"></textarea>
-      <pre id="rep-res"></pre>
+      <textarea id="rep-raw" spellcheck="false" aria-label="HTTP request content"></textarea>
+      <pre id="rep-res" aria-label="HTTP response content"></pre>
     </div>
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+
+  const handleShortcut = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void send();
+    }
+  };
+  $("#rep-raw")!.addEventListener("keydown", handleShortcut);
+  $("#rep-target")!.addEventListener("keydown", handleShortcut);
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -86,9 +95,9 @@ function renderTabs(): void {
       .map(
         (t) =>
           `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<span class="tab-close" data-close="${t.id}" title="close tab" aria-label="Close tab ${t.id}">&times;</span></div>`,
       )
-      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
+      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab" aria-label="New tab">+</button>`;
 }
 
 function saveEditorIntoActiveTab(): void {
