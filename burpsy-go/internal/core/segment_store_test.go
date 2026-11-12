@@ -230,6 +230,9 @@ func TestVerifyCaptureDirActuallyFindsTheSegmentsThatWereWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak.
+	t.Cleanup(func() { _ = ts.Close() })
 	var written int64
 	for i := 0; i < 10; i++ {
 		raw := req("a.test", fmt.Sprintf("/v%d", i), 1024)
