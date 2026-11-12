@@ -28,6 +28,10 @@ func TestVerifyIndexCleanDiskBacked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTrafficStoreWithCaptureDir: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak, which is why
+	// this only surfaced off Linux.
+	t.Cleanup(func() { _ = ts.Close() })
 	req := putVerifyMessage(t, ts, verifyReqMsg)
 	resp := putVerifyMessage(t, ts, verifyRespMsg)
 	putVerifyMessage(t, ts, []byte("GET /b HTTP/1.1\r\nHost: b.test\r\n\r\nbody"))
@@ -86,6 +90,9 @@ func TestVerifyIndexDetectsTruncatedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTrafficStoreWithCaptureDir: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak.
+	t.Cleanup(func() { _ = ts.Close() })
 	raws := [][]byte{
 		verifyReqMsg,
 		verifyRespMsg,
@@ -233,6 +240,9 @@ func TestVerifyIndexFreshOpenStoreVerifiesClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen capture dir: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak.
+	t.Cleanup(func() { _ = reopened.Close() })
 	if err := reopened.VerifyIndex(); err != nil {
 		t.Fatalf("fresh-open store with an empty index must verify clean, got %v", err)
 	}
@@ -251,6 +261,9 @@ func TestVerifyIndexNamesTamperedLocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTrafficStoreWithCaptureDir: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak.
+	t.Cleanup(func() { _ = ts.Close() })
 	putVerifyMessage(t, ts, verifyReqMsg)
 
 	// Shrink the recorded on-disk length of message 0 so it still resolves (the
