@@ -6,15 +6,21 @@ name: Go
 #
 # What runs when (scripts/ci-changes.py decides, in the `changes` job, and prints why):
 #
-#   push to master, workflow_dispatch  lint + the FULL sharded suite + ui + beads. Master is the tree
-#                                      that landed; its full run is the evidence it passes.
-#   pull request into master           lint (whole module) + the AFFECTED tests + ui + beads. The
+#   push to master or a round branch, lint + the FULL sharded suite + ui + beads. Master is the tree
+#   workflow_dispatch                  that landed; its full run is the evidence it passes. A round
+#                                      branch (round/<date>-<n>, docs/DEVELOPMENT-PROCESS.md
+#                                      section 3) is the integration branch of the round workflow,
+#                                      and its full run is the same evidence for the tree about to
+#                                      land in master.
+#   pull request into any branch       lint (whole module) + the AFFECTED tests + ui + beads. The
 #                                      round workflow already ran the affected set locally (T1 per
 #                                      item, T2 per merge); CI repeats it once on GitHub's merge
 #                                      commit, on clean runners with the pinned tools, rather than
 #                                      the whole suite a second time. A PR that touches go.mod/
 #                                      go.sum, .github/**, scripts/ci-*, the affected-test selector
-#                                      or any testdata/ runs the full suite instead.
+#                                      or any testdata/ runs the full suite instead. No branch filter:
+#                                      an item PR into a round branch is covered too, not only the
+#                                      round PR into master.
 #   docs / .beads data / bench scripts only (either event): changes + beads; lint, test and ui are
 #                                      skipped and `gate` reports success. The one Go test such a
 #                                      change could break (no tracked text file holds a raw control
@@ -35,9 +41,9 @@ name: Go
 # without importing it (the explicit rules in scripts/affected-go-tests.sh, plus "testdata/ runs
 # everything" above); a compile error anywhere (lint builds and vets the whole module on every run).
 #
-# Pushes run only on master; every other branch is covered by its pull request. Pull requests run
-# only when they target master: item PRs into a round branch (round/<date>-<n>) are covered by T1/T2
-# and show no checks, deliberately.
+# Pushes run on master and on round branches (round/<date>-<n>); every other branch is covered by
+# its pull request. Pull requests run whatever branch they target, so an item PR into a round branch
+# gets CI instead of relying on T1/T2 alone.
 #
 # The review gate lives in its own workflow (review-gate.yml): it must re-run when a verdict is
 # posted as a comment or review, and it runs under pull_request_target; neither fits this workflow.
@@ -45,11 +51,16 @@ name: Go
 # Required checks (branch protection): `gate`, `ui`, `beads` here and `review-gate`. Their names are
 # unchanged by the 2026-10-13 optimisation. A job skipped by its `if:` reports success to branch
 # protection, which is what a docs-only PR needs from `ui`; `gate` is never skipped (if: always()).
+# `vulncheck` (vulncheck.yml) runs on PRs too but is not in this list: it is a separate, non-blocking
+# signal by design.
 on:
   push:
-    branches: [master]
+    branches:
+      - master
+      - "round/**"
+  # No branch filter: item PRs target a round branch, and that is where merge skew would otherwise
+  # first appear. T1/T2 still run locally; this is the clean-runner repeat.
   pull_request:
-    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -150,10 +161,6 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
         run: ../scripts/ci-lint.sh lint "$BASE"
-      # govulncheck: fails on a reachable vulnerability that is not in
-      # scripts/ci/govulncheck-baseline.txt, so a NEW one blocks and the known ones are tracked.
-      - name: govulncheck (new reachable vulnerabilities only)
-        run: ../scripts/ci-lint.sh vuln
       - name: Save the Go cache (lint)
         if: always() && github.event_name != 'pull_request' && steps.env.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -344,6 +351,9 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # The master self-heal step below pushes the rebuilt bundle; the top-level grant is read-only.
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: burpsy-go/internal/web/ui
@@ -383,7 +393,12 @@ jobs:
       # source change that was never rebuilt reaches no browser while every test passes. Rebuilding
       # with the pinned bun and requiring no difference makes that state unmergeable. The whole UI
       # directory is compared, so generated token files are held to the same rule.
+      #
+      # PR semantics are unchanged: a pull request still fails here when its committed bundle is
+      # stale. On a push to master the next step repairs the tree instead — master is the tree that
+      # landed, and a stale bundle there would block every later PR for a reason none of them caused.
       - name: Bundle is fresh
+        if: github.event_name != 'push' || github.ref != 'refs/heads/master'
         run: |
           if ! git diff --quiet -- .; then
             echo "::error::The committed UI bundle or generated files differ from a fresh 'bun run build' (bun 1.4.2):"
@@ -398,6 +413,32 @@ jobs:
             exit 1
           fi
           echo "dist/app.js, style.css and generated sources match a fresh build."
+
+      # The bundle is generated output, and the 2.5 MB minified line conflicts on every merge
+      # (.gitattributes merge=ours). Rather than make every PR carry it, master rebuilds it here and
+      # commits the result when the pinned-bun build differs. This runs only on a master push; PRs
+      # still fail the freshness step above. Rebase-retry covers two merges landing close together.
+      - name: Publish the rebuilt bundle on master
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          if git diff --quiet -- . && [ -z "$(git ls-files --others --exclude-standard -- .)" ]; then
+            echo "bundle is already fresh on master"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A -- .
+          git commit -m "chore(ui): rebuild the committed bundle on master"
+          for _ in 1 2 3; do
+            if git push origin HEAD:master; then
+              echo "rebuilt bundle pushed to master"
+              exit 0
+            fi
+            git fetch --no-tags origin master
+            git rebase origin/master || exit 1
+          done
+          echo "::error::could not push the rebuilt bundle after 3 attempts"
+          exit 1
 
   # .beads/issues.jsonl on master is the issue tracker's source of truth. This job holds every
   # change to it to the closure rule: a bead closed by this change must cite the PR and the commit

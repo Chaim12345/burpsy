@@ -27,10 +27,17 @@ on:
     branches: [master]
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
-  # A verdict posted as a comment or a review must re-evaluate the head.
+    # No `edited`, `labeled` or `unlabeled`: a title/body edit or a label change does not change the
+    # code, so it must not invalidate a verdict. The gate still re-runs on opened/synchronize/reopened,
+    # which is every event that can change the head or the risk paths under it.
+    types: [opened, synchronize, reopened]
+  # A verdict posted as a comment must re-evaluate the head. `created` only: GitHub cannot filter a
+  # comment by body in the trigger, and an edit that changes a verdict is not re-read (the script
+  # already treats a comment's updated_at as its time; the created run reads the current body). The
+  # job guard below drops comments with no agent-review marker, so ordinary conversation does not run
+  # the gate at all. Reviews are not filtered: a review body carries the marker.
   issue_comment:
-    types: [created, edited, deleted]
+    types: [created]
   pull_request_review:
     types: [submitted, edited, dismissed]
   workflow_dispatch:
@@ -47,8 +54,12 @@ concurrency:
 
 jobs:
   review-gate-run:
-    # Comments on plain issues are not our business.
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    # Comments on plain issues are not our business, and a comment with no agent-review line is not
+    # a verdict: skipping it (which reports success) keeps the gate's status from being re-posted for
+    # ordinary discussion. GitHub has no body filter in `on:`, so the marker test lives here.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, 'agent-review:'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
