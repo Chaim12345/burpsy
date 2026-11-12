@@ -25,6 +25,7 @@ func TestBackupProducesADatabaseThatOpensAndHoldsTheData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if store.Path() != src {
 		t.Errorf("Path() = %q, want %q", store.Path(), src)
 	}
@@ -57,6 +58,7 @@ func TestBackupProducesADatabaseThatOpensAndHoldsTheData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the backup does not open as a database: %v", err)
 	}
+	t.Cleanup(func() { _ = restored.Close() })
 	rules, err := restored.LoadScope()
 	if err != nil {
 		t.Fatalf("reading the marker back out of the backup: %v", err)
@@ -74,6 +76,7 @@ func TestBackupLeavesTheLiveDatabaseWritable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.SaveScope([]*core.ScopeRule{{Kind: core.ScopeInclude, Pattern: "before.test"}})
 	if err := store.Backup(filepath.Join(dir, "b1.db")); err != nil {
 		t.Fatalf("Backup: %v", err)
@@ -98,6 +101,7 @@ func TestABackupIsAPointInTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	store.SaveScope([]*core.ScopeRule{{Kind: core.ScopeInclude, Pattern: "in-the-backup.test"}})
 
 	dest := filepath.Join(dir, "snapshot.db")
@@ -112,6 +116,7 @@ func TestABackupIsAPointInTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening the snapshot: %v", err)
 	}
+	t.Cleanup(func() { _ = restored.Close() })
 	rules, err := restored.LoadScope()
 	if err != nil {
 		t.Fatalf("reading the snapshot: %v", err)
@@ -133,6 +138,7 @@ func TestBackupRefusesToOverwriteAnExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	dest := filepath.Join(dir, "taken.db")
 	if err := os.WriteFile(dest, []byte("previous backup"), 0o600); err != nil {
 		t.Fatalf("seeding: %v", err)
@@ -158,6 +164,7 @@ func TestBackupRejectsAnEmptyDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	if err := store.Backup(""); err == nil {
 		t.Error("an empty destination was accepted")
 	}
@@ -187,6 +194,7 @@ func TestBackupIntoAMissingDirectoryFailsCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	err = store.Backup(filepath.Join(dir, "no-such-dir", "b.db"))
 	if err == nil {
 		t.Fatal("a backup into a missing directory reported success")

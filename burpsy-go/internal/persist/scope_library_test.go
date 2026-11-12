@@ -23,6 +23,10 @@ func openStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// SQLite holds the file open for the life of the handle, and Windows refuses to
+	// delete a file that is still open — so t.TempDir cleanup fails without this.
+	// Unix unlinks an open file happily, which is why it only surfaced off Linux.
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -179,6 +183,8 @@ func Test_a_scope_library_survives_reopening_the_database(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
+	// Windows will not delete a file still open, so t.TempDir cleanup needs this.
+	t.Cleanup(func() { _ = reopened.Close() })
 	rules, found, err := reopened.LoadScopeLibrary("restart")
 	if err != nil || !found {
 		t.Fatalf("after reopening: LoadScopeLibrary = (found %v, err %v); the library did not outlive the process, which is the whole reason it is stored rather than held in memory", found, err)

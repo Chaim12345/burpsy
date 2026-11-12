@@ -119,6 +119,19 @@ func NewResidentMessage(id MsgId, raw []byte, shape MessageShape) *StoredMessage
 	return &StoredMessage{ID: id, Shape: shape, resident: owned}
 }
 
+// NewResidentMessageAt is NewResidentMessage that also records where the bytes
+// were written. A platform that cannot map a segment still appends the message to
+// one (Append always returns a location) and then keeps a resident copy so spans
+// stay free to slice — but dropping the location there loses the only durable
+// pointer to the bytes, and the mirror then writes a NULL segment: a restart
+// would have to read the payload back into memory rather than resolve a span.
+// Carrying loc keeps the mirror writing a span on every platform.
+func NewResidentMessageAt(id MsgId, raw []byte, shape MessageShape, loc Location) *StoredMessage {
+	msg := NewResidentMessage(id, raw, shape)
+	msg.loc = loc
+	return msg
+}
+
 // NewDiskMessage builds a message whose bytes stay in a segment file. It holds
 // no payload at all; Raw reads through src on demand.
 func NewDiskMessage(id MsgId, shape MessageShape, loc Location, src *SegmentLog) *StoredMessage {
@@ -946,6 +959,12 @@ func (ts *TrafficStore) put(raw []byte, direction Direction) (MsgId, error) {
 	var msg *StoredMessage
 	if loc.Segment != "" && ts.segmentLog.Mappable() {
 		msg = NewDiskMessage(id, shape, loc, ts.segmentLog)
+	} else if loc.Segment != "" {
+		// Written to a segment, but this platform cannot map one: keep the bytes
+		// resident and *also* keep the location, so the mirror still writes a span
+		// and a restart resolves the bytes from the segment instead of reading them
+		// back. Dropping loc here is what made the mirrored segment NULL off unix.
+		msg = NewResidentMessageAt(id, raw, shape, loc)
 	} else {
 		msg = NewResidentMessage(id, raw, shape)
 	}
