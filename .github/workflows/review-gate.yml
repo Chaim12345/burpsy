@@ -27,8 +27,20 @@ on:
     branches: [master]
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
-  # A verdict posted as a comment or a review must re-evaluate the head.
+    # `edited` is required, not optional noise. The risk set is `git diff base...head` (see
+    # scripts/review-gate.sh), and the base is read from the API at run time, so a PR retargeted to
+    # a different base has a different risk set with the same head commit. Without `edited`, a
+    # verdict earned against the old base would stand for the new one. `labeled` and `unlabeled`
+    # stay off: a label is not a risk path and must not invalidate a verdict.
+    types: [opened, synchronize, reopened, edited]
+  # A verdict posted as a comment must re-evaluate the head, including when it is retracted.
+  # `edited` and `deleted` are both here on purpose: scripts/review-verdict.sh orders comments by
+  # updated_at and takes the latest valid verdict, and DEVELOPMENT-PROCESS.md section 7 says the
+  # latest verdict wins. Without these two triggers a reviewer who edits an approval into
+  # changes-required, or deletes it, leaves the old `success` status standing, and the PR merges on
+  # evidence that no longer exists. The job guard below drops comments with no agent-review marker,
+  # so ordinary conversation still does not run the gate; that guard is what makes restoring these
+  # cheap.
   issue_comment:
     types: [created, edited, deleted]
   pull_request_review:
@@ -47,8 +59,12 @@ concurrency:
 
 jobs:
   review-gate-run:
-    # Comments on plain issues are not our business.
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    # Comments on plain issues are not our business, and a comment with no agent-review line is not
+    # a verdict: skipping it (which reports success) keeps the gate's status from being re-posted for
+    # ordinary discussion. GitHub has no body filter in `on:`, so the marker test lives here.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, 'agent-review:'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -1,0 +1,45 @@
+name: Vulncheck
+
+# govulncheck over burpsy-go, kept out of the lint job (go.yml) so a vulnerability report never
+# blocks a merge. It fails on a reachable vulnerability that is not in
+# scripts/ci/govulncheck-baseline.txt, so a NEW one is visible and the known ones stay tracked.
+#
+# Why a workflow of its own:
+#   * pull_request — a signal on the PR, not a gate. The step is continue-on-error for this event, so
+#     the job reports the finding without turning the PR red, and `vulncheck` is not in the branch
+#     protection required-checks list at the top of go.yml.
+#   * schedule + workflow_dispatch — the periodic full scan. There is no PR to protect, so a new
+#     reachable vulnerability fails the run and is visible in the Actions tab.
+#
+# The baseline and install logic are the ones the lint job used: `scripts/ci-lint.sh vuln` installs
+# the pinned govulncheck and runs scripts/ci-vulncheck-gate.py against scripts/ci/govulncheck-baseline.txt.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vulncheck-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  vulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: burpsy-go/go.mod
+          cache: false
+
+      # On a PR a finding is reported but must not block; the scheduled run fails so a new
+      # vulnerability is not silently absorbed into the baseline's quiet.
+      - name: govulncheck (new reachable vulnerabilities only)
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: scripts/ci-lint.sh vuln
