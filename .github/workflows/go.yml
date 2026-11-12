@@ -359,7 +359,15 @@ jobs:
         working-directory: burpsy-go/internal/web/ui
 
     steps:
+      # persist-credentials: false. This job holds contents: write for the self-heal push at the
+      # end, and the default leaves that token in .git/config for the rest of the job -- including
+      # `bun install` and `npm --prefix tools/api-types ci`, which execute dependency lifecycle
+      # scripts. A lifecycle script can read .git/config and push to master directly, which no PR
+      # ever diffed and the review gate never saw. The push step below checks out again with an
+      # explicit token instead, so the credential exists only for that step.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Pinned exactly: dist/app.js is byte-reproducible only with the same bun (two rebuilds with
       # 1.4.2 were identical; another version emits different bytes and the freshness step below
@@ -420,6 +428,9 @@ jobs:
       # still fail the freshness step above. Rebase-retry covers two merges landing close together.
       - name: Publish the rebuilt bundle on master
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          # The job token, scoped to this step. contents: write is granted at the job level.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if git diff --quiet -- . && [ -z "$(git ls-files --others --exclude-standard -- .)" ]; then
             echo "bundle is already fresh on master"
@@ -429,8 +440,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A -- .
           git commit -m "chore(ui): rebuild the committed bundle on master"
+          # The job's checkout ran with persist-credentials: false, so no token is in .git/config
+          # and this push needs one explicitly. It is passed as a per-command remote URL rather
+          # than written to config, so the credential exists only for these three commands and
+          # never in a file a later step (or a dependency lifecycle script) could read.
+          auth="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           for _ in 1 2 3; do
-            if git push origin HEAD:master; then
+            if git push "$auth" HEAD:master; then
               echo "rebuilt bundle pushed to master"
               exit 0
             fi
