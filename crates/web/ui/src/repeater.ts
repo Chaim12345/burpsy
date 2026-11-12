@@ -56,6 +56,7 @@ export function initRepeater(): void {
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+  $("#rep-tabs")!.addEventListener("keydown", (e) => onTabStripKeydown(e as KeyboardEvent));
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -65,17 +66,38 @@ export function initRepeater(): void {
 
 function onTabStripClick(e: Event): void {
   const target = e.target as HTMLElement;
-  if (target.id === "rep-tab-add") {
+  if (target.closest("#rep-tab-add")) {
     addTab();
     return;
   }
-  const closeId = target.dataset["close"];
-  if (closeId) {
-    closeTab(Number(closeId));
+  const closeBtn = target.closest<HTMLElement>("[data-close]");
+  if (closeBtn?.dataset["close"]) {
+    closeTab(Number(closeBtn.dataset["close"]));
     return;
   }
   const item = target.closest<HTMLElement>(".tab-item");
   if (item?.dataset["id"]) selectTab(Number(item.dataset["id"]));
+}
+
+function onTabStripKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const target = e.target as HTMLElement;
+  if (target.closest("#rep-tab-add")) {
+    e.preventDefault();
+    addTab();
+    return;
+  }
+  const closeBtn = target.closest<HTMLElement>("[data-close]");
+  if (closeBtn?.dataset["close"]) {
+    e.preventDefault();
+    closeTab(Number(closeBtn.dataset["close"]));
+    return;
+  }
+  const item = target.closest<HTMLElement>(".tab-item");
+  if (item?.dataset["id"]) {
+    e.preventDefault();
+    selectTab(Number(item.dataset["id"]));
+  }
 }
 
 function renderTabs(): void {
@@ -85,10 +107,10 @@ function renderTabs(): void {
     tabs
       .map(
         (t) =>
-          `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}" role="tab" aria-selected="${t.id === activeId}" tabindex="0">${t.id}` +
+          `<button class="tab-close" data-close="${t.id}" aria-label="Close tab ${t.id}" title="Close tab ${t.id}">&times;</button></div>`,
       )
-      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
+      .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab" aria-label="New tab">+</button>`;
 }
 
 function saveEditorIntoActiveTab(): void {
