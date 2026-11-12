@@ -867,11 +867,14 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 	if err != nil {
 		return nil, err
 	}
+	// One close for every exit path below: rows.Close is idempotent, and the error paths used to
+	// call it directly, which golangci-lint's gosec G104 correctly reads as an unhandled error.
+	defer func() { _ = rows.Close() }()
 
 	// deferred holds only the rows whose bytes are genuinely required, in id order. Everything else
 	// becomes a disk-backed message in the loop below, so a capture-dir history allocates nothing
 	// proportional to its size here.
-	type deferred struct {
+	type deferredRow struct {
 		id      uint64
 		dir     int
 		segment sql.NullString
@@ -879,7 +882,7 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 		length  sql.NullInt64
 		shape   []byte
 	}
-	var pending []deferred
+	var pending []deferredRow
 
 	var out []*core.StoredMessage
 	for rows.Next() {
@@ -890,13 +893,11 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 		var offset, length sql.NullInt64
 		var encodedShape []byte
 		if err := rows.Scan(&id, &dir, &rawLen, &segment, &offset, &length, &encodedShape); err != nil {
-			rows.Close()
 			return nil, err
 		}
 
 		onDisk := segment.Valid && segment.String != ""
 		if onDisk && src == nil {
-			rows.Close()
 			return nil, fmt.Errorf("message %d is recorded at %s offset %d but this store has no segment log to resolve it against",
 				id, segment.String, offset.Int64)
 		}
@@ -906,7 +907,6 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 		if onDisk && len(encodedShape) > 0 {
 			shape, err := core.DecodeShape(encodedShape)
 			if err != nil {
-				rows.Close()
 				return nil, fmt.Errorf("message %d shape: %w", id, err)
 			}
 			out = append(out, core.NewDiskMessage(core.MsgId(id), shape, loc, src))
@@ -914,19 +914,17 @@ func (s *Store) LoadMessages(src *core.SegmentLog) ([]*core.StoredMessage, error
 		}
 
 		// Either the row is resident (SQLite is the only copy of its bytes) or it predates shapes
-		// and the shape has to be re-derived from them. Both need raw, fetched after the cursor closes.
-		pending = append(pending, deferred{
+		// and the shape has to be re-derived from them. Both need raw, fetched after the loop.
+		pending = append(pending, deferredRow{
 			id: id, dir: dir, segment: segment, offset: offset, length: length, shape: encodedShape,
 		})
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return nil, err
 	}
-	rows.Close()
 
-	// Fetch the bytes only now: the cursor is closed, and db.SetMaxOpenConns(1) means a query issued
-	// while it was open would deadlock against this one.
+	// Fetch the bytes only now, outside the row iteration: db.SetMaxOpenConns(1) means a query
+	// issued while the cursor was open would deadlock against that same connection.
 	for _, r := range pending {
 		onDisk := r.segment.Valid && r.segment.String != ""
 		loc := core.Location{Segment: r.segment.String, Offset: r.offset.Int64, Length: r.length.Int64}
