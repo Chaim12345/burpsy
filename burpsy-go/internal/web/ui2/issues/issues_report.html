@@ -1,0 +1,42 @@
+<div id="rows" class="issues-report" style="padding:6px 14px; max-width:900px">
+<h2>Report settings</h2>
+<p class="meta">Every choice here is a query parameter on the export links, so the file you download is the file these settings describe. Title, organisation and contents apply to the HTML report; detail sections and HTTP messages apply to HTML and Burp XML; the filters apply to every format. Confidence is a view filter on the Issues list, not an export axis. <a href="/ui2/issues">back to issues</a></p>
+{{if .Error}}<p class="meta" role="alert"><strong>{{.Error}}</strong></p>{{end}}
+<form method="get" action="/ui2/issues/report" hx-get="/ui2/issues/report" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">
+  <input type="hidden" name="sections_set" value="1">
+  <fieldset><legend>Report details (HTML)</legend>
+    <p><label>Title <input type="text" name="title" value="{{.Title}}" maxlength="200" placeholder="burpsy scan report" aria-label="Report title"></label></p>
+    <p><label>Organise by <select name="organise_by" aria-label="Organise by">
+      <option value="severity"{{if eq .OrganiseBy "severity"}} selected{{end}}>Severity</option>
+      <option value="type"{{if eq .OrganiseBy "type"}} selected{{end}}>Issue type</option>
+      <option value="url"{{if eq .OrganiseBy "url"}} selected{{end}}>URL</option>
+    </select></label>
+    <label>Contents <select name="toc_depth" aria-label="Table of contents depth">
+      <option value="0"{{if eq .TOCDepth "0"}} selected{{end}}>No table of contents</option>
+      <option value="1"{{if eq .TOCDepth "1"}} selected{{end}}>Groups</option>
+      <option value="2"{{if eq .TOCDepth "2"}} selected{{end}}>Groups and issues</option>
+    </select></label></p>
+  </fieldset>
+  <fieldset><legend>Issue detail sections (HTML, XML)</legend>
+    {{range .SectionOptions}}<label><input type="checkbox" name="sections" value="{{.Value}}"{{if index $.Sections .Value}} checked{{end}}> {{.Label}}</label> {{end}}
+  </fieldset>
+  <fieldset><legend>HTTP messages (HTML, XML)</legend>
+    <label>Mode <select name="message_mode" aria-label="HTTP messages mode">
+      <option value="none"{{if eq .MessageMode "none"}} selected{{end}}>Do not include</option>
+      <option value="relevant"{{if eq .MessageMode "relevant"}} selected{{end}}>Relevant extracts</option>
+      <option value="full"{{if eq .MessageMode "full"}} selected{{end}}>Full messages</option>
+    </select></label>
+    <label>Max length (bytes) <input type="text" name="max_message_len" value="{{.MaxMessageLen}}" inputmode="numeric" size="8" aria-label="Maximum message length in bytes"></label>
+  </fieldset>
+  <fieldset><legend>Which issues (every format)</legend>
+    <p>{{range .SeverityLevels}}<label><input type="checkbox" name="severity" value="{{.}}"{{if index $.Severities .}} checked{{end}}> {{.}}</label> {{end}}<span class="meta">(none ticked = every severity)</span></p>
+    <p><label>Host contains <input type="text" name="host" value="{{.Host}}" aria-label="Host filter"></label>
+    <label><input type="checkbox" name="hide_fp" value="1"{{if .HideFP}} checked{{end}}> Hide false positives</label></p>
+  </fieldset>
+  <button type="submit">Apply settings</button>
+</form>
+<h3>Export</h3>
+<ul class="report-links">
+{{range .Links}}<li><a class="btn" href="{{.Href}}" target="_blank" rel="noopener" data-format="{{.Format}}">{{.Label}}</a> <code class="meta brk">{{.Href}}</code></li>{{else}}<li class="meta">Fix the settings above to get export links.</li>{{end}}
+</ul>
+</div>

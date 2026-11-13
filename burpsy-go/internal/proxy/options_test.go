@@ -785,3 +785,50 @@ func Test_the_invisible_routing_host_read_keeps_the_strict_shape(t *testing.T) {
 		t.Errorf("a plain Host line read as %q", h)
 	}
 }
+
+// The panel hears about real movement and only real movement: a flipped flag and a moved
+// counter announce, a no-op Set and a response no rule was enabled for stay silent - the
+// difference between a live panel and one that refetches on every proxied response.
+func TestOnChangeAnnouncesMovementAndStaysSilentOtherwise(t *testing.T) {
+	o := NewOptions()
+	calls := 0
+	o.OnChange(func() { calls++ })
+
+	// A no-op Set leaves the flag as it was: nothing moved, nothing announced.
+	if err := o.Set(OptRemoveAllJavaScript, false); err != nil {
+		t.Fatalf("no-op Set: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("a no-op Set announced %d changes, want 0", calls)
+	}
+
+	// A real flip announces once.
+	if err := o.Set(OptRemoveAllJavaScript, true); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("a flag flip announced %d changes, want 1", calls)
+	}
+
+	// A response no untouched-rule path touches moves no counter and stays silent.
+	o2 := NewOptions()
+	calls2 := 0
+	o2.OnChange(func() { calls2++ })
+	raw := htmlResponse(`<p>plain</p>`)
+	o2.ApplyResponse(raw)
+	if calls2 != 0 {
+		t.Fatalf("a response with no rule enabled announced %d changes, want 0", calls2)
+	}
+
+	// A response a rule rewrites moves counters, and the panel hears it.
+	o3 := optionsWith(t, OptRemoveAllJavaScript)
+	calls3 := 0
+	o3.OnChange(func() { calls3++ })
+	o3.ApplyResponse(htmlResponse(`<script>alert(1)</script><p>kept</p>`))
+	if calls3 == 0 {
+		t.Fatal("a rewritten response announced nothing")
+	}
+	if c := o3.Counters(); c.Modified == 0 {
+		t.Fatal("a rewritten response moved no Modified counter - the test proves nothing")
+	}
+}

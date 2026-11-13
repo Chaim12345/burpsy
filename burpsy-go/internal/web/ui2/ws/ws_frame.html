@@ -1,0 +1,32 @@
+<div class="ws-detail" data-open="1">
+{{if .Error}}<p class="meta" role="alert">Frame #{{.ID}} unavailable: {{.Error}}</p>{{else}}{{with .Msg}}
+<h3>Frame #{{.ID}} <span class="meta">{{if eq .Direction "client_to_server"}}→ sent{{else}}← received{{end}} · <code>{{.Opcode}}</code> · {{.Len}} bytes</span></h3>
+<dl>
+<dt>Connection</dt><dd>#{{.Exchange}} {{.URL}}</dd>
+<dt>At</dt><dd>{{$.At}}</dd>
+<dt>Fragments</dt><dd>{{.Fragments}}</dd>
+<dt>Edited</dt><dd>{{if .Edited}}edited by the operator before relay{{else}}no{{end}}</dd>
+{{if .Note}}<dt>Notes</dt><dd>{{.Note}}</dd>{{end}}
+{{if .Close}}<dt>Close code</dt><dd><span class="badge">{{.Close.Code}}</span></dd>
+<dt>Reason</dt><dd>{{if .Close.Reason}}{{.Close.Reason}}{{else}}(no reason given){{end}}</dd>{{end}}
+</dl>
+{{if .Truncated}}<p class="meta" role="note">{{.Dropped}} byte(s) were dropped from this frame; showing only what was kept.</p>{{end}}
+{{end}}
+<h3>{{if .IsText}}Text payload{{else}}Hex payload{{end}}</h3>
+<pre class="msg" id="ws-payload">{{.Payload}}</pre>
+<div class="ws-actions">
+<a class="btn" href="/ui2/repeater/ws?frame={{.ID}}">Send to Repeater</a>
+<a class="btn" href="/ui2/decoder" data-seed="decoder" data-seed-src="ws-payload">Payload to Decoder</a>
+<a class="btn" href="/ui2/comparer" data-seed="comparer.a" data-seed-src="ws-payload">Comparer A</a>
+<a class="btn" href="/ui2/comparer" data-seed="comparer.b" data-seed-src="ws-payload">Comparer B</a>
+<a class="btn" href="/ui2/ws/frame/{{.ID}}?download=1" download>Save payload</a>
+</div>
+<div class="ws-actions">
+<button type="button" class="copy-btn" data-label="Copy frame id" data-copy="{{.ID}}">Copy frame id</button>
+<button type="button" class="copy-btn" data-label="Copy summary" data-copy="{{.Summary}}">Copy summary</button>
+<button type="button" class="copy-btn" data-label="Copy exchange id" data-copy="{{.Msg.Exchange}}">Copy exchange id</button>
+<a class="btn" href="/ui2/ws/handshake/{{.Msg.Exchange}}" hx-get="/ui2/ws/handshake/{{.Msg.Exchange}}" hx-target="#ws-detail" hx-swap="innerHTML">Handshake</a>
+{{if .HistoryHref}}<a class="btn" href="{{.HistoryHref}}">Show exchange in history</a>{{end}}
+</div>
+{{end}}
+</div>

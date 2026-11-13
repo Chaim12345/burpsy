@@ -1,0 +1,4 @@
+{{if .error}}<p class="meta pxs-err" role="alert"><strong>Test refused: {{.error}}</strong></p>{{else if .ran}}
+<p class="meta" style="padding:0">Transformed output ({{.direction}} rules) · {{if .changed}}<span class="badge" id="mr-test-changed">changed</span>{{else}}<span class="badge" id="mr-test-changed">no change</span>{{end}}</p>
+<pre id="mr-test-output" style="margin:0">{{.output}}</pre>
+{{end}}

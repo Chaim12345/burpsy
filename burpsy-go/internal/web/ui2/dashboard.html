@@ -1,0 +1,91 @@
+<div id="rows">
+<span id="dash-live" data-live="{{.LiveURL}}" hidden></span>
+{{if .Error}}<p class="meta" role="alert"><strong>{{.Error}}</strong></p>{{end}}
+{{if .Note}}<p class="meta" role="alert" id="dash-note"><strong>{{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status" id="dash-note"><strong>{{.Done}}</strong></p>{{end}}
+<p class="meta">{{.Exchanges}} exchanges · {{.Messages}} messages · {{.StoredBytes}} bytes stored · suite {{if .Paused}}PAUSED{{else}}running{{end}}</p>
+{{if .Paused}}<p class="meta" role="status"><strong>Task execution is paused</strong> — running tasks hold at their next step until resumed.</p>{{end}}
+
+<h3>Tasks ({{.TasksRunning}} running{{if .TasksDropped}}, {{.TasksDropped}} older finished task(s) dropped from the list{{end}})</h3>
+<div class="meta" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+<form hx-get="/ui2/dashboard" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard" method="get" style="display:flex; gap:6px">
+<input type="search" name="filter" value="{{.Filter}}" placeholder="Filter tasks" aria-label="Filter tasks">
+<button type="submit">Filter</button>
+</form>
+{{if .Paused}}
+<form hx-post="/ui2/dashboard/tasks/resume" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/tasks/resume" method="post"><input type="hidden" name="filter" value="{{.Filter}}"><button type="submit">Resume tasks</button></form>
+{{else}}
+<form hx-post="/ui2/dashboard/tasks/pause" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/tasks/pause" method="post"><input type="hidden" name="filter" value="{{.Filter}}"><button type="submit">Pause all tasks</button></form>
+{{end}}
+<a class="btn" href="/ui2/scanner">New scan</a>
+</div>
+<table class="dash-tasks">
+<thead><tr><th scope="col">Task</th><th scope="col">State</th><th scope="col">Progress</th><th scope="col">Issues</th><th scope="col">Actions</th></tr></thead>
+<tbody>
+{{if .LiveStanding}}
+<tr data-id="live"><td>Live audit from Proxy (all traffic)</td><td>running</td><td class="meta">waiting for in-scope traffic</td><td>{{.Live.Findings}}</td>
+<td style="white-space:normal">{{template "dash-live-toggle" .}}</td></tr>
+{{end}}
+{{range .Shown}}
+<tr data-id="{{.ID}}">
+<td title="{{.Title}}"><a href="/ui2/dashboard/task/{{.ID}}" hx-get="/ui2/dashboard/task/{{.ID}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">{{.ID}}. {{.Title}}</a></td>
+<td>{{.State}}{{if .Paused}} <span class="badge">paused</span>{{end}}</td>
+<td class="meta" title="{{.Progress}}">{{.Progress}}</td>
+<td title="{{.Result.Summary}}">{{.Result.Found}}</td>
+<td style="white-space:normal">
+{{if .CanPause}}{{if .Paused}}<form hx-post="/ui2/dashboard/task/{{.ID}}/resume" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/resume" method="post" style="display:inline"><input type="hidden" name="filter" value="{{$.Filter}}"><button type="submit" aria-label="Resume task {{.ID}}">Resume</button></form>
+{{else}}<form hx-post="/ui2/dashboard/task/{{.ID}}/pause" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/pause" method="post" style="display:inline"><input type="hidden" name="filter" value="{{$.Filter}}"><button type="submit" aria-label="Pause task {{.ID}}">Pause</button></form>{{end}}{{end}}
+{{if .CanCancel}}<form hx-post="/ui2/dashboard/task/{{.ID}}/cancel" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/cancel" method="post" style="display:inline"><input type="hidden" name="filter" value="{{$.Filter}}"><button type="submit" aria-label="Cancel task {{.ID}}">Cancel</button></form>{{end}}
+{{if .CanAgain}}<form hx-post="/ui2/dashboard/task/{{.ID}}/again" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/again" method="post" style="display:inline"><input type="hidden" name="filter" value="{{$.Filter}}"><button type="submit" aria-label="Scan task {{.ID}} again">Scan again</button></form>{{end}}
+{{if not .Running}}<form hx-post="/ui2/dashboard/task/{{.ID}}/delete" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/task/{{.ID}}/delete" method="post" style="display:inline"><input type="hidden" name="filter" value="{{$.Filter}}"><button type="submit" aria-label="Delete task {{.ID}}">Delete</button></form>{{end}}
+</td></tr>
+{{else}}{{if not .LiveStanding}}<tr><td colspan="5" class="meta">{{if .Filter}}No task matches this filter.{{else}}No tasks. Start a new scan or live task to populate this list.{{end}}</td></tr>{{end}}{{end}}
+</tbody>
+</table>
+
+<h3>Live audit</h3>
+{{if .LiveErr}}<p class="meta">Live audit state unavailable: {{.LiveErr}}</p>{{else}}
+<p class="meta">Capturing: <strong>{{if .Live.Enabled}}ON{{else}}off{{end}}</strong>{{if not .Live.Wired}} (not wired in this process){{end}} · {{.Live.Findings}} finding(s) · {{.Live.Swept}} swept · {{.Live.Behind}} behind{{if .Live.Query}} · filter <code class="brk">{{.Live.Query}}</code>{{end}} · configuration {{if .Live.Config}}{{.Live.Config}}{{else}}default{{end}} · pool {{if .Live.Pool}}{{.Live.Pool}}{{else}}global pace{{end}}{{if .Live.Hint}} · {{.Live.Hint}}{{end}}</p>
+<div class="meta">{{template "dash-live-toggle" .}}</div>
+<details class="meta" id="dash-new-live">
+<summary>New live task</summary>
+<form hx-post="/ui2/dashboard/live/confirm" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/live/confirm" method="post" style="display:grid; gap:6px; max-width:520px">
+<input type="hidden" name="mode" value="task">
+<label>Scope filter query (optional)<br><input type="text" name="query" value="" placeholder='host == "demo.local"' style="width:100%"></label>
+<label>Scan configuration<br><select name="config"><option value="">Server default (Settings → Audit checks)</option>{{range .Configs}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+<label>Resource pool<br><select name="pool"><option value="">Global pace</option>{{range .Pools}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+<div><button type="submit">Review and start</button></div>
+<p class="meta" style="padding:0">Audits proxied traffic as it arrives{{if .LiveGated}}; sends active checks, so the next step shows the exact call for review{{end}}.</p>
+</form>
+</details>
+{{end}}
+
+<h3>Coverage</h3>
+<table>
+<thead><tr><th scope="col">Summary</th><th scope="col">Found</th><th scope="col">Skipped</th><th scope="col">Breakdown</th></tr></thead>
+<tbody>
+{{range .Summaries}}
+<tr><td>{{.Label}}</td><td>{{.Breakdown.Found}}</td><td>{{.Breakdown.Skipped}}</td>
+<td class="meta">{{if .Breakdown.Complete}}complete{{else}}{{.Breakdown.Unaccounted}} {{.WorkUnit}} without a verdict{{end}} {{range .Reasons}}· {{.Detail}} ({{.Count}}) {{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">Nothing yet.</td></tr>{{end}}
+</tbody>
+</table>
+
+<section id="dash-dock" aria-label="Dashboard dock" style="border-top:2px solid var(--line); margin-top:12px">
+<h3><a href="/ui2/issues">All issues</a> <span class="badge">{{.Issues}}</span></h3>
+<p class="meta">{{range $k, $v := .IssueCounts}}{{if and $v (ne $k "info")}}{{$k}} {{$v}} · {{end}}{{end}}{{if .IssueFP}}{{.IssueFP}} marked false positive (not counted){{end}}</p>
+<h3>Event log ({{.EventsShown}} of {{.EventsTotal}}{{if .EventsDropped}}, {{.EventsDropped}} older discarded{{end}})</h3>
+<div class="meta">
+<form hx-post="/ui2/dashboard/events/confirm" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/events/confirm" method="post" style="display:inline"><button type="submit"{{if not .Events}} disabled{{end}}>Clear event log</button></form>
+{{if .Shown}}{{with index .Shown 0}}<a href="/ui2/dashboard/task/{{.ID}}?tab=events">filter the full log</a>{{end}}{{end}}
+</div>
+<table>
+<thead><tr><th scope="col">Severity</th><th scope="col">Kind</th><th scope="col">Detail</th><th scope="col">Source</th><th scope="col">At</th></tr></thead>
+<tbody>
+{{range .DockEvents}}
+<tr><td class="sev sev-{{.Severity}}">{{.Severity}}</td><td>{{.Kind}}</td><td class="meta" title="{{.Detail}}">{{.Detail}}</td><td class="meta">{{.Source}}</td><td class="meta">{{.At}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No event log items to show.</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+</div>

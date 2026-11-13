@@ -5,6 +5,88 @@ Feature inventory taken from the Burp 2026.7.1 teardown, not from marketing page
 scopes / 8 insertion-point types / 5 scan phases / 183 `burp.Zcot` issue types, and the shipped data
 resources (`KnowledgeBase/Issues`, `BuiltInConfigs`, `PayloadStrings`, `RetireJS`).
 
+## Where things stand — 2026-11-10
+
+The phase tables further down are the original plan and are kept as the feature inventory. They
+were written when the Rust tree (`crates/`) was the implementation, so they name Rust libraries
+(`rcgen`, `rustls`, `rhai`). **The active tree is the Go port, `burpsy-go/`**; `crates/` is a frozen
+reference. This section is the current status and supersedes the per-phase "Task" wording.
+
+"Built" below means the package exists in `burpsy-go/internal/`, is wired to routes, and its tests
+pass in the full suite (56 packages pass; the three failures on the last run were missing local
+tools — `ffuf`, a killed Chromium — not code). It does not mean verified parity with Burp: the
+parity evidence lives in `burpsy-go/docs/` (`SCANNER-COVERAGE.md`, `BCHECK-COVERAGE.md`,
+`ui-parity-audit-complete.md`).
+
+| Phase | Area | Status | Where |
+|---|---|---|---|
+| 1 | TLS interception: CA, per-host leaves, MITM tunnel, passthrough list, ALPN, runtime on/off switch | **DONE** | `proxy`, `alpn`, `servercerts`, `tlsprobe` |
+| 2 | Scope, site map, interception, match & replace, history filters | **DONE** | `core`, `sitemap`, `intercept`, `matchreplace`, `query` |
+| 2 | Repeater (HTTP, WebSocket, HTTP/2, GraphQL), Intruder (all four attack types, payload processing, grep, pools) | **DONE** | `sender`, `intruder`, `pool`, `ratelimit`, `wsclient` |
+| 2 | Decoder, Comparer, Logger, Organizer, Sequencer | **DONE** | `tools`, `toollog`, `organizer`, `sequencer` |
+| 3 | Issue catalogue, passive and active checks, dispatch scopes, audit queue, live audit, scan configs | **DONE** — 183 of 183 catalogue rows registered as runnable (as of 2026-08-18) | `scanner`, `advisory` |
+| 3 | BCheck interpreter | **PART** — 264 of 264 corpus checks parse; the runtime-supported count is not yet published (`BCHECK-COVERAGE.md`) | `bcheck` |
+| 3 | Crawler, including browser-driven crawling and recorded logins | **DONE** | `crawler`, `browser`, `domexec` |
+| 4 | Persistence and project files | **DONE** | `persist` |
+| 4 | Collaborator client (Interactsh-compatible), blind XSS | **DONE** (hosting a server stays out of scope) | `oob`, `blindxss` |
+| 4 | Extensions over a JSON-RPC child process | **DONE** | `extension` |
+| 4 | Filter language (the Bambda analogue: a closed typed grammar) | **DONE** | `query` |
+| 4 | WebSockets, HTTP/2, session handling, reporting (HTML/JSON/XML/SARIF), dashboard | **DONE** | `proxy`, `http2`, `session`, `report`, `dash` |
+| 5 | MCP server and agent tool surface, with a server-side confirmation gate | **DONE** | `mcp`, `cmd/burpsy-mcp`, `web/confirm_gate.go` |
+| 5 | DOM / JavaScript analysis, DOM Invader | **DONE** | `domexec`, `jsexec`, `dominvader` |
+| — | External tool delegation (ffuf content discovery, nuclei, tlsx) | **DONE** | `extscan`, `tlsprobe` |
+| — | Operator console | **PART** — see below | `web` |
+
+### Operator console
+
+There are two consoles over the same JSON API (381 routes):
+
+- **React SPA** (`internal/web/ui`) — the complete console on `master`.
+- **ui2** — a server-rendered console (Go `html/template` + vendored htmx, no build step). On the
+  `ui2-migration` branch (PR #402) it has 189 routes and 176 templates across 25 domain units, is
+  the default at `/`, and the SPA moves to `/legacy/` for one release.
+
+### Now
+
+1. **Land PR #402** (ui2 to SPA parity). Tests, the UI bundle check and the UAT jobs pass in CI; it needs an
+   independent reviewer's verdict and a browser pass of the integrated console.
+2. **Bugs fixed in the 2026-11-10 program review** (on the same branch):
+   - `/api/scanner/dom` could start any program on the machine and attach to a remote CDP
+     endpoint; it now starts known browsers only and attaches only locally, and no longer echoes
+     an endpoint's browser id.
+   - A closed browser provider returned no browser and no error (a nil dereference).
+   - Response framing: `Transfer-Encoding: gzip, chunked` was not read as chunked, and a
+     non-chunked transfer coding was not treated as close-delimited.
+   - `head` (lower case) was treated as `HEAD`, so a real body was left on the connection.
+   - The sender waited out its deadline for the body of a `HEAD` answer.
+   - A first request held in Intercept past the origin's idle timeout was written into a closed
+     upstream connection.
+   - Access control: a redirect answering a form post always gave "Ambiguous", and any four-byte
+     body counted as "no data".
+   - Smaller: no body on the disabled-interface answer to `HEAD`; the advisories search query is
+     encoded; the console and PoC servers have a header-read timeout.
+
+### Next
+
+- **ui2 settings pages** not yet migrated (the runtime TLS-interception and DOM-engine switches are in): network and TLS (DNS, timeouts, HTTP/2 and HTTP/3,
+  upstream proxy and SOCKS, platform authentication, client certificates), scheduled tasks,
+  skills, browser, per-tool logging, CA import/regenerate/export, backup, diagnostics, hotkeys.
+- **ui2 end-to-end suite in CI**: a browser smoke test of every page plus one write per domain.
+- **Tests for thin units**: New scan, Sequencer/Comparer, Collaborator/Decoder and Session shipped
+  with almost no tests of their own.
+- **Delete the React SPA** one release after ui2 becomes the default.
+- **BCheck runtime coverage**: publish the runtime-supported count (CS-11).
+
+### Later
+
+- Burn down the lint backlog (about 1,250 findings on the whole tree; CI gates new ones only).
+- Replace deprecated APIs flagged by static analysis: `golang.org/x/net/http2` transport and
+  server types (proxy and sender), raw `ecdsa` key fields (JWT checks).
+- The DOM engine switch and the extension loader are the two routes that start a process; give
+  the DOM switch the same operator confirmation the attack routes have.
+
+---
+
 ## What "Montoya coverage" means here, and what it does not
 
 `MontoyaApi` is used throughout this document as the **feature inventory** — it is the most complete

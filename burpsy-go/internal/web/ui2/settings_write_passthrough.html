@@ -1,0 +1,24 @@
+<div id="settings-passthrough">
+{{if .unwired}}<p class="meta">No TLS policy is attached to this process, so there is no passthrough list to manage.</p>{{else}}
+<p class="meta">{{len .patterns}} patterns · apply to out-of-scope={{.apply_out_of_scope}} · auto-add on certificate refusal={{.auto_add_on_failure}}{{if .auto_added}} · {{.auto_added}} auto-added{{end}}</p>
+{{range .patterns}}<p class="meta"><code>{{.}}</code> <form style="display:inline" hx-post="/ui2/settings/write/passthrough/confirm" hx-target="#settings-passthrough" hx-swap="outerHTML"><input type="hidden" name="op" value="remove"><input type="hidden" name="pattern" value="{{.}}"><button>remove</button></form></p>{{end}}
+<details><summary>Add a passthrough pattern</summary>
+<form hx-post="/ui2/settings/write/passthrough/confirm" hx-target="#settings-passthrough" hx-swap="outerHTML">
+<input type="hidden" name="op" value="add">
+<p><label>Host pattern <input type="text" name="pattern" placeholder="*.example.com" size="30"></label></p>
+<p><button>Review and add</button></p>
+<p class="meta">Hosts on this list are NOT intercepted: their TLS passes through untouched.</p>
+</form>
+</details>
+<details><summary>Coupling switches</summary>
+<form hx-post="/ui2/settings/write/passthrough/confirm" hx-target="#settings-passthrough" hx-swap="outerHTML">
+<input type="hidden" name="op" value="switch"><input type="hidden" name="field" value="apply_out_of_scope"><input type="hidden" name="value" value="{{if .apply_out_of_scope}}false{{else}}true{{end}}">
+<p><button>{{if .apply_out_of_scope}}Turn off{{else}}Turn on{{end}}: apply passthrough to out-of-scope hosts</button> <span class="meta">(currently {{.apply_out_of_scope}})</span></p>
+</form>
+<form hx-post="/ui2/settings/write/passthrough/confirm" hx-target="#settings-passthrough" hx-swap="outerHTML">
+<input type="hidden" name="op" value="switch"><input type="hidden" name="field" value="auto_add_on_failure"><input type="hidden" name="value" value="{{if .auto_add_on_failure}}false{{else}}true{{end}}">
+<p><button>{{if .auto_add_on_failure}}Turn off{{else}}Turn on{{end}}: auto-add a host when its client refuses burpsy's certificate</button> <span class="meta">(currently {{.auto_add_on_failure}})</span></p>
+</form>
+</details>
+{{end}}
+</div>

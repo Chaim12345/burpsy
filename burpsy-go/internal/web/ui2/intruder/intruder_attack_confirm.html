@@ -1,0 +1,19 @@
+{{if .error}}<p class="meta" role="alert" style="color:#c00">Not launched: {{.error}}</p>{{end}}
+{{if .token}}
+<p class="meta">This launches a real attack (riskAttack). Review the exact call — the one-time confirmation binds this body and nothing else:</p>
+<dl class="intruder-review meta">
+  <dt>Call</dt><dd>{{.call}}</dd>
+  <dt>Target</dt><dd>{{.run.target}}</dd>
+  <dt>Attack type</dt><dd>{{.mode_label}}</dd>
+  <dt>Positions</dt><dd>{{range .point_labels}}<div>{{.}}</div>{{else}}none{{end}}</dd>
+</dl>
+<details open><summary class="meta">exact body (what the token binds, in full)</summary>
+<pre class="brk" style="white-space:pre-wrap; max-height:50vh">{{.full_body}}</pre>
+</details>
+<form hx-post="/ui2/intruder/run" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="token" value="{{.token}}">
+  {{range .echo}}<input type="hidden" name="{{index . 0}}" value="{{index . 1}}">
+  {{end}}
+  <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and launch attack</button>
+</form>
+{{else if not .error}}<p class="meta">No token minted.</p>{{end}}

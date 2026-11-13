@@ -1,0 +1,67 @@
+<div id="rows" class="authz-page" style="padding:8px 14px; max-width:960px">
+<h3>Access control</h3>
+<p class="meta">Re-send a captured request as each identity and see whether access control held (the BOLA/IDOR test). One identity is the baseline - the high-privilege role the others are compared against. A role that receives the baseline's content is a bypass.</p>
+{{if .note}}<p class="meta" id="authz-note" role="status"><strong>{{.note}}</strong></p>{{end}}
+<h3>Identities <span class="badge">{{.stored}} saved</span></h3>
+<form id="authz-identities" hx-post="/ui2/authz/identities/confirm" method="post" action="/ui2/authz/identities/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="base" value="{{.base}}">
+{{range .rows}}
+<fieldset class="authz-id" data-row="{{.Index}}" style="margin:8px 0; padding:8px; border:1px solid var(--line); border-radius:6px; min-width:0">
+<legend>{{if .Orig}}{{.Label}}{{else}}new identity{{end}}</legend>
+<input type="hidden" name="row" value="{{.Index}}">
+<input type="hidden" name="orig_{{.Index}}" value="{{.Orig}}">
+<p class="meta" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:0">
+<label>Label <input type="text" name="label_{{.Index}}" value="{{.Label}}" size="18" aria-label="Identity label"></label>
+<label><input type="radio" name="baseline" value="{{.Index}}" {{if .Baseline}}checked{{end}}> baseline</label>
+<label><input type="checkbox" name="strip_{{.Index}}" value="on" {{if .StripCookie}}checked{{end}}> strip cookie (no auth)</label>
+{{if .Orig}}<label><input type="checkbox" name="remove_{{.Index}}" value="on"> remove</label>{{end}}
+</p>
+<p class="meta" style="padding:0"><label>Source from session rule
+<select name="rule_{{.Index}}" aria-label="Session rule source">
+<option value="">paste a cookie below</option>
+{{range .Rules}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Name}} (id {{.ID}})</option>{{end}}
+{{if .RuleMissing}}<option value="{{.RuleMissing}}" selected>rule {{.RuleMissing}} (no longer listed)</option>{{end}}
+</select></label> <span>runs the rule's login macro before the test and uses its fresh cookie</span></p>
+<p class="meta" style="padding:0"><label>Cookie <input type="text" name="cookie_{{.Index}}" value="" size="40" autocomplete="off" spellcheck="false"
+ placeholder="{{if .CookieLen}}stored ({{.CookieLen}} chars, hidden) - blank keeps it{{else}}session=...; role=user{{end}}" aria-label="Cookie"></label>
+{{if .CookieLen}}<label><input type="checkbox" name="cookie_clear_{{.Index}}" value="on"> clear stored cookie</label>{{end}}
+<br>replaces the request's Cookie header; blank leaves the captured one unless strip is set</p>
+<p class="meta" style="padding:0"><label>Extra headers<br><textarea name="headers_{{.Index}}" rows="2" cols="48" autocomplete="off" spellcheck="false"
+ placeholder="{{if .HeaderNames}}stored: {{range $i, $n := .HeaderNames}}{{if $i}}, {{end}}{{$n}}{{end}} (values hidden) - blank keeps them{{else}}Authorization: Bearer ...{{end}}" aria-label="Extra headers"></textarea></label>
+{{if .HeaderNames}}<br><label><input type="checkbox" name="headers_clear_{{.Index}}" value="on"> clear stored headers</label>{{end}}
+<br>one per line, Name: value; anything typed here replaces all of this identity's stored headers</p>
+</fieldset>
+{{end}}
+<p>
+{{if .canMore}}<a class="btn" href="/ui2/authz?add={{.more}}" hx-get="/ui2/authz?add={{.more}}" hx-target="#rows" hx-swap="outerHTML">Add identity row</a>{{end}}
+<button type="submit">Review and save identities</button>
+</p>
+<p class="meta">Stored cookie and header values are never shown here. Saving shows the exact PUT for review (values withheld) before anything is written.</p>
+</form>
+
+<h3>Test an exchange</h3>
+<form id="authz-test" hx-post="/ui2/authz/test/confirm" method="post" action="/ui2/authz/test/confirm" hx-target="#rows" hx-swap="outerHTML">
+<p class="meta" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:0">
+<label>Exchange id <input type="text" name="exchange_id" inputmode="numeric" size="8" value="{{if .exchange_id}}{{.exchange_id}}{{end}}" placeholder="e.g. 42" aria-label="Exchange id"></label>
+<label>Baseline samples <input type="text" name="samples" inputmode="numeric" size="4" placeholder="5" aria-label="Baseline samples"></label>
+<button type="submit">Review test</button>
+</p>
+<p class="meta">The exchange id comes from HTTP history. The test re-sends that request to its target under every saved identity (needs a baseline and at least one other).</p>
+</form>
+{{if .test_error}}<p class="meta" role="alert" style="color:#c00">Test failed: {{.test_error}}</p>{{end}}
+{{if .verdicts}}
+<h3>Verdicts <span class="badge">exchange {{.exchange_id}}</span></h3>
+<table class="authz-verdicts">
+<thead><tr><th scope="col">Identity</th><th scope="col">Verdict</th><th scope="col">Status</th><th scope="col">Length</th><th scope="col">Why</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .verdicts}}
+<tr data-verdict="{{.Verdict}}"><td>{{.Label}}</td>
+<td><span class="sev {{if eq .Verdict "Bypassed"}}sev-high{{else if eq .Verdict "Enforced"}}sev-low{{else if eq .Verdict "Ambiguous"}}sev-medium{{else}}sev-info{{end}}">{{.Verdict}}</span></td>
+<td>{{if .Status}}{{.Status}}{{else}}—{{end}}</td><td>{{.BodyLen}}</td>
+<td title="{{.Why}}">{{.Why}}</td>
+<td>{{if .Diff}}<a href="{{.Diff}}" title="Comparer: baseline response vs this identity's">diff</a>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{end}}
+</div>

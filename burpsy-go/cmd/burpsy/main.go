@@ -51,6 +51,7 @@ func main() {
 	scopeInclude := flag.String("scope-include", "", "include host pattern in scope")
 	scopeExclude := flag.String("scope-exclude", "", "exclude host pattern from scope")
 	interceptTLS := flag.Bool("intercept-tls", false, "enable TLS interception")
+	upstreamTLSVerify := flag.Bool("upstream-tls-verify", true, "verify the target's TLS certificate (false for self-signed or internal-CA targets); overrides the saved network setting for this run, and stays editable at PUT /api/network/settings")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
 	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files from DIR, added to the bundled corpus, and scan with them")
@@ -693,6 +694,23 @@ func main() {
 		}
 	}
 
+	// -upstream-tls-verify, when given, is this run's decision and later than any saved setting: it goes
+	// through the sender's own document (so the console, Repeater and the scanner see it) and onto the
+	// policy the proxy leg holds, the same two places the restore above writes.
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name != "upstream-tls-verify" {
+			return
+		}
+		n := httpSender.Network()
+		n.TLS.Verify = *upstreamTLSVerify
+		if err := httpSender.ApplyNetwork(n); err != nil {
+			logger.Warn("-upstream-tls-verify was refused by the sender's network settings", zap.Error(err))
+			return
+		}
+		restoredTLSPolicy.WithVerify(*upstreamTLSVerify)
+		logger.Info("Upstream TLS verification set from the command line", zap.Bool("verify", *upstreamTLSVerify))
+	})
+
 	bundledChecks, berr := bundledCorpus(logger)
 	if berr != nil {
 		log.Fatal(berr)
@@ -719,12 +737,27 @@ func main() {
 	// reports a missing capability — which is what this binary did unconditionally until the
 	// flag existed. The provider is lazy, so an audit whose check set contains no DOM check
 	// never starts a browser.
-	if domOpts != nil {
-		// The gated browser sessions (renders, recorded logins) leave through the sender's egress
-		// route — upstream proxy, SOCKS carrier, resolution table — like every other send.
-		domOpts.EgressDial = httpSender.EgressDialContext
-		caps.BrowserProvider = scanner.NewLazyBrowserProvider(*domOpts)
+	// The engine sits in a switch the console can set at runtime (PUT /api/scanner/dom), so a process
+	// started without -dom can gain one, and one started with it can change or drop it, without a restart.
+	// The gated browser sessions (renders, recorded logins) leave through the sender's egress
+	// route — upstream proxy, SOCKS carrier, resolution table — like every other send.
+	buildDOMEngine := func(value string) (scanner.BrowserProvider, error) {
+		opts, err := domEngineOptions(value)
+		if err != nil || opts == nil {
+			return nil, err
+		}
+		opts.EgressDial = httpSender.EgressDialContext
+		return scanner.NewLazyBrowserProvider(*opts), nil
 	}
+	domSwitch := scanner.NewSwitchableBrowsers()
+	if domOpts != nil {
+		p, err := buildDOMEngine(*domEngine)
+		if err != nil {
+			log.Fatal(err)
+		}
+		_ = domSwitch.Set(p, strings.TrimSpace(*domEngine))
+	}
+	caps.BrowserProvider = domSwitch
 	activeScanner := scanner.NewActiveScanner(store, logger).
 		WithSender(httpSender).
 		WithScope(scope).
@@ -845,6 +878,7 @@ func main() {
 		WithBindAddrs(*proxyBind, *webBind).
 		WithAllowedHosts(mustAllowedHosts(*webAllowedHosts, logger)...).
 		WithDOMEngine(*domEngine).
+		WithDOMSwitch(domSwitch, buildDOMEngine).
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
 		WithUpstreamProxy(upstreamPolicy).

@@ -1,0 +1,82 @@
+<div id="sm-root">
+<style>
+#sm-root { padding:6px 10px; }
+.sm-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.sm-views { display:flex; gap:4px; flex-wrap:wrap; }
+.sm-views .sm-on, .sm-tabs .sm-on { border-color:var(--accent); color:var(--accent); }
+.sm-filter { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+.sm-filter fieldset { border:1px solid var(--line); border-radius:6px; padding:2px 6px; margin:0; display:flex; gap:6px; flex-wrap:wrap; }
+.sm-filter legend { font-size:11px; color:var(--muted); padding:0 3px; }
+.sm-filter label { white-space:nowrap; }
+.sm-split { display:flex; gap:10px; align-items:flex-start; }
+.sm-tree { width:38%; min-width:0; max-height:calc(100vh - 170px); overflow:auto; border-right:1px solid var(--line); }
+.sm-detail { flex:1; min-width:0; max-height:calc(100vh - 170px); overflow:auto; }
+.sm-rows .meta { padding:4px 2px; }
+.sm-tree-list, .sm-kids { list-style:none; margin:0; padding:0; }
+.sm-kids { padding-left:14px; }
+.sm-node > details > summary { list-style:none; cursor:pointer; }
+.sm-node > details > summary::-webkit-details-marker { display:none; }
+.sm-node > details > summary::before { content:"▸"; display:inline-block; width:14px; color:var(--muted); }
+.sm-node > details[open] > summary::before { content:"▾"; }
+.sm-leaf { padding-left:14px; }
+.sm-line { display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; padding:1px 0; max-width:calc(100% - 16px); }
+.sm-label { color:var(--fg); text-decoration:none; overflow-wrap:anywhere; }
+.sm-sel > details > summary .sm-label, .sm-sel > .sm-leaf .sm-label { background:var(--sel); border-radius:4px; padding:0 4px; }
+.sm-dim { color:var(--muted); font-style:italic; }
+.sm-oos { opacity:.6; }
+.sm-count { color:var(--muted); font-size:11px; }
+.sm-params { padding:0; }
+.sm-menu { display:inline-block; position:relative; }
+.sm-menu > summary { list-style:none; padding:0 6px; line-height:1.3; }
+.sm-menu > summary::-webkit-details-marker { display:none; }
+.sm-menu-body { position:absolute; z-index:30; left:0; top:100%; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:6px; display:flex; flex-direction:column; gap:3px; min-width:230px; box-shadow:0 2px 10px rgba(0,0,0,.25); }
+.sm-menu-body form { margin:0; }
+.sm-menu-body button, .sm-menu-body .btn { width:100%; text-align:left; white-space:nowrap; }
+.sm-actions { display:flex; gap:6px; flex-wrap:wrap; margin:6px 0; }
+.sm-actions form { margin:0; }
+.sm-detail h2 { margin:2px 0 6px; font-size:15px; overflow-wrap:anywhere; }
+.sm-detail details { margin:6px 0; }
+.sm-detail textarea { width:100%; }
+.sm-sub { margin-top:6px; }
+.sm-tabs { display:flex; gap:4px; flex-wrap:wrap; margin:6px 0; }
+.sm-path-row { display:flex; gap:6px; align-items:center; padding:1px 0; flex-wrap:wrap; }
+.sm-path-row code { overflow-wrap:anywhere; }
+@media (max-width:640px) {
+ .sm-split { display:block; }
+ .sm-tree, .sm-detail { width:100%; max-height:none; border-right:none; }
+ .sm-tree { max-height:50vh; border-bottom:1px solid var(--line); margin-bottom:8px; }
+ .sm-menu-body { position:fixed; left:8px; right:8px; top:auto; bottom:8px; max-height:70vh; overflow-y:auto; min-width:0; }
+ table.sm-req td:nth-child(4), table.sm-req th:nth-child(4),
+ table.sm-req td:nth-child(7), table.sm-req th:nth-child(7),
+ table.sm-req td:nth-child(8), table.sm-req th:nth-child(8),
+ table.sm-req td:nth-child(9), table.sm-req th:nth-child(9),
+ table.sm-req td:nth-child(10), table.sm-req th:nth-child(10) { display:none; }
+ table.sm-eng-t td:nth-child(2), table.sm-eng-t th:nth-child(2) { display:none; }
+}
+</style>
+<div class="sm-bar">
+<nav class="sm-views" aria-label="Site map view">
+<a class="btn{{if eq .View "urls"}} sm-on{{end}}" href="{{.URLsView}}"{{if eq .View "urls"}} aria-current="page"{{end}}>URL view</a>
+<a class="btn{{if eq .View "paths"}} sm-on{{end}}" href="{{.PathsView}}"{{if eq .View "paths"}} aria-current="page"{{end}}>Crawl paths</a>
+<a class="btn{{if eq .View "engagement"}} sm-on{{end}}" href="{{.EngView}}"{{if eq .View "engagement"}} aria-current="page"{{end}}>Engagement tools</a>
+<a class="btn{{if eq .View "analyzer"}} sm-on{{end}}" href="/ui2/sitemap?view=analyzer"{{if eq .View "analyzer"}} aria-current="page"{{end}}>Target analyzer</a>
+</nav>
+</div>
+{{if eq .View "urls"}}
+<form id="sm-filter" class="sm-filter" action="/ui2/sitemap" method="get" hx-get="/ui2/sitemap" hx-target="#sm-root" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, submit, keyup changed delay:400ms from:#sm-q">
+<input type="search" id="sm-q" name="q" value="{{.Filter.Q}}" placeholder="Filter by segment or path" aria-label="Filter site map" autocomplete="off">
+<fieldset><legend>Type</legend>{{range .TypeOpts}}<label><input type="checkbox" name="type" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>{{end}}</fieldset>
+<fieldset><legend>Status</legend>{{range .StatusOpts}}<label><input type="checkbox" name="status" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>{{end}}</fieldset>
+<label><input type="checkbox" name="scope" value="1"{{if .Filter.ScopeOnly}} checked{{end}}> In scope only</label>
+<label><input type="checkbox" name="requested" value="1"{{if .Filter.RequestedOnly}} checked{{end}}> Requested only</label>
+<label><input type="checkbox" name="params" value="1"{{if .Filter.ParamsOnly}} checked{{end}}> Parameterized only</label>
+<label><input type="checkbox" name="hide404" value="1"{{if .Filter.HideNotFound}} checked{{end}}> Hide not-found</label>
+{{if .Filter.Narrowed}}<a class="btn" id="sm-clear" href="{{.ClearURL}}" hx-get="{{.ClearURL}}" hx-target="#sm-root" hx-swap="outerHTML" hx-push-url="true">Clear filters</a>{{end}}
+<noscript><button>Apply</button></noscript>
+</form>
+<div class="sm-split">
+<div class="sm-tree">{{template "sitemap.html" .Tree}}</div>
+<div id="sm-detail" class="sm-detail" role="region" aria-label="Selected node" aria-live="polite">{{if .Detail}}{{.Detail}}{{else}}<p class="meta">No path selected. Choose a host or path in the tree to see the requests captured under it.</p>{{end}}</div>
+</div>
+{{else}}<div class="sm-sub">{{.Sub}}</div>{{end}}
+</div>

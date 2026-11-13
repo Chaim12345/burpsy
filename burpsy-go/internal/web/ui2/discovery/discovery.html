@@ -1,0 +1,60 @@
+<div id="discovery" class="ui2-disc">
+<style>
+.ui2-disc section { padding:6px 14px; }
+.ui2-disc .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:8px 14px; }
+.ui2-disc label.f { display:flex; flex-direction:column; gap:2px; }
+.ui2-disc label.f input, .ui2-disc label.f select { width:100%; }
+.ui2-disc .hint { color:var(--muted); font-size:11px; }
+.ui2-disc .scroll { overflow-x:auto; max-width:100%; }
+.ui2-disc .st-good { color:#080; } .ui2-disc .st-info { color:#06c; } .ui2-disc .st-warn { color:#a60; font-weight:700; } .ui2-disc .st-bad { color:#c00; font-weight:700; } .ui2-disc .st-neutral { color:var(--muted); }
+.ui2-disc .state-running { color:#06c; } .ui2-disc .state-done { color:#080; } .ui2-disc .state-stopped { color:#a60; } .ui2-disc .state-failed { color:#c00; }
+.ui2-disc .metrics { display:flex; flex-wrap:wrap; gap:6px 18px; }
+.ui2-disc .metrics div { min-width:120px; }
+.ui2-disc .run { border:1px solid var(--line); border-radius:8px; margin:8px 0; padding:6px 10px; }
+.ui2-disc td.acts { white-space:normal; }
+.ui2-disc td.acts form { display:inline; }
+.ui2-disc td.acts button, .ui2-disc td.acts .btn { padding:1px 6px; font-size:11px; margin:1px 0; }
+</style>
+<section>
+<h2 style="margin:6px 0">Content discovery</h2>
+<p class="hint">Burp's Discover content, delegated to {{.Tool.Name}}. These requests do not pass through burpsy, so they appear in no history row and no site-map node — the command and the run record are the whole account of them.</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">Could not load content-discovery runs: {{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="alert" style="color:#c00"><strong>{{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status"><strong>{{.Done}}</strong></p>{{end}}
+</section>
+{{if .Tool.Available}}
+<section>
+<h3>New sweep</h3>
+<p class="hint">FUZZ is appended to the target path, so point it at the directory to sweep. Starting a sweep shows the exact call for review first.</p>
+<form hx-post="/ui2/discovery/review" method="post" action="/ui2/discovery/review" hx-target="#disc-review" hx-swap="innerHTML">
+<input type="hidden" name="op" value="start">
+<div class="grid">
+<label class="f">Target URL <input type="text" name="target" placeholder="https://target.test/app/" required><span class="hint">the path space swept beneath it</span></label>
+<label class="f">Wordlist path <input type="text" name="wordlist" placeholder="/usr/share/wordlists/dirb/common.txt"><span class="hint">a path on the burpsy host</span></label>
+<label class="f">Or an uploaded list <select name="wordlist_upload"><option value="">— none —</option>{{range .Uploads}}<option value="{{.Ref}}">{{.Name}} ({{.Lines}} lines)</option>{{end}}</select><span class="hint">{{if not .Uploads}}no uploads yet (Settings › Wordlists){{else}}uploads only; give a path or pick one{{end}}</span></label>
+<label class="f">Extensions <input type="text" name="extensions" placeholder="php,bak"><span class="hint">optional; extends every word</span></label>
+<label class="f">Match status codes <input type="text" name="match_codes" placeholder="200,204,301,302,401,403"><span class="hint">optional; empty takes {{.Tool.Name}}'s default, which already excludes 404</span></label>
+<label class="f">Rate limit <input type="text" name="rate" inputmode="numeric" placeholder="uncapped"><span class="hint">optional, requests per second</span></label>
+<label class="f">Subdirectory levels <select name="recurse_depth">{{range .Depths}}<option value="{{.}}">{{if eq . 0}}No recursion (one flat sweep){{else}}{{.}} level(s){{end}}</option>{{end}}</select><span class="hint">each level is a separate sweep per discovered directory, scope-checked before it runs</span></label>
+<label class="f">Variant extensions <input type="text" name="variant_extensions" placeholder="bak,old"><span class="hint">retest discovered files' stems — the backup-copy check</span></label>
+</div>
+<fieldset style="border:1px solid var(--line); border-radius:6px; margin:8px 0">
+<legend>Built-in lists and derived names</legend>
+{{range .Lists}}<label style="display:block"><input type="checkbox" name="lists" value="{{.Name}}"> {{.Name}} ({{.Words}} words)</label>{{end}}
+<label style="display:block"><input type="checkbox" name="observed_names" value="on"> Names observed in use on target site — directory names and filename stems the capture store has seen on this host</label>
+<label style="display:block"><input type="checkbox" name="derivations" value="on"> Derivations based on discovered items — numeric suffix, _old, .bak and case variants of what each sweep finds</label>
+</fieldset>
+<button type="submit">Review sweep…</button>
+<span class="hint">Scope is checked before the run and again on every result. A host whose subtree is only partly in scope is refused outright, because a wordlist picks its own paths.</span>
+</form>
+</section>
+{{else}}
+<section role="note">
+<p><strong>{{.Tool.Name}} not available — content discovery cannot run on this server.</strong></p>
+<p class="hint">{{.Tool.Reason}}</p>
+<p class="hint">Which binary may be executed is operator policy set on the command line, never by this page.</p>
+</section>
+{{end}}
+<section id="disc-review" aria-live="polite"></section>
+{{template "discovery_runs.html" .}}
+</div>

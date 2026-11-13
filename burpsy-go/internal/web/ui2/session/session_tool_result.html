@@ -1,0 +1,22 @@
+<section id="session-tool-result" class="session-tool-result">
+{{with .report}}<h3>Macro {{if eq $.kind "analyze"}}analysis{{else}}test{{end}} — session {{.status}}</h3>
+<table><thead><tr><th scope="col">Step</th><th scope="col">Sent</th><th scope="col">Status</th><th scope="col">Set cookies</th><th scope="col">Extractions</th></tr></thead><tbody>
+{{range .steps}}<tr><td>{{.index}}</td><td class="brk">{{.method}} {{.url}}</td><td>{{if .skipped}}skipped: {{.skipped}}{{else}}{{.response_status}}{{end}}</td><td>{{.set_cookies}}</td>
+<td>{{range .extractions}}{{.name}}: {{.outcome}}{{if .value_len}} (value withheld, {{.value_len}} chars){{end}}{{if .detail}} - {{.detail}}{{end}}; {{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">The macro has no steps.</td></tr>{{end}}
+</tbody></table>
+<p class="meta">Set-cookie and extracted values are withheld; the cookie names and outcomes are what the run measured.</p>{{end}}
+{{if eq .kind "analyze"}}
+{{if .suggestions}}<form hx-post="/ui2/session/call/review" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/call/review">
+<input type="hidden" name="call" value="apply_extractions"><input type="hidden" name="rule_id" value="{{.rule_id}}">
+<p class="meta">Suggested extractions (values withheld):</p>
+{{range .suggestions}}<label><input type="checkbox" name="name" value="{{.name}}" checked> {{"{{"}}{{.name}}{{"}}"}} - {{.source}} in step {{.step}} ({{.from}}{{if .header}} {{.header}}{{end}}, {{.value_len}} chars)</label><br>{{end}}
+<button type="submit">review apply chosen</button></form>
+{{else}}<p class="meta">No new parameter relationships - every value the responses determine is already wired.</p>{{end}}
+{{end}}
+{{with .login}}<h3>Log-in probe — {{.outcome}}</h3>
+<p class="meta">{{if .rule}}rule {{.rule}}{{end}}{{if .login_attempts}}; login attempts {{.login_attempts}}{{end}}{{if .validity}}; validity {{.validity}}{{end}}{{if .response_status}}; retried request answered {{.response_status}} ({{.response_len}} bytes, body withheld){{end}}{{if .hint}}; {{.hint}}{{end}}{{if .error}}; error: {{.error}}{{end}}</p>
+{{if .actions}}<ol>{{range .actions}}<li{{if .skipped}} class="meta"{{end}}>{{.label}}{{if .skipped}} - {{.skipped}}{{else if .changed}} - changed the request{{end}}{{if .detail}} ({{.detail}}){{end}}</li>{{end}}</ol>{{end}}
+{{end}}
+{{if .rule_id}}<div class="meta"><form hx-post="/ui2/session/editor/open" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/session/editor/open" style="display:inline"><input type="hidden" name="rule_id" value="{{.rule_id}}"><button type="submit">open the rule editor</button></form></div>{{end}}
+</section>

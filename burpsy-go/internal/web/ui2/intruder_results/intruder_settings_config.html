@@ -1,0 +1,10 @@
+{{if .load_error}}<p class="meta" role="alert" style="color:#c00">Configuration not loaded: {{.load_error}}</p>{{end}}
+{{if .config}}
+<p class="meta">Attack configuration{{if not .positions}}, without positions{{end}}:</p>
+<textarea readonly rows="8" style="width:100%; font-family:ui-monospace,monospace" aria-label="Attack configuration JSON">{{.config}}</textarea>
+<form method="post" action="/ui2/intruder/config/save" style="display:inline">
+  <input type="hidden" name="config" value="{{.config}}">
+  <button type="submit">Download .json</button>
+</form>
+<button type="button" class="btn copy-btn" data-copy="{{.config}}">Copy</button>
+{{end}}

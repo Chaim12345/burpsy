@@ -71,7 +71,7 @@ func (s *ActiveScanner) AuditCrawlLocations(ctx context.Context, locations map[s
 		out.Declined = "no scanner is wired to this crawl"
 		return out, nil, nil
 	}
-	if s.browsers == nil {
+	if !s.hasBrowsers() {
 		// Not an error. A crawl that wanted the rendered view and has no browser looked at
 		// nothing, and the caller must be told that rather than shown an empty result —
 		// the same rule stored_dom_render.go applies.

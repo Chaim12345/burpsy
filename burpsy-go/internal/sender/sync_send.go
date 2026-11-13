@@ -148,6 +148,7 @@ func (s *Sender) sendSynchronizedOn(ctx context.Context, conn net.Conn, raw []by
 
 	response, capped, rerr := readResponse(
 		bufio.NewReader(conn),
+		requestMethod(raw),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
 		eventStreamPromoter(ctx, conn, settings),

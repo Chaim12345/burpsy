@@ -1,0 +1,23 @@
+<div id="gql-sitemap" style="margin-top:10px">
+<h3>Save GraphQL queries to site map</h3>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">Not saved: {{.Error}}</p>{{end}}
+{{if .Done}}
+<p role="status"><strong>Saved {{len .Done.Operations}} unsent request(s) to the site map</strong> for {{.Done.Endpoint}} (query carried in the {{.Done.Placement}}). Nothing was sent.{{if .Done.Truncated}} The schema declared more than {{.Done.Limit}} operations; the rest were not generated.{{end}}</p>
+<ul>{{range .Done.Operations}}<li>{{.Kind}} <code>{{.Field}}</code> → <a href="/ui2/history/{{.ExchangeID}}">exchange #{{.ExchangeID}}</a></li>{{end}}</ul>
+{{else if .ReviewID}}
+<p>Exchange #{{.Exchange}}'s introspection answer declares <strong>{{len .Ops}}</strong> operation(s) for {{.Endpoint}}. Saving writes one <strong>unsent</strong> request per operation into burpsy's store and site map (source "schema"), carried in the {{.Placement}}. Nothing is sent to the target.{{if .Truncated}} Only the first {{.Limit}} are generated.{{end}}</p>
+<ul>{{range .Ops}}<li>{{.Kind}} <code>{{.Field}}</code> ({{.Name}})</li>{{else}}<li class="meta">The schema declares no query or mutation fields; nothing would be written.</li>{{end}}</ul>
+<form method="post" action="/ui2/repeater/graphql/sitemap-run" hx-post="/ui2/repeater/graphql/sitemap-run" hx-target="#gql-sitemap" hx-swap="outerHTML">
+  <input type="hidden" name="review_id" value="{{.ReviewID}}"><input type="hidden" name="token" value="{{.Token}}">
+  <button type="submit" disabled data-arm-on-load title="arming…">Confirm save to site map</button>
+</form>
+<p class="meta">The review is held once and expires after the confirmation window.</p>
+{{else if .Ready}}
+<form method="post" action="/ui2/repeater/graphql/sitemap-confirm" hx-post="/ui2/repeater/graphql/sitemap-confirm" hx-target="#gql-sitemap" hx-swap="outerHTML">
+  <input type="hidden" name="exchange" value="{{.Exchange}}">
+  <button type="submit">Review save of exchange #{{.Exchange}}'s schema</button>
+</form>
+{{else}}
+<p class="meta">Send an introspection query first: the save reads the answer of a sent exchange.</p>
+{{end}}
+</div>

@@ -17,7 +17,7 @@ test.describe("routes", () => {
       consoleErrors,
       failedRequests,
     }) => {
-      await page.goto(`/#${route.id}`);
+      await page.goto(`/legacy/#${route.id}`);
 
       // The h1 assertion is the render check. Every page got one in commit 608da8e; asserting the
       // exact text also catches a route silently falling back to the default leaf, which a

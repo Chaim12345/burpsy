@@ -1,0 +1,104 @@
+<div id="rows"{{if .live}} hx-get="/ui2/intruder/{{.task}}/results{{if .state}}?{{.state}}{{end}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<h3>Attack {{.task}}{{with .view}} — {{.Report.Kind}}{{end}}</h3>
+{{with .live}}<p class="meta" role="status">{{.status}}{{if .stop_reason}} ({{.stop_reason}}){{end}} · sent {{.sent}} · failed {{.failed}} · planned {{.planned}} — refreshing every 2 s while it runs.</p>{{end}}
+{{if .kept}}{{with .view}}{{$r := .Report}}
+<p class="meta">{{$r.Status}}{{if $r.StopReason}} ({{$r.StopReason}}){{end}} · planned {{$r.Planned}} of {{if not $r.CombinationsExact}}≥ {{end}}{{$r.Combinations}} combinations · enumerated {{$r.Enumerated}} · sent {{$r.Sent}} · failed {{$r.Failed}} · {{$r.ElapsedMS}} ms · target {{$.target}} · finished {{$.finished}}</p>
+<ul class="meta">
+  {{if $r.Truncated}}<li>Truncated at max_requests {{$r.MaxRequests}} — the rows below are not the whole payload space.</li>{{end}}
+  {{if $.capped}}<li>Per-attempt rows stop at the detail limit ({{$r.DetailLimit}}); later attempts are counted in the buckets only.</li>{{end}}
+  {{if $r.BucketsTruncated}}<li>Bucket table truncated; {{$r.Unbucketed}} responses unbucketed.</li>{{end}}
+  {{if $r.CaptureFilter}}<li>Capture filter on: {{$r.Discarded}} results discarded — counted in sent, failed and the buckets, with no row.</li>{{end}}
+  {{if not $r.RequestsStored}}<li>Requests were not stored (attack setting): rows cannot be opened, resent or compared on the request side.</li>{{end}}
+  {{if not $r.ResponsesStored}}<li>Responses were not stored (attack setting).</li>{{end}}
+  {{if $r.RetriesUsed}}<li>{{$r.RetriesUsed}} retries used.</li>{{end}}
+  {{if $r.AutoPaused}}<li>Auto-pause fired {{$r.AutoPaused}} time(s).</li>{{end}}
+  {{if $.interactions_error}}<li>Collaborator interactions unavailable: {{$.interactions_error}}</li>{{end}}
+</ul>
+{{end}}
+<div class="toolbar" style="margin:6px 0">
+  <a class="btn" href="/ui2/intruder/{{.task}}/export?format=csv" download>Export CSV</a>
+  <a class="btn" href="/ui2/intruder/{{.task}}/export?format=json" download>Export report (JSON)</a>
+</div>
+<form hx-get="/ui2/intruder/{{.task}}/results" action="/ui2/intruder/{{.task}}/results" method="get" hx-target="#rows" hx-swap="outerHTML" class="toolbar" aria-label="Filter results">
+  {{with .filter}}
+  <input type="hidden" name="sort" value="{{.Sort}}"><input type="hidden" name="order" value="{{.Order}}">
+  <input type="hidden" name="cmp_a" value="{{.CmpA}}"><input type="hidden" name="cmp_b" value="{{.CmpB}}">
+  <input type="search" name="q" value="{{.Q}}" placeholder="payload, error, extract, comment" aria-label="Filter text">
+  <select name="status" aria-label="Status class">
+    <option value="">any status</option>
+    <option value="2xx"{{if eq .Status "2xx"}} selected{{end}}>2xx</option><option value="3xx"{{if eq .Status "3xx"}} selected{{end}}>3xx</option>
+    <option value="4xx"{{if eq .Status "4xx"}} selected{{end}}>4xx</option><option value="5xx"{{if eq .Status "5xx"}} selected{{end}}>5xx</option>
+    <option value="none"{{if eq .Status "none"}} selected{{end}}>no response</option>
+  </select>
+  <label><input type="checkbox" name="grep" value="1"{{if .OnlyGrep}} checked{{end}}> grep hits</label>
+  <label><input type="checkbox" name="reflected" value="1"{{if .OnlyReflected}} checked{{end}}> reflected</label>
+  <label><input type="checkbox" name="hide_errors" value="1"{{if .HideErrors}} checked{{end}}> hide errors</label>
+  {{end}}
+  <button type="submit">Filter</button>
+</form>
+{{with .filter}}{{if or .CmpA .CmpB}}<p class="meta" id="cmp-slots">Comparer — A: {{if .CmpA}}{{.CmpA}}{{else}}—{{end}} · B: {{if .CmpB}}{{.CmpB}}{{else}}—{{end}}
+  {{if $.compare_href}}<a class="btn" href="{{$.compare_href}}">Compare A and B</a>{{end}}
+  <a class="btn" href="{{$.compare_clear}}" hx-get="{{$.compare_clear}}" hx-target="#rows" hx-swap="outerHTML">clear</a></p>{{end}}{{end}}
+<p class="meta">{{.shown}} of {{.matched}} matching rows ({{.total}} kept){{if .prev_href}} · <a href="{{.prev_href}}" hx-get="{{.prev_href}}" hx-target="#rows" hx-swap="outerHTML">previous page</a>{{end}}{{if .next_href}} · <a href="{{.next_href}}" hx-get="{{.next_href}}" hx-target="#rows" hx-swap="outerHTML">next page</a>{{end}}</p>
+<div style="overflow-x:auto">
+<table class="intruder-results">
+<thead><tr>{{range .columns}}<th scope="col"{{if .Arrow}} aria-sort="{{if eq .Arrow "▲"}}ascending{{else}}descending{{end}}"{{end}}><a href="{{.Href}}" hx-get="{{.Href}}" hx-target="#rows" hx-swap="outerHTML" data-sort="{{.Key}}">{{.Label}}</a> {{.Arrow}}</th>{{end}}</tr></thead>
+<tbody id="rows-body">
+{{range .rows}}
+<tr hx-get="/ui2/intruder/{{$.task}}/item/{{.Ordinal}}{{if $.item_query}}?{{$.item_query}}{{end}}" hx-target="#detail" hx-swap="innerHTML" data-ordinal="{{.Ordinal}}">
+  <td><a href="/ui2/intruder/{{$.task}}/item/{{.Ordinal}}">{{.Ordinal}}</a></td>
+  <td title="{{.Payload}}">{{if .Base}}<em>{{.Payload}}</em>{{else}}{{.Payload}}{{end}}</td>
+  <td>{{.Status}}</td><td>{{.Length}}</td><td>{{if .Reflected}}yes{{end}}</td>
+  {{if $.has_counts}}{{$c := .Counts}}{{range $i, $x := $.view.PayloadSets}}<td>{{if lt $i (len $c)}}{{index $c $i}}{{end}}</td>{{end}}{{end}}
+  {{if $.has_grep_list}}{{$g := .GrepCounts}}{{range $i, $x := $.view.Report.GrepMatchLabels}}<td>{{if lt $i (len $g)}}{{index $g $i}}{{end}}</td>{{end}}{{else}}<td>{{.GrepMatched}}</td>{{end}}
+  <td title="{{.Extract}}">{{.Extract}}</td>
+  <td>{{if .Anomaly}}{{.Anomaly}}{{end}}</td><td>{{.TimeOfDay}}</td><td>{{.Duration}}</td>
+  <td>{{if .Interactions}}{{.Interactions}}{{end}}</td><td>{{if .Timeout}}yes{{end}}</td>
+  <td>{{.Cookies}}</td><td>{{.Comment}}</td><td>{{.Error}}</td>
+</tr>
+{{else}}<tr><td colspan="{{len .columns}}" class="meta">No rows match.</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+{{with .view}}
+<h3>Result buckets</h3>
+<table>
+<thead><tr><th scope="col">Status</th><th scope="col">Length</th><th scope="col">Reflected</th><th scope="col">Count</th><th scope="col">First #</th><th scope="col">Grep matches</th><th scope="col">Extract</th><th scope="col">Exemplar</th></tr></thead>
+<tbody>
+{{range .Report.Buckets}}<tr><td>{{if .Status}}{{.Status}}{{else}}—{{end}}</td><td>{{.ResponseLen}}</td><td>{{if .Reflected}}yes{{end}}</td><td>{{.Count}}</td><td>{{.FirstOrdinal}}</td><td>{{.GrepMatches}}</td><td>{{if .GrepExtract}}{{.GrepExtract}}{{end}}</td><td>{{if .ExampleOrdinal}}<a href="/ui2/intruder/{{$.task}}/item/{{.ExampleOrdinal}}" hx-get="/ui2/intruder/{{$.task}}/item/{{.ExampleOrdinal}}" hx-target="#detail" hx-swap="innerHTML">#{{.ExampleOrdinal}}</a>{{else}}not stored{{end}}</td></tr>
+{{else}}<tr><td colspan="8" class="meta">No responses.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Errors</h3>
+<table>
+<thead><tr><th scope="col">Error</th><th scope="col">Count</th><th scope="col">First #</th></tr></thead>
+<tbody>
+{{range .Report.Errors}}<tr><td>{{.Error}}</td><td>{{.Count}}</td><td>{{if .FirstOrdinal}}{{.FirstOrdinal}}{{else}}—{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No errors.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Payload sets</h3>
+<table>
+<thead><tr><th scope="col">Set</th><th scope="col">Kind</th><th scope="col">Used</th><th scope="col">Total</th><th scope="col">Truncated</th><th scope="col">Max</th><th scope="col">Skipped</th><th scope="col">Dropped</th></tr></thead>
+<tbody>
+{{range $i, $p := .PayloadSets}}<tr><td>{{$i}}</td><td>{{$p.Kind}}</td><td>{{$p.Count}}</td><td>{{if not $p.TotalExact}}≥ {{end}}{{$p.Total}}</td><td>{{if $p.Truncated}}yes{{end}}</td><td>{{$p.MaxCount}}</td><td>{{$p.Skipped}}</td><td>{{range $p.Dropped}}{{.Reason}} ×{{.Count}}; {{end}}</td></tr>
+{{else}}<tr><td colspan="8" class="meta">No payload sets reported.</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+{{else}}
+<p class="meta">No full report is held for this attack (only attacks launched from this console page keep their per-attempt rows, and only once they finish). Its stored requests, newest first:</p>
+{{if .results.next_offset}}<p class="meta"><a href="/ui2/intruder/{{.task}}/results?offset={{.results.next_offset}}" hx-get="/ui2/intruder/{{.task}}/results?offset={{.results.next_offset}}" hx-target="#rows" hx-swap="outerHTML">older results (next page)</a></p>{{end}}
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Status</th><th scope="col">Len</th></tr></thead>
+<tbody>
+{{range .results.rows}}
+<tr hx-get="/ui2/history/{{.id}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click">
+  <td>{{.id}}</td><td>{{.method}}</td><td title="{{.path}}">{{.path}}</td>
+  <td>{{if .status}}{{.status}}{{else}}—{{end}}</td><td>{{.response_len}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No results yet.</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+</div>

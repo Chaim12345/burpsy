@@ -1,0 +1,49 @@
+{{define "proxy_listener_fields"}}<div class="pxs-grid">
+<label>Bind address (host:port; port 0 = ephemeral)<input type="text" name="bind" value="{{.Bind}}" placeholder="127.0.0.1:8081" required></label>
+<label>Redirect to host (blank = client's host)<input type="text" name="redirect_host" value="{{.RedirectHost}}" placeholder="(keep the client's host)"></label>
+<label>Redirect to port (blank = client's port)<input type="text" name="redirect_port" value="{{.RedirectPort}}" inputmode="numeric" placeholder="(keep the client's port)"></label>
+<label>Support invisible proxying<select name="invisible">
+<option value="inherit"{{if eq .Invisible "inherit"}} selected{{end}}>Inherit the Options switch</option>
+<option value="on"{{if eq .Invisible "on"}} selected{{end}}>On for this listener</option>
+<option value="off"{{if eq .Invisible "off"}} selected{{end}}>Off for this listener</option>
+</select></label>
+<label class="pxs-check"><input type="checkbox" name="force_tls" value="on"{{if .ForceTLS}} checked{{end}}> <span>Force use of TLS (the leg to the destination)</span></label>
+<label class="pxs-check"><input type="checkbox" name="support_http2" value="on"{{if .HTTP2}} checked{{end}}> <span>Support HTTP/2 (off holds clients to HTTP/1.1)</span></label>
+</div>{{end}}
+<div id="rows">
+{{template "proxy_subnav" "listeners"}}
+{{template "proxy_note" .note}}
+<div id="proxy-review" class="pxs-review" aria-live="polite"></div>
+<h3 class="pxs-sec" style="margin:0">Proxy listeners</h3>
+{{if .unwired}}<p class="meta">No listeners to manage: {{.unwired}}</p>{{else}}
+<p class="meta">Every row is a socket the accept loop is serving. Changes are live and need no restart, but none is persisted: a restart reverts to the single listener <code>-proxy-bind</code> names. Invisible proxying for listeners set to inherit is currently <strong>{{if .global_invisible}}on{{else}}off{{end}}</strong> (switch it on the <a href="/ui2/proxy/options">Options</a> page).</p>
+<div class="pxs-sec">
+{{range .rows}}
+<div class="pxs-rule">
+<div><strong>{{if eq .Row.ID "default"}}default (-proxy-bind){{else}}{{.Row.ID}}{{end}}</strong> · bound to <code>{{or .Row.BoundAddr "—"}}</code> (bind <code>{{.Row.Bind}}</code>)</div>
+<div class="meta" style="padding:2px 0">redirect: {{or .Redirect "—"}} · force TLS: {{if .Row.ForceTLS}}forced{{else}}no{{end}} · invisible: {{.Invisible}} ({{if .Effective}}on{{else}}off{{end}} in effect) · HTTP/2: {{if .HTTP2}}offered{{else}}held to HTTP/1.1{{end}}</div>
+<details><summary>Edit</summary>
+<form method="post" action="/ui2/proxy/listeners/confirm" hx-post="/ui2/proxy/listeners/confirm" hx-target="#proxy-review" hx-swap="innerHTML show:top">
+<input type="hidden" name="op" value="edit">
+<input type="hidden" name="id" value="{{.Row.ID}}">
+{{template "proxy_listener_fields" .Form}}
+<div class="pxs-acts"><button type="submit">Review changes</button></div>
+</form>
+</details>
+{{if .Row.Removable}}<form method="post" action="/ui2/proxy/listeners/confirm" hx-post="/ui2/proxy/listeners/confirm" hx-target="#proxy-review" hx-swap="innerHTML show:top" class="pxs-acts">
+<input type="hidden" name="op" value="remove">
+<input type="hidden" name="id" value="{{.Row.ID}}">
+<button type="submit">Remove…</button>
+</form>{{else}}<p class="meta" style="padding:2px 0">Re-bind only: the boot listener cannot be removed.</p>{{end}}
+</div>
+{{end}}
+<details open><summary><strong>Add listener</strong></summary>
+<form method="post" action="/ui2/proxy/listeners/confirm" hx-post="/ui2/proxy/listeners/confirm" hx-target="#proxy-review" hx-swap="innerHTML show:top" id="listener-add">
+<input type="hidden" name="op" value="add">
+{{template "proxy_listener_fields" .add_form}}
+<div class="pxs-acts"><button type="submit">Review new listener</button></div>
+</form>
+</details>
+</div>
+{{end}}
+</div>

@@ -1,0 +1,29 @@
+<div id="rows" data-review="1" style="padding:8px 14px; max-width:960px">
+{{if .error}}<p class="meta" role="alert"><strong>Not run: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/authz" hx-get="/ui2/authz" hx-target="#rows" hx-swap="outerHTML">back to access control</a></p>{{else}}
+{{if eq .kind "test"}}
+<p><strong>Review before sending (riskAttack):</strong> this sends real traffic to the exchange's target.</p>
+{{else}}
+<p><strong>Review before saving:</strong> the identities list below replaces the saved one.</p>
+{{end}}
+<ul class="meta">{{range .summary}}<li class="brk">{{.}}</li>{{end}}</ul>
+<details open><summary>exact call (the full body the confirmation binds{{if eq .kind "identities"}}; cookie and header values are withheld in this view but held server-side and written as entered{{end}})</summary>
+<pre class="meta brk" style="white-space:pre-wrap; max-height:50vh; overflow:auto">{{.preview}}</pre>
+</details>
+{{if eq .kind "test"}}
+<form hx-post="/ui2/authz/test/run" method="post" action="/ui2/authz/test/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="exchange_id" value="{{.exchange_id}}">
+<input type="hidden" name="samples" value="{{.samples}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and run test</button>
+</form>
+{{else}}
+<form hx-post="/ui2/authz/identities/run" method="post" action="/ui2/authz/identities/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">Confirm and save</button>
+</form>
+{{end}}
+<p class="meta"><a href="/ui2/authz" hx-get="/ui2/authz" hx-target="#rows" hx-swap="outerHTML">cancel</a> (the pending review expires on its own)</p>
+{{end}}
+</div>

@@ -1,0 +1,37 @@
+<div id="rows" style="padding:0 14px 14px">
+{{template "repeater_ws_tools"}}
+<h3>GraphQL{{with .Exchange}} <span class="badge">exchange #{{.}}</span>{{end}}{{if .Operations}} <span class="badge">{{.Operations}} operation(s)</span>{{end}}</h3>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="status">{{.Note}}</p>{{end}}
+<form id="gql-form" method="post" action="/ui2/repeater/graphql/validate" hx-post="/ui2/repeater/graphql/validate" hx-target="#rows" hx-swap="outerHTML">
+  {{with .Exchange}}<input type="hidden" name="exchange" value="{{.}}">{{end}}
+  <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px">
+    <input type="text" name="target" value="{{.Target}}" placeholder="target (defaults to the Host header)" aria-label="Target" style="flex:1; min-width:180px">
+    <label>Operation <input type="text" name="index" value="{{.Index}}" size="3" inputmode="numeric" aria-label="Operation index (0-based)"></label>
+  </div>
+  <label for="gql-query">Query</label>
+  <textarea id="gql-query" name="query" rows="10" style="width:100%; font-family:ui-monospace,monospace" aria-label="GraphQL query">{{.Query}}</textarea>
+  <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0">
+    <button type="submit">Validate query</button>
+    <button type="button" hx-post="/ui2/repeater/graphql/query" hx-include="#gql-form" hx-target="#rows" hx-swap="outerHTML">Write query into request</button>
+    <button type="button" hx-post="/ui2/repeater/graphql/query" hx-include="#gql-form" hx-vals='{"preset":"introspection"}' hx-target="#rows" hx-swap="outerHTML">Set introspection query</button>
+    <button type="button" hx-post="/ui2/repeater/graphql/query" hx-include="#gql-form" hx-vals='{"preset":"legacy"}' hx-target="#rows" hx-swap="outerHTML">Set legacy introspection query</button>
+  </div>
+  <label for="gql-request">Request</label>
+  <textarea id="gql-request" name="request" rows="12" style="width:100%; font-family:ui-monospace,monospace" aria-label="Request">{{.Request}}</textarea>
+  <div style="margin:6px 0"><button type="button" hx-post="/ui2/repeater/graphql/send" hx-include="#gql-form" hx-target="#rows" hx-swap="outerHTML">Send request</button></div>
+</form>
+{{with .Validation}}
+<div id="gql-validation" role="status">
+{{if .OK}}<p><strong>Valid GraphQL document.</strong></p>
+{{else}}<p style="color:#c00"><strong>Invalid GraphQL document:</strong></p>
+<ul>{{range .Errors}}<li>{{if .Line}}line {{.Line}}, column {{.Column}}: {{end}}{{.Message}}</li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+{{with .Result}}
+<h3>Response <span class="badge">{{.Status}}</span> <span class="badge">{{.DurationMs}} ms</span>
+  <a class="btn" href="/ui2/history/{{.ExchangeID}}">stored exchange #{{.ExchangeID}}</a></h3>
+<pre class="msg">{{.Response}}</pre>
+{{end}}
+{{template "repeater_gql_sitemap.html" .Sitemap}}
+</div>

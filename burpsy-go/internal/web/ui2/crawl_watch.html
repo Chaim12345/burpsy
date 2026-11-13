@@ -1,0 +1,15 @@
+<div id="crawlwatch" data-task="{{.task_id}}">
+{{if .error}}<p class="meta">{{.error}}</p>{{else}}
+<h3>Crawl task {{.task_id}}</h3>
+<p class="meta">state {{.state}} &middot; phase {{.phase}} &middot; {{.fetched}} fetched{{if .current}} &middot; now: {{.current.method}} {{.current.url}}{{end}}</p>
+{{if .frame_note}}<p class="meta">{{.frame_note}}</p>{{end}}
+{{if .recent}}<table>
+<thead><tr><th scope="col">Method</th><th scope="col">URL</th><th scope="col">Status</th><th scope="col">Depth</th></tr></thead>
+<tbody>{{range .recent}}<tr><td>{{.method}}</td><td>{{.url}}</td><td>{{.status}}</td><td>{{.depth}}</td></tr>{{end}}</tbody>
+</table>{{else}}<p class="meta">No fetch recorded yet.</p>{{end}}
+{{end}}
+<form hx-get="/ui2/scanner/crawl-watch" hx-target="#crawlwatch" hx-swap="outerHTML">
+<input type="hidden" name="task" value="{{.task_id}}">
+<button>check now</button></form>
+<p class="meta">This view updates itself while the crawl produces traffic or task activity, over the same live event stream as the dashboard; check now forces a refresh. The same view is the API at /api/crawl/live?task={{.task_id}}.</p>
+</div>

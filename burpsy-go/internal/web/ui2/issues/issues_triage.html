@@ -1,0 +1,39 @@
+{{define "issues_triage_forms"}}
+<h3>Triage</h3>
+<div class="issue-triage">
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="op" value="severity"><input type="hidden" name="id" value="{{.ID}}">
+  <label>Severity <select name="value" aria-label="Set severity">
+    <option value=""{{if not .SeverityOverride}} selected{{end}}>Engine default{{if .OriginalSeverity}} ({{.OriginalSeverity}}){{else}} ({{.Severity}}){{end}}</option>
+    {{range .SeverityOptions}}<option value="{{.}}"{{if eq . $.SeverityOverride}} selected{{end}}>{{.}}</option>{{end}}
+  </select></label>
+  <button type="submit">Set severity…</button>
+</form>
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="op" value="confidence"><input type="hidden" name="id" value="{{.ID}}">
+  <label>Confidence <select name="value" aria-label="Set confidence">
+    <option value=""{{if not .ConfidenceOverride}} selected{{end}}>Engine default{{if .OriginalConfidence}} ({{.OriginalConfidence}}){{else}} ({{.Confidence}}){{end}}</option>
+    {{range .ConfidenceOptions}}<option value="{{.}}"{{if eq . $.ConfidenceOverride}} selected{{end}}>{{.}}</option>{{end}}
+  </select></label>
+  <button type="submit">Set confidence…</button>
+</form>
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="op" value="false_positive"><input type="hidden" name="id" value="{{.ID}}">
+  <input type="hidden" name="value" value="{{if .FalsePositive}}false{{else}}true{{end}}">
+  <button type="submit">{{if .FalsePositive}}Unmark false positive…{{else}}Mark false positive…{{end}}</button>
+</form>
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="op" value="comment"><input type="hidden" name="id" value="{{.ID}}">
+  <label>Comment<br><textarea name="value" rows="3" cols="40" maxlength="8192" aria-label="Issue comment">{{.Comment}}</textarea></label><br>
+  <button type="submit">{{if .Comment}}Edit comment…{{else}}Add comment…{{end}}</button>
+</form>
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML" style="display:inline">
+  <input type="hidden" name="op" value="llm"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="value" value="">
+  <button type="submit">LLM second look…</button>
+</form>
+<form hx-post="/ui2/issues/action/confirm" method="post" action="/ui2/issues/action/confirm" hx-target="#detail" hx-swap="innerHTML" style="display:inline">
+  <input type="hidden" name="op" value="delete"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="value" value="">
+  <button type="submit" style="color:#c00">Delete issue…</button>
+</form>
+</div>
+{{end}}

@@ -1,0 +1,31 @@
+<div id="rows">
+<h3>Extractor columns</h3>
+<p class="meta">Each extractor runs against a row's stored response and shows the captured value as an extra History column (a dash means the response did not yield it). Saved with the project; nothing is sent. At most {{.max}} columns.</p>
+{{if .note}}<p role="alert"><strong>{{.note}}</strong></p>{{end}}
+{{if .done}}<p role="status">{{.done}} <a href="/ui2/history">Back to History</a></p>{{end}}
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">Reads</th><th scope="col">Extracts</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .rows}}<tr><td>{{.Name}}</td><td>{{.From}}</td><td class="brk">{{.How}}</td><td>
+<form hx-post="/ui2/history/extractors/remove" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/history/extractors/remove">
+<input type="hidden" name="base" value="{{$.base}}"><input type="hidden" name="name" value="{{.Name}}"><button class="btn">Remove</button></form></td></tr>
+{{else}}<tr><td colspan="4" class="meta">No extractor columns yet.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Add a column</h3>
+<form hx-post="/ui2/history/extractors/add" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/history/extractors/add">
+<input type="hidden" name="base" value="{{.base}}">
+<p><label>Name <input type="text" name="name" required></label></p>
+<p>Read from <label><input type="radio" name="from" value="body" checked> response body</label>
+<label><input type="radio" name="from" value="header"> header</label>
+<label>Header name <input type="text" name="header"></label></p>
+<p>Extract by <label><input type="radio" name="how" value="regex" checked> regex</label>
+<label><input type="radio" name="how" value="json_path"> JSON path</label>
+<label><input type="radio" name="how" value="whole"> whole value</label></p>
+<p><label>Regex <input type="text" name="pattern" placeholder="csrf=([a-z0-9]+)"></label>
+<label>Group <input type="text" name="group" value="1" inputmode="numeric" size="3"></label>
+<label>JSON path <input type="text" name="json_path" placeholder="$.user.id"></label></p>
+<p><button class="btn">Add column</button></p>
+</form>
+<p><a href="/ui2/history">Back to History</a></p>
+</div>
