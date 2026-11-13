@@ -131,15 +131,22 @@ type wsLiveConn struct {
 type wsLiveRegistry struct {
 	mu    sync.Mutex
 	conns map[core.ExchangeID]*wsLiveConn
+	// onChange fires after a connection enters or leaves the set: the lifecycle signal, as
+	// opposed to the store's per-message OnWsChange. Set through OnWsLiveChange.
+	onChange func()
 }
 
 func (r *wsLiveRegistry) add(c *wsLiveConn) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.conns == nil {
 		r.conns = map[core.ExchangeID]*wsLiveConn{}
 	}
 	r.conns[c.exchange] = c
+	hook := r.onChange
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 // remove drops c, and only c: a later connection registered under the same id (which cannot
@@ -147,10 +154,29 @@ func (r *wsLiveRegistry) add(c *wsLiveConn) {
 // that) is not removed by an older relay's cleanup.
 func (r *wsLiveRegistry) remove(c *wsLiveConn) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	removed := false
 	if r.conns[c.exchange] == c {
 		delete(r.conns, c.exchange)
+		removed = true
 	}
+	hook := r.onChange
+	r.mu.Unlock()
+	// The hook runs outside the lock: it feeds the web server's live hub, and a callback that
+	// re-entered the registry (a live-list read is the expected reaction) must not deadlock.
+	if removed && hook != nil {
+		hook()
+	}
+}
+
+// OnWsLiveChange installs the signal called after a connection enters or leaves the live
+// registry — one socket opening or closing, as opposed to the store's OnWsChange, which is one
+// captured message. The console needs both: a socket that opens and closes without a frame, or
+// whose close follows its last frame, is otherwise invisible to anything watching the store's
+// signal. Single slot, mirroring TrafficStore.OnWsChange.
+func (s *Server) OnWsLiveChange(fn func()) {
+	s.wsLive.mu.Lock()
+	defer s.wsLive.mu.Unlock()
+	s.wsLive.onChange = fn
 }
 
 func (r *wsLiveRegistry) get(id core.ExchangeID) *wsLiveConn {

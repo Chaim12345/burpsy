@@ -46,7 +46,7 @@ func getTriageSettings(t *testing.T, s *Server) triageSettingsView {
 
 func TestTheSettingsDoorNeverEchoesTheKey(t *testing.T) {
 	s := triageSettingsServer(t)
-	rec := putTriageSettings(t, s, `{"enabled":true,"base_url":"http://llm.internal/v1","model":"m","api_key":"sk-secret"}`)
+	rec := putTriageSettings(t, s, `{"enabled":true,"base_url":"https://llm.internal/v1","model":"m","api_key":"sk-secret"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT settings = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -57,16 +57,16 @@ func TestTheSettingsDoorNeverEchoesTheKey(t *testing.T) {
 	if !v.Configured {
 		t.Fatal("GET says not-configured although a key is stored")
 	}
-	if v.BaseURL != "http://llm.internal/v1" || v.Model != "m" {
+	if v.BaseURL != "https://llm.internal/v1" || v.Model != "m" {
 		t.Errorf("the stored shape came back wrong: %+v", v)
 	}
 }
 
 func TestAPutWithoutAKeyKeepsTheStoredOne(t *testing.T) {
 	s := triageSettingsServer(t)
-	putTriageSettings(t, s, `{"enabled":true,"base_url":"http://llm.internal/v1","model":"m","api_key":"sk-secret"}`)
+	putTriageSettings(t, s, `{"enabled":true,"base_url":"https://llm.internal/v1","model":"m","api_key":"sk-secret"}`)
 	// The UI's re-save: the GET shape (no key) comes back as a PUT.
-	rec := putTriageSettings(t, s, `{"enabled":true,"base_url":"http://llm.internal/v1","model":"m2"}`)
+	rec := putTriageSettings(t, s, `{"enabled":true,"base_url":"https://llm.internal/v1","model":"m2"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT without a key = %d: %s", rec.Code, rec.Body.String())
 	}

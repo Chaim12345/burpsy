@@ -1,0 +1,9 @@
+<div id="rows" data-review="1">
+{{if .error}}<p><strong>Not saved: {{.error}}</strong></p>{{else}}
+<h3>Review collection change</h3>
+<p>Only this collection's name and note change. Saved items stay in their current collections. No traffic is sent.</p>
+<details open><summary>Exact change (the full content the one-time confirmation binds)</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:50vh;overflow:auto">{{.projection}}</pre></details>
+<form hx-post="/ui2/organizer/collections/run" hx-target="#rows" hx-swap="outerHTML"><input type="hidden" name="review_id" value="{{.review_id}}"><input type="hidden" name="token" value="{{.token}}"><button>Confirm collection change</button></form>
+{{end}}
+<p><a href="/ui2/organizer" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML">cancel</a> (pending reviews expire after the confirmation window)</p>
+</div>

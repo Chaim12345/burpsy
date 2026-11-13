@@ -11,7 +11,7 @@
     "test:lib": "bun test src/lib",
     "fetch:penpot": "node scripts/fetch-penpot-file.mjs",
     "audit:penpot": "node scripts/penpot-audit.mjs",
-    "build:js": "bun build src/app.tsx --outdir dist --minify",
+    "build:js": "bun build src/app.tsx --outdir dist --minify && bun build src/issues.worker.ts --outfile dist/issues.worker.js --minify --format esm",
     "build:css": "bun build src/styles.css --outfile style.css --minify",
     "build": "bun run gen:tokens && bun run build:js && bun run build:css",
     "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run check:gated-routes && bun run check:api-types && bun run test:scripts && bun run test:lib && bun run lint && bun run test:components",

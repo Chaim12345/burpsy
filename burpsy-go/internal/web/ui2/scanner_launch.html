@@ -1,0 +1,10 @@
+{{if .error}}<p class="meta">Cannot launch: {{.error}}</p>{{else}}
+<p><strong>Review before launch:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">An audit sends active attack probes to the target. The engine refuses an out-of-scope exchange before any probe is planned, and an id that names no captured exchange answers unauditable with its reason. This confirmation is one-time and covers exactly the call above.</p>
+<form hx-post="/ui2/scanner/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="exchange_id" value="{{.exchange_id}}">
+<input type="hidden" name="config" value="{{.config}}">
+<button>Confirm and launch</button>
+</form>
+{{end}}

@@ -1,0 +1,10 @@
+{{if .error}}<p class="meta">Not applied: {{.error}}</p>{{else}}
+<p><strong>Review configuration changes:</strong> <span class="meta">{{.preview}}</span></p>
+<ul class="meta">{{range .changes}}<li>{{.}}</li>{{end}}</ul>
+<p class="meta">This changes what later audits run: a family switched off sends none of its probes, and a timeout change bounds every later probe. Named configurations saved in the console are untouched. This confirmation is one-time and covers exactly the call above.</p>
+<form hx-post="/ui2/scanner/config-run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="patch" value="{{.patch}}">
+<button>Confirm and apply</button>
+</form>
+{{end}}

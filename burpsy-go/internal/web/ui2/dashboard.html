@@ -1,0 +1,40 @@
+<div id="rows">
+<p class="meta">{{.Exchanges}} exchanges · {{.Messages}} messages · {{.StoredBytes}} bytes stored · suite {{if .Paused}}PAUSED{{else}}running{{end}}</p>
+<h3>Coverage</h3>
+<table>
+<thead><tr><th scope="col">Summary</th><th scope="col">Found</th><th scope="col">Skipped</th><th scope="col">Breakdown</th></tr></thead>
+<tbody>
+{{range .Summaries}}
+<tr><td>{{.Label}}</td><td>{{.Breakdown.Found}}</td><td>{{.Breakdown.Skipped}}</td>
+<td class="meta">{{range .Reasons}}{{.Detail}} ({{.Count}}) {{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">Nothing yet.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Tasks ({{.TasksRunning}} running)</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Kind</th><th scope="col">Target</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
+<tbody>
+{{range .Tasks}}
+<tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.Target}}</td><td>{{.State}}</td><td class="meta">{{.Note}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No tasks.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Activity ({{.ActivityShown}} of {{.ActivityTotal}})</h3>
+<table>
+<thead><tr><th scope="col">Tool</th><th scope="col">Method</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th></tr></thead>
+<tbody>
+{{range .Activity}}
+<tr><td>{{.Tool}}</td><td>{{.Method}}</td><td>{{.Host}}</td><td title="{{.Path}}">{{.Path}}</td><td>{{if .Status}}{{.Status}}{{else}}—{{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No tool activity.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Events ({{.EventsShown}} of {{.EventsTotal}})</h3>
+<table>
+<thead><tr><th scope="col">Kind</th><th scope="col">Severity</th><th scope="col">Detail</th></tr></thead>
+<tbody>
+{{range .Events}}
+<tr><td>{{.Kind}}</td><td>{{.Severity}}</td><td class="meta">{{.Detail}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No events.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

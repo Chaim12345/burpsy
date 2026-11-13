@@ -224,6 +224,9 @@ jobs:
     name: test (${{ matrix.shard }})
     env:
       CI_AFFECTED_BASE: ${{ needs.changes.outputs.mode == 'affected' && needs.changes.outputs.base || '' }}
+      # Chromium cannot initialise its sandbox on the hosted runners (ZygoteHostImpl::Init
+      # aborts); the mcp snapshot renderer adds --no-sandbox only under this opt-in.
+      BURPSY_CHROME_NO_SANDBOX: "1"
       # The lint job runs the full `go vet ./...` on every run; go test's built-in vet subset would
       # re-run part of it in every shard.
       CI_SHARD_GO_TEST_FLAGS: -vet=off

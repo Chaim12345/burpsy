@@ -71,6 +71,25 @@ type callResult struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+	// Data and MimeType are an image block's base64 bytes and media type (Type "image").
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// MarshalJSON writes the members MCP defines for the block's type and no others: an image block
+// carries no "text", and a text block no empty "data".
+func (c contentBlock) MarshalJSON() ([]byte, error) {
+	if c.Type == "image" {
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Data     string `json:"data"`
+			MimeType string `json:"mimeType"`
+		}{c.Type, c.Data, c.MimeType})
+	}
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{c.Type, c.Text})
 }
 
 // errResult is a tool-execution failure. MCP distinguishes this from a protocol error on purpose:
@@ -100,7 +119,7 @@ func (s *Server) buildRouteTools() []tool {
 	// The transport's own tool name is claimed first so a manifest route can never shadow it: a
 	// descriptor list where "burpsy_confirm" means a route is a list where the confirm flow is
 	// unreachable.
-	used := map[string]bool{confirmToolName: true, taskStatusToolName: true}
+	used := map[string]bool{confirmToolName: true, taskStatusToolName: true, screenshotToolName: true}
 
 	out := make([]tool, 0, len(routes)+1)
 	for _, r := range routes {
@@ -121,6 +140,9 @@ func (s *Server) buildRouteTools() []tool {
 	status := taskStatusDescriptor()
 	out = append(out, status)
 	s.byName[status.Name] = status
+	shot := screenshotDescriptor()
+	out = append(out, shot)
+	s.byName[shot.Name] = shot
 	return out
 }
 
@@ -205,10 +227,22 @@ func describeRoute(r web.MCPRouteInfo) string {
 // exactly the drift between a published safety claim and the enforced one that the risk taxonomy
 // exists to prevent. The extra keys are for hosts that want to gate on burpsy's own vocabulary —
 // MCP's four booleans cannot express "widens scope" or "hands out a credential".
+// annotationsForRoute carries the route's risk class and MCP's four standard hints. The hints
+// come from the manifest's risk class, with the same verb derivation the grouped surface applies:
+// a route that answers a mutating verb is not read-only or idempotent, whatever its class says —
+// the class hints describe the route's usual call, the verb set decides what a caller can do. This
+// is what keeps the opt-in routes surface honest about the /ui2/* POST routes classed riskAsset:
+// the grouped surface never lists them, so only this view could ever publish them as reads.
 func annotationsForRoute(r web.MCPRouteInfo) map[string]any {
+	readOnly := hasHint(r.Hints, "READ_ONLY")
+	idempotent := hasHint(r.Hints, "IDEMPOTENT")
+	if len(mutatingMethods(r.Methods)) > 0 {
+		readOnly = false
+		idempotent = false
+	}
 	return map[string]any{
-		"readOnlyHint":         hasHint(r.Hints, "READ_ONLY"),
-		"idempotentHint":       hasHint(r.Hints, "IDEMPOTENT"),
+		"readOnlyHint":         readOnly,
+		"idempotentHint":       idempotent,
 		"destructiveHint":      hasHint(r.Hints, "DESTRUCTIVE"),
 		"openWorldHint":        hasHint(r.Hints, "OPEN_WORLD"),
 		"riskClass":            r.Risk,
@@ -380,7 +414,7 @@ func toolNeedsConfirm(t tool) bool {
 func (s *Server) buildGroupedTools() ([]tool, error) {
 	out := make([]tool, 0, len(groupedTools)+1)
 	for _, g := range groupedTools {
-		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName || g.name == taskStatusToolName {
+		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName || g.name == taskStatusToolName || g.name == screenshotToolName {
 			return nil, fmt.Errorf("mcp: grouped tool name %q is used twice", g.name)
 		}
 		t := tool{Name: g.name, byOp: make(map[string]op, len(g.ops))}
@@ -420,6 +454,9 @@ func (s *Server) buildGroupedTools() ([]tool, error) {
 	status := taskStatusDescriptor()
 	out = append(out, status)
 	s.byName[status.Name] = status
+	shot := screenshotDescriptor()
+	out = append(out, shot)
+	s.byName[shot.Name] = shot
 	return out, nil
 }
 
@@ -477,25 +514,26 @@ func describeGrouped(g groupSpec, ops []op) string {
 // annotationsForGrouped carries the shared risk class and MCP's four standard hints.
 //
 // The hints come from the manifest's risk class exactly as for a route tool, with one derivation on
-// top: readOnlyHint is false for a tool that can PUT, PATCH or DELETE, whatever its class says. That
-// is not a re-judgement of the class — a verb that replaces or removes state is not read-only by
-// definition. It was written for DELETE /api/history, which the manifest classed riskRead until
-// burpsy-react-ui-gf68 moved it to its own riskDestructive pattern; it stays as the backstop for
-// the next mutating verb that lands under a read class.
+// top: readOnlyHint and idempotentHint are false for a tool that can mutate, whatever its class
+// says. That is not a re-judgement of the class — a verb that can change state is not read-only or
+// idempotent by definition. It was written for DELETE /api/history, which the manifest classed
+// riskRead until burpsy-react-ui-gf68 moved it to its own riskDestructive pattern; it stays as the
+// backstop for the next mutating verb that lands under a read class.
 func annotationsForGrouped(g groupSpec, ops []op) map[string]any {
 	r := ops[0].route
 	readOnly := hasHint(r.Hints, "READ_ONLY")
+	idempotent := hasHint(r.Hints, "IDEMPOTENT")
 	names := make([]string, 0, len(ops))
 	for _, o := range ops {
 		names = append(names, o.name)
-		switch o.method {
-		case http.MethodPut, http.MethodPatch, http.MethodDelete:
+		if web.MCPMethodMutates(o.method) {
 			readOnly = false
+			idempotent = false
 		}
 	}
 	return map[string]any{
 		"readOnlyHint":         readOnly,
-		"idempotentHint":       hasHint(r.Hints, "IDEMPOTENT"),
+		"idempotentHint":       idempotent,
 		"destructiveHint":      hasHint(r.Hints, "DESTRUCTIVE"),
 		"openWorldHint":        hasHint(r.Hints, "OPEN_WORLD"),
 		"riskClass":            r.Risk,
@@ -739,6 +777,11 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 	}
 	if strings.TrimSpace(params.Name) == "" {
 		return s.fail(req, codeInvalidParams, "tools/call requires a tool name")
+	}
+	// Before the shared argument decode: that one would accept "body" and "path", and this tool's
+	// refusal of exactly those is the point of its argument check.
+	if params.Name == screenshotToolName {
+		return s.callScreenshot(ctx, req, params.Arguments)
 	}
 
 	var args callArgs
@@ -1080,7 +1123,7 @@ type mintPreview struct {
 func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) response {
 	name := strings.TrimSpace(args.Tool)
 	t, ok := s.byName[name]
-	if !ok || name == confirmToolName || name == taskStatusToolName {
+	if !ok || name == confirmToolName || name == taskStatusToolName || name == screenshotToolName {
 		return s.ok(req, errResult(fmt.Sprintf("%q is not a tool on this surface. Pass \"tool\" (the tool you will call) and \"arguments\" (its exact arguments); the refusal of the call prints both.", name)))
 	}
 	if why := s.refusedByPolicy(name); why != "" {

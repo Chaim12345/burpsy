@@ -1,0 +1,24 @@
+<div id="rows">
+{{if .error}}<p class="meta"><strong>Not started: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/sequencer" hx-get="/ui2/sequencer" hx-target="#rows" hx-swap="outerHTML">back to sequencer</a></p>{{else}}
+<p><strong>Review before starting:</strong> <span class="meta">{{.preview}}</span></p>
+<details open><summary>exact body (what the token binds, in full)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.full_body}}</pre>
+</details>
+<p class="meta">A capture sends the reviewed request repeatedly against the target - the most request-hungry action in the tool. This confirmation is one-time and covers exactly the call above.</p>
+<form hx-post="/ui2/sequencer/capture/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="target" value="{{.target}}">
+<input type="hidden" name="protocol" value="{{.protocol}}">
+<input type="hidden" name="count" value="{{.count}}">
+<input type="hidden" name="delay_ms" value="{{.delay_ms}}">
+<input type="hidden" name="threads" value="{{.threads}}">
+<input type="hidden" name="kind" value="{{.kind}}">
+<input type="hidden" name="name" value="{{.name}}">
+<input type="hidden" name="pattern" value="{{.pattern}}">
+<input type="hidden" name="request" value="{{.request}}">
+<button>Confirm and start</button>
+</form>
+<p class="meta"><a href="/ui2/sequencer" hx-get="/ui2/sequencer" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>
