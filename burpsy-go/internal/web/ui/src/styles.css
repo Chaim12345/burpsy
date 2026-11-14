@@ -3601,6 +3601,47 @@ tbody td {
   }
 }
 
+/* Coarse pointers (touch screens): WCAG 2.5.5 target size — interactive controls grow to
+   at least 44x44 so they can be hit reliably; checkboxes/radios to the 24px 2.5.8 floor.
+   The --height.* tokens are overridden too, because the grid rows and controls are sized
+   from them: a 44px tab inside a 33px token-sized row would overflow instead of growing.
+   Desktop pointer precision keeps the compact density. */
+@media (pointer: coarse) {
+  :root {
+    --menubar-h: 44px;
+    --toolbar-h: 44px;
+    --subtab-h: 44px;
+    --control-h: 44px;
+    --control-h-sm: 44px;
+    --icon-btn: 44px;
+    --row-h: 44px;
+    --row-h-compact: 44px;
+  }
+  .tool-tab,
+  .tool-tabs-overflow,
+  .sub-tab,
+  .icon-button,
+  .bottom-dock-tab,
+  .column-menu-trigger,
+  .skip-link {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .button,
+  .filter-toggle,
+  .th-sort,
+  .menu-trigger,
+  input:not([type="checkbox"]):not([type="radio"]),
+  select {
+    min-height: 44px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 24px;
+    min-height: 24px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Drop decorative motion and transitions, but do not freeze the spinner: a
      motionless loading indicator claims the app has stopped. It slows instead. */
