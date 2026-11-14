@@ -1,5 +1,5 @@
 import { AlertTriangle, RefreshCw, SlidersHorizontal } from "lucide-react";
-import { Component, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
+import { Component, useEffect, useState, type ComponentType, type ErrorInfo, type ReactNode } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { cn } from "../lib/cn";
 import { requestSettingsSection, type SettingsSectionId } from "../lib/settings-sections";
@@ -92,6 +92,18 @@ export function RefreshButton({
  * Resizable master/detail split. `storageId` persists the drag position so an
  * operator's chosen layout survives navigation and reloads.
  */
+/** Narrow-viewport media query shared by layout adaptations (form-factor-adaptation). */
+function useNarrowViewport(query = "(max-width: 760px)"): boolean {
+ const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+ useEffect(() => {
+  const mql = window.matchMedia(query);
+  const onChange = () => setNarrow(mql.matches);
+  mql.addEventListener("change", onChange);
+  return () => mql.removeEventListener("change", onChange);
+ }, [query]);
+ return narrow;
+}
+
 export function SplitPane({
  master,
  detail,
@@ -116,18 +128,23 @@ export function SplitPane({
   panelIds: ["master", "detail"],
   storage: localStorage,
  });
+ // form-factor-adaptation: side-by-side panes squeeze into unreadable slivers on a phone,
+ // so a horizontal split stacks (master above detail) below the app's 760px small-screen
+ // breakpoint. The persisted divider layout still applies; only the axis changes.
+ const narrow = useNarrowViewport();
+ const effectiveOrientation = orientation === "horizontal" && narrow ? "vertical" : orientation;
 
  return (
   <Group
-   className={cn("split-pane", `split-${orientation}`, className)}
-   orientation={orientation}
+   className={cn("split-pane", `split-${effectiveOrientation}`, className)}
+   orientation={effectiveOrientation}
    defaultLayout={defaultLayout}
    onLayoutChanged={onLayoutChanged}
   >
    <Panel id="master" defaultSize={defaultMasterSize} minSize={minMasterSize} className="split-panel">
     {master}
    </Panel>
-   <Separator className={orientation === "vertical" ? "resize-handle resize-handle-y" : "resize-handle resize-handle-x"}>
+   <Separator className={effectiveOrientation === "vertical" ? "resize-handle resize-handle-y" : "resize-handle resize-handle-x"}>
     <span className="resize-grip" />
    </Separator>
    <Panel id="detail" minSize="15" className="split-panel">

@@ -434,9 +434,14 @@ export function Modal({
        {description ? <Dialog.Description className="dialog-description">{description}</Dialog.Description> : null}
       </div>
       <Dialog.Close asChild>
-       <IconButton label="Close">
+       {/* No tooltip on this button: it is the dialog's first tabbable element, so Radix focuses
+           it on open, and a focus-opened tooltip swallows the first Escape (the keystroke closes
+           the tooltip instead of the dialog), breaking light-dismiss
+           (modern-web-guidance ui-behaviors/light-dismiss-a-dialog). The aria-label already names
+           it for assistive tech. */}
+       <button type="button" aria-label="Close" className="icon-button">
         <X size={17} />
-       </IconButton>
+       </button>
       </Dialog.Close>
      </div>
      {children}

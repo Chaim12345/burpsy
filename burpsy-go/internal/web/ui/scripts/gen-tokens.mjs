@@ -252,11 +252,23 @@ function primitiveVar(primitiveName) {
   return PRIMITIVE_ALIAS[primitiveName] ?? cssName(primitiveName);
 }
 
+// visual-design/typography: font sizes belong in rem so the browser's font-size
+// setting applies; px pins text past the user's reach. Dividing the Penpot floors
+// and the FLUID_WRAP ceilings by the 16px default root keeps every rendered size
+// byte-identical while letting the whole scale follow the user's setting.
+function pxToRem(px) {
+  const n = typeof px === "number" ? px : parseFloat(px);
+  return `${parseFloat((n / 16).toFixed(4))}rem`;
+}
+
 function primitiveDecl(token) {
   const name = primitiveVar(token.name);
   const wrap = FLUID_WRAP[token.name];
   if (wrap) {
     const term = wrap.vw !== undefined ? `${wrap.vw}vw` : `${wrap.vh}vh`;
+    if (token.name.startsWith("font.size.")) {
+      return `  ${name}: clamp(${pxToRem(token.value)}, ${term}, ${pxToRem(wrap.ceiling)});`;
+    }
     return `  ${name}: clamp(${token.value}, ${term}, ${wrap.ceiling}px);`;
   }
   if (token.type === "fontFamilies") {

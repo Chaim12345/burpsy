@@ -6,6 +6,7 @@ import { appliedSectionLabels, readBundleCoverage } from "./lib/config-coverage"
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
  Activity,
+ ChevronsRight,
  ClipboardPaste,
  Command,
  Copy,
@@ -94,7 +95,7 @@ import {
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { BottomDock } from "./ui/bottom-dock";
-import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
+import { ContextMenu, DropdownMenu, MenuBar, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
 import { DialogHost } from "./ui/dialog-host";
@@ -308,6 +309,19 @@ function App(): JSX.Element {
  const [draggedTool, setDraggedTool] = useState<string | null>(null);
  const [dragOverTool, setDragOverTool] = useState<string | null>(null);
  const orderedTools = orderToolTabs(TOOLS, toolOrder);
+ const toolTabsRef = useRef<HTMLElement | null>(null);
+ const [toolTabsOverflow, setToolTabsOverflow] = useState(false);
+ useEffect(() => {
+  const nav = toolTabsRef.current;
+  if (!nav) return;
+  // modern-web-guidance ui-components/navbar: when the links do not fit, surface an overflow
+  // affordance instead of silently truncating the strip.
+  const measure = () => setToolTabsOverflow(nav.scrollWidth > nav.clientWidth + 1);
+  measure();
+  const observer = new ResizeObserver(measure);
+  observer.observe(nav);
+  return () => observer.disconnect();
+ }, [orderedTools, hiddenTools]);
  const dropTool = (onto: string) => {
   if (draggedTool && draggedTool !== onto) {
    const next = moveToolTab(
@@ -1485,20 +1499,7 @@ function App(): JSX.Element {
    <div className={`app-shell${hasSubTabs ? " has-subtabs" : ""}${showDock ? " has-dock" : ""}`}>
     {/* Menu bar, above the tool tabs as in Burp. Hidden on narrow viewports,
             where the command palette reaches the same actions. */}
-    <div className="menu-bar">
-     {MENUS.map((menu) => (
-      <DropdownMenu
-       key={menu.label}
-       groups={menu.groups}
-       align="start"
-       trigger={
-        <button type="button" className="menu-trigger">
-         {menu.label}
-        </button>
-       }
-      />
-     ))}
-    </div>
+    <MenuBar menus={MENUS} />
 
     {/* Primary tool row. */}
     <header className="toolbar-row">
@@ -1506,7 +1507,7 @@ function App(): JSX.Element {
       <span className="brand-symbol">b/</span>
       <span className="brand-name">burpsy</span>
      </div>
-     <nav className="tool-tabs" aria-label="Tools">
+     <nav className="tool-tabs" aria-label="Tools" ref={toolTabsRef}>
       {orderedTools
        .filter((entry) => !hiddenTools.includes(entry.id))
        .map((entry) => {
@@ -1594,6 +1595,28 @@ function App(): JSX.Element {
         );
        })}
      </nav>
+     {toolTabsOverflow ? (
+      <DropdownMenu
+       align="end"
+       groups={[
+        {
+         id: "more-tools",
+         actions: orderedTools
+          .filter((entry) => !hiddenTools.includes(entry.id))
+          .map((entry) => ({
+           id: `more-${entry.id}`,
+           label: entry.id === tool.id ? `${entry.label} (current)` : entry.label,
+           onSelect: () => navigate(entryLeaf(entry)),
+          })),
+        },
+       ]}
+       trigger={
+        <button type="button" className="tool-tabs-overflow" aria-label="More tools" title="More tools">
+         <ChevronsRight size={14} />
+        </button>
+       }
+      />
+     ) : null}
      <div className="toolbar-right">
       <Badge tone={live ? "good" : "warn"}>
        {live ? <Activity size={11} /> : <Unplug size={11} />}

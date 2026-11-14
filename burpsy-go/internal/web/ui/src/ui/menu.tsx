@@ -1,5 +1,6 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
+import * as MenubarPrimitive from "@radix-ui/react-menubar";
 import { BookOpen, Check, ChevronRight } from "lucide-react";
 import { docEntryLabel, openDocs, type DocTopic } from "../lib/docs";
 import type { ComponentType, ReactNode } from "react";
@@ -82,6 +83,17 @@ const DROPDOWN_PARTS: MenuParts = {
  SubTrigger: DropdownPrimitive.SubTrigger,
  SubContent: DropdownPrimitive.SubContent,
  Portal: DropdownPrimitive.Portal,
+};
+
+const MENUBAR_PARTS: MenuParts = {
+ Item: MenubarPrimitive.Item,
+ CheckboxItem: MenubarPrimitive.CheckboxItem,
+ Indicator: MenubarPrimitive.ItemIndicator,
+ Separator: MenubarPrimitive.Separator,
+ Sub: MenubarPrimitive.Sub,
+ SubTrigger: MenubarPrimitive.SubTrigger,
+ SubContent: MenubarPrimitive.SubContent,
+ Portal: MenubarPrimitive.Portal,
 };
 
 /** Whether a set of groups would render anything at all. Used to skip empty menus. */
@@ -196,6 +208,29 @@ export function ContextMenu({
 }
 
 /** Click-to-open menu, used for row overflow buttons and toolbar "more" affordances. */
+/**
+ * The app menu bar (File / Project / ... / Help). Radix Menubar implements the full
+ * ui-components/app-menus pattern the plain dropdowns could not: role="menubar" with
+ * menuitem triggers, roving tabindex, ArrowLeft/ArrowRight moving BETWEEN menus (opening
+ * the neighbour when one is open), Home/End, and typeahead.
+ */
+export function MenuBar({ menus }: { menus: { label: string; groups: MenuGroup[] }[] }): JSX.Element {
+ return (
+  <MenubarPrimitive.Root className="menu-bar">
+   {menus.map((menu) => (
+    <MenubarPrimitive.Menu key={menu.label}>
+     <MenubarPrimitive.Trigger className="menu-trigger">{menu.label}</MenubarPrimitive.Trigger>
+     <MenubarPrimitive.Portal>
+      <MenubarPrimitive.Content className="menu-content" align="start" sideOffset={5} collisionPadding={8}>
+       {renderItems(menu.groups, MENUBAR_PARTS)}
+      </MenubarPrimitive.Content>
+     </MenubarPrimitive.Portal>
+    </MenubarPrimitive.Menu>
+   ))}
+  </MenubarPrimitive.Root>
+ );
+}
+
 export function DropdownMenu({
  groups,
  trigger,

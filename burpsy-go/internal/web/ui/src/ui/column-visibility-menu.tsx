@@ -85,11 +85,15 @@ export function BucketMenu({
   };
  }, [open]);
  return (
-  <div className="column-menu-anchor">
+  // column-menu-anchor is the table's absolute dock (top:0/right:0 of .table-frame); a toolbar
+  // filter must stay inline, so BucketMenu gets its own relatively-positioned wrapper. Using the
+  // table's class here ripped every BucketMenu out of its toolbar to the page's top-right corner
+  // (and its overflowing text pushed the whole page 28px sideways).
+  <div className="bucket-menu">
    <button
     ref={triggerRef}
     type="button"
-    className="column-menu-trigger"
+    className={`button button-sm ${selected.length ? "button-outline" : "button-quiet"}`}
     aria-haspopup="menu"
     aria-expanded={open}
     aria-label={`${label} filter${selected.length ? `, ${selected.length} selected` : ""}`}
