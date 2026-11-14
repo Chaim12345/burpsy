@@ -56,6 +56,7 @@ export function initRepeater(): void {
   `;
   $("#rep-send")!.addEventListener("click", () => void send());
   $("#rep-tabs")!.addEventListener("click", (e) => onTabStripClick(e));
+  $("#rep-tabs")!.addEventListener("keydown", (e) => onTabStripKey(e as KeyboardEvent));
   addTab();
   on<SendToRepeaterDetail>(EVT_SEND_TO_REPEATER, (d) => {
     addTab({ target: d.target, raw: d.raw, protocol: d.protocol });
@@ -78,6 +79,30 @@ function onTabStripClick(e: Event): void {
   if (item?.dataset["id"]) selectTab(Number(item.dataset["id"]));
 }
 
+function onTabStripKey(e: KeyboardEvent): void {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    const target = e.target as HTMLElement;
+    if (target.id === "rep-tab-add") {
+      addTab();
+      return;
+    }
+    const closeId = target.dataset["close"];
+    if (closeId) {
+      closeTab(Number(closeId));
+      return;
+    }
+    const item = target.closest<HTMLElement>(".tab-item");
+    if (item?.dataset["id"]) {
+      if (target.classList.contains("tab-close")) {
+        closeTab(Number(item.dataset["id"]));
+      } else {
+        selectTab(Number(item.dataset["id"]));
+      }
+    }
+  }
+}
+
 function renderTabs(): void {
   const el = $("#rep-tabs");
   if (!el) return;
@@ -85,8 +110,8 @@ function renderTabs(): void {
     tabs
       .map(
         (t) =>
-          `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}">${t.id}` +
-          `<span class="tab-close" data-close="${t.id}" title="close tab">&times;</span></div>`,
+          `<div class="tab-item${t.id === activeId ? " on" : ""}" data-id="${t.id}" tabindex="0" role="tab" aria-selected="${t.id === activeId ? "true" : "false"}" aria-label="Tab ${t.id}">${t.id}` +
+          `<span class="tab-close" data-close="${t.id}" tabindex="0" role="button" aria-label="close tab ${t.id}" title="close tab">&times;</span></div>`,
       )
       .join("") + `<button class="tab-add" id="rep-tab-add" title="new tab">+</button>`;
 }

@@ -60,7 +60,7 @@ export function initDashboard(): void {
       <div class="card">
         <div class="row" style="justify-content:space-between;margin-bottom:4px">
           <div class="card-title" style="margin:0">Live active audit</div>
-          <label class="switch"><input type="checkbox" id="dash-audit-toggle" /><span class="slider"></span></label>
+          <label class="switch"><input type="checkbox" id="dash-audit-toggle" aria-label="Toggle live active audit" /><span class="slider"></span></label>
         </div>
         <p class="hint">Auditing new in-scope traffic. Active checks are never sent automatically
           while this is off.</p>

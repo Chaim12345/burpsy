@@ -89,7 +89,7 @@ export function initIntercept(): void {
   if (!section) return;
   section.innerHTML = `
     <div class="row">
-      <label class="switch"><input type="checkbox" id="ic-enabled" /><span class="slider"></span></label>
+      <label class="switch"><input type="checkbox" id="ic-enabled" aria-label="Toggle interception" /><span class="slider"></span></label>
       <span>Intercept is on</span>
       <span id="ic-status" class="hint"></span>
       <span class="grow"></span>
