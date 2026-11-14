@@ -611,6 +611,10 @@ button.ghost:disabled:hover {
   border-bottom-color: var(--acc);
 }
 .tab-close {
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
   color: var(--dim);
   padding: 0 2px;
   border-radius: var(--radius);
