@@ -85,7 +85,11 @@ export const delJSON = <T>(url: string): Promise<T> => request<T>("DELETE", url)
 // ---- tabs ---------------------------------------------------------------------------------
 
 export function switchTab(id: string): void {
-  $all("nav button[data-t]").forEach((b) => b.classList.toggle("on", (b as HTMLElement).dataset["t"] === id));
+  $all("nav button[data-t]").forEach((b) => {
+    const active = (b as HTMLElement).dataset["t"] === id;
+    b.classList.toggle("on", active);
+    b.setAttribute("aria-selected", active ? "true" : "false");
+  });
   $all("main > section").forEach((s) => s.classList.toggle("on", s.id === id));
 }
 
