@@ -5,7 +5,7 @@
 <div id="session-rule-controls">
 <form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
 <input type="hidden" name="rule_op" value="add">
-<p class="meta">Add rule: name <input type="text" name="name" size="20" required><br>
+<p class="meta">Add rule: <label>name <input type="text" name="name" size="20" required></label><br>
 action (a choice you must tick - nothing is created with an implicit default):<br>
 <label><input type="radio" name="action" value="add_cookies_from_jar" required> add cookies from the session jar</label>
 <label><input type="radio" name="action" value="set_cookie"> set a cookie</label>
@@ -44,7 +44,7 @@ New rules are created turned off and change no traffic until turned on, which is
 <form hx-post="/ui2/session/rules/confirm" hx-target="#rows" hx-swap="outerHTML">
   <input type="hidden" name="rule_op" value="edit">
   <input type="hidden" name="rule_id" value="{{.id}}">
-  <p class="meta">name <input type="text" name="name" size="20" value="{{.name}}" required></p>
+  <p class="meta"><label>name <input type="text" name="name" size="20" value="{{.name}}" required></label></p>
   <p class="meta">tools:
   <label><input type="radio" name="tools_mode" value="all" {{if eq .tools_mode "all"}}checked{{end}}> every tool</label>
   <label><input type="radio" name="tools_mode" value="selected" {{if eq .tools_mode "selected"}}checked{{end}}> only:</label>

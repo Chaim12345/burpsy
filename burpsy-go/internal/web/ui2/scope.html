@@ -12,10 +12,10 @@
 <form hx-post="/ui2/scope/confirm" hx-target="#srows" hx-swap="outerHTML">
 <input type="hidden" name="scope_action" value="rule-add">
 <p class="meta">Add rule
-<select name="kind"><option value="include">include</option><option value="exclude">exclude</option></select>
-host <input type="text" name="pattern" size="16" placeholder="example.com or *.example.com">
+<label>kind <select name="kind"><option value="include">include</option><option value="exclude">exclude</option></select></label>
+<label>host <input type="text" name="pattern" size="16" placeholder="example.com or *.example.com"></label>
 path <input type="text" name="path" size="8" placeholder="/prefix">
-port <input type="text" name="port" size="4">
+<label>port <input type="text" name="port" size="4"></label>
 protocol <input type="text" name="protocol" size="5" placeholder="http">
 <button type="submit">add rule</button></p>
 </form>
@@ -56,10 +56,10 @@ protocol <input type="text" name="protocol" size="5" placeholder="http">
     {{if .port}}<input type="hidden" name="old_port" value="{{.port}}">{{end}}
     {{if .protocol}}<input type="hidden" name="old_protocol" value="{{.protocol}}">{{end}}
     <p class="meta"><button type="button" class="scope-edit-close">close</button> Replace this rule:
-    <select name="kind"><option value="include"{{if eq .kind "Include"}} selected{{end}}>include</option><option value="exclude"{{if eq .kind "Exclude"}} selected{{end}}>exclude</option></select>
+    <label>kind <select name="kind"><option value="include"{{if eq .kind "Include"}} selected{{end}}>include</option><option value="exclude"{{if eq .kind "Exclude"}} selected{{end}}>exclude</option></select></label>
     host <input type="text" name="pattern" size="16" value="{{.host}}">
     path <input type="text" name="path" size="8" value="{{.path}}">
-    port <input type="text" name="port" size="4" value="{{.port}}">
+    <label>port <input type="text" name="port" size="4" value="{{.port}}"></label>
     protocol <input type="text" name="protocol" size="5" value="{{.protocol}}" placeholder="http">
     <button type="submit">review replacement</button></p>
   </form></details></td>

@@ -18,7 +18,7 @@
 <label><input type="checkbox" name="status" value="3"{{if .Filter.S3}} checked{{end}}> 3xx</label>
 <label><input type="checkbox" name="status" value="4"{{if .Filter.S4}} checked{{end}}> 4xx</label>
 <label><input type="checkbox" name="status" value="5"{{if .Filter.S5}} checked{{end}}> 5xx</label></p>
-<p class="meta">term <input type="text" name="term" value="{{.Filter.Term}}" size="14">
+<p class="meta"><label>term <input type="text" name="term" value="{{.Filter.Term}}" size="14"></label>
 <label><input type="checkbox" name="regex"{{if .Filter.Regex}} checked{{end}}> regex</label>
 <label><input type="checkbox" name="case"{{if .Filter.Case}} checked{{end}}> case-sensitive</label>
 <label><input type="checkbox" name="negate"{{if .Filter.Negate}} checked{{end}}> negated</label>

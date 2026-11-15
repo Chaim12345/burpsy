@@ -6,7 +6,7 @@
 <title>{{.Title}}</title>
 <style>
 :root { color-scheme: light dark; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
-html[data-theme="dark"] { color-scheme: dark; --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#274; }
+html[data-theme="dark"] { color-scheme: dark; --bg:#16181d; --fg:#e6e6e6; --muted:#9aa; --line:#333; --accent:#7ab; --sel:#1e6b3a; /* was #274: 4.44:1 against --fg text, under 4.5:1; #1e6b3a measures 5.23:1 */ }
 html[data-theme="light"] { color-scheme: light; --bg:#fff; --fg:#111; --muted:#666; --line:#ddd; --accent:#06c; --sel:#dce9ff; }
 tr.checked { outline: 2px solid var(--accent); }
 #sel-count { margin-left: 8px; font-weight: 600; }
@@ -49,6 +49,11 @@ tbody tr.selected { background:var(--sel); box-shadow:inset 3px 0 0 var(--accent
 .sev-high, .sev-critical { color:#c00; }
 .sev-medium { color:#a60; }
 .sev-low { color:#06c; }
+/* Dark-theme severity text: the light values sit at 3.0:1 on the dark bg (#c00 on #16181d,
+   measured by the live axe sweep). These hold the same hue order at 6.2:1 and up. */
+html[data-theme="dark"] .sev-high, html[data-theme="dark"] .sev-critical { color:#ff6b66; }
+html[data-theme="dark"] .sev-medium { color:#e8a33d; }
+html[data-theme="dark"] .sev-low { color:#6aa9ff; }
 .sev-informational, .sev-info { color:var(--muted); }
 .meta { color:var(--muted); font-size:12px; padding:6px 14px; }
 pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; font:12px/1.4 ui-monospace, monospace; max-height:45vh; overflow:auto; }
@@ -207,8 +212,8 @@ table.scope-t details.scope-edit[open] form {
   {{end}}
 </header>
 <div id="notice" role="status" aria-live="polite"></div>
-<main class="{{if or (eq .View "history") (eq .View "issues") (eq .View "intruder") (eq .View "advisories")}}split{{end}}">
-  <div id="list" role="region" aria-label="Rows">
+<main class="{{if or (eq .View "history") (eq .View "issues") (eq .View "intruder") (eq .View "advisories")}}split{{end}}" tabindex="0">
+  <div id="list" role="region" aria-label="Rows" tabindex="0">
     {{.Body}}
   </div>
   <div id="detail" role="region" aria-label="Selected item detail" aria-live="polite">{{if eq .View "history"}}<p class="meta">Select a row to see its request and response.</p>{{end}}</div>
