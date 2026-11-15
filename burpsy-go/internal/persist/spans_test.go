@@ -22,9 +22,22 @@ func diskBackedStore(t *testing.T) (*core.TrafficStore, *Store, string) {
 	if err != nil {
 		t.Fatalf("open persist store: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed. Unix tolerates the leak.
+	t.Cleanup(func() { _ = store.Close() })
 	t.Cleanup(func() { p.Close() })
 	store.SetPersistenceSinks(p.SaveMessage, p.SaveExchange)
 	return store, p, captureDir
+}
+
+// storeCanMap reports whether this platform can mmap a segment. Where it cannot,
+// TrafficStore.Put keeps the bytes resident on purpose (segment_map_other.go), so
+// the mirror still stores a span but the message is also held in memory. Tests
+// that assert the span behaviour must ask rather than assume, or they fail on a
+// platform the design explicitly supports.
+func storeCanMap(ts *core.TrafficStore) bool {
+	sl := ts.SegmentLog()
+	return sl != nil && sl.Mappable()
 }
 
 // The mirror must record a span, not the bytes, whenever the bytes are already
@@ -53,9 +66,19 @@ func TestAMirroredMessageStoresItsSpanRatherThanItsBytes(t *testing.T) {
 	if length != int64(len(raw)) {
 		t.Errorf("row length = %d, want %d", length, len(raw))
 	}
+	// The mirror writes a span wherever the message has one, including on a platform
+	// that cannot map: the location is the durable pointer, and dropping it is what
+	// made the mirrored segment NULL off unix. So the blob is 0 either way.
 	if blobLen != 0 {
 		t.Errorf("row still carries %d bytes of payload — the bytes are in the segment already, "+
 			"and storing them twice is what this change removes", blobLen)
+	}
+	if !storeCanMap(store) {
+		// The resident copy is deliberate here (segment_map_other.go); it is the only
+		// place the bytes are held, and the row must not also carry them.
+		if _, err := store.Get(0); err != nil {
+			t.Errorf("resident message must be readable on a platform without mapping: %v", err)
+		}
 	}
 }
 
@@ -107,6 +130,9 @@ func TestRestoreRebuildsDiskBackedMessagesFromSpans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen traffic store: %v", err)
 	}
+	// Windows will not delete a file still open for append, so t.TempDir cleanup
+	// fails unless the segment log is closed.
+	t.Cleanup(func() { _ = restored.Close() })
 	if err := p.Restore(restored, nil, nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -127,6 +153,9 @@ func TestRestoreRebuildsDiskBackedMessagesFromSpans(t *testing.T) {
 			t.Errorf("message %d header = %q, want %q — the shape must survive the restore",
 				i, got, bodies[i])
 		}
+		// On a platform that cannot map a segment the store keeps a resident copy on
+		// purpose, but it still records the span — so this holds either way, and it is
+		// the assertion that proves the location survived the round trip.
 		if m.Location().Segment == "" {
 			t.Errorf("message %d came back resident, so restoring a capture still costs its size in memory", i)
 		}
