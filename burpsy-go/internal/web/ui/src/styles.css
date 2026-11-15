@@ -93,6 +93,12 @@
   --placeholder: var(--muted);
 
   --editor-line: var(--line);
+  /* Penpot's light gutter role (grey-350 #8c8c8c on --editor-gutter-bg #f0f0f0) measures 2.95:1,
+     under the 4.5:1 line numbers need as referenceable content; grey-10 (#6e6e6e) lands at 4.47:1,
+     still short, so the gutter uses grey-20, the theme's --text-soft, until Penpot has a role
+     between the two. bun's CSS build lowers this block onto :root too, so the dark block below
+     re-asserts its own gutter value after this one - source order is what keeps the pair apart. */
+  --editor-gutter-fg: var(--grey-20);
   /* Was 7%. Composited over --editor-bg (white) this pushes .cm-placeholder's fixed grey (#949494,
      see the rule below) down to 2.81:1, and normal editor text isn't much better — the tint alone was
      eating the contrast budget on the theme with the least room to spare, since white starts with the
@@ -138,6 +144,11 @@
    (headerName #D1E8F9, literalString #93C763) — a different palette from a different vendor. */
 [data-theme="dark"] {
   color-scheme: dark;
+
+  /* Re-asserted here because bun lowers the light block's declarations onto :root, where this
+     theme's semantic gutter role (grey-300 on grey-700, 4.80:1 - passing) would otherwise be
+     beaten by the light override above on source order. */
+  --editor-gutter-fg: var(--grey-300);
 
   --accent-contrast: #1a1a1a;
 
@@ -1752,7 +1763,10 @@ tbody td {
 
 .layout-switch button[aria-pressed="true"] {
   background: var(--accent-soft, rgba(255, 102, 51, 0.14));
-  color: var(--accent);
+  /* --text, not --accent: on the accent-soft fill, --accent measures 3.13:1 in dark and 3.48:1 in
+     light, and even --accent-strong only reaches 4.27:1 in dark. The fill plus aria-pressed carry
+     the selected state, so the label takes the theme's text colour (4.59:1 dark, 13:1 light). */
+  color: var(--text);
 }
 
 /* ===========================================================================
@@ -5180,7 +5194,9 @@ tbody td {
   border: none;
   padding: 0;
   font: inherit;
-  color: var(--accent);
+  /* accent-strong, not accent: --accent measures 3.64:1 (dark) / 4.02:1 (light) on --paper, under
+     the 4.5:1 body-size text needs; --accent-strong clears it at 4.98:1 / 5.80:1. */
+  color: var(--accent-strong);
   cursor: pointer;
 }
 

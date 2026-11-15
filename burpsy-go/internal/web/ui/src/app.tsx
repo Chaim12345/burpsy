@@ -1680,8 +1680,11 @@ function App(): JSX.Element {
             tagged gate was green), but the text was unreachable by navigation, which is
             what the landmark exists to fix. */}
     <footer className="statusbar">
-     <span>
-      <span className={live ? "status-dot live" : "status-dot stale"} />
+     {/* role="status" on the stream state only: the connected/offline flip is rare and
+          worth announcing, while the byte and exchange counts next to it churn constantly
+          and would bury a screen reader in updates. */}
+     <span role="status">
+      <span className={live ? "status-dot live" : "status-dot stale"} aria-hidden="true" />
       {live ? "event stream connected" : "event stream offline"}
      </span>
      <span>
