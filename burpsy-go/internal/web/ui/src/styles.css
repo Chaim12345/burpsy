@@ -237,7 +237,10 @@ body,
 #root {
   height: 100%;
   margin:0;
-  min-width: 340px;
+  /* 320, not 340: WCAG 1.4.10 reflow is judged at 320 CSS px, and the chrome already adapts
+     there (tab strip scrolls into its overflow menu, statusbar sheds items, panes scroll
+     internally). The floor stays so the console never collapses into unusable slivers. */
+  min-width: 320px;
 }
 
 /* The base type is the most semantic call site in the file — "body text, in the
