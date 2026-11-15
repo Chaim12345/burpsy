@@ -719,6 +719,7 @@ export function VirtualTable<T>({
          return (
           <th
            key={header.id}
+           scope="col"
            style={{ width: header.getSize() }}
            aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
            className={cn(draggingColumn && draggingColumn !== header.column.id && "th-drop-target")}
@@ -1038,7 +1039,7 @@ export function SortableTable<T>({
          const sorted = header.column.getIsSorted();
          const canSort = header.column.getCanSort();
          return (
-          <th key={header.id} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
+          <th key={header.id} scope="col" aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
            {canSort ? (
             <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
              {flexRender(header.column.columnDef.header, header.getContext())}
