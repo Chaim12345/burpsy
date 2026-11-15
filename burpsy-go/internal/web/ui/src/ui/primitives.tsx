@@ -3,7 +3,7 @@ import * as SwitchPrimitive from "@radix-ui/react-switch";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { X } from "lucide-react";
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import type {
  AnchorHTMLAttributes,
  ButtonHTMLAttributes,
@@ -419,13 +419,38 @@ export function Modal({
   */
  onOpenAutoFocus?: (event: Event) => void;
 }): JSX.Element {
+ // Focus return for a controlled dialog. This Modal has no Dialog.Trigger (callers open it from
+ // plain onClicks), so Radix's trigger ref is empty and its close-autofocus lands on <body> -
+ // a keyboard user who opened the dialog from a button loses their place entirely. Track the
+ // focused element while the dialog is closed and restore it on close when nothing more specific
+ // was asked for; callers with a better target (context menus, ui/dialog-host.tsx) still win via
+ // the onCloseAutoFocus prop.
+ const lastFocusedRef = useRef<HTMLElement | null>(null);
+ useEffect(() => {
+  if (open) return;
+  const track = () => {
+   lastFocusedRef.current = document.activeElement as HTMLElement | null;
+  };
+  document.addEventListener("focusin", track);
+  return () => document.removeEventListener("focusin", track);
+ }, [open]);
  return (
   <Dialog.Root open={open} onOpenChange={onOpenChange}>
    <Dialog.Portal>
     <Dialog.Overlay className="dialog-overlay" />
     <Dialog.Content
      className={cn("dialog-content", wide && "dialog-wide")}
-     onCloseAutoFocus={onCloseAutoFocus}
+     onCloseAutoFocus={(event) => {
+      if (onCloseAutoFocus) {
+       onCloseAutoFocus(event);
+       return;
+      }
+      const target = lastFocusedRef.current;
+      if (target && target.isConnected) {
+       event.preventDefault();
+       target.focus();
+      }
+     }}
      onOpenAutoFocus={onOpenAutoFocus}
     >
      <div className="dialog-head">
