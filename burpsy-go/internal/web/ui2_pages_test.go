@@ -294,7 +294,7 @@ func TestUI2DetailViewsUseTheSplitLayout(t *testing.T) {
 	s := newTestServer()
 	for _, p := range []string{"/ui2/history", "/ui2/issues", "/ui2/intruder"} {
 		body := getUI2(t, s, p).Body.String()
-		if !strings.Contains(body, `<main class="split">`) {
+		if !strings.Contains(body, `<main class="split" tabindex="0">`) {
 			t.Errorf("%s did not render the split layout (detail pane hidden)", p)
 		}
 	}
@@ -603,7 +603,7 @@ func TestUI2AdvisoriesPageRendersEveryCatalogueRow(t *testing.T) {
 	}
 	// The detail pane is display:none unless main carries .split - a Definitions row
 	// tap must be visible, so the view must opt into the split layout like Issues.
-	if !strings.Contains(body, `<main class="split">`) {
+	if !strings.Contains(body, `<main class="split" tabindex="0">`) {
 		t.Fatal("advisories view lacks the split layout - row detail would render into a hidden pane")
 	}
 	// Severity badges must carry real values, not empty cells from a missing field.
@@ -2024,13 +2024,13 @@ func TestUI2ScanConfigRunPageShowsAppliedState(t *testing.T) {
 	if !strings.Contains(body, "Configuration applied") {
 		t.Fatalf("run refused: %s", body[:ui2Min(300, len(body))])
 	}
-	if strings.Contains(body, `name="check_xss" checked`) {
+	if strings.Contains(body, `name="check_xss" aria-label="xss" checked`) {
 		t.Errorf("page shows check_xss on after applying it off")
 	}
 	// And the way back: re-checking renders checked after applying on.
 	token, patch, _ = ui2ScanConfigConfirmToken(t, s, "check_xss=on")
 	body = ui2ScanConfigRun(t, s, "token="+token+"&patch="+url.QueryEscape(patch))
-	if !strings.Contains(body, "Configuration applied") || !strings.Contains(body, `name="check_xss" checked`) {
+	if !strings.Contains(body, "Configuration applied") || !strings.Contains(body, `name="check_xss" aria-label="xss" checked`) {
 		t.Errorf("page does not show check_xss on after restoring it")
 	}
 }
