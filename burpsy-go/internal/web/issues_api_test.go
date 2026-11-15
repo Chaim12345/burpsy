@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -168,5 +169,83 @@ func TestIssuesSurfacesMergedParams(t *testing.T) {
 		if body.Findings[0].Params[i] != p {
 			t.Errorf("params[%d] = %q, want %q", i, body.Findings[0].Params[i], p)
 		}
+	}
+}
+
+// The list the console refetches on every issues event must not carry each finding's prose.
+//
+// A few thousand findings, each with its detail and a copy of the catalogue advisory, is a
+// multi-megabyte document. The shell's issue badge is mounted on every page and the Issues tree
+// only paints a window of rows, so both of those reads are a summary: the prose is GET
+// /api/issues/{id}, fetched for the one row that is open. The count read is smaller still — the
+// badge does not need a row per finding at all.
+func TestTheIssueListSummaryOmitsProseAndTheCountSendsNoRows(t *testing.T) {
+	store := core.NewTrafficStore()
+	reqID, err := store.Put([]byte("GET /admin HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respID, err := store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), core.DirectionResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddExchange(&core.Exchange{
+		Request: core.MsgPtr(reqID), Response: &respID,
+		Host: "app.test", Port: 80, Method: "GET", Path: "/admin",
+	})
+	const prose = "UNIQUE-DETAIL-the operator reads this on the open issue, not in the list"
+	findings := core.NewFindingStore()
+	id := findings.Add(core.NewFinding{
+		Name:        "Admin panel",
+		Severity:    core.SeverityHigh,
+		Confidence:  core.ConfidenceCertain,
+		Description: prose,
+		Remediation: "UNIQUE-REMEDIATION-do not list this",
+		Evidence:    "UNIQUE-EVIDENCE-do not list this",
+		Occurrences: []core.Occurrence{{Request: core.MsgPtr(reqID), Response: &respID}},
+	})
+	s := NewServer(store, core.NewScope()).WithFindings(findings)
+
+	summary := get(t, s, "/api/issues?summary=1")
+	if summary.Code != http.StatusOK {
+		t.Fatalf("summary: %d %s", summary.Code, summary.Body.String())
+	}
+	raw := summary.Body.String()
+	for _, leaked := range []string{prose, "UNIQUE-REMEDIATION", "UNIQUE-EVIDENCE"} {
+		if strings.Contains(raw, leaked) {
+			t.Errorf("summary list contains %q; that text belongs on the open issue, not the list", leaked)
+		}
+	}
+	if !strings.Contains(raw, `"host":"app.test"`) || !strings.Contains(raw, `"path":"/admin"`) {
+		t.Errorf("summary list lost the exchange it was observed on: %s", raw)
+	}
+
+	count := get(t, s, "/api/issues?count=1")
+	if count.Code != http.StatusOK {
+		t.Fatalf("count: %d %s", count.Code, count.Body.String())
+	}
+	var counted struct {
+		Counted  int               `json:"counted"`
+		Findings []json.RawMessage `json:"findings"`
+	}
+	if err := json.Unmarshal(count.Body.Bytes(), &counted); err != nil {
+		t.Fatal(err)
+	}
+	if counted.Counted != 1 {
+		t.Errorf("counted = %d, want 1", counted.Counted)
+	}
+	if len(counted.Findings) != 0 {
+		t.Errorf("count response has %d findings; the badge must not receive a row per issue", len(counted.Findings))
+	}
+	if strings.Contains(count.Body.String(), prose) {
+		t.Errorf("count response contains the finding prose")
+	}
+
+	one := get(t, s, "/api/issues/"+strconv.FormatUint(id, 10))
+	if one.Code != http.StatusOK {
+		t.Fatalf("GET one: %d %s", one.Code, one.Body.String())
+	}
+	if !strings.Contains(one.Body.String(), prose) {
+		t.Errorf("the open issue does not carry its detail: %s", one.Body.String())
 	}
 }

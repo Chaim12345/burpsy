@@ -1,0 +1,49 @@
+<div id="rows">
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<h3>Captures</h3>
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Target</th><th scope="col">Location</th><th scope="col">Tokens</th><th scope="col">State</th></tr></thead>
+<tbody>
+{{range .captures.captures}}
+<tr><td>{{.id}}</td><td>{{.target}}</td><td>{{.location}}</td><td>{{.total}}</td>
+<td>{{if .capturing}}capturing{{else}}done{{end}}{{if .stop_reason}} ({{.stop_reason}}){{end}}</td></tr>
+{{else}}<tr><td colspan="5" class="meta">No captures.</td></tr>{{end}}
+</tbody>
+</table>
+{{if .any_running}}
+<p class="meta">A capture is running. Pause and resume act on the newest running capture; stop ends every running capture.
+<form style="display:inline" hx-post="/ui2/sequencer/capture/pause" hx-target="#rows" hx-swap="outerHTML"><button type="submit">pause</button></form>
+<form style="display:inline" hx-post="/ui2/sequencer/capture/resume" hx-target="#rows" hx-swap="outerHTML"><button type="submit">resume</button></form>
+<form style="display:inline" hx-post="/ui2/sequencer/capture/stop" hx-target="#rows" hx-swap="outerHTML"><button type="submit">stop all</button></form></p>
+{{end}}
+<h3>Start live capture</h3>
+<form hx-post="/ui2/sequencer/capture/confirm" hx-target="#rows" hx-swap="outerHTML">
+  <p class="meta">Target <input type="text" name="target" size="22" aria-label="Target host" placeholder="host or host:port"> protocol
+  <select name="protocol" aria-label="Protocol"><option value="http" selected>http</option><option value="https">https</option></select>
+  count <input type="number" name="count" size="6" min="1" max="20000" placeholder="100" aria-label="Token count">
+  delay ms <input type="number" name="delay_ms" size="5" min="0" placeholder="0" aria-label="Delay between requests in milliseconds">
+  threads <input type="number" name="threads" size="3" min="1" max="32" placeholder="1" aria-label="Threads"></p>
+  <p class="meta">Token location
+  <select name="kind" aria-label="Token location kind"><option value="cookie" selected>cookie</option><option value="header">header</option><option value="form_field">form field</option><option value="body_regex">body regex</option></select>
+  name <input type="text" name="name" size="14" aria-label="Cookie, header or form field name" placeholder="SESSIONID">
+  or body regex <input type="text" name="pattern" size="24" aria-label="Body regex" placeholder="token&quot;:&quot;([^&quot;]+)"></p>
+  <textarea name="request" rows="8" style="width:100%" aria-label="Request to repeat" placeholder="GET / HTTP/1.1&#10;Host: example.com">{{.base_request}}</textarea>
+  <button type="submit">review capture</button>
+</form>
+<h3>Analyse pasted tokens</h3>
+<form hx-post="/ui2/sequencer/analyse" hx-target="#rows" hx-swap="outerHTML">
+  <textarea name="tokens" rows="6" style="width:100%" aria-label="Tokens, one per line" placeholder="paste tokens, one per line">{{.tokens}}</textarea>
+  <div style="display:flex; gap:6px; margin:6px 0;">
+    <select name="encoding" aria-label="Token encoding">
+      <option value="raw" {{if eq .encoding "raw"}}selected{{end}}>raw</option>
+      <option value="hex" {{if eq .encoding "hex"}}selected{{end}}>hex</option>
+      <option value="base64" {{if eq .encoding "base64"}}selected{{end}}>base64</option>
+    </select>
+    <button type="submit">Analyse</button>
+  </div>
+</form>
+{{if .report}}
+<h3>Report</h3>
+<pre>{{.report}}</pre>
+{{end}}
+</div>

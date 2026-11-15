@@ -1,0 +1,10 @@
+{{if .error}}<p class="meta">Cannot launch: {{.error}}</p>{{else}}
+<p><strong>Review before crawl:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">A crawl sends its own requests to the target host within the engagement scope and records what it finds. A seed the scope refuses is named before anything is sent, and a crawl whose every seed is refused does not start. This confirmation is one-time and covers exactly the call above.</p>
+<form hx-post="/ui2/scanner/crawl-run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="seeds" value="{{.seeds}}">
+<input type="hidden" name="config" value="{{.config}}">
+<button>Confirm and crawl</button>
+</form>
+{{end}}

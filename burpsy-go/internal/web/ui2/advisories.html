@@ -1,0 +1,12 @@
+<div id="rows">
+<p class="meta">{{.count}} definitions · {{range $sev, $n := .severity_counts}}<span class="sev sev-{{$sev | lower}}">{{$sev}}</span> {{$n}} · {{end}}</p>
+<table>
+<thead><tr><th scope="col">Type</th><th scope="col">Name</th><th scope="col">Severity</th></tr></thead>
+<tbody>
+{{range .advisories}}
+<tr hx-get="/ui2/advisories/{{.type_index}}" hx-target="#detail" hx-swap="innerHTML" hx-trigger="click">
+<td>{{.type_index}}</td><td>{{.name}}{{if .shadowed}} <span class="meta">· shared index - tap shows the definition that owns {{.type_index}}</span>{{end}}</td><td class="sev sev-{{.typical_severity | lower}}">{{.typical_severity}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">Catalogue not loaded.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

@@ -1,0 +1,24 @@
+<div id="settings-pools">
+<p class="meta">{{.count}} saved · default max_concurrent={{.default_mc}} delay_ms={{.default_dm}}</p>
+{{range .pools}}<div class="meta"><strong>{{.Name}}</strong> · max_concurrent={{.MaxConcurrent}} · delay_ms={{.DelayMs}} · throttle={{if .Throttle}}on (+{{.Throttle.IncrementMs}}ms){{else}}off{{end}}{{with index $.in_use .Name}} · bounds: {{.}}{{end}}
+<form style="display:inline" hx-post="/ui2/settings/write/pools/confirm" hx-target="#settings-pools" hx-swap="outerHTML"><input type="hidden" name="op" value="delete"><input type="hidden" name="name" value="{{.Name}}"><button>delete</button></form>
+<details><summary>edit bounds</summary>
+<form hx-post="/ui2/settings/write/pools/confirm" hx-target="#settings-pools" hx-swap="outerHTML">
+<input type="hidden" name="op" value="edit"><input type="hidden" name="name" value="{{.Name}}">
+<p><label>Max concurrent <input type="text" name="max_concurrent" value="{{.MaxConcurrent}}" size="6"></label></p>
+<p><label>Delay ms <input type="text" name="delay_ms" value="{{.DelayMs}}" size="6"></label></p>
+<p><button>Review and save</button></p>
+<p class="meta">Name and throttling do not change. Renames are not offered: a rename would leave schedules pointing at a name nothing holds.</p>
+</form>
+</details></div>{{end}}
+<details><summary>Create a pool</summary>
+<form hx-post="/ui2/settings/write/pools/confirm" hx-target="#settings-pools" hx-swap="outerHTML">
+<input type="hidden" name="op" value="create">
+<p><label>Name <input type="text" name="name" placeholder="out of hours" size="24"></label></p>
+<p><label>Max concurrent <input type="text" name="max_concurrent" value="{{.default_mc}}" size="6"></label></p>
+<p><label>Delay ms <input type="text" name="delay_ms" value="{{.default_dm}}" size="6"></label></p>
+<p><button>Review and create</button></p>
+<p class="meta">Automatic throttling is off for a pool created here. The defaults shown are the intruder's own long-standing bounds.</p>
+</form>
+</details>
+</div>

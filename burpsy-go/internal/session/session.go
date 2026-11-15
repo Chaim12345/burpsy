@@ -3,6 +3,9 @@ package session
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -950,11 +953,10 @@ func pathMatches(cookiePath, requestPath string) bool {
 // on the same map.
 // updateSent sets the value of every cookie named name that this jar would send with a request to
 // (host, port, tls, path), by cookieHeaderPairs' matching rules. It reports whether any matched.
-func (j *cookieJar) updateSent(host string, port uint16, tls bool, path, name, value string) bool {
+func (j *cookieJar) updateSent(host string, port uint16, tls bool, path, name, value string) (found, changed bool) {
 	j.Lock()
 	defer j.Unlock()
 	now := time.Now()
-	found := false
 	for k, c := range j.m {
 		if k[strings.LastIndex(k, "\x01")+1:] != name {
 			continue
@@ -969,17 +971,26 @@ func (j *cookieJar) updateSent(host string, port uint16, tls bool, path, name, v
 		if !pathMatches(c.Path, path) || (!c.Expires.IsZero() && !now.Before(c.Expires)) || (c.Secure && !tls) {
 			continue
 		}
-		c.Value = value
-		j.m[k] = c
+		if c.Value != value {
+			c.Value = value
+			j.m[k] = c
+			changed = true
+		}
 		found = true
 	}
-	return found
+	return found, changed
 }
 
-func (j *cookieJar) set(name, value string) {
+// set writes one host-only cookie at Path=/ and reports whether the jar's content changed:
+// a rewrite of the same name with the same value is no movement.
+func (j *cookieJar) set(name, value string) bool {
 	j.Lock()
-	j.m[jarKey("", "/", name)] = jarCookie{Value: value, Path: "/"}
-	j.Unlock()
+	defer j.Unlock()
+	k := jarKey("", "/", name)
+	nc := jarCookie{Value: value, Path: "/"}
+	old, existed := j.m[k]
+	j.m[k] = nc
+	return !existed || old != nc
 }
 
 // remove deletes one cookie and reports whether it was there.
@@ -1000,13 +1011,17 @@ func (j *cookieJar) remove(name string) bool {
 }
 
 // clear empties the jar's map, keeping the jar itself for the authority.
-func (j *cookieJar) clear() {
+// clear empties the jar and reports whether it held anything: clearing an already-empty jar
+// is no movement.
+func (j *cookieJar) clear() (changed bool) {
 	j.Lock()
+	defer j.Unlock()
+	changed = len(j.m) > 0
 	j.m = make(map[string]jarCookie)
-	j.Unlock()
+	return changed
 }
 
-func (j *cookieJar) absorb(val string) {
+func (j *cookieJar) absorb(val string) (changed bool) {
 	// §5.3: the name/value pair first, then the attributes. The old absorb stopped at the first
 	// semicolon and stored the pair — the fix for the bug where every attribute became its own
 	// cookie — and the comment on it disclosed that attributes were dropped. This pass keeps them,
@@ -1087,7 +1102,14 @@ func (j *cookieJar) absorb(val string) {
 	}
 	j.Lock()
 	defer j.Unlock()
-	j.m[jarKey(c.Domain, c.Path, name)] = c
+	k := jarKey(c.Domain, c.Path, name)
+	old, existed := j.m[k]
+	j.m[k] = c
+	// Movement is what changed the jar's send-time behaviour or the operator's table: a new
+	// cookie always, an overwrite only when the stored attributes meaningfully differ — a
+	// rolling Max-Age that only slides a still-valid expiry forward stays silent (see
+	// onchange.go for why).
+	return !existed || jarCookieMeaningfullyDifferent(old, c)
 }
 
 // defaultPath is §5.1.4's default-path: the directory of the request URI that carried the
@@ -1106,6 +1128,9 @@ type cookiePair struct{ name, value string }
 type CookieJarManager struct {
 	mu   sync.RWMutex
 	jars map[string]*cookieJar
+	// onChange fires after a mutation that actually changed a jar's content (see onchange.go);
+	// installed by Coordinator.OnChange so jar movement announces with the rest of the session.
+	onChange onChangeHook
 }
 
 func NewCookieJarManager() *CookieJarManager {
@@ -1193,7 +1218,9 @@ func (cjm *CookieJarManager) AbsorbSetCookie(host string, port uint16, tls bool,
 		cjm.jars[key] = jar
 	}
 	cjm.mu.Unlock()
-	jar.absorb(val)
+	if jar.absorb(val) {
+		cjm.onChange.note()
+	}
 }
 
 // SetCookie writes one cookie into the authority's jar, creating the jar when it does not
@@ -1222,13 +1249,19 @@ func (cjm *CookieJarManager) AbsorbRequestCookie(host string, port uint16, tls b
 	}
 	cjm.mu.Unlock()
 	updated := false
+	changed := false
 	for _, j := range all {
-		if j.updateSent(host, port, tls, path, name, value) {
+		found, ch := j.updateSent(host, port, tls, path, name, value)
+		if found {
 			updated = true
 		}
+		changed = changed || ch
 	}
 	if !updated {
-		jar.set(name, value)
+		changed = jar.set(name, value)
+	}
+	if changed {
+		cjm.onChange.note()
 	}
 }
 
@@ -1241,7 +1274,9 @@ func (cjm *CookieJarManager) SetCookie(host string, port uint16, tls bool, name,
 		cjm.jars[key] = jar
 	}
 	cjm.mu.Unlock()
-	jar.set(name, value)
+	if jar.set(name, value) {
+		cjm.onChange.note()
+	}
 }
 
 // RemoveCookie deletes one cookie by name from the authority's jar and reports whether it was
@@ -1256,7 +1291,11 @@ func (cjm *CookieJarManager) RemoveCookie(host string, port uint16, tls bool, na
 	if jar == nil {
 		return false
 	}
-	return jar.remove(name)
+	if jar.remove(name) {
+		cjm.onChange.note()
+		return true
+	}
+	return false
 }
 
 // ClearJar empties one authority's jar and reports whether it existed. It is the jar's
@@ -1272,7 +1311,9 @@ func (cjm *CookieJarManager) ClearJar(host string, port uint16, tls bool) bool {
 		return false
 	}
 	cjm.mu.Unlock()
-	jar.clear()
+	if jar.clear() {
+		cjm.onChange.note()
+	}
 	return true
 }
 
@@ -1584,6 +1625,10 @@ type Coordinator struct {
 	// only per-request cost is one atomic load.
 	tracer traceRing
 
+	// onChange fires after real session movement the Session page renders (see onchange.go):
+	// rule edits, and through the same hook the jar manager's and tracer's movement.
+	onChange onChangeHook
+
 	// runs holds the login currently in flight for a rule. If N requests notice
 	// session loss at once — realistic under any concurrency — reacting to each
 	// independently would fire N logins at the engagement target. The first
@@ -1723,11 +1768,15 @@ func (c *Coordinator) AddRule(rule *SessionRule) (RuleID, error) {
 	// wire answer all describe the same list (see NormaliseActions).
 	rule.NormaliseActions()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	id := RuleID(atomic.AddInt64(&c.nextID, 1))
 	rule.ID = id
 	c.rules[id] = rule
 	c.order = append(c.order, id)
+	c.mu.Unlock()
+	// Strictly after the lock is released, like every component hook before it: a deferred
+	// noteChange would run before a deferred Unlock (defers are LIFO), firing the hook while
+	// c.mu is still held and deadlocking any future hook that reads coordinator state.
+	c.noteChange()
 	return id, nil
 }
 
@@ -1776,8 +1825,8 @@ func (c *Coordinator) RestoreRule(rule *SessionRule) error {
 		}
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if held, clash := c.rules[rule.ID]; clash {
+		c.mu.Unlock()
 		return fmt.Errorf("%w: id %d is held by %q, so restoring %q at it would drop one of the two",
 			ErrDuplicateRuleID, int64(rule.ID), held.Name, rule.Name)
 	}
@@ -1786,19 +1835,54 @@ func (c *Coordinator) RestoreRule(rule *SessionRule) error {
 	if int64(rule.ID) > atomic.LoadInt64(&c.nextID) {
 		atomic.StoreInt64(&c.nextID, int64(rule.ID))
 	}
+	c.mu.Unlock()
+	c.noteChange()
 	return nil
 }
 
 func (c *Coordinator) RemoveRule(id RuleID) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if _, held := c.rules[id]; !held {
+		c.mu.Unlock()
+		return
+	}
 	delete(c.rules, id)
 	for i, iter := range c.order {
 		if iter == id {
 			c.order = append(c.order[:i], c.order[i+1:]...)
-			return
+			break
 		}
 	}
+	c.mu.Unlock()
+	c.noteChange()
+}
+
+// DeleteRuleIfUnchanged is RemoveRule with the same precondition UpdateRuleIfUnchanged adds to
+// UpdateRule, in one lock hold: the removal happens only while the stored rule still digests to
+// expectDigest. A remove the operator reviewed against one rule must not land on a rule that
+// changed since the review - removal cannot be undone from this page, so the clobber window a
+// check outside the lock would leave is the whole defect.
+func (c *Coordinator) DeleteRuleIfUnchanged(id RuleID, expectDigest string) error {
+	c.mu.Lock()
+	cur, ok := c.rules[id]
+	if !ok {
+		c.mu.Unlock()
+		return ErrNoSuchRule
+	}
+	if RuleDigest(cur) != expectDigest {
+		c.mu.Unlock()
+		return ErrRuleChanged
+	}
+	delete(c.rules, id)
+	for i, iter := range c.order {
+		if iter == id {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+	c.mu.Unlock()
+	c.noteChange()
+	return nil
 }
 
 // UpdateRule replaces a rule's mutable fields in place, keeping its identity (ID and position in
@@ -1813,13 +1897,63 @@ func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) error {
 	}
 	rule.NormaliseActions()
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	cur, ok := c.rules[id]
 	if !ok {
+		c.mu.Unlock()
 		return ErrNoSuchRule
 	}
 	rule.ID = cur.ID
 	c.rules[id] = rule
+	moved := !rulesSemanticallyEqual(cur, rule)
+	c.mu.Unlock()
+	// An unchanged edit announces nothing: resubmitting the form as-is is not movement (the
+	// JSON projection compares separately decoded rules by meaning - see onchange.go).
+	if moved {
+		c.noteChange()
+	}
+	return nil
+}
+
+// RuleDigest is the canonical fingerprint of a rule's whole state for compare-and-update:
+// the sha256 of its JSON projection. Every SessionRule field is exported and tagged, so the
+// projection covers the complete rule - two rules with the same digest are interchangeable.
+// Struct field order is fixed and encoding/json sorts map keys, so the encoding is stable.
+func RuleDigest(r *SessionRule) string {
+	raw, _ := json.Marshal(r)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// ErrRuleChanged refuses a compare-and-update whose base no longer matches: the rule moved
+// between the operator's review and the apply, so applying would clobber the newer change.
+var ErrRuleChanged = errors.New("session: the rule changed since the change was prepared")
+
+// UpdateRuleIfUnchanged is UpdateRule with a precondition, in ONE lock hold: the swap happens
+// only when the stored rule still digests to expectDigest. AddExtraction's comment gives the
+// reason this exists as a method - "read, mutate, UpdateRule" in a caller races with any other
+// writer, and a precondition checked outside the lock is a window, not a guard.
+func (c *Coordinator) UpdateRuleIfUnchanged(id RuleID, expectDigest string, rule *SessionRule) error {
+	if err := ValidateRule(rule); err != nil {
+		return err
+	}
+	rule.NormaliseActions()
+	c.mu.Lock()
+	cur, ok := c.rules[id]
+	if !ok {
+		c.mu.Unlock()
+		return ErrNoSuchRule
+	}
+	if RuleDigest(cur) != expectDigest {
+		c.mu.Unlock()
+		return ErrRuleChanged
+	}
+	rule.ID = cur.ID
+	c.rules[id] = rule
+	moved := !rulesSemanticallyEqual(cur, rule)
+	c.mu.Unlock()
+	if moved {
+		c.noteChange()
+	}
 	return nil
 }
 
@@ -1831,23 +1965,28 @@ func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) error {
 // happened to hold last, which is a resolution nobody can debug.
 func (c *Coordinator) AddExtraction(id RuleID, ex *Extraction) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	rule := c.rules[id]
 	if rule == nil {
+		c.mu.Unlock()
 		return fmt.Errorf("%w: %d", ErrNoSuchRule, id)
 	}
 	if ex == nil || strings.TrimSpace(ex.Name) == "" {
+		c.mu.Unlock()
 		return fmt.Errorf("an extraction needs a name")
 	}
 	for _, existing := range rule.Extractions {
 		if existing != nil && existing.Name == ex.Name {
+			c.mu.Unlock()
 			return fmt.Errorf("rule already extracts %q", ex.Name)
 		}
 	}
 	if err := ex.Recompile(); err != nil {
+		c.mu.Unlock()
 		return err
 	}
 	rule.Extractions = append(rule.Extractions, ex)
+	c.mu.Unlock()
+	c.noteChange()
 	return nil
 }
 
@@ -1894,7 +2033,6 @@ func (c *Coordinator) MoveRule(id RuleID, offset int) (int, error) {
 		return c.rulePosition(id)
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	pos := -1
 	for i, candidate := range c.order {
 		if candidate == id {
@@ -1903,15 +2041,19 @@ func (c *Coordinator) MoveRule(id RuleID, offset int) (int, error) {
 		}
 	}
 	if pos < 0 {
+		c.mu.Unlock()
 		return -1, ErrNoSuchRule
 	}
 	target := pos + offset
 	if target < 0 || target >= len(c.order) {
+		c.mu.Unlock()
 		return pos, fmt.Errorf("%w: the move would take rule %d past the %s of the list (%d rule(s))",
 			ErrRuleAtEdge, int64(id), map[bool]string{true: "top", false: "bottom"}[target < 0], len(c.order))
 	}
 	c.order[pos] = c.order[target]
 	c.order[target] = id
+	c.mu.Unlock()
+	c.noteChange()
 	return target, nil
 }
 
@@ -1932,6 +2074,42 @@ func (c *Coordinator) Rule(id RuleID) *SessionRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.rules[id]
+}
+
+// RuleSnapshot returns a DEEP COPY of the stored rule together with the rule's current
+// digest, both taken in one hold of the coordinator lock, so the two cannot come from
+// different versions of the rule. Rule hands out the live pointer; callers that edit -
+// the ui2 confirmation gate's merge - must work on this copy instead, so nothing they
+// change reaches the stored rule before a compare-and-update installs it. The copy goes
+// through the domain JSON round-trip persistence itself uses, with the loader's own
+// fix-up (extraction recompile) applied, so every field RuleDigest binds - per-action
+// validity, extension session state, macro steps - survives intact.
+func (c *Coordinator) RuleSnapshot(id RuleID) (*SessionRule, string, bool) {
+	c.mu.RLock()
+	rule := c.rules[id]
+	if rule == nil {
+		c.mu.RUnlock()
+		return nil, "", false
+	}
+	raw, err := json.Marshal(rule)
+	digest := RuleDigest(rule)
+	c.mu.RUnlock()
+	if err != nil {
+		return nil, "", false
+	}
+	var out SessionRule
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, "", false
+	}
+	for _, ex := range out.Extractions {
+		if ex == nil {
+			continue
+		}
+		if err := ex.Recompile(); err != nil {
+			return nil, "", false
+		}
+	}
+	return &out, digest, true
 }
 
 // MatchingRule returns the first enabled rule whose scopes cover this request: host by name,

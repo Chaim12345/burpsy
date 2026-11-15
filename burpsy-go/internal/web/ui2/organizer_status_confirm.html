@@ -1,0 +1,10 @@
+<div id="rows" data-review="1">
+{{if .error}}<p><strong>Not saved: {{.error}}</strong></p>{{else}}
+<h3>Review workflow status</h3>
+<p>Item #{{.change.Before.ID}}: <span style="overflow-wrap:anywhere">{{.change.Before.Title}}</span></p>
+<p>Workflow status: <strong>{{.change.Before.Status}}</strong> → <strong>{{.change.Status}}</strong></p>
+<p>Only this saved item's workflow status changes. Its other fields and collection stay unchanged. No request is sent. The one-time confirmation binds this change and the full stored item snapshot; a changed or removed item is refused.</p>
+<form hx-post="/ui2/organizer/status/run" hx-target="#rows" hx-swap="outerHTML"><input type="hidden" name="review_id" value="{{.review_id}}"><input type="hidden" name="token" value="{{.token}}"><button>Confirm workflow status</button></form>
+{{end}}
+<p><a href="/ui2/organizer" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML">cancel</a> (pending reviews expire after the confirmation window)</p>
+</div>

@@ -59,6 +59,10 @@ type advisoryIndexView struct {
 	TypeIndex       string `json:"type_index"`
 	Name            string `json:"name"`
 	TypicalSeverity string `json:"typical_severity"`
+	// Shadowed marks definitions that lost an index collision (see Catalogue.ShadowedByIndex):
+	// their row's type_index resolves to a different definition, so the row must say so rather
+	// than let a tap open the neighbour's identity under this row's name.
+	Shadowed bool `json:"shadowed,omitempty"`
 }
 
 // advisoryCatalogueView is the list response.
@@ -138,6 +142,10 @@ func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
 	needle := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 
 	all := s.advisories.All() // nil-safe: a nil catalogue returns no definitions, not a panic
+	shadowed := make(map[*advisory.Definition]bool)
+	for _, d := range s.advisories.ShadowedByIndex() {
+		shadowed[d] = true
+	}
 	rows := make([]advisoryIndexView, 0, len(all))
 	counts := make(map[string]int, len(advisorySeverities))
 	for _, d := range all {
@@ -152,6 +160,7 @@ func (s *Server) handleAdvisories(w http.ResponseWriter, r *http.Request) {
 			TypeIndex:       d.HexIndex(),
 			Name:            d.Name,
 			TypicalSeverity: string(d.Severity),
+			Shadowed:        shadowed[d],
 		})
 	}
 

@@ -149,9 +149,17 @@ func (p sessionPrompter) PromptForBrowserRecovery(ruleName string, requestURL st
 	case r := <-prompt.answered:
 		return r.recovered, r.err
 	case <-time.After(browserRecoveryPromptTimeout):
-		p.s.prompts.expire(prompt.id)
+		p.expireAndAnnounce(prompt.id)
 		return false, fmt.Errorf("no answer from the operator after %s", browserRecoveryPromptTimeout)
 	}
+}
+
+// expireAndAnnounce removes a prompt whose wait timed out and announces the removal, so a live
+// console's pending count returns to none instead of reading stale until some unrelated change
+// refetches it - the same frame a resolve sends.
+func (p sessionPrompter) expireAndAnnounce(id uint64) {
+	p.s.prompts.expire(id)
+	p.s.live.notify(changeSession)
 }
 
 // ---- wire shapes -----------------------------------------------------------------------------------

@@ -84,6 +84,15 @@ func (s *Server) handleTriageSettings(w http.ResponseWriter, r *http.Request) {
 		if key == "" {
 			key = existing.APIKey
 		}
+		// The engine's endpoint policy applies at write time too, so non-UI clients cannot
+		// store what the console refuses to mint (https for remote endpoints; loopback http;
+		// no userinfo/query/fragment). Errors name the property, never the value.
+		if b := strings.TrimSpace(v.BaseURL); b != "" {
+			if err := scanner.CheckTriageEndpointURL(b); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		if (v.Enabled || existing.Enabled) && strings.TrimSpace(v.BaseURL) == "" && strings.TrimSpace(existing.BaseURL) == "" {
 			http.Error(w, "triage needs a base URL before it can be enabled — an unconfigured endpoint is a silent no-op, which is the failure the two-gate rule exists to prevent", http.StatusBadRequest)
 			return
@@ -151,6 +160,11 @@ func (s *Server) triageCfg() (scanner.TriageEndpointConfig, bool, error) {
 	}
 	if !stored.Enabled || stored.BaseURL == "" {
 		return scanner.TriageEndpointConfig{}, false, nil
+	}
+	// Use-time guard for configs stored before the policy existed: refuse rather than send
+	// the key somewhere unsafe. TriageFinding revalidates at dispatch as well.
+	if err := scanner.CheckTriageEndpointURL(stored.BaseURL); err != nil {
+		return scanner.TriageEndpointConfig{}, false, err
 	}
 	return scanner.TriageEndpointConfig{
 		BaseURL: stored.BaseURL,

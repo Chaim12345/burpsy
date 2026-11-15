@@ -355,6 +355,17 @@ type ScopeRequest struct {
 	// custom scope's rules, each in the include/exclude shape (action is the rule's kind).
 	Mode      string         `json:"mode,omitempty"`
 	DropRules []ScopeRequest `json:"drop_rules,omitempty"`
+	// ExpectedLibrary and ExpectedRules are the content preconditions a confirmed library call
+	// carries (burpsy-react-ui-e365 review binding). ExpectedLibrary is the digest of the stored
+	// library document the operator reviewed (persist.ScopeLibraryAbsent for "no such library"),
+	// checked against the stored bytes inside the writing transaction; ExpectedRules is the
+	// core.ScopeRulesDigest of the live rule list the operator reviewed, checked under the
+	// scope's own lock. Either one that no longer matches is a 409 naming which moved, because
+	// applying anyway would act on content the review never showed. Both are optional: an
+	// older client that sends neither gets the legacy unchecked behaviour, which the gate that
+	// fronts this endpoint has always authorised the same way.
+	ExpectedLibrary string `json:"expected_library,omitempty"`
+	ExpectedRules   string `json:"expected_rules,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -662,17 +673,32 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var removed bool
+		// Protocol is part of the identity, like path and port: two rules may share the other
+		// four arms and differ only in scheme, and removing whichever came first could delete
+		// the https rule for a click aimed at http. Naming the protocol picks one exactly;
+		// leaving it out over several matches is refused as ambiguous rather than guessed.
+		protocol, err := normaliseScopeProtocol(req.Protocol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var removed core.ScopeMatchResult
 		switch req.Kind {
 		case "exclude":
-			removed = s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port)
+			removed = s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port, protocol)
 		case "include":
-			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port)
+			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port, protocol)
 		default:
-			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port) ||
-				s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port)
+			removed = s.scope.RemoveScoped(core.ScopeInclude, req.Pattern, path, req.Port, protocol)
+			if removed == core.ScopeMatchNone {
+				removed = s.scope.RemoveScoped(core.ScopeExclude, req.Pattern, path, req.Port, protocol)
+			}
 		}
-		if !removed {
+		switch removed {
+		case core.ScopeMatchAmbiguous:
+			http.Error(w, "More than one scope rule matches that kind, host, path and port - they differ only by protocol. Name the protocol to pick one.", http.StatusConflict)
+			return
+		case core.ScopeMatchNone:
 			http.Error(w, "No matching rule found", http.StatusNotFound)
 			return
 		}
@@ -737,7 +763,19 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Kind must be include or exclude for toggle", http.StatusBadRequest)
 			return
 		}
-		if !s.scope.SetRuleEnabled(kind, req.Pattern, path, req.Port, req.Enabled == nil || *req.Enabled) {
+		// Same identity as remove: the protocol arm keeps a toggle aimed at the https row from
+		// flipping its http sibling, and an unnamed protocol over several matches is refused
+		// rather than guessed.
+		protocol, err := normaliseScopeProtocol(req.Protocol)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch s.scope.SetRuleEnabled(kind, req.Pattern, path, req.Port, protocol, req.Enabled == nil || *req.Enabled) {
+		case core.ScopeMatchAmbiguous:
+			http.Error(w, "More than one scope rule matches that kind, host, path and port - they differ only by protocol. Name the protocol to pick one.", http.StatusConflict)
+			return
+		case core.ScopeMatchNone:
 			http.Error(w, "No matching rule found", http.StatusNotFound)
 			return
 		}
@@ -839,8 +877,31 @@ func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
 	case "library_save":
 		// The live rule list as it stands, which is what the operator can see on the page. Disabled
 		// rules go in as disabled: a library is a photograph of the scope, not an edit of it.
-		rules := s.scope.Rules()
-		replaced, err := s.persist.SaveScopeLibrary(name, rules)
+		// A confirmed call photographs the REVIEWED list: SnapshotIfUnchanged compares and copies
+		// under the scope's lock, so what is written is what the review showed or nothing is.
+		var rules []*core.ScopeRule
+		if req.ExpectedRules != "" {
+			snap, ok := s.scope.SnapshotIfUnchanged(req.ExpectedRules)
+			if !ok {
+				http.Error(w, "The current rules changed since this review, so the photograph you confirmed is no longer the scope; nothing was saved. Review the library save again to photograph what is there now.", http.StatusConflict)
+				return
+			}
+			rules = snap
+		} else {
+			rules = s.scope.Rules()
+		}
+		var replaced bool
+		var err error
+		if req.ExpectedLibrary != "" {
+			var conflict bool
+			replaced, conflict, err = s.persist.SaveScopeLibraryIfUnchanged(name, rules, req.ExpectedLibrary)
+			if conflict {
+				http.Error(w, "The saved library changed since this review; not overwriting it. Review the save again to replace what is stored now.", http.StatusConflict)
+				return
+			}
+		} else {
+			replaced, err = s.persist.SaveScopeLibrary(name, rules)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -856,7 +917,7 @@ func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
 		// through core.NewScopeRuleFrom (which compiles the `regex:` and `range:` arms and refuses what
 		// does not compile — see core/scope.go), and the live scope is only cleared once all of them
 		// exist. A refused load leaves the operator with exactly the scope they already had.
-		stored, found, err := s.persist.LoadScopeLibrary(name)
+		stored, storedDigest, found, err := s.persist.LoadScopeLibraryWithDigest(name)
 		if err != nil {
 			// The library exists and cannot be read. Refused by name rather than loaded as the empty
 			// list json.Unmarshal would otherwise leave behind.
@@ -865,6 +926,14 @@ func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
 		}
 		if !found {
 			http.Error(w, fmt.Sprintf("No scope library called %q; %s", name, s.scopeLibraryNamesInStore()), http.StatusNotFound)
+			return
+		}
+		// A confirmed load binds the reviewed document: one SELECT re-read the stored bytes above
+		// and the digest is compared here, in Go, which is sufficient for a READ-side check — the
+		// bytes just read are what would be installed, and a write landing after the SELECT does
+		// not alter them. If they are not the reviewed bytes, refuse.
+		if req.ExpectedLibrary != "" && req.ExpectedLibrary != storedDigest {
+			http.Error(w, "The saved library changed since this review; not loading it. Review the load again to see what is stored now.", http.StatusConflict)
 			return
 		}
 		built := make([]*core.ScopeRule, 0, len(stored))
@@ -897,16 +966,36 @@ func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
 		// loading it once, and would leave an operator unable to *narrow* a scope with a library at
 		// all — the rules they wanted gone would still be there, which is the failure direction that
 		// matters. The page says so before it calls this; see pages/scope.tsx.
-		s.scope.Clear()
-		for _, rule := range built {
-			s.scope.Add(rule)
+		// A confirmed load binds the reviewed live list too: compare-and-swap under the scope's one
+		// lock, so a rule added between the review and now is never silently discarded.
+		if req.ExpectedRules != "" {
+			if !s.scope.ReplaceRulesIfUnchanged(req.ExpectedRules, built) {
+				http.Error(w, "The current rules changed since this review; not replacing them. Review the load again — it will show the rules now in force alongside the stored list.", http.StatusConflict)
+				return
+			}
+		} else {
+			s.scope.Clear()
+			for _, rule := range built {
+				s.scope.Add(rule)
+			}
 		}
 		// The live rule list has changed, so the durable one has to follow — the same write every
 		// other arm of this endpoint ends with.
 		s.persistScope()
 		writeJSON(w, http.StatusOK, map[string]any{"loaded": true, "rules": len(built), "name": name})
 	case "library_delete":
-		deleted, err := s.persist.DeleteScopeLibrary(name)
+		var deleted bool
+		var err error
+		if req.ExpectedLibrary != "" {
+			var conflict bool
+			deleted, conflict, err = s.persist.DeleteScopeLibraryIfUnchanged(name, req.ExpectedLibrary)
+			if conflict {
+				http.Error(w, "The saved library changed since this review; not deleting it. Review the delete again to see what is stored now.", http.StatusConflict)
+				return
+			}
+		} else {
+			deleted, err = s.persist.DeleteScopeLibrary(name)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1077,25 +1166,75 @@ func issueSource(f *core.Finding) string {
 // some other request, so a finding on /search was reported against /login, and findings whose
 // message id ran past the exchange count lost their host and path entirely. Attribution is the
 // whole value of a finding, so the lookup that cannot silently mismatch is the only one used here.
+// exchangeIndex is one snapshot of ExchangeBriefs, so a list of findings resolves every
+// occurrence without taking the store lock again per row.
+type exchangeIndex struct {
+	byRequest map[core.MsgId]core.ExchangeBrief
+	byID      map[core.ExchangeID]core.ExchangeBrief
+}
+
+// exchangeIndexFor snapshots briefs for only the exchanges the given findings reference, the
+// superset of every key resolveOccurrence and isolatedAgainst can ask for (each occurrence's
+// exchange id, plus its request message id when it carries one). The full-history ExchangeBriefs
+// map is sized by captured traffic, not by findings; on a large history a list of a few findings
+// would otherwise copy the whole map on every issues refetch.
+func (s *Server) exchangeIndexFor(findings []*core.Finding) exchangeIndex {
+	if s.store == nil {
+		return exchangeIndex{}
+	}
+	var reqs []core.MsgId
+	var ids []core.ExchangeID
+	for _, f := range findings {
+		if f == nil {
+			continue
+		}
+		for _, occ := range f.Occurrences {
+			ids = append(ids, occ.ExchangeID)
+			if occ.Request != nil {
+				reqs = append(reqs, *occ.Request)
+			}
+		}
+	}
+	s.exchangeSnapshots.Add(1)
+	byRequest, byID := s.store.ExchangeBriefsFor(reqs, ids)
+	s.exchangeSnapshotBriefs.Add(int64(len(byID)))
+	return exchangeIndex{byRequest: byRequest, byID: byID}
+}
+
 func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
+	return s.issueView(f, nil, false)
+}
+
+// issueView builds one finding's wire row. idx, when non-nil, is the list's shared snapshot;
+// nil falls back to a per-occurrence lookup, which is the right cost for a single finding.
+// brief omits the prose (detail, remediation, evidence, the catalogue advisory, triage notes):
+// those strings are what make a few thousand findings a multi-megabyte document, and the list
+// does not render them. GET /api/issues/{id} is the full row, fetched when one is opened.
+func (s *Server) issueView(f *core.Finding, idx *exchangeIndex, brief bool) issueFindingView {
 	v := issueFindingView{
 		ID:              f.ID,
 		CheckName:       f.Name,
 		IssueName:       nil,
 		Severity:        f.EffectiveSeverity().String(),
 		Confidence:      f.EffectiveConfidence().String(),
-		Detail:          strPtr(f.Description),
-		Remediation:     strPtr(f.Remediation),
 		Param:           f.Param,
 		Params:          f.Params,
 		TimesSeen:       len(f.Occurrences),
 		MergedCount:     f.MergedCount,
-		Evidence:        f.Evidence,
 		TaskID:          f.TaskID,
 		TimestampUnixMs: int64(f.Timestamp),
 		Source:          issueSource(f),
 		Confirm:         f.Confirm,
-		Triage:          f.Triage,
+	}
+	// Comment stays on brief rows: the Issues tree edits comments from those rows, so a
+	// summary row that omits it would initialise the editor empty and save "" over the
+	// existing comment.
+	v.Comment = f.Comment
+	if !brief {
+		v.Detail = strPtr(f.Description)
+		v.Remediation = strPtr(f.Remediation)
+		v.Evidence = f.Evidence
+		v.Triage = f.Triage
 	}
 	if f.SeverityOverride != nil {
 		over := f.SeverityOverride.String()
@@ -1108,14 +1247,15 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		v.OriginalConfidence = f.Confidence.String()
 	}
 	v.FalsePositive = f.FalsePositive
-	v.Comment = f.Comment
-	if def, note := s.advisories.Resolve(f.Name); def != nil {
-		// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
-		// and a finding's attached advisory cannot come to disagree about the shape they share.
-		view := advisoryDetailView(def)
-		v.Advisory = &view
-	} else {
-		v.AdvisoryNote = note
+	if !brief {
+		if def, note := s.advisories.Resolve(f.Name); def != nil {
+			// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
+			// and a finding's attached advisory cannot come to disagree about the shape they share.
+			view := advisoryDetailView(def)
+			v.Advisory = &view
+		} else {
+			v.AdvisoryNote = note
+		}
 	}
 	// Empty, not nil. A finding can legitimately have no occurrences — activeFinding leaves them
 	// off when the exchange has rolled out of the store, on the documented principle that no
@@ -1128,15 +1268,14 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	// history gained Delete items and Clear.
 	v.Occurrences = []issueOccurrenceView{}
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
-		if err == nil {
+		if hit, ok := resolveOccurrence(s, idx, occ); ok {
 			if v.Host == "" {
-				v.Host = ex.Host
+				v.Host = hit.host
 			}
 			v.Occurrences = append(v.Occurrences, issueOccurrenceView{
-				ExchangeID: ex.ID,
-				Response:   derefMsgID(ex.Response),
-				Path:       ex.Path,
+				ExchangeID: hit.id,
+				Response:   hit.response,
+				Path:       hit.path,
 			})
 			continue
 		}
@@ -1153,6 +1292,74 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	return v
 }
 
+// occurrenceHit is one occurrence resolved to the exchange it was observed on.
+type occurrenceHit struct {
+	id       core.ExchangeID
+	host     string
+	path     string
+	response uint64
+}
+
+// resolveOccurrence finds the exchange this occurrence was observed on.
+//
+// The request message is the lookup that cannot confuse a message id with an exchange id. When
+// that message is not indexed — a nil request, or a request id the exchange no longer carries —
+// the occurrence's own exchange id is the location the producer recorded, and it still has the
+// host and path. Leaving those blank made every finding on a restored project sit under
+// "(no host)". A list passes idx so either lookup is a map read.
+func resolveOccurrence(s *Server, idx *exchangeIndex, occ core.Occurrence) (occurrenceHit, bool) {
+	if occ.Request != nil {
+		if hit, ok := occurrenceByRequest(s, idx, *occ.Request); ok {
+			return hit, true
+		}
+	}
+	return occurrenceByExchange(s, idx, occ.ExchangeID)
+}
+
+func occurrenceByRequest(s *Server, idx *exchangeIndex, req core.MsgId) (occurrenceHit, bool) {
+	if idx != nil {
+		b, ok := idx.byRequest[req]
+		if !ok {
+			return occurrenceHit{}, false
+		}
+		return hitFromBrief(b), true
+	}
+	if s.store == nil {
+		return occurrenceHit{}, false
+	}
+	ex, err := s.store.ExchangeByRequest(req)
+	if err != nil {
+		return occurrenceHit{}, false
+	}
+	return hitFromExchange(ex), true
+}
+
+func occurrenceByExchange(s *Server, idx *exchangeIndex, id core.ExchangeID) (occurrenceHit, bool) {
+	if idx != nil {
+		b, ok := idx.byID[id]
+		if !ok {
+			return occurrenceHit{}, false
+		}
+		return hitFromBrief(b), true
+	}
+	if s.store == nil {
+		return occurrenceHit{}, false
+	}
+	ex, err := s.store.GetExchange(id)
+	if err != nil || ex == nil {
+		return occurrenceHit{}, false
+	}
+	return hitFromExchange(ex), true
+}
+
+func hitFromBrief(b core.ExchangeBrief) occurrenceHit {
+	return occurrenceHit{id: b.ID, host: b.Host, path: b.Path, response: derefMsgID(b.Response)}
+}
+
+func hitFromExchange(ex *core.Exchange) occurrenceHit {
+	return occurrenceHit{id: ex.ID, host: ex.Host, path: ex.Path, response: derefMsgID(ex.Response)}
+}
+
 func derefMsgID(id *core.MsgId) uint64 {
 	if id == nil {
 		return 0
@@ -1166,19 +1373,39 @@ func derefMsgID(id *core.MsgId) uint64 {
 // --bchecks, enabled is true and loaded names how many passive checks will run.
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	findings := s.findings.All()
-	views := make([]issueFindingView, 0, len(findings))
 	// truthy, not == "1": the route declares a boolean, so an agent sends "true" (route_schemas.go).
 	includeIsolated := truthy(r.URL.Query().Get("include_isolated"))
-	for _, f := range findings {
-		// Burp: "Results from isolated scans do not appear in ... Dashboard > All issues" (13uw). A
-		// task's own view asks for them with include_isolated=1 and gets them flagged.
-		isolated := s.findingIsolated(f)
-		if isolated && !includeIsolated {
-			continue
+	// count is the dock's badge: the shell is mounted on every page, so it must not download a row
+	// per finding. summary is the Issues tree and the site map: same rows, without the advisory
+	// prose and the evidence excerpt, which are what made the document grow with the issue count.
+	countOnly := truthy(r.URL.Query().Get("count"))
+	brief := countOnly || truthy(r.URL.Query().Get("summary"))
+	views := make([]issueFindingView, 0, len(findings))
+	if countOnly {
+		// The dock badge mounts on every page: count severities without building the
+		// exchange snapshot, which is sized by the whole captured history. Isolated findings
+		// stay excluded, classified per occurrence against the store instead.
+		for _, f := range findings {
+			if s.isolatedAgainst(f, nil) && !includeIsolated {
+				continue
+			}
+			views = append(views, issueFindingView{Severity: f.EffectiveSeverity().String(), FalsePositive: f.FalsePositive})
 		}
-		v := s.findingToIssueView(f)
-		v.Isolated = isolated
-		views = append(views, v)
+	} else if len(findings) > 0 {
+		// The snapshot is sized by the whole captured history; with zero findings there is
+		// nothing to resolve, so building it only charges the big-history cost to an empty list.
+		idx := s.exchangeIndexFor(findings)
+		for _, f := range findings {
+			// Burp: "Results from isolated scans do not appear in ... Dashboard > All issues" (13uw). A
+			// task's own view asks for them with include_isolated=1 and gets them flagged.
+			isolated := s.isolatedAgainst(f, &idx)
+			if isolated && !includeIsolated {
+				continue
+			}
+			v := s.issueView(f, &idx, brief)
+			v.Isolated = isolated
+			views = append(views, v)
+		}
 	}
 
 	loaded := 0
@@ -1267,6 +1494,12 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		// finding in `findings`. "info" is a duplicate of "informational" and is excluded from the sum.
 		body["counted"] = len(views) - falsePositives
 	}
+	if countOnly {
+		// The tally above already walked the rows. The dock reads `counted` and must not receive
+		// a findings array that grows with the project — an empty array, not null, so a client
+		// that still reads .length does not throw.
+		body["findings"] = []issueFindingView{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
 }
@@ -1288,7 +1521,30 @@ func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
 		return
 	}
+	if r.Method == http.MethodGet {
+		s.handleIssueGet(w, id)
+		return
+	}
 	s.handleIssueTriage(w, r, id)
+}
+
+// handleIssueGet serves GET /api/issues/{id}: the full finding, including the detail, the
+// remediation and the catalogue advisory the list omits. The Issues tree selects a row from
+// the summary list and reads this for the advisory pane, so opening one issue does not require
+// the list response to have carried every issue's prose.
+func (s *Server) handleIssueGet(w http.ResponseWriter, idStr string) {
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	f, err := s.findings.Get(id)
+	if err != nil {
+		http.Error(w, "Issue not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.findingToIssueView(f))
 }
 
 // issueTriageReq is the request body handleIssueTriage decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
@@ -1796,12 +2052,26 @@ func advisoryLinks(refs []advisory.Reference, cls []advisory.Classification) []i
 // findingIsolated reports whether every occurrence of a finding is on an isolated scan's exchange
 // (13uw). A finding also seen on ordinary traffic is not isolated: it belongs on the issue list.
 func (s *Server) findingIsolated(f *core.Finding) bool {
+	return s.isolatedAgainst(f, nil)
+}
+
+// isolatedAgainst reports whether every occurrence sits on an isolated scan's exchange.
+// idx, when non-nil, answers from the list snapshot; nil asks the store per occurrence.
+func (s *Server) isolatedAgainst(f *core.Finding, idx *exchangeIndex) bool {
 	if f == nil || len(f.Occurrences) == 0 {
 		return false
 	}
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.GetExchange(occ.ExchangeID)
-		if err != nil || ex == nil || !ex.Source.Isolated() {
+		var isolated, ok bool
+		if idx != nil {
+			b, found := idx.byID[occ.ExchangeID]
+			ok, isolated = found, b.Isolated
+		} else if s.store != nil {
+			ex, err := s.store.GetExchange(occ.ExchangeID)
+			ok = err == nil && ex != nil
+			isolated = ok && ex.Source.Isolated()
+		}
+		if !ok || !isolated {
 			return false
 		}
 	}

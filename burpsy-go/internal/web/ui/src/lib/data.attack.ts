@@ -7,16 +7,18 @@
  */
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json } from "./api";
-import { keys, useInvalidate, useResource } from "./data";
+import { keys, useInvalidate, useIssueSummary, useResource } from "./data";
+import { loadTaskIssues } from "./issue-worker";
+import { DEFAULT_TASK_ACTIVITY_LIMIT } from "./task-activity";
 import type { InterceptTarget } from "./intercept-target";
 import type { IssueTriagePatch } from "./issue-triage";
 import type {
  AuditConfigSettings,
  AuditResult,
  CorpusChecks,
+ FindingDetail,
  InterceptListState,
  InterceptStateDetail,
- IssuesDetail,
  IssueTypeCatalogue,
  LLMTriageRun,
  LiveAuditState,
@@ -136,12 +138,25 @@ export function useForwardHeld() {
 
 /* --- scanner -------------------------------------------------------------- */
 
-/** Same endpoint and cache key as the shared `useIssues`, typed to the full finding shape (`id`, and
- * nullable detail/remediation) that stable row selection and honest empty text need. */
-export const useIssuesDetailed = () => useResource<IssuesDetail>(keys.issues, "/api/issues");
-/** The issue list including isolated scans' findings (13uw) — for a task's own view, never "All issues". */
-export const useIssuesDetailedWithIsolated = () =>
- useResource<IssuesDetail>([...keys.issues, "with-isolated"], "/api/issues?include_isolated=1");
+/** Same summary list as `useIssues`, typed to the finding shape the tree groups on. The advisory
+ * prose is not in this response — `useIssue` loads that for the row that is open. */
+export const useIssuesDetailed = () => useIssueSummary(true);
+
+/**
+ * One task's issue activity. The worker reads the isolated summary and returns that task's rows
+ * only, so a dashboard task pane does not take the whole project list onto the main thread.
+ */
+export function useTaskIssueActivity(taskId: number) {
+ return useQuery({
+  queryKey: [...keys.issues, "task-activity", taskId],
+  queryFn: ({ signal }) => loadTaskIssues("/api/issues?include_isolated=1&summary=1", taskId, DEFAULT_TASK_ACTIVITY_LIMIT, signal),
+  enabled: taskId >= 0,
+ });
+}
+
+/** GET /api/issues/{id} — the full finding, including detail and the catalogue advisory. */
+export const useIssue = (id: number | null) =>
+ useResource<FindingDetail>([...keys.issues, "one", id], id === null ? "/api/issues/0" : `/api/issues/${id}`, id !== null);
 
 /**
  * The triage writes (burpsy-react-ui-pwd): PUT /api/issues/{id} for severity, confidence,

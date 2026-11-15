@@ -1,0 +1,19 @@
+<div id="rows">
+{{if .error}}<p class="meta"><strong>Not saved: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/settings" hx-get="/ui2/settings" hx-target="#rows" hx-swap="outerHTML">back to settings</a></p>{{else}}
+<p><strong>Review before saving:</strong></p>
+<details open><summary>exact call (what the token binds; the API key is hidden in this view but bound in the token)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.projection}}</pre>
+</details>
+{{if .key_replaces}}<p class="meta">Key destination: the API key you entered will REPLACE the stored key, and the new key will be sent to <strong>{{.base_url}}</strong>. The key itself is never shown on this page.</p>{{end}}
+{{if .key_absent}}<p class="meta">Key destination: no key entered and none is stored - the saved configuration will have no API key. Nothing is sent anywhere until a key is set.</p>{{end}}
+{{if .key_preserves_same}}<p class="meta">Key destination: no key entered, so the stored key is kept and stays pointed at the SAME base URL ({{.base_url}}).</p>{{end}}
+{{if .key_preserves_changed}}<p class="meta"><strong>Key destination: no key entered and the base URL CHANGED - the stored key will now be sent to {{.base_url}} (it previously went to {{.old_base_url}}). You acknowledged this transfer on the form.</strong></p>{{end}}
+<form hx-post="/ui2/settings/triage/run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button>Confirm and save</button>
+</form>
+<p class="meta"><a href="/ui2/settings" hx-get="/ui2/settings" hx-target="#rows" hx-swap="outerHTML">cancel</a> (cancelling just leaves this page - the pending review expires with the confirmation window on its own)</p>
+{{end}}
+</div>

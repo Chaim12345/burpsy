@@ -494,17 +494,84 @@ func (s *Scope) AllowAll() bool {
 // choice) be configured independently, as Burp's two panels do.
 func (s *Scope) SetDropOutOfScope(on bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.dropOutOfScope == on {
+		// Setting the switch to the value it already holds changes no answer, so it is not a
+		// change and must not wake a subscriber - the toggle discipline above.
+		s.mu.Unlock()
+		return
+	}
 	s.dropOutOfScope = on
+	before, allowAll := s.changeSnapshot()
+	s.mu.Unlock()
+	s.notifyUnconditional(ScopeChange{Before: before, After: before, AllowAllBefore: allowAll,
+		AllowAllAfter: allowAll, Operation: "drop_switch"})
 }
 
 // SetDropScope installs the custom scope's rules (nil for none) and whether the drop gate uses them
 // (Burp's "Use custom scope") or the suite scope. The scope passed is owned by this one afterwards.
 func (s *Scope) SetDropScope(custom *Scope, use bool) {
+	// Read the candidate's rules before the write lock: it is not installed yet, so no other
+	// goroutine can mutate it mid-compare, and the comparison then never takes a child lock
+	// inside the parent's.
+	var newRules []*ScopeRule
+	if custom != nil {
+		newRules = custom.Rules()
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if scopeRulesSemanticallyEqual(s.dropScopeRulesLocked(), newRules) && s.dropCustom == (use && custom != nil) {
+		// Reinstalling the identical custom scope in the identical mode changes no answer.
+		s.mu.Unlock()
+		return
+	}
 	s.dropScope = custom
 	s.dropCustom = use && custom != nil
+	before, allowAll := s.changeSnapshot()
+	s.mu.Unlock()
+	s.notifyUnconditional(ScopeChange{Before: before, After: before, AllowAllBefore: allowAll,
+		AllowAllAfter: allowAll, Operation: "drop_scope"})
+}
+
+// dropScopeRulesLocked returns the installed custom drop scope's rules, nil when none is
+// installed. Callers hold the write lock; the custom scope is owned by this one, so its own
+// read lock is a leaf.
+func (s *Scope) dropScopeRulesLocked() []*ScopeRule {
+	if s.dropScope == nil {
+		return nil
+	}
+	return s.dropScope.Rules()
+}
+
+// scopeRulesSemanticallyEqual compares two rule lists by meaning: kind, pattern, enabled flag
+// and the three optional limiters, in order. Compiled arms and parse faults are derived state,
+// never the identity.
+func scopeRulesSemanticallyEqual(a, b []*ScopeRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x.Kind != y.Kind || x.Pattern != y.Pattern || x.Enabled != y.Enabled ||
+			!stringPtrEqual(x.PathPrefix, y.PathPrefix) ||
+			!uint16PtrEqual(x.Port, y.Port) ||
+			!stringPtrEqual(x.Protocol, y.Protocol) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringPtrEqual(a, b *string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
+}
+
+func uint16PtrEqual(a, b *uint16) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
 }
 
 // DropScope returns the custom drop scope's rules (nil when none were ever set) and whether the drop
@@ -572,6 +639,25 @@ func (s *Scope) Remove(kind ScopeRuleKind, pattern string) bool {
 	return false
 }
 
+// ScopeMatchResult is the outcome of a tuple-named rule mutation: nothing matched, exactly one
+// rule matched and the change landed, or the tuple named several rules and the caller did not
+// narrow it by protocol. The ambiguous answer exists because a scope rule's identity is the full
+// five-arm tuple (kind, pattern, path, port, protocol): protocol-differentiated siblings are
+// legitimate and common (http and https on one host:port), and a mutation that picked the first
+// of them would silently widen or narrow an engagement's authorised surface.
+type ScopeMatchResult int
+
+const (
+	// ScopeMatchNone: no rule carries the named tuple.
+	ScopeMatchNone ScopeMatchResult = iota
+	// ScopeMatchDone: exactly one rule matched and the change was applied.
+	ScopeMatchDone
+	// ScopeMatchAmbiguous: the four-arm tuple matched several rules (they differ only in
+	// protocol) and the caller named no protocol. Nothing was changed; naming the protocol
+	// picks one exactly.
+	ScopeMatchAmbiguous
+)
+
 // RemoveScoped removes the rule matching a kind, pattern, path prefix and port exactly.
 //
 // Remove matches on kind and pattern alone, which was unambiguous while every rule was host-only.
@@ -582,9 +668,16 @@ func (s *Scope) Remove(kind ScopeRuleKind, pattern string) bool {
 //
 // Nil path and nil port mean "the rule that also has none", not "any": removing the host-wide rule
 // must not take a path-scoped sibling with it.
-func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16) bool {
+// A nil protocol means the caller did not name one: the change lands only when the four-arm
+// tuple names exactly one rule. Several protocol-differentiated siblings answer
+// ScopeMatchAmbiguous and nothing is removed — deleting whichever came first is exactly the
+// silent widening the exact tuple exists to prevent. A named protocol extends the identity to
+// the full five arms and picks one rule exactly.
+func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, protocol *string) ScopeMatchResult {
 	s.mu.Lock()
 
+	hit := -1
+	matches := 0
 	for i, rule := range s.rules {
 		if rule.Kind != kind || rule.Pattern != pattern {
 			continue
@@ -592,15 +685,27 @@ func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *str
 		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
 			continue
 		}
-		before, allowAll := s.changeSnapshot()
-		s.rules = append(s.rules[:i], s.rules[i+1:]...)
-		s.mu.Unlock()
-		s.notify(ScopeChange{Before: before, After: before - 1, AllowAllBefore: allowAll,
-			AllowAllAfter: allowAll, Operation: "remove"})
-		return true
+		matches++
+		if protocol == nil || eqStrPtr(rule.Protocol, protocol) {
+			if hit == -1 {
+				hit = i
+			}
+		}
 	}
+	if matches == 0 || (protocol != nil && hit == -1) {
+		s.mu.Unlock()
+		return ScopeMatchNone
+	}
+	if protocol == nil && matches > 1 {
+		s.mu.Unlock()
+		return ScopeMatchAmbiguous
+	}
+	before, allowAll := s.changeSnapshot()
+	s.rules = append(s.rules[:hit], s.rules[hit+1:]...)
 	s.mu.Unlock()
-	return false
+	s.notify(ScopeChange{Before: before, After: before - 1, AllowAllBefore: allowAll,
+		AllowAllAfter: allowAll, Operation: "remove"})
+	return ScopeMatchDone
 }
 
 // SetRuleEnabled flips the enabled flag on the rule matching a kind, pattern, path prefix and
@@ -611,9 +716,14 @@ func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *str
 //
 // Enabled does not take part in the identity: toggling twice with the same tuple flips the
 // same rule twice, which is exactly what a switch must do.
-func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, enabled bool) bool {
+// Protocol plays the same role it does in RemoveScoped: nil means unnamed, and an unnamed
+// protocol over several protocol-differentiated siblings answers ScopeMatchAmbiguous rather
+// than flipping whichever came first.
+func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, protocol *string, enabled bool) ScopeMatchResult {
 	s.mu.Lock()
 
+	matches := 0
+	var target *ScopeRule
 	for _, rule := range s.rules {
 		if rule.Kind != kind || rule.Pattern != pattern {
 			continue
@@ -621,15 +731,32 @@ func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *s
 		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
 			continue
 		}
+		matches++
+		if protocol == nil || eqStrPtr(rule.Protocol, protocol) {
+			if target == nil {
+				target = rule
+			}
+		}
+	}
+	if matches == 0 || (protocol != nil && target == nil) {
+		s.mu.Unlock()
+		return ScopeMatchNone
+	}
+	if protocol == nil && matches > 1 {
+		s.mu.Unlock()
+		return ScopeMatchAmbiguous
+	}
+	{
+		rule := target
 		before, allowAll := s.changeSnapshot()
 		if rule.Enabled == enabled {
 			// Setting a rule to the value it already holds changes no answer, so it is not a change
 			// and must not wake a subscriber — a handler woken by this re-reads its whole cache for a
 			// decision nobody made. Refused-or-accepted is deliberately NOT the question here: the
-			// caller gets true (the rule was found and is in the requested state, which it now
-			// demonstrably is), and only the notification is suppressed.
+			// caller gets ScopeMatchDone (the rule was found and is in the requested state, which
+			// it now demonstrably is), and only the notification is suppressed.
 			s.mu.Unlock()
-			return true
+			return ScopeMatchDone
 		}
 		rule.Enabled = enabled
 		s.mu.Unlock()
@@ -640,10 +767,8 @@ func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *s
 		// the Changed() filter.
 		s.notifyUnconditional(ScopeChange{Before: before, After: before, AllowAllBefore: allowAll,
 			AllowAllAfter: allowAll, Operation: "enable"})
-		return true
+		return ScopeMatchDone
 	}
-	s.mu.Unlock()
-	return false
 }
 
 // ReplaceScoped swaps the rule at a kind/pattern/path/port tuple for a new rule, in place —
