@@ -1,0 +1,11 @@
+{{define "dash-live-toggle"}}<form hx-post="/ui2/dashboard/live/confirm" hx-target="#rows" hx-swap="outerHTML" action="/ui2/dashboard/live/confirm" method="post" style="display:inline">
+<input type="hidden" name="mode" value="toggle">
+<input type="hidden" name="enabled" value="{{if .Live.Enabled}}off{{else}}on{{end}}">
+{{if .Back}}<input type="hidden" name="back" value="{{.Back}}">{{end}}
+<button type="submit" role="switch" aria-checked="{{if .Live.Enabled}}true{{else}}false{{end}}" aria-label="Capturing for the live audit task">Capturing: {{if .Live.Enabled}}ON — turn off{{else}}off — turn on{{end}}{{if .LiveGated}} (review){{end}}</button>
+</form>{{end}}
+{{define "dash-activity"}}<table>
+<thead><tr><th scope="col">At</th><th scope="col">Tool</th><th scope="col">Request</th><th scope="col">Status</th></tr></thead>
+<tbody>{{range .}}<tr><td class="meta">{{.At}}</td><td>{{.Tool}}</td><td title="{{.Method}} {{.Host}}{{.Path}}"><code>{{.Method}} {{.Host}}{{.Path}}</code></td><td>{{if .Status}}{{.Status}}{{else}}pending{{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No tool traffic. Requests that burpsy itself sends — Repeater, Intruder, Scanner — are logged here.</td></tr>{{end}}</tbody>
+</table>{{end}}

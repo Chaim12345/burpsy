@@ -1,0 +1,41 @@
+<div id="rows">
+{{template "proxy_subnav" "overview"}}
+<h3>Listeners</h3>
+<p class="meta phone-hint">A cut-off table cell expands in place when tapped; tap it again to collapse.</p>
+{{if .listeners.listeners}}
+<table>
+<thead><tr><th scope="col">ID</th><th scope="col">Bind</th><th scope="col">Bound</th><th scope="col">Redirect</th><th scope="col">Force TLS</th><th scope="col">Invisible</th></tr></thead>
+<tbody>
+{{range .listeners.listeners}}
+<tr><td>{{.id}}</td><td>{{.bind}}</td><td>{{.bound_addr}}</td><td>{{if or .redirect_host .redirect_port}}{{or .redirect_host "(client's host)"}}:{{if .redirect_port}}{{.redirect_port}}{{else}}(client's port){{end}}{{else}}—{{end}}</td><td>{{.force_tls}}</td><td>{{if eq (printf "%v" .invisible) "<nil>"}}inherit{{else}}{{.invisible}}{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No listener attached.</p>{{end}}
+<p class="meta"><a href="/ui2/proxy/listeners">Add, edit or remove listeners</a></p>
+<h3>Response modification options</h3>
+{{if .options.options}}
+<table>
+<tbody>
+{{range $k, $v := .options.options}}<tr><td>{{$k}}</td><td>{{if $v}}on{{else}}off{{end}}</td></tr>{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No proxy options attached.</p>{{end}}
+<p class="meta"><a href="/ui2/proxy/options">Edit options</a>{{with .history_logging}} · proxy history logging: {{.}}{{end}}</p>
+<h3>Outcome counters</h3>
+{{template "proxy_counters" .counter_rows}}
+<h3>Match &amp; replace rules</h3>
+{{if .rules.config.rules}}
+<table>
+<thead><tr><th scope="col">Enabled</th><th scope="col">Type</th><th scope="col">Match</th><th scope="col">Replace</th></tr></thead>
+<tbody>
+{{range .rules.config.rules}}
+<tr class="{{if not .enabled}}meta{{end}}"><td>{{if .enabled}}on{{else}}off{{end}}</td><td>{{.rule_type}}</td><td title="{{.string_match}}">{{.string_match}}</td><td title="{{.string_replace}}">{{.string_replace}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">No match &amp; replace rules.</p>{{end}}
+<p class="meta"><a href="/ui2/proxy/match-replace">Edit match &amp; replace rules</a></p>
+<h3>TLS passthrough</h3>
+{{if .passthrough.patterns}}<p class="meta">{{range .passthrough.patterns}}{{.}} {{end}}</p>{{else}}<p class="meta">No passthrough hosts.</p>{{end}}
+</div>

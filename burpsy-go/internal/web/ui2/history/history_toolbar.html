@@ -1,0 +1,81 @@
+<style>
+#htools { padding:6px 10px; border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:6px; }
+#htools .hrow { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+#htools form { display:inline-flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; }
+#htools details > summary { cursor:pointer; }
+#htools fieldset { border:1px solid var(--line); border-radius:6px; padding:4px 8px; margin:4px 0; display:inline-flex; flex-wrap:wrap; gap:8px; }
+#htools input[type=text] { width:9em; }
+#htools input[type=file] { max-width:14em; }
+#htools .hcols label, #htools fieldset label { white-space:nowrap; }
+.hist-t .selbox { margin:0; vertical-align:middle; }
+.hreview .calls { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media (max-width:640px) {
+  table.hist-t td:nth-child(1), table.hist-t th:nth-child(1) { display:table-cell; width:30px; }
+  .hist-t .rid { display:none; }
+  #htools input[type=text] { width:7em; }
+}
+</style>
+<div id="htools" role="region" aria-label="History tools">
+  <div class="hrow" id="hbulk-bar">
+    <strong>Selection:</strong>
+    <form id="hbulk" hx-target="#detail" hx-swap="innerHTML">
+      <input type="hidden" id="hbulk-ids" class="hbulk-ids" name="ids" value="">
+      <button type="button" class="btn" hx-post="/ui2/history/bulk/urls" data-needs-sel="1" disabled>Copy URLs</button>
+      <button type="button" class="btn" hx-post="/ui2/history/bulk/organizer" data-needs-sel="1" disabled>Add to Organizer</button>
+      <button type="button" class="btn" hx-post="/ui2/history/bulk/scope-confirm" data-needs-sel="1" disabled>Add hosts to scope…</button>
+      <button type="button" class="btn" hx-post="/ui2/history/bulk/audit-confirm" data-needs-sel="1" disabled>Audit selected…</button>
+      <button type="button" class="btn" hx-post="/ui2/history/bulk/delete-confirm" data-needs-sel="1" disabled>Delete selected…</button>
+    </form>
+    <form method="get" action="/ui2/history/compare">
+      <input type="hidden" class="hbulk-ids" name="ids" value="">
+      <button class="btn" data-needs-sel="2" disabled>Compare first two</button>
+    </form>
+    <button type="button" class="btn" id="hsel-clear">Clear selection</button>
+  </div>
+  <div class="hrow">
+    <button type="button" class="btn" hx-post="/ui2/history/bulk/clear-confirm" hx-target="#detail" hx-swap="innerHTML">Clear history…</button>
+    <form hx-post="/ui2/history/import" hx-encoding="multipart/form-data" hx-target="#detail" hx-swap="innerHTML" method="post" action="/ui2/history/import" enctype="multipart/form-data">
+      <input type="file" name="har" accept=".har,application/json" aria-label="HAR file to import">
+      <button class="btn">Import HAR</button>
+    </form>
+    <a id="hexport" class="btn" href="/ui2/history/export.csv" download>Export CSV</a>
+    <form hx-get="/ui2/history/goto" hx-target="#detail" hx-swap="innerHTML" method="get" action="/ui2/history/goto">
+      <input type="text" name="id" inputmode="numeric" placeholder="entry #" aria-label="Go to entry id" autocomplete="off">
+      <button class="btn">Go</button>
+    </form>
+    <a class="btn" href="/ui2/history/extractors">Extractor columns</a>
+    <details class="hcols">
+      <summary>Columns</summary>
+      {{range .cols}}<label><input type="checkbox" data-hcol="{{.Key}}"{{if .Default}} data-default="1"{{end}}> {{.Label}}</label> {{end}}
+    </details>
+    <label><input type="checkbox" id="hfollow"> follow new rows</label>
+  </div>
+  <details id="hfilter-box"{{if .f.Active}} open{{end}}>
+    <summary>Filters{{if .f.Active}} ({{.f.Active}} active){{end}}</summary>
+    <form id="hfilter" hx-get="/ui2/history" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" hx-include="#hq" hx-trigger="change, submit">
+      <fieldset><legend>Status</legend>{{range .status}}<label><input type="checkbox" name="status" value="{{.Value}}"{{if .On}} checked{{end}}> {{.Label}}</label>{{end}}</fieldset>
+      <fieldset><legend>MIME</legend>{{range .mime}}<label><input type="checkbox" name="mime" value="{{.Value}}"{{if .On}} checked{{end}}> {{.Label}}</label>{{end}}</fieldset>
+      <fieldset><legend>Rows</legend>
+        <label>Method <select name="method"><option value="">all</option>{{range .methods}}<option{{if eq . $.f.Method}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+        <label><input type="checkbox" name="scope_only" value="1"{{if .f.ScopeOnly}} checked{{end}}> in-scope only</label>
+        <label><input type="checkbox" name="hide_noresp" value="1"{{if .f.HideNoResp}} checked{{end}}> hide no-response</label>
+        <label><input type="checkbox" name="params" value="1"{{if .f.Params}} checked{{end}}> parameterized</label>
+        <label><input type="checkbox" name="commented" value="1"{{if .f.Commented}} checked{{end}}> commented</label>
+        <label><input type="checkbox" name="highlighted" value="1"{{if .f.Highlighted}} checked{{end}}> highlighted</label>
+      </fieldset>
+      <fieldset><legend>Narrow</legend>
+        <label>Listener ports <input type="text" name="listener" value="{{.f.Listener}}" placeholder="8080, 8081"></label>
+        <label>Show only ext <input type="text" name="show_ext" value="{{.f.ShowExt}}" placeholder="php, asp"></label>
+        <label>Hide ext <input type="text" name="hide_ext" value="{{.f.HideExt}}" placeholder="png, css"></label>
+        <label>Rows per page <select name="limit">{{range .limits}}<option{{if eq . $.limit}} selected{{end}}{{if eq . 100}} data-default="1"{{end}}>{{.}}</option>{{end}}</select></label>
+      </fieldset>
+      <noscript><button>Apply</button></noscript>
+    </form>
+    <fieldset><legend>Presets</legend>
+      <select id="hpreset" aria-label="Saved filter presets"><option value="">saved presets…</option></select>
+      <button type="button" class="btn" id="hpreset-save">Save as…</button>
+      <button type="button" class="btn" id="hpreset-del">Delete preset</button>
+      <button type="button" class="btn" id="hpreset-reset">Restore defaults</button>
+    </fieldset>
+  </details>
+</div>

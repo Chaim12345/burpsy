@@ -1,0 +1,22 @@
+<div class="bcheck-test" style="padding:0 14px">
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">Test refused: {{.Error}}</p>
+{{else}}
+<h3>Test run — {{.Name}} ({{.Kind}})</h3>
+<div style="overflow-x:auto">
+<table class="bcheck-test-t">
+<thead><tr><th scope="col">Exchange</th><th scope="col">Findings</th><th scope="col">Probes</th><th scope="col">Notes</th></tr></thead>
+<tbody>
+{{range .Results}}
+<tr>
+<td title="{{.URL}}">#{{.ExchangeID}} <span class="meta">{{.URL}}</span></td>
+<td>{{range .Findings}}<div><span class="sev sev-{{lower .Severity}}">{{.Severity}}</span> {{.Name}}{{if .Param}} <span class="meta">· {{.Param}}</span>{{end}}</div>{{else}}<span class="meta">none</span>{{end}}</td>
+<td>{{.Sent}} sent{{if .Refused}}, {{.Refused}} refused (out of scope){{end}}</td>
+<td>{{if .Error}}{{.Error}}{{else if .Unsupported}}{{.Unsupported}}{{else if .Unresolved}}unresolved: {{range $i, $u := .Unresolved}}{{if $i}}, {{end}}{{$u}}{{end}}{{else}}<span class="meta">—</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+<p class="meta">Nothing was filed; the draft was run, not loaded.</p>
+{{end}}
+</div>

@@ -1,0 +1,17 @@
+<div class="newscan-sheet" style="border:1px solid var(--line); border-left:3px solid #c60; border-radius:6px; padding:8px 12px; margin:8px 0">
+{{if .error}}<p role="alert" style="color:#c00"><strong>Not done: {{.error}}</strong></p>
+{{else}}<p><strong>Review: {{if eq .op "save"}}save the recorded login “{{.label}}”{{else if eq .op "delete"}}delete the recorded login “{{.label}}”{{else}}replay the recorded login “{{.label}}”{{end}}</strong></p>
+<details open><summary>Exact call (what the one-time confirmation binds{{if eq .op "save"}}; the script's typed values are bound but not shown{{end}})</summary>
+<pre class="brk" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:40vh; overflow:auto">{{.projection}}</pre></details>
+{{if eq .op "save"}}<p class="meta" style="padding:0">The {{.format}} script imports to {{len .steps}} step(s):</p>
+<ol>{{range .steps}}<li>{{.}}</li>{{end}}</ol>
+{{range .notes}}<p class="meta" style="padding:0">Recorded event {{.Event}} ({{.EventType}}): {{.Outcome}} — {{.Detail}}</p>{{end}}
+<p class="meta" style="padding:0">Saving stores the typed passwords and TOTP secrets in the project; they are never shown again.</p>
+{{else if eq .op "delete"}}<p class="meta" style="padding:0">Removes the stored sequence and its secrets. A crawl that names it can no longer start.</p>
+{{else}}<p class="meta" style="padding:0">A replay opens an isolated browser that types the stored credentials into the target; every request it makes is checked against scope.</p>{{end}}
+<form method="post" hx-post="/ui2/newscan/logins/run" hx-target="#newscan-logins" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">{{if eq .op "save"}}Confirm and save{{else if eq .op "delete"}}Confirm and delete{{else}}Confirm and replay{{end}}</button>
+</form>{{end}}
+</div>

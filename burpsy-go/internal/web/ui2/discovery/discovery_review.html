@@ -1,0 +1,17 @@
+<div class="review-sheet" data-review="1" style="border:2px solid var(--accent); border-radius:8px; padding:8px 12px; margin:8px 0">
+{{if .Error}}<p role="alert" style="color:#c00"><strong>Not reviewed: {{.Error}}</strong></p>
+<p class="meta"><a href="{{.Back}}">back</a></p>{{else}}
+<p><strong>Review before running:</strong> {{.What}}</p>
+<p class="meta">{{.Effect}}</p>
+<p class="meta">Exact call{{if .Gated}} (bound by a one-time gate confirmation){{end}}:</p>
+<pre class="brk" style="white-space:pre-wrap">{{.Method}} {{.Path}}{{if .Body}}
+{{.Body}}{{end}}</pre>
+<p class="meta">These bytes are held on the server and sent verbatim; nothing typed after this review changes them. The review is single-use and expires with the confirmation window.</p>
+<form hx-post="{{.RunURL}}" method="post" action="{{.RunURL}}" hx-target="{{.Target}}" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.ReviewID}}">
+<input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">Confirm and run</button>
+</form>
+<p class="meta"><a href="{{.Back}}">cancel</a> (the held review expires on its own)</p>
+{{end}}
+</div>

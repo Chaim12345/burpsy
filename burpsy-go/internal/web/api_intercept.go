@@ -463,9 +463,20 @@ func rulesToSpecs(rules []*intercept.Rule) []interceptRuleSpec {
 			Enabled:  r.Enabled,
 			Comment:  r.Comment,
 			Action:   r.Action.String(),
+			// Only AND is spelled: OR is the default an absent op reads back as, so lists
+			// without an AND serialize exactly as they did before the column existed.
+			Op: ruleOpWire(r.Op),
 		})
 	}
 	return specs
+}
+
+// ruleOpWire is a rule's op as the wire carries it: "and", or "" for the OR default.
+func ruleOpWire(op intercept.RuleOp) string {
+	if op == intercept.RuleOpAnd {
+		return "and"
+	}
+	return ""
 }
 
 // handleInterceptRules serves GET/PUT /api/intercept/rules/{requests|responses}.

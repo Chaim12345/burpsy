@@ -1,0 +1,43 @@
+<div id="rows" class="xa-page" style="padding:10px 14px">
+<p class="meta"><a class="btn" href="/ui2/history">&larr; back to history</a></p>
+{{with .Outcome}}{{template "exchange_outcome.html" .}}{{end}}
+<h3 class="brk">#{{.Menu.ID}} {{.Menu.Method}} {{.Menu.URL}} → {{.Status}}</h3>
+<p class="meta">{{if .Mime}}{{.Mime}} · {{end}}{{.ResponseLen}} bytes · {{.DurationMs}} ms{{if .Menu.Highlight}} · highlight {{.Menu.Highlight}}{{end}}</p>
+{{if .Menu.Notes}}<p class="meta brk">Comment: {{.Menu.Notes}}</p>{{end}}
+<details class="xa-details" open><summary class="btn">Actions</summary>
+{{template "exchange_actions.html" .Menu}}
+</details>
+<h3>Request
+  <span class="pane-toggle">
+    {{if .ReqPretty}}<span class="pt-on">Pretty</span> <a class="btn" href="/ui2/exchange/{{.Menu.ID}}?view_req=raw{{if not .RespPretty}}&view_resp=raw{{end}}">Raw</a>{{else}}<a class="btn" href="/ui2/exchange/{{.Menu.ID}}{{if not .RespPretty}}?view_resp=raw{{end}}">Pretty</a> <span class="pt-on">Raw</span>{{end}}
+  </span>
+  {{if .ReqPane.Kind}}<span class="badge">{{.ReqPane.Kind}}</span>{{end}}
+</h3>
+{{if .ReqPane.Note}}<p class="meta" role="note">{{.ReqPane.Note}}</p>{{end}}
+{{if .Request}}<pre class="msg">{{.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response
+  <span class="pane-toggle">
+    {{if .RespPretty}}<span class="pt-on">Pretty</span> <a class="btn" href="/ui2/exchange/{{.Menu.ID}}?view_resp=raw{{if not .ReqPretty}}&view_req=raw{{end}}">Raw</a>{{else}}<a class="btn" href="/ui2/exchange/{{.Menu.ID}}{{if not .ReqPretty}}?view_req=raw{{end}}">Pretty</a> <span class="pt-on">Raw</span>{{end}}
+  </span>
+  {{if .RespPane.Kind}}<span class="badge">{{.RespPane.Kind}}</span>{{end}}
+</h3>
+{{if .RespPane.Note}}<p class="meta" role="note">{{.RespPane.Note}}</p>{{end}}
+{{if .Response}}<pre class="msg">{{.RespPane.Highlighted}}</pre>{{else}}<p class="meta">No response recorded for this exchange.</p>{{end}}
+<div class="xa-sections">
+<details open><summary><strong>Request headers</strong> ({{len .ReqHeaders}})</summary>
+{{template "exchange_kv" .ReqHeaders}}</details>
+<details open><summary><strong>Query parameters</strong> ({{len .Query}})</summary>
+{{template "exchange_kv" .Query}}</details>
+<details open><summary><strong>Body parameters</strong> ({{len .BodyParams}})</summary>
+{{if .BodyNote}}<p class="meta">{{.BodyNote}}</p>{{end}}{{template "exchange_kv" .BodyParams}}</details>
+<details open><summary><strong>Request cookies</strong> ({{len .Cookies}})</summary>
+{{template "exchange_kv" .Cookies}}</details>
+<details><summary><strong>Response headers</strong> ({{len .RespHeaders}})</summary>
+{{template "exchange_kv" .RespHeaders}}</details>
+<details open><summary><strong>Cookies set by the response</strong> ({{len .SetCookies}})</summary>
+{{template "exchange_kv" .SetCookies}}</details>
+</div>
+</div>
+{{define "exchange_kv"}}{{if .}}<table class="xa-kv"><thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead><tbody>
+{{range .}}<tr><td class="brk">{{.Name}}</td><td class="brk">{{.Value}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="meta">none</p>{{end}}{{end}}

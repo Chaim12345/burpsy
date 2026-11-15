@@ -296,3 +296,41 @@ func TestTheDeclinedActionsWireFieldIsGone(t *testing.T) {
 			"that will never come")
 	}
 }
+
+// TestAnExpiredBrowserRecoveryPromptAnnouncesItsRemoval pins the timeout half of the prompt
+// lifecycle: a prompt the operator never answered must leave the pending list AND announce the
+// "session" frame, or a live console keeps reading "1 pending" until some unrelated change
+// refetches it. The wait itself is pinned against the seam; this drives the expire-and-announce
+// helper directly so the test does not wait out the generous operator bound.
+func TestAnExpiredBrowserRecoveryPromptAnnouncesItsRemoval(t *testing.T) {
+	srv := newTestServer().WithSessionCoordinator(session.NewCoordinator(zap.NewNop()))
+	sub, unsubscribe := srv.live.subscribe()
+	defer unsubscribe()
+
+	prompt := srv.prompts.register("ask the operator", "https://example.com/act")
+	sessionPrompter{s: srv}.expireAndAnnounce(prompt.id)
+
+	rec := get(t, srv, "/api/session/prompts")
+	var list sessionPromptsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode pending list: %v", err)
+	}
+	if len(list.Prompts) != 0 {
+		t.Fatalf("pending list has %d entries after expiry, want 0", len(list.Prompts))
+	}
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-sub.signal:
+			for _, frame := range srv.live.take(sub) {
+				if frame.Kind == "session" {
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatal("no \"session\" event frame arrived after a prompt expired — a live console " +
+				"would keep reading the stale pending count")
+		}
+	}
+}

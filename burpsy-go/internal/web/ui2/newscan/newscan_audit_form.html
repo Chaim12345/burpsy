@@ -1,0 +1,17 @@
+<form id="newscan-audit" method="post" hx-post="/ui2/newscan/audit/confirm" hx-target="#newscan-review" hx-swap="innerHTML">
+<p class="meta" style="padding:0">Scans exactly the exchanges ticked below (or listed by id) as one task, and nothing else in the capture.</p>
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Select</th><th scope="col">#</th><th scope="col">Method</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Status</th></tr></thead>
+<tbody>
+{{range .history}}<tr><td><input type="checkbox" name="exchange_id" value="{{.row.ID}}" aria-label="Select exchange {{.row.ID}}"{{if .checked}} checked{{end}}></td><td>{{.row.ID}}</td><td>{{.row.Method}}</td><td>{{.row.Host}}</td><td>{{.row.Path}}</td><td>{{.row.Status}}</td></tr>
+{{else}}<tr><td colspan="6" class="meta">No captured proxy traffic yet. Browse through the proxy, or list exchange ids below.</td></tr>{{end}}
+</tbody>
+</table></div>
+<p class="meta" style="padding:0">The newest {{len .history}} of {{.history_total}} captured proxy exchanges.</p>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px 12px">
+<label>Exchange ids <small>(optional, comma separated)</small><br><input type="text" name="exchange_ids" value="{{.preset_extra}}" inputmode="numeric" style="width:100%"></label>
+<label>Scan configuration<br><select name="config" style="width:100%"><option value="">server default</option>{{with .configs}}{{range .configs}}<option value="{{.name}}">{{.name}}</option>{{end}}{{end}}</select></label>
+<label>Resource pool<br><select name="pool" style="width:100%"><option value="">none</option>{{with .pools}}{{range .pools}}<option value="{{.name}}">{{.name}}</option>{{end}}{{end}}</select></label>
+</div>
+<p><button type="submit">Review audit</button></p>
+</form>

@@ -1,0 +1,60 @@
+<form id="newscan-crawl" method="post" hx-post="/ui2/newscan/crawl/confirm" hx-target="#newscan-review" hx-swap="innerHTML">
+<input type="hidden" name="kind" value="{{.kind}}">
+<p><label for="ns-seeds"><strong>URLs to scan</strong></label> <small>one per line, or comma separated</small><br>
+<textarea id="ns-seeds" name="seeds" rows="3" style="width:100%" placeholder="https://demo.local/&#10;https://api.demo.local/"></textarea></p>
+{{if eq .kind "crawl-audit"}}<p class="meta" style="padding:0">Two tasks appear: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the crawl finishes.</p>{{end}}
+<fieldset style="margin:8px 0; min-width:0"><legend>Crawl scope</legend>
+<label style="display:block"><input type="radio" name="scope_mode" value="seed_directories" checked> Restrict to the URLs' directories <small>— each URL's final directory (Burp's default)</small></label>
+<label style="display:block"><input type="radio" name="scope_mode" value="engagement"> Use the engagement scope <small>— everything the project scope allows</small></label>
+<label style="display:block"><input type="radio" name="scope_mode" value="prefixes"> Detailed scope configuration <small>— URL prefixes to include and exclude</small></label>
+<label style="display:block">Include URL prefixes <small>(detailed scope only; one per line)</small><br><textarea name="scope_include" rows="2" style="width:100%" placeholder="https://demo.local/app/"></textarea></label>
+<label style="display:block">Exclude URL prefixes <small>(never requested; not with the engagement scope)</small><br><textarea name="scope_exclude" rows="2" style="width:100%" placeholder="https://demo.local/app/logout"></textarea></label>
+<label style="display:block"><input type="checkbox" name="isolated" value="on"> Run isolated scan <small>— its locations and issues stay out of the site map and All issues; the task still shows them</small></label>
+<p class="meta" style="padding:0">Every mode only narrows the engagement scope.</p>
+</fieldset>
+<fieldset style="margin:8px 0; min-width:0"><legend>Protocol settings</legend>
+<label style="display:block"><input type="radio" name="protocols" value="both" checked> Scan using HTTP &amp; HTTPS <small>— each URL over both schemes; a URL may be a bare host</small></label>
+<label style="display:block"><input type="radio" name="protocols" value="specified"> Scan using my specified protocols <small>— each URL over the scheme it names</small></label>
+</fieldset>
+<fieldset style="margin:8px 0; min-width:0"><legend>Limits</legend>
+<p class="meta" style="padding:0">Blank takes the engine default; 0 is a real value for every bound except the first three, where 0 also means the default.</p>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:6px 12px">
+<label>Max requests<br><input type="number" name="max_requests" min="0" value="50" style="width:100%"></label>
+<label>Max depth<br><input type="number" name="max_depth" min="0" value="5" style="width:100%"></label>
+<label>Max duration (seconds)<br><input type="number" name="max_duration_secs" min="0" placeholder="{{index .defaults "max_duration_secs"}}" style="width:100%"></label>
+<label>Requests per second<br><input type="number" name="requests_per_second" min="0" step="any" placeholder="engine default" style="width:100%"></label>
+<label>Max locations<br><input type="number" name="max_locations" min="0" placeholder="{{index .defaults "max_locations"}}" style="width:100%"></label>
+<label>Max frontier<br><input type="number" name="max_frontier" min="0" placeholder="{{index .defaults "max_frontier"}}" style="width:100%"></label>
+<label>Max links per page<br><input type="number" name="max_links_per_page" min="0" placeholder="{{index .defaults "max_links_per_page"}}" style="width:100%"></label>
+<label>Max template visits<br><input type="number" name="max_template_visits" min="0" placeholder="{{index .defaults "max_template_visits"}}" style="width:100%"></label>
+<label>Max parse bytes<br><input type="number" name="max_parse_bytes" min="0" placeholder="{{index .defaults "max_parse_bytes"}}" style="width:100%"></label>
+<label>Max capture bytes<br><input type="number" name="max_capture_bytes" min="0" placeholder="{{index .defaults "max_capture_bytes"}}" style="width:100%"></label>
+<label>Max fingerprints<br><input type="number" name="max_fingerprints" min="0" placeholder="{{index .defaults "max_fingerprints"}}" style="width:100%"></label>
+<label>Max re-logins<br><input type="number" name="max_relogins" min="0" placeholder="{{index .defaults "max_relogins"}}" style="width:100%"></label>
+</div>
+</fieldset>
+<fieldset style="margin:8px 0; min-width:0"><legend>Pause and retry</legend>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:6px 12px">
+<label>Pause after timeouts in a row<br><input type="number" name="pause_task_requests_timed_out_count" min="0" placeholder="default (15); 0 never" style="width:100%"></label>
+<label>Pause at timeout percentage<br><input type="number" name="pause_task_requests_timed_out_percentage" min="0" max="100" placeholder="blank or 0 is off" style="width:100%"></label>
+<label>Pause after auth failures in a row<br><input type="number" name="consecutive_authentication_failures_before_pausing_task" min="0" max="10" placeholder="default (2); 0 never" style="width:100%"></label>
+<label>Follow-up passes<br><input type="number" name="number_of_follow_up_passes" min="0" placeholder="default (1); 0 retries nothing" style="width:100%"></label>
+</div>
+</fieldset>
+<fieldset style="margin:8px 0; min-width:0"><legend>Behaviour</legend>
+<label style="display:block"><input type="checkbox" name="seed_from_site_map" value="on"> Reuse the site map <small>— skip requests the site map already holds for the seeds' origins (best for a re-crawl)</small></label>
+<label style="display:block"><input type="checkbox" name="request_well_known" value="on"> Request .well-known documents <small>— seven extra requests per seed authority</small></label>
+<label style="display:block"><input type="checkbox" name="submit_forms" value="on"> Submit discovered forms <small>— writes to the application under test</small></label>
+<label style="display:block"><input type="checkbox" name="interact" value="on"> Drive pages in a browser <small>— click controls and follow the routes they reveal (needs a browser)</small></label>
+<label style="display:block"><input type="checkbox" name="fill_interaction_forms" value="on"> Fill and submit forms while driving <small>— state-changing; only with the browser switch above</small></label>
+</fieldset>
+<fieldset style="margin:8px 0; min-width:0"><legend>Run under</legend>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px 12px">
+<label>Scan configuration<br><select name="config" style="width:100%"><option value="">server default</option>{{with .configs}}{{range .configs}}<option value="{{.name}}">{{.name}}</option>{{end}}{{end}}</select></label>
+<label>Resource pool<br><select name="pool" style="width:100%"><option value="">none (inline rate)</option>{{with .pools}}{{range .pools}}<option value="{{.name}}">{{.name}}</option>{{end}}{{end}}</select></label>
+<label>Recorded login<br><select name="recorded_login" style="width:100%"><option value="">none</option>{{with .logins}}{{with .logins}}{{range .logins}}<option value="{{.id}}">{{.label}}</option>{{end}}{{end}}{{end}}</select></label>
+<label>Login page pattern (regex)<br><input type="text" name="login_page_pattern" style="width:100%" placeholder="optional"></label>
+</div>
+</fieldset>
+<button type="submit">Review {{if eq .kind "crawl-audit"}}crawl and audit{{else}}crawl{{end}}</button>
+</form>

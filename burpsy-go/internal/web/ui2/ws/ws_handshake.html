@@ -1,0 +1,13 @@
+<div class="ws-detail" data-open="1">
+<h3>Handshake of WebSocket #{{.id}}
+ <span class="pane-toggle">{{if .pretty}}<span class="pt-on">Pretty</span> <a class="btn" href="/ui2/ws/handshake/{{.id}}?view=raw" hx-get="/ui2/ws/handshake/{{.id}}?view=raw" hx-target="#ws-detail" hx-swap="innerHTML">Raw</a>{{else}}<a class="btn" href="/ui2/ws/handshake/{{.id}}" hx-get="/ui2/ws/handshake/{{.id}}" hx-target="#ws-detail" hx-swap="innerHTML">Pretty</a> <span class="pt-on">Raw</span>{{end}}</span></h3>
+{{with .panes}}
+{{if .Error}}<p class="meta" role="alert">Handshake unavailable: {{.Error}}</p>{{else}}
+<h3>Upgrade request {{if .ReqPane.Kind}}<span class="badge">{{.ReqPane.Kind}}</span>{{end}}</h3>
+{{if .ReqPane.Note}}<p class="meta" role="note">{{.ReqPane.Note}}</p>{{end}}
+{{if .Request}}<pre class="msg">{{.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes captured.</p>{{end}}
+<h3>Upgrade response {{if .RespPane.Kind}}<span class="badge">{{.RespPane.Kind}}</span>{{end}}</h3>
+{{if .RespPane.Note}}<p class="meta" role="note">{{.RespPane.Note}}</p>{{end}}
+{{if .NoResponse}}<p class="meta">No response was captured for this exchange.</p>{{else if .Response}}<pre class="msg">{{.RespPane.Highlighted}}</pre>{{else}}<p class="meta">No response bytes captured.</p>{{end}}
+{{end}}{{end}}
+</div>

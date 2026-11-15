@@ -1,0 +1,54 @@
+<div id="ext-detail">
+{{template "extensions_tabs" "installed"}}
+<p class="meta"><a href="/ui2/extensions">&larr; all plugins</a></p>
+{{if .Error}}<p class="meta" role="alert"><strong>{{.Error}}</strong></p>{{else}}
+<h3 class="ext-sec"><code>{{.Plugin.Name}}</code>{{if .Plugin.DeclaredName}} — {{.Plugin.DeclaredName}}{{end}} <span class="badge {{if or (eq .Row.State "failed") (eq .Row.State "crashed")}}ext-bad{{end}}">{{.Row.StateLabel}}</span>{{if .Plugin.RegistrationsRefused}} <span class="badge ext-bad">{{.Plugin.RegistrationsRefused}} refused</span>{{end}}</h3>
+<p class="meta brk">{{if .Plugin.Detail}}{{.Plugin.Detail}}{{else}}{{.Plugin.Path}}{{if .Args}} {{.Args}}{{end}}{{end}}</p>
+{{if .Note}}<p class="meta" role="alert" id="ext-note"><strong>Not done: {{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" id="ext-done"><strong>{{.Done}}</strong></p>{{end}}
+{{if .Result}}<div class="ext-sec" id="ext-result"><p class="meta"><code>{{.ResultReg}}</code> answered (plugin output, shown as text):</p><pre>{{.Result}}</pre></div>{{end}}
+<div class="ext-sec">
+<form method="post" action="/ui2/extensions/confirm" hx-post="/ui2/extensions/confirm" hx-target="#ext-review" hx-swap="outerHTML" style="display:inline">
+<input type="hidden" name="action" value="{{if .Row.Loaded}}unload{{else}}load{{end}}"><input type="hidden" name="name" value="{{.Plugin.Name}}"><input type="hidden" name="from" value="detail">{{if .Exchange}}<input type="hidden" name="exchange" value="{{.Exchange}}">{{end}}
+<button type="submit">{{if .Row.Loaded}}Unload{{else}}Load{{end}} {{.Plugin.Name}}</button>
+</form>
+<a class="btn" href="{{.SelfURL}}" hx-get="{{.SelfURL}}" hx-target="#ext-detail" hx-swap="outerHTML">Refresh</a>
+</div>
+<div id="ext-review"></div>
+<div class="ext-metrics">
+  <div><b>{{len .Plugin.Registrations}}</b><span>Registrations — accepted at the handshake</span></div>
+  <div><b {{if .Plugin.RegistrationsRefused}}class="ext-bad"{{end}}>{{.Plugin.RegistrationsRefused}}</b><span>Refused — reasons are on the error console</span></div>
+  <div><b>{{.Plugin.Invocations}}</b><span>Invocations</span></div>
+  <div><b {{if .Plugin.InvocationFailures}}class="ext-bad"{{end}}>{{.Plugin.InvocationFailures}}</b><span>Failed invocations</span></div>
+  <div><b>{{.Plugin.HookCalls}}</b><span>Hook calls this load</span></div>
+  <div><b {{if .Plugin.HookFailures}}class="ext-bad"{{end}}>{{.Plugin.HookFailures}}</b><span>Hook failures{{if .Plugin.HookSuspended}} — suspended, reload the plugin to resume{{end}}</span></div>
+  <div><b {{if .Plugin.ProtocolErrors}}class="ext-bad"{{end}}>{{.Plugin.ProtocolErrors}}</b><span>Protocol errors — stdout lines that were not JSON-RPC</span></div>
+</div>
+{{if .ExitText}}<p class="meta"><strong>{{.ExitText}}</strong></p>{{end}}
+<h3 class="ext-sec">Registrations</h3>
+<form class="ext-sec" method="get" action="/ui2/extensions/plugin">
+<input type="hidden" name="name" value="{{.Plugin.Name}}">
+<label>Exchange context <input type="text" name="exchange" value="{{.Exchange}}" inputmode="numeric" size="8" aria-label="Exchange id for context-menu items and editor tabs"></label>
+<button type="submit">Set</button>
+{{if .ExchangeLabel}}<span class="meta brk">{{.ExchangeLabel}}</span>{{end}}
+{{if .ExchangeError}}<span class="meta ext-bad">{{.ExchangeError}}</span>{{end}}
+</form>
+{{if .Regs}}
+<table class="ext-t ext-cards">
+<thead><tr><th scope="col">Kind</th><th scope="col">Label</th><th scope="col">Id</th><th scope="col">Hint</th><th scope="col">Run</th></tr></thead>
+<tbody>
+{{range .Regs}}
+<tr>
+<td data-label="Kind">{{.KindLabel}}{{if .Chord}} <code>{{.Chord}}</code>{{end}}</td>
+<td data-label="Label">{{.Label}}</td>
+<td data-label="Id"><code>{{.ID}}</code></td>
+<td data-label="Hint">{{if .Hint}}{{.Hint}}{{else}}—{{end}}</td>
+<td data-label="Run">{{if .Runnable}}<form method="post" action="/ui2/extensions/confirm" hx-post="/ui2/extensions/confirm" hx-target="#ext-review" hx-swap="outerHTML"><input type="hidden" name="action" value="invoke"><input type="hidden" name="name" value="{{$.Plugin.Name}}"><input type="hidden" name="registration" value="{{.ID}}"><input type="hidden" name="from" value="detail">{{if $.Exchange}}<input type="hidden" name="exchange" value="{{$.Exchange}}">{{end}}<button type="submit">Run&hellip;</button></form>{{else}}<span class="meta">{{.Why}}</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">{{if .Row.Loaded}}{{.Plugin.Name}} completed the handshake and declared nothing it can be asked to do. It can still log to its consoles.{{else}}Registrations are declared at the handshake, so there are none until the plugin is loaded.{{end}}</p>{{end}}
+{{template "extensions_console.html" .Console}}
+{{end}}
+</div>

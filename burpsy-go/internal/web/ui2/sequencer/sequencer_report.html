@@ -1,0 +1,147 @@
+{{define "sequencer_report"}}
+{{if .R.Warnings}}<section aria-label="Caveats">
+<strong>{{if eq .R.Grade "insufficient"}}This sample does not support a verdict{{else}}Caveats on this verdict{{end}}</strong>
+{{range .R.Warnings}}<p class="seq-notice warn">{{.}}</p>{{end}}
+</section>{{end}}
+<div class="seq-grade"><span class="meta">GRADE</span> <strong class="{{.GradeClass}}">{{.GradeLabel}}</strong> <span>{{.R.Verdict}}</span></div>
+<div class="seq-metrics">
+  <div class="seq-metric"><b>{{.R.Tokens}}</b><span>tokens · length {{.LengthLabel}}</span></div>
+  <div class="seq-metric"><b>{{.R.Characters.AlphabetSize}}</b><span>alphabet (distinct characters)</span></div>
+  <div class="seq-metric"><b>{{printf "%.1f" .R.Characters.TotalEntropyBits}} b</b><span>entropy per token · ceiling {{printf "%.1f" .R.Characters.MaxPossibleBits}} b</span></div>
+  <div class="seq-metric"><b>{{printf "%.2f" .R.Characters.EntropyBitsPerChar}} b</b><span>entropy per character · per-position cap {{printf "%.1f" .R.Characters.EntropyCeilingBits}} b</span></div>
+  <div class="seq-metric"><b>{{.R.Encoding}}</b><span>bits read as · {{if .R.EncodingDetected}}detected{{else}}your choice{{end}}</span></div>
+</div>
+<p class="meta">Entropy per token is the sum of the per-position figures, which assumes the positions are independent{{if not .R.Characters.AssumesPositionalIndependence}} (the server reports otherwise for this sample){{end}} - an upper estimate, not a measurement.{{if .R.Base64Decoded}} Tokens were base64-decoded first: every figure describes the decoded bytes.{{end}}{{if or (eq .R.Padding.Mode "start") (eq .R.Padding.Mode "end")}} {{.R.Padding.TokensPadded}} token(s) padded at {{.R.Padding.Mode}} with {{.R.Padding.PadByteLabel}} ({{.R.Padding.PadBytesAdded}} byte(s) added).{{end}}</p>
+
+{{with .Effective}}
+<section aria-label="Effective entropy">
+<h3>Effective entropy by significance level</h3>
+<p class="meta">{{.Detail}}</p>
+{{if .HasMarks}}
+<figure style="margin:0">
+<svg id="seq-effective-chart" viewBox="-44 -8 732 196" role="img" aria-label="Effective entropy at each significance level; the table below carries every number">
+  <line class="ceil" x1="0" y1="0" x2="640" y2="0"></line>
+  <line class="ax" x1="0" y1="160" x2="640" y2="160"></line>
+  <line class="ax" x1="0" y1="0" x2="0" y2="160"></line>
+  <text x="-6" y="4" text-anchor="end">{{.MaxBits}}</text>
+  <text x="-6" y="160" text-anchor="end">0</text>
+  {{range .Gaps}}<line class="gap" x1="{{.X}}" y1="0" x2="{{.X}}" y2="160"><title>{{.Title}}</title></line>{{end}}
+  {{range .Runs}}<polyline class="curve" points="{{.}}"></polyline>{{end}}
+  {{range .Marks}}<circle class="mark{{if .Chosen}} chosen{{end}}" cx="{{.X}}" cy="{{.Y}}" r="{{if .Chosen}}5{{else}}3{{end}}"><title>{{.Title}}</title></circle>{{end}}
+  {{range .Ticks}}<text x="{{.X}}" y="176" text-anchor="middle">{{.Label}}</text>{{end}}
+</svg>
+<figcaption>Significance level, logarithmic, from {{.FirstLabel}} on the left to {{.LastLabel}} on the right; bits on the vertical axis, out of {{.MaxBits}} examined. A dashed column is a level this sample cannot answer - the line breaks there rather than being drawn through a value that does not exist.</figcaption>
+</figure>
+{{else}}<p class="seq-notice warn">No level in the chart's range could be answered by this sample, so there is nothing to draw. That is an absence, not a curve at zero - the table below says why for each level.</p>{{end}}
+<table><thead><tr><th scope="col">Level</th><th scope="col">Effective entropy</th><th scope="col">Rejected</th><th scope="col">Expected by chance</th><th scope="col">Note</th></tr></thead>
+<tbody>{{range .Rows}}{{template "sequencer_level_row" .}}{{end}}</tbody></table>
+{{if .MoreRows}}<details><summary>All {{.CurveN}} levels</summary>
+<table><tbody>{{range .MoreRows}}{{template "sequencer_level_row" .}}{{end}}</tbody></table></details>{{end}}
+<p class="seq-notice{{if .SpreadWarn}} warn{{end}}">{{.Note}}</p>
+<p class="meta"><strong>What this number is.</strong> {{.Definition}} Tests run at each bit position: {{.Tests}}. No multiple-comparison correction is applied, so read every loss against the "expected by chance" column.</p>
+{{if .SkippedVar}}<p class="meta">{{.SkippedVar}} bit position(s) present in the longest token but not the shortest were excluded.</p>{{end}}
+{{if .Truncated}}<p class="seq-notice warn">Only the first {{.Examined}} bit positions were examined.</p>{{end}}
+<p class="meta"><strong>Against the FIPS grade.</strong> {{.Agreement}}</p>
+</section>
+{{end}}
+
+{{with .R.ExtraStats}}
+<section aria-label="Uniformity and duplicates">
+<h3>Uniformity &amp; duplicates</h3>
+<p class="meta">Chi-square is a raw statistic - larger means the alphabet is used less uniformly; it is not a pass/fail p-value.</p>
+<div class="seq-metrics">
+  <div class="seq-metric"><b class="{{if .RepeatedTokens}}seq-warn{{end}}">{{.RepeatedTokens}}</b><span>repeated tokens{{if .RepeatedTokens}} - an exact repeat is a finding on its own{{end}}</span></div>
+  <div class="seq-metric"><b>{{printf "%.1f" .ChiSquare}}</b><span>chi-square (chars) · larger = less uniform</span></div>
+  <div class="seq-metric"><b>{{printf "%.3f" .SerialCorrelation}}</b><span>serial correlation · {{.SerialCorrelationLabel}}</span></div>
+  <div class="seq-metric"><b>{{printf "%.2f" .MonteCarloPi}}</b><span>Monte-Carlo π · deviation {{printf "%.2f" .MonteCarloDeviation}}</span></div>
+</div>
+{{if $.Repeated}}<p class="seq-notice warn">Tokens appearing more than once: {{range $i, $t := $.Repeated}}{{if $i}}, {{end}}<code>{{$t}}</code>{{end}}{{if $.RepeatedN}} …and {{$.RepeatedN}} more{{end}}</p>{{end}}
+</section>
+{{end}}
+
+<section aria-label="FIPS 140-2">
+<h3>FIPS 140-2 bit-level tests</h3>
+<p class="meta">{{.R.Fips.BitsSupplied}} bit(s) supplied · {{.R.Fips.BlocksTested}} whole {{.R.Fips.BlockBits}}-bit block(s) tested{{if .R.Fips.BitsUntested}} · {{.R.Fips.BitsUntested}} bit(s) not tested{{end}}. These verdicts describe the whole bit stream cut into {{.R.Fips.BlockBits}}-bit blocks; the same tests at each bit position are below.</p>
+{{if .FipsRows}}
+<table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Observed</th><th scope="col">Requirement</th><th scope="col">Blocks</th></tr></thead><tbody>
+{{range .FipsRows}}{{if .Disabled}}<tr><td title="{{.Spec}}">{{.Name}}</td><td><span class="badge">not run - switched off</span></td><td colspan="3" class="meta">{{.Reason}}</td></tr>
+{{else}}<tr><td title="{{.Spec}}">{{.Name}}</td><td class="{{if .Passed}}seq-good{{else}}seq-bad{{end}}">{{if .Passed}}pass{{else}}fail{{end}}</td><td>{{.Observed}}</td><td class="meta">{{.Requirement}}</td><td>{{.Blocks}}</td></tr>{{end}}{{end}}
+</tbody></table>
+{{else}}<p class="seq-notice warn">Not run. Every FIPS 140-2 threshold is defined on a {{.R.Fips.BlockBits}}-bit sample, so running them against a shorter one would produce a confident answer that means nothing. Capture more tokens.</p>{{end}}
+<table><tbody>
+<tr><th scope="row">Bits</th><td>{{.R.Bits.Bits}}</td></tr>
+<tr><th scope="row">Ones / zeros</th><td>{{.R.Bits.Ones}} / {{.R.Bits.Zeros}}</td></tr>
+<tr><th scope="row">Bit entropy</th><td>{{.BitEntropy}} of a perfect split</td></tr>
+<tr><th scope="row">Longest run</th><td>{{.R.Bits.LongestRun}} bit(s)</td></tr>
+<tr><th scope="row">Runs of zeros</th><td>{{.RunsZeros}}</td></tr>
+<tr><th scope="row">Runs of ones</th><td>{{.RunsOnes}}</td></tr>
+</tbody></table>
+</section>
+
+<section aria-label="FIPS tests at each bit position">
+<h3>FIPS tests at each bit position</h3>
+{{if not .R.FipsPositions.Computed}}<p class="seq-notice warn">Not computed: {{.R.FipsPositions.Reason}}.</p>
+{{else}}
+<p class="meta">{{.R.FipsPositions.Tokens}} token(s) per position · {{.R.FipsPositions.PositionsExamined}} bit position(s){{if .R.FipsPositions.ExactIntervals}} · FIPS intervals (N = 20,000){{else}} · significance thresholds (N ≠ 20,000){{end}}</p>
+<table><thead><tr><th scope="col">Test</th><th scope="col">Positions failed</th><th scope="col">Failing positions</th><th scope="col">Requirement</th></tr></thead><tbody>
+{{range .PosRows}}{{if .Disabled}}<tr><td>{{.Name}}</td><td><span class="badge">not run - switched off</span></td><td colspan="2" class="meta">{{.Reason}}</td></tr>
+{{else}}<tr><td>{{.Name}}</td><td class="{{if .Clean}}seq-good{{else}}seq-bad{{end}}">{{.Failed}}</td><td>{{.Ranges}}</td><td class="meta">{{.Requirement}}</td></tr>{{end}}{{end}}
+</tbody></table>
+{{range $i, $c := .PosCharts}}
+<details{{if eq $i 0}} open{{end}}><summary>Chart: {{$c.Name}}</summary>
+<figure style="margin:0">
+<svg id="{{$c.ID}}" class="seq-pos-chart" viewBox="-40 -8 780 154" role="img" aria-label="{{$c.Aria}}">
+  <line class="ax" x1="0" y1="120" x2="640" y2="120"></line>
+  <line class="ax" x1="0" y1="0" x2="0" y2="120"></line>
+  <text x="-6" y="124" text-anchor="end">0</text><text x="-6" y="84" text-anchor="end">2</text><text x="-6" y="44" text-anchor="end">4</text><text x="-6" y="4" text-anchor="end">6</text>
+  {{range $c.Bars}}<rect class="{{if .Pass}}pass{{else}}fail{{end}}" x="{{.X}}" y="{{.Y}}" width="{{.W}}" height="{{.H}}"><title>{{.Title}}</title></rect>{{end}}
+  {{range $c.FailMarks}}<rect class="fail" x="{{.X}}" y="122" width="{{.W}}" height="5"></rect>{{end}}
+  <line class="passline" x1="0" y1="{{$c.PassY}}" x2="640" y2="{{$c.PassY}}"></line>
+  <text x="646" y="{{$c.PassY}}">FIPS pass level</text>
+  <text x="0" y="140">bit 0</text><text x="640" y="140" text-anchor="end">bit {{$c.LastBit}}</text>
+</svg>
+<figcaption>Each bar is one bit position's significance as 6 + log10(p): 6 is an ordinary position, 0 the 10⁻⁶ floor. The dashed line is the pass level, 6 + log10({{$c.Threshold}}). Green passed, red failed; a red mark under the axis flags every failing position.{{if $c.Exact}} At N = 20,000 the FIPS intervals decide each verdict, so a bar's colour, not its height, is the verdict.{{end}}</figcaption>
+</figure>
+</details>
+{{end}}
+<p class="meta">{{.R.FipsPositions.Method}}{{if .R.FipsPositions.PositionsTruncated}} Only the first {{.R.FipsPositions.PositionsExamined}} bit positions are examined.{{end}}{{if .R.FipsPositions.PositionsSkippedVariable}} {{.R.FipsPositions.PositionsSkippedVariable}} bit position(s) past the shortest token are not examined.{{end}}{{if .R.FipsPositions.TokensNotAnalysed}} {{.R.FipsPositions.TokensNotAnalysed}} token(s) are not analysed here.{{end}} This section does not change the grade above.</p>
+{{end}}
+</section>
+
+{{if .R.Advanced.Tests}}
+<section aria-label="Extended tests">
+<h3>Extended tests</h3>
+<p class="meta">{{.R.Advanced.Summary}}</p>
+<table><thead><tr><th scope="col">Test</th><th scope="col">Result</th><th scope="col">Observed</th><th scope="col">Requirement</th><th scope="col">Flagged</th></tr></thead><tbody>
+{{range .R.Advanced.Tests}}{{if .Disabled}}<tr><td title="{{.Basis}}">{{.Name}}</td><td><span class="badge">not run - switched off</span></td><td colspan="3" class="meta">{{if .DisableReason}}{{.DisableReason}}{{else}}switched off in the analysis settings{{end}}</td></tr>
+{{else if .Tested}}<tr><td title="{{.Basis}}">{{.Name}}</td><td class="{{if .Passed}}seq-good{{else}}seq-bad{{end}}">{{if .Passed}}pass{{else}}fail{{end}}</td><td>{{.Observed}}</td><td class="meta">{{.Requirement}}</td><td>{{.Flagged}} / {{.Examined}}</td></tr>
+{{else}}<tr><td title="{{.Basis}}">{{.Name}}</td><td class="seq-warn">not tested</td><td colspan="3" class="meta">{{.Reason}}</td></tr>{{end}}{{end}}
+</tbody></table>
+{{range .Notices}}<p class="meta">{{.}}</p>{{end}}
+<p class="meta">These four do not change the grade above, which is the FIPS 140-2 battery's.</p>
+</section>
+{{end}}
+
+<section aria-label="Character positions">
+<h3>Character positions</h3>
+<p class="meta">alphabet ({{.R.Characters.AlphabetSize}}): <code>{{range .R.Characters.Alphabet}}{{.}}{{end}}</code></p>
+{{if .R.Characters.PositionsTruncated}}<p class="seq-notice warn">Only the first {{len .R.Characters.Positions}} of {{.R.Characters.MaxLen}} positions are reported by the server.</p>{{end}}
+{{if .Positions}}
+<table><thead><tr><th scope="col">#</th><th scope="col">Entropy</th><th scope="col">Distinct</th><th scope="col">Samples</th><th scope="col">Distribution</th><th scope="col">Flag</th></tr></thead><tbody>
+{{range .Positions}}{{template "sequencer_pos_row" .}}{{end}}
+</tbody></table>
+{{if .MorePos}}<details><summary>Show all positions ({{len .MorePos}} more)</summary><table><tbody>{{range .MorePos}}{{template "sequencer_pos_row" .}}{{end}}</tbody></table></details>{{end}}
+{{else}}<p class="meta">No tokens to analyse.</p>{{end}}
+</section>
+
+<details><summary>Summary as text</summary>
+<pre>{{.Summary}}</pre>
+</details>
+{{end}}
+
+{{define "sequencer_level_row"}}<tr><td>{{.Label}}{{if .Chosen}} <span class="badge">chosen</span>{{end}}</td>
+<td>{{if .Computed}}{{.Value}}{{else}}<span class="seq-warn">insufficient sample</span>{{end}}</td><td>{{.Rejected}}</td><td>{{.Expected}}</td><td class="meta">{{if not .Computed}}{{.Reason}}{{end}}</td></tr>{{end}}
+
+{{define "sequencer_pos_row"}}<tr{{if .Dead}} class="seq-dead"{{end}}><td>{{.Index}}</td><td>{{.Entropy}} b</td><td>{{.Distinct}}</td><td>{{.Samples}}</td>
+<td>{{range .Counts}}<span class="seq-chip" title="{{.Title}}">{{.Label}} {{.Pct}}</span>{{end}}{{if .More}} <span class="meta">+{{.More}} more</span>{{end}}</td>
+<td>{{if .Dead}}<span class="seq-bad">never varies</span>{{else}}—{{end}}</td></tr>{{end}}

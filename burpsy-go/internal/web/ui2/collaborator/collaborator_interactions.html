@@ -1,0 +1,35 @@
+<section id="collab-interactions" aria-labelledby="collab-inter-h">
+<h3 id="collab-inter-h">Interactions <span class="badge" id="collab-unread" aria-live="polite"></span></h3>
+{{if .InterErr}}<p class="alert" role="alert">The interaction log could not be read, so this is not a report that nothing called back: {{.InterErr}}</p>
+{{else if not .Counts}}<p class="meta">No channel is open, so no interaction has been recorded — an empty table here would not mean "nothing called back".</p>
+{{else}}
+<p class="meta">A DNS interaction means the payload address was resolved; HTTP means something rendered or fetched it. Read state, highlights and comments are kept in this browser only.</p>
+<form class="row" action="/ui2/collaborator" method="get" hx-get="/ui2/collaborator" hx-target="#collab-interactions" hx-swap="outerHTML" hx-trigger="submit, change from:#collab-protocol, keyup changed delay:400ms from:#collab-q">
+  <select name="protocol" id="collab-protocol" aria-label="Filter by protocol">
+    <option value="all">All protocols</option>
+    {{range .Protocols}}<option value="{{.}}"{{if eq . $.Protocol}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  <input type="search" name="q" id="collab-q" value="{{.Q}}" aria-label="Search interactions" placeholder="Search id, type, IP, payload…" autocomplete="off">
+  <label><input type="checkbox" id="collab-hide-read"> Hide read</label>
+  <button type="button" id="collab-mark-all">Mark all read</button>
+  <button type="button" id="collab-export">Export shown as CSV</button>
+  <noscript><button type="submit">Filter</button></noscript>
+</form>
+<table class="collab-inter" data-collab-domain="{{.Status.Domain}}">
+<thead><tr><th scope="col">#</th><th scope="col">Type</th><th scope="col">Client IP</th><th scope="col" class="wrap">Payload</th><th scope="col">Time</th><th scope="col" class="wrap">Note</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .Rows}}
+<tr data-collab-id="{{.ID}}"{{if .Collapsed}} title="folded into an earlier row by de-duplication"{{end}}>
+<td>{{.ID}}</td><td>{{.TypeUpper}}{{if .QType}} {{.QType}}{{end}}</td><td><code>{{.ClientIP}}</code></td>
+<td class="wrap"><code>{{if .Payload}}{{.Payload}}{{else}}—{{end}}</code></td><td>{{.Time}}</td>
+<td class="wrap collab-note"></td>
+<td><button type="button" class="collab-mark" data-id="{{.ID}}">Mark read</button>
+<a class="btn" href="/ui2/collaborator/interaction/{{.ID}}" hx-get="/ui2/collaborator/interaction/{{.ID}}" hx-target="#collab-detail" hx-swap="innerHTML">Open</a></td></tr>
+{{else}}
+<tr><td colspan="7" class="meta">{{if .RowsTotal}}No interaction matches this filter — clear the protocol or search to see all {{.RowsTotal}}.{{else}}No interactions recorded: mint a payload, plant it, and poll. With a configured channel, empty means nothing has called back yet.{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+<p class="meta">{{len .Rows}} shown of {{.RowsTotal}}{{with .Counts}} · {{.Distinct}} distinct event(s){{end}}</p>
+{{end}}
+</section>

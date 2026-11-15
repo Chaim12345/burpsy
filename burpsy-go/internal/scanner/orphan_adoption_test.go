@@ -86,12 +86,12 @@ func TestAccessControlDiffNamesTheBolaCaseInBothDirections(t *testing.T) {
 	}
 	threshold := DefaultDeviationThreshold()
 
-	if dev := b.DiffAccessControl(privileged, threshold); !dev.Matched {
+	if dev := b.DiffAccessControl("GET", privileged, threshold); !dev.Matched {
 		t.Errorf("identity B receiving identity A's exact body was not reported as a match (%+v); "+
 			"that IS the BOLA case and it is the one verdict that must never be missed", dev)
 	}
 	denied := NewBaselineSample(403, "forbidden", 10*time.Millisecond)
-	if dev := b.DiffAccessControl(denied, threshold); dev.Matched {
+	if dev := b.DiffAccessControl("GET", denied, threshold); dev.Matched {
 		t.Errorf("identity B being correctly refused was reported as a match (%+v); an enforced "+
 			"endpoint must not read as a finding", dev)
 	}

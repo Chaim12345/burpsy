@@ -1,0 +1,13 @@
+{{if .error}}<p class="meta">Cannot launch: {{.error}}</p>{{else}}
+<p><strong>Review before crawl:</strong> <span class="meta">{{.preview}}</span></p>
+<details open><summary>exact body (what the token binds, in full)</summary>
+<pre class="meta brk" style="white-space:pre-wrap; overflow-wrap:anywhere; max-height:50vh; overflow:auto">{{.full_body}}</pre>
+</details>
+<p class="meta">A crawl sends its own requests to the target host within the engagement scope and records what it finds. A seed the scope refuses is named before anything is sent, and a crawl whose every seed is refused does not start. This confirmation is one-time and covers exactly the call above.</p>
+<form method="post" hx-post="/ui2/scanner/crawl-run" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="seeds" value="{{.seeds}}">
+<input type="hidden" name="config" value="{{.config}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and crawl</button>
+</form>
+{{end}}

@@ -1,0 +1,1 @@
+{{if .error}}<p class="meta" role="alert" style="color:#c00"><strong>Not loaded: {{.error}}</strong></p>{{else}}<p class="meta">Loaded request message {{.seed.MsgID}}{{if .seed.HasExchange}} from exchange #{{.seed.ExchangeID}} (target {{.seed.Target}}){{end}} into {{.tool}}. This is an editable copy; nothing has been sent.</p>{{end}}

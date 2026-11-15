@@ -147,7 +147,7 @@ func (s *ActiveScanner) RenderStoredTargets(ctx context.Context) (StoredDOMRende
 		out.Declined = "DOM checks are not enabled for this scan, so no page was rendered"
 		return out, nil
 	}
-	if s.browsers == nil {
+	if !s.hasBrowsers() {
 		// Not a decline. A scan that asked for DOM checks and has no browser looked at nothing,
 		// and the stored DOM rows must be told that rather than shown an empty result.
 		return out, fmt.Errorf("stored DOM render: no DOM execution capability is configured for this scan")

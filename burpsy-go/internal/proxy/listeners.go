@@ -255,7 +255,48 @@ func (s *Server) AddListener(spec ListenerSpec) (ListenerStatus, error) {
 		zap.String("addr", ln.Addr().String()))
 
 	go s.serveListener(ctx, bl)
+	s.noteListenersChange()
 	return ListenerStatus{ListenerSpec: spec, BoundAddr: ln.Addr().String()}, nil
+}
+
+// OnListenersChange installs the signal called after the listener table visibly moves: a
+// listener added, removed, rebound, or updated to a spec that differs. Single slot, mirroring
+// OnWsLiveChange; the hook runs synchronously on the edit's path.
+func (s *Server) OnListenersChange(fn func()) {
+	s.listenersChange.Store(fn)
+}
+
+// noteListenersChange invokes the installed hook, if any.
+func (s *Server) noteListenersChange() {
+	if fn, ok := s.listenersChange.Load().(func()); ok {
+		fn()
+	}
+}
+
+// listenerSpecEqual compares two specs by meaning, not pointer: the tri-state fields
+// (Invisible, HTTP2) are equal when both are nil - "inherit" - or when both point at the same
+// VALUE, so two separately decoded true pointers are the same setting. nil versus an explicit
+// false is a real difference: inherit is not force-off.
+func listenerSpecEqual(a, b ListenerSpec) bool {
+	return a.Bind == b.Bind &&
+		a.RedirectHost == b.RedirectHost &&
+		a.RedirectPort == b.RedirectPort &&
+		a.ForceTLS == b.ForceTLS &&
+		triStateEqual(a.Invisible, b.Invisible) &&
+		a.CertMode == b.CertMode &&
+		a.CertHostname == b.CertHostname &&
+		a.CertFile == b.CertFile &&
+		a.CertPassword == b.CertPassword &&
+		a.TLSMinVersion == b.TLSMinVersion &&
+		a.TLSMaxVersion == b.TLSMaxVersion &&
+		triStateEqual(a.HTTP2, b.HTTP2)
+}
+
+func triStateEqual(a, b *bool) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || *a == *b
 }
 
 // UpdateListener replaces a listener's spec. When the bind address changes the socket moves
@@ -274,7 +315,6 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 		return ListenerStatus{}, ErrNoSuchListener
 	}
 
-	spec.ID = id
 	// Validated before any part of the edit lands, for the reason AddListener states: a listener
 	// whose new bundle cannot be loaded keeps serving exactly what it served before, rather than
 	// falling back to the process CA and looking like it worked.
@@ -284,12 +324,15 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 	}
 
 	bl.mu.Lock()
+	current := bl.spec
 	currentBind := bl.spec.Bind
 	currentAddr := ""
 	if bl.ln != nil {
 		currentAddr = bl.ln.Addr().String()
 	}
 	bl.mu.Unlock()
+	spec.ID = current.ID
+	moved := !listenerSpecEqual(current, spec)
 
 	// An unchanged bind must not re-open the socket: a spec-only edit (a redirect, a tick)
 	// would otherwise drop the accept socket for an instant and, for an ephemeral bind,
@@ -307,6 +350,9 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 		addr := currentAddr
 		bl.mu.Unlock()
 		s.config.logger.Info("proxy listener updated", zap.String("id", id), zap.String("addr", addr))
+		if moved {
+			s.noteListenersChange()
+		}
 		return ListenerStatus{ListenerSpec: spec, BoundAddr: addr}, nil
 	}
 
@@ -330,6 +376,7 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 		zap.String("id", id),
 		zap.String("addr", ln.Addr().String()),
 		zap.String("previous", currentAddr))
+	s.noteListenersChange()
 	return ListenerStatus{ListenerSpec: spec, BoundAddr: ln.Addr().String()}, nil
 }
 
@@ -373,6 +420,7 @@ func (s *Server) RemoveListener(id string) error {
 		ln.Close()
 	}
 	s.config.logger.Info("proxy listener removed", zap.String("id", id))
+	s.noteListenersChange()
 	return nil
 }
 

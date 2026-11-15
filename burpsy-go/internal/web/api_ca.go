@@ -65,13 +65,13 @@ type caStatusResponse struct {
 }
 
 func (s *Server) caStatus() caStatusResponse {
-	if s.tlsEngine == nil {
+	if s.caEngine() == nil {
 		return caStatusResponse{
 			Hint: "TLS interception is off, so there is no signing CA. Start burpsy with " +
 				"-intercept-tls to enable it.",
 		}
 	}
-	subject, notAfter, ok := s.tlsEngine.CADescription()
+	subject, notAfter, ok := s.caEngine().CADescription()
 	if !ok {
 		return caStatusResponse{Hint: "the TLS engine holds no CA certificate"}
 	}
@@ -103,11 +103,11 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	if s.tlsEngine == nil {
+	if s.caEngine() == nil {
 		// Nothing would consult an imported CA, so accepting it would store a value that changes
 		// nothing.
 		http.Error(w, "TLS interception is off, so there is no signing CA to replace; start burpsy "+
-			"with -intercept-tls", http.StatusServiceUnavailable)
+			"with -intercept-tls or PUT /api/proxy/interception {\"enabled\": true}", http.StatusServiceUnavailable)
 		return
 	}
 	if req.CertPEM == "" || req.KeyPEM == "" {
@@ -116,7 +116,7 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validates first and replaces nothing on failure.
-	if err := s.tlsEngine.ImportCA([]byte(req.CertPEM), []byte(req.KeyPEM)); err != nil {
+	if err := s.caEngine().ImportCA([]byte(req.CertPEM), []byte(req.KeyPEM)); err != nil {
 		// err comes from loadCA/validateCA and describes the certificate or the key's *shape* —
 		// "is not a certificate authority", "do not match". It never contains key material.
 		http.Error(w, "CA import refused: "+err.Error(), http.StatusBadRequest)
@@ -160,17 +160,17 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 // route riskDestructive and an unattended caller must confirm before invoking it.
 func (s *Server) handleCARegenerate(w http.ResponseWriter, r *http.Request) {
 	// Verb-checked by the mux: registered as "POST /api/proxy/ca/regenerate" (burpsy-react-ui-vnlh).
-	if s.tlsEngine == nil {
+	if s.caEngine() == nil {
 		// Nothing would sign with a regenerated CA, so minting one would change nothing.
 		http.Error(w, "TLS interception is off, so there is no signing CA to regenerate; start burpsy "+
-			"with -intercept-tls", http.StatusServiceUnavailable)
+			"with -intercept-tls or PUT /api/proxy/interception {\"enabled\": true}", http.StatusServiceUnavailable)
 		return
 	}
 
 	// RegenerateCA validates the minted pair before swapping, so on the (near-impossible)
 	// failure path the running CA and the leaf cache are untouched. The error never carries
 	// key material.
-	certPEM, keyPEM, err := s.tlsEngine.RegenerateCA()
+	certPEM, keyPEM, err := s.caEngine().RegenerateCA()
 	if err != nil {
 		http.Error(w, "CA regeneration failed: "+err.Error(), http.StatusInternalServerError)
 		return

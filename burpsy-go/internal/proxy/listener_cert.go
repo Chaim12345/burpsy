@@ -133,6 +133,12 @@ func loadPKCS12(path, password string) (*tls.Certificate, error) {
 // listener has moved them apart, and the certificate has to match what the client expects to see or
 // the handshake fails before any of this matters.
 func (s *Server) certificateFor(spec ListenerSpec, loaded *tls.Certificate, certName string) (*tls.Certificate, error) {
+	// One read of the engine for the whole decision: interception can be switched off at runtime
+	// (PUT /api/proxy/interception) between the passthrough check and this mint.
+	engine := s.config.tls.Engine()
+	if engine == nil && spec.CertMode != CertModePKCS12 {
+		return nil, fmt.Errorf("TLS interception was switched off while %s was being intercepted", certName)
+	}
 	switch spec.CertMode {
 	case CertModePKCS12:
 		if loaded == nil {
@@ -142,11 +148,11 @@ func (s *Server) certificateFor(spec ListenerSpec, loaded *tls.Certificate, cert
 		}
 		return loaded, nil
 	case CertModeSelfSigned:
-		return s.config.tls.engine.selfSignedCertificate(certName)
+		return engine.selfSignedCertificate(certName)
 	case CertModeCAFixed:
-		return s.config.tls.engine.GetCertificate(spec.CertHostname)
+		return engine.GetCertificate(spec.CertHostname)
 	default:
-		return s.config.tls.engine.GetCertificate(certName)
+		return engine.GetCertificate(certName)
 	}
 }
 

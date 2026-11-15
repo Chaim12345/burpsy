@@ -1554,6 +1554,7 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 	}
 	response, capped, err := readResponse(
 		br,
+		requestMethod(raw),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
 		promote,

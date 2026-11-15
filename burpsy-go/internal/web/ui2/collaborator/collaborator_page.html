@@ -1,0 +1,187 @@
+<div id="rows" class="collab">
+<style>
+.collab { padding:0 14px 20px; }
+.collab section { margin:10px 0 18px; }
+.collab .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+.collab .metrics { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:6px; margin:6px 0; }
+.collab .metric { border:1px solid var(--line); border-radius:6px; padding:6px 8px; min-width:0; }
+.collab .metric b { display:block; font-size:11px; color:var(--muted); font-weight:600; }
+.collab .metric span { overflow-wrap:anywhere; }
+.collab .alert { color:#c00; }
+.collab .done { color:#080; }
+.collab .note { border-left:3px solid var(--accent); padding:4px 8px; margin:6px 0; }
+.collab table { table-layout:auto; }
+.collab td.wrap, .collab th.wrap { white-space:normal; overflow-wrap:anywhere; }
+.collab input[type=text] { min-width:0; flex:1 1 220px; max-width:420px; }
+.collab tr.collab-read td { color:var(--muted); }
+.collab tr[data-hl=red] { box-shadow:inset 3px 0 0 #d33; } .collab tr[data-hl=orange] { box-shadow:inset 3px 0 0 #e80; }
+.collab tr[data-hl=yellow] { box-shadow:inset 3px 0 0 #cb0; } .collab tr[data-hl=green] { box-shadow:inset 3px 0 0 #2a2; }
+.collab tr[data-hl=cyan] { box-shadow:inset 3px 0 0 #0bb; } .collab tr[data-hl=blue] { box-shadow:inset 3px 0 0 #36d; }
+.collab tr[data-hl=pink] { box-shadow:inset 3px 0 0 #e6a; } .collab tr[data-hl=magenta] { box-shadow:inset 3px 0 0 #c3c; }
+.collab tr[data-hl=gray] { box-shadow:inset 3px 0 0 #888; }
+@media (max-width:640px) {
+  .collab table.collab-inter td:nth-child(4), .collab table.collab-inter th:nth-child(4),
+  .collab table.collab-inter td:nth-child(6), .collab table.collab-inter th:nth-child(6),
+  .collab table.collab-bx td:nth-child(2), .collab table.collab-bx th:nth-child(2) { display:none; }
+  .collab table { table-layout:auto; }
+}
+</style>
+{{if .Error}}<p class="alert" role="alert">{{.Error}}</p>{{end}}
+{{if .Done}}<p class="done" role="status">{{.Done}}</p>{{end}}
+{{if .StatusErr}}<p class="alert" role="alert">Collaborator state unavailable: {{.StatusErr}}</p>{{end}}
+
+<section aria-labelledby="collab-server-h">
+<h3 id="collab-server-h">Interaction server</h3>
+<p class="meta">{{if .Status.Configured}}Change where out-of-band callbacks are collected. Refused once a channel has registered, because payloads already handed out belong to the current domain.{{else}}No interaction server is set, so every out-of-band check refuses and no address can be handed out. Set one here instead of restarting.{{end}}</p>
+<form hx-post="/ui2/collaborator/server/confirm" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="op" value="set">
+  <div class="row">
+    <input type="text" name="server" value="{{.ServerInput}}" aria-label="Interaction server URL" placeholder="https://oast.example — or the word: public">
+    <input type="text" name="client_path" value="{{.ClientInput}}" aria-label="Path to the interactsh-client binary" placeholder="optional — path to interactsh-client, else found on PATH">
+    <button type="submit">Set server…</button>
+  </div>
+</form>
+<p class="meta"><code>public</code> uses interactsh's own pool — third-party, and your callback data lands there.</p>
+{{if .Status.Configured}}
+<div class="row">
+  <form hx-post="/ui2/collaborator/health" method="post" hx-target="#rows" hx-swap="outerHTML">
+    <button type="submit">Run health check…</button>
+  </form>
+  <form hx-post="/ui2/collaborator/server/confirm" method="post" hx-target="#rows" hx-swap="outerHTML" class="row">
+    <input type="hidden" name="op" value="unset">
+    {{if .Status.Domain}}<label><input type="checkbox" name="discard" value="1"> discard the open channel on <code>{{.Status.Domain}}</code> ({{len .Status.Payloads}} payload(s) stop being polled)</label>{{end}}
+    <button type="submit">Don't use Collaborator…</button>
+  </form>
+</div>
+{{end}}
+{{if .Status.Domain}}<p class="note">A channel is registered on <code>{{.Status.Domain}}</code>, so the server can no longer be changed: the payload addresses already handed out belong to that domain. Choose <strong>Don't use Collaborator</strong> first (ticking discard), then set the new server.</p>{{end}}
+
+{{with .ServerReview}}
+<div class="note" id="collab-server-review">
+  <p><strong>{{if .Unset}}Stop using Collaborator?{{else}}Point Collaborator at this server?{{end}}</strong>
+  {{if .Gated}}This route is confirmation-gated (riskScope): the one-time confirmation binds exactly the call below, method, path and body.{{else}}The call below is held server-side; confirming runs it, not re-read form fields.{{end}} Single-use, 60s.</p>
+  {{if and .Unset .Domain}}<p class="alert">The channel on <code>{{.Domain}}</code> is open: with discard set it closes, and the {{.Orphans}} payload address(es) minted from it point at a server nobody polls. Without discard the API refuses.</p>{{end}}
+  <pre class="brk">{{.Preview}}</pre>
+  <form hx-post="/ui2/collaborator/server/run" method="post" hx-target="#rows" hx-swap="outerHTML">
+    <input type="hidden" name="review_id" value="{{.ID}}">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">{{if .Unset}}Confirm: stop using Collaborator{{else}}Confirm: set server{{end}}</button>
+    <a class="btn" href="/ui2/collaborator" hx-get="/ui2/collaborator" hx-target="#rows" hx-swap="outerHTML">Cancel</a>
+  </form>
+</div>
+{{end}}
+
+{{if .HealthPending}}
+<div class="note" id="collab-health-review">
+  <p><strong>Run the health check?</strong> It registers a channel if none is open, then sends DNS, HTTP, HTTPS and SMTP traffic to the interaction server (riskEgress) and waits up to 30s for each to come back. The call is held server-side (single-use, 60s):</p>
+  <pre class="brk">{{.HealthPreview}}</pre>
+  <form hx-post="/ui2/collaborator/health" method="post" hx-target="#rows" hx-swap="outerHTML">
+    <input type="hidden" name="review_id" value="{{.HealthID}}">
+    <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm health check</button>
+  </form>
+</div>
+{{end}}
+{{if .HealthError}}<p class="alert" role="alert">Health check: {{.HealthError}}</p>{{end}}
+{{with .Health}}
+<div id="collab-health">
+  <h3>Health check <span class="badge">{{.Status}}</span></h3>
+  <p class="meta">{{.Address}} · waited {{.WaitedMS}} ms for callbacks · {{.Summary}}</p>
+  <table>
+  <thead><tr><th scope="col">Interaction came back through polling</th><th scope="col">Result</th><th scope="col">After</th><th scope="col" class="wrap">Detail</th></tr></thead>
+  <tbody>{{range .Captures}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{with .LatencyMS}}{{.}} ms{{else}}—{{end}}</td><td class="wrap">{{.Detail}}</td></tr>{{end}}</tbody>
+  </table>
+  <table>
+  <thead><tr><th scope="col">Connection</th><th scope="col">Result</th><th scope="col">Took</th><th scope="col" class="wrap">Detail</th></tr></thead>
+  <tbody>{{range .Connections}}<tr><td>{{.Name}}</td><td>{{.Status}}</td><td>{{with .LatencyMS}}{{.}} ms{{else}}—{{end}}</td><td class="wrap">{{.Detail}}</td></tr>{{end}}</tbody>
+  </table>
+  <p class="meta">{{.Polling}}</p>
+</div>
+{{end}}
+</section>
+
+<section aria-labelledby="collab-channel-h">
+<h3 id="collab-channel-h">Channel <span class="badge">{{if .Status.Configured}}configured{{else}}not configured{{end}}</span></h3>
+{{if .Status.Configured}}
+<p class="meta">{{if .Status.DefaultPool}}Using the interactsh public pool.{{else}}{{.Status.Server}}{{end}}
+{{if .Status.IdentityKept}}{{if .Status.Resumed}}Resumed the identity saved by an earlier run, so payloads minted before the restart are still polled.{{else}}The identity is kept across restarts, so payloads minted here stay polled after one.{{end}}{{else}}The identity is not kept: a restart orphans every payload minted here.{{end}}</p>
+<div class="metrics" id="collab-metrics">
+  <div class="metric"><b>State</b><span>{{.Status.State}}</span></div>
+  <div class="metric"><b>Domain</b><span>{{if .Status.Domain}}{{.Status.Domain}}{{else}}—{{end}}</span></div>
+  <div class="metric"><b>Payloads</b><span>{{len .Status.Payloads}}</span></div>
+  <div class="metric"><b>Interactions</b><span>{{with .Status.Interactions}}{{.Total}} ({{.Distinct}} distinct){{else}}—{{end}}</span></div>
+  <div class="metric"><b>Last read</b><span>{{.LastRead}}</span></div>
+  <div class="metric"><b>Gated checks</b><span>{{with .Status.GatedChecks}}{{.}}{{else}}— (no corpus loaded){{end}}</span></div>
+</div>
+<div class="row">
+  <form hx-post="/ui2/collaborator/mint" method="post" hx-target="#rows" hx-swap="outerHTML" class="row">
+    <input type="number" name="count" value="{{.Count}}" min="1" max="20" aria-label="Payloads to generate" style="width:70px">
+    <button type="submit">Generate payloads</button>
+  </form>
+  <form hx-post="/ui2/collaborator/poll" method="post" hx-target="#rows" hx-swap="outerHTML">
+    <button type="submit">Poll now</button>
+  </form>
+</div>
+{{else}}
+<p class="meta">{{if .Status.Hint}}{{.Status.Hint}}{{else}}No collaborator channel: set an interaction server above to mint payloads and collect interactions.{{end}}</p>
+<p class="meta">State: {{.Status.State}} · gated checks: {{with .Status.GatedChecks}}{{.}} refusing out-of-band verdicts{{else}}— (no corpus loaded){{end}}</p>
+{{end}}
+{{if .ConfirmPending}}
+<p class="meta">Minting registers a domain with the interaction server (riskEgress). Review the exact call — confirming runs the call the server held when this preview rendered (single-use, 60s), not re-read form fields:</p>
+<pre class="brk">{{.ConfirmPreview}}</pre>
+<form hx-post="/ui2/collaborator/mint" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <input type="hidden" name="mint_id" value="{{.MintID}}">
+  <button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm mint</button>
+</form>
+{{end}}
+{{if .MintError}}<p class="alert" role="alert">{{.MintError}}</p>{{end}}
+{{with .Minted}}
+<div class="mint-result">
+  <p class="meta">Minted {{len .Addresses}} payload(s) on <code>{{.Domain}}</code> · marker <code>{{.Marker}}</code> — the leading label attributes a callback to this batch.</p>
+  {{range .Addresses}}
+  <div class="mint-addr">
+    <code class="mint-addr-text">{{.}}</code>
+    <button type="button" class="btn copy-btn" data-copy="{{.}}">Copy</button>
+  </div>
+  {{end}}
+</div>
+{{end}}
+</section>
+
+{{template "collaborator_interactions.html" .}}
+<div id="collab-detail" aria-live="polite"></div>
+
+<section aria-labelledby="collab-bx-h">
+<h3 id="collab-bx-h">Blind XSS callbacks</h3>
+<p class="meta">Plant the script tag where a scanner cannot reach; a rendered payload calls home with its page context. An outstanding payload is outstanding, never clean.</p>
+{{if .BXErr}}<p class="alert" role="alert">Blind-XSS state unavailable: {{.BXErr}}</p>
+{{else if not .BX.Configured}}<p class="meta">No blind-XSS listener: {{if .BX.Reason}}{{.BX.Reason}}{{else}}start the server with -blindxss 0.0.0.0:8088 to mint callback payloads.{{end}}</p>
+{{else}}
+<p class="meta">{{.BX.Verdict}}</p>
+<form hx-post="/ui2/collaborator/blindxss" method="post" hx-target="#rows" hx-swap="outerHTML">
+  <button type="submit">Mint script tag</button>
+</form>
+{{end}}
+{{with .BXMinted}}
+<div class="mint-result" id="collab-bx-minted">
+  <p class="meta">Minted token <code>{{.Token}}</code> — plant this tag in a form field or header:</p>
+  <div class="mint-addr">
+    <code class="mint-addr-text">{{.ScriptTag}}</code>
+    <button type="button" class="btn copy-btn" data-copy="{{.ScriptTag}}">Copy</button>
+  </div>
+  {{if $.BXCaveat}}<p class="meta">{{$.BXCaveat}}</p>{{end}}
+</div>
+{{end}}
+{{if .BXRows}}
+<table class="collab-bx">
+<thead><tr><th scope="col">Token</th><th scope="col" class="wrap">Script URL</th><th scope="col">State</th><th scope="col">Hits</th><th scope="col">Last hit</th></tr></thead>
+<tbody>
+{{range .BXRows}}
+<tr><td><button type="button" class="btn copy-btn" data-copy="{{.ScriptTag}}" aria-label="Copy the script tag for {{.TokenShort}}">Copy</button> <code>{{.TokenShort}}</code></td>
+<td class="wrap"><code>{{.ScriptURL}}</code></td>
+<td>{{if .Outstanding}}outstanding{{else}}fired{{end}}</td><td>{{.Hits}}</td><td>{{.LastHit}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else if .BX.Configured}}<p class="meta">No payloads minted yet.</p>{{end}}
+</section>
+</div>

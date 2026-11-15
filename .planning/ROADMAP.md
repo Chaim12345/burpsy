@@ -8,6 +8,11 @@
 > including the session gate; Phases 8 and 10 (plugin API, MCP) are documented in Go
 > as deliberately not shipped (`burpsy-go/docs/MCP.md`). This file is retained as the
 > historical Rust-era roadmap.
+>
+> **Update — 2026-11-10.** The line above about Phases 8 and 10 is out of date: the Go tree
+> now has a JSON-RPC plugin host (`internal/extension`) and an MCP server (`internal/mcp`,
+> `cmd/burpsy-mcp`). Current status, and what is next, is the "Where things stand" section
+> at the top of the root `ROADMAP.md`.
 
 ## Overview
 

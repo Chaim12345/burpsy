@@ -1,0 +1,29 @@
+{{define "intercept_held_tools"}}<div class="held-tools">
+<form hx-post="/ui2/intercept/annotate-{{.id}}" hx-target="#rows" hx-swap="outerHTML">
+<label>Note <input type="text" name="comment" value="{{.comment}}" size="28" aria-label="Annotation note for held #{{.id}}"></label>
+<label>Highlight <select name="highlight" aria-label="Highlight colour for held #{{.id}}">
+<option value=""{{if eq .highlight ""}} selected{{end}}>none</option>
+<option value="red"{{if eq .highlight "red"}} selected{{end}}>red</option>
+<option value="orange"{{if eq .highlight "orange"}} selected{{end}}>orange</option>
+<option value="yellow"{{if eq .highlight "yellow"}} selected{{end}}>yellow</option>
+<option value="green"{{if eq .highlight "green"}} selected{{end}}>green</option>
+<option value="cyan"{{if eq .highlight "cyan"}} selected{{end}}>cyan</option>
+<option value="blue"{{if eq .highlight "blue"}} selected{{end}}>blue</option>
+<option value="pink"{{if eq .highlight "pink"}} selected{{end}}>pink</option>
+<option value="magenta"{{if eq .highlight "magenta"}} selected{{end}}>magenta</option>
+<option value="gray"{{if eq .highlight "gray"}} selected{{end}}>gray</option>
+</select></label>
+<button>Save annotation</button>
+</form>
+{{if .is_request}}<form method="post" action="/ui2/intercept/rules/quick" style="display:inline"><input type="hidden" name="id" value="{{.id}}"><input type="hidden" name="kind" value="pass-host"><button>Don't intercept requests to {{.host}}…</button></form>
+{{if .ext}}<form method="post" action="/ui2/intercept/rules/quick" style="display:inline"><input type="hidden" name="id" value="{{.id}}"><input type="hidden" name="kind" value="pass-ext"><button>Don't intercept .{{.ext}} files…</button></form>{{end}}{{end}}
+{{if .is_response}}<form method="post" action="/ui2/intercept/rules/quick" style="display:inline"><input type="hidden" name="id" value="{{.id}}"><input type="hidden" name="kind" value="pass-host"><button>Don't intercept responses from {{.host}}…</button></form>{{end}}
+<p class="meta">
+{{if .raw_editable}}<a class="btn" href="/ui2/intercept/send?id={{.id}}&amp;to=repeater">Send to Repeater</a>
+<a class="btn" href="/ui2/intercept/send?id={{.id}}&amp;to=comparer">Send to Comparer</a>
+<a class="btn" href="/ui2/intercept/send?id={{.id}}&amp;to=decoder">Send to Decoder</a>{{end}}
+· URL <button type="button" class="btn copy-btn" data-copy="{{.url}}" aria-label="Copy URL">Copy</button>
+{{if and .curl .raw_editable}}· curl command <button type="button" class="btn copy-btn" data-copy="{{.curl}}" aria-label="Copy as curl">Copy</button>{{end}}
+</p>
+<p class="meta">Sending to a tool copies the bytes and leaves the message held. A quick rule opens a review of the rule list before anything is saved.</p>
+</div>{{end}}

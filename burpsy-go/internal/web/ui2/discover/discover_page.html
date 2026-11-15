@@ -1,0 +1,45 @@
+<div id="rows" class="discover-page">
+<style>
+.discover-page { padding:8px 14px; max-width:980px; }
+.discover-page form { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0 10px; }
+.discover-page form input { flex:1 1 240px; min-width:0; }
+.discover-jump { display:flex; flex-wrap:wrap; gap:4px; margin:6px 0 12px; }
+.discover-jump a { padding:2px 8px; border:1px solid var(--line); border-radius:10px; color:var(--fg); text-decoration:none; font-size:12px; }
+.discover-panel { border-top:1px solid var(--line); padding:6px 0 10px; scroll-margin-top:8px; }
+.discover-panel h2 { font-size:16px; margin:8px 0 2px; }
+.discover-panel dl { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr); gap:6px 16px; margin:8px 0; }
+.discover-panel dt { font-weight:600; overflow-wrap:anywhere; }
+.discover-panel dd { margin:0; overflow-wrap:anywhere; }
+.discover-panel dd small { display:block; color:var(--muted); margin-top:2px; }
+.discover-panel .block-label { color:var(--muted); font-size:12px; font-weight:600; margin-top:6px; }
+.discover-panel kbd { border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; font:12px ui-monospace, monospace; }
+@media (max-width:640px) { .discover-panel dl { grid-template-columns:minmax(0,1fr); } .discover-panel dd { margin-bottom:6px; } }
+</style>
+<h2 style="margin:6px 0 2px">Discover</h2>
+<p class="meta" style="padding:0">An in-app reference for operating burpsy: the filter grammar, the BCheck shape, the hotkeys, and the gaps that change how a result should be read.</p>
+<form action="/ui2/discover" method="get" hx-get="/ui2/discover" hx-target="#discover-results" hx-select="#discover-results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="submit, input changed delay:300ms from:#discover-q" role="search">
+  <input type="search" id="discover-q" name="q" value="{{.Q}}" aria-label="Search the reference" placeholder="collaborator, insertion point, append-only…" autocomplete="off">
+  <noscript><button type="submit">Search</button></noscript>
+</form>
+<div id="discover-results">
+<p class="meta" style="padding:0" id="discover-count">{{if .Q}}{{.Shown}} of {{.Total}} entries{{else}}{{.Total}} entries{{end}}</p>
+{{if .Panels}}
+<nav class="discover-jump" aria-label="Reference sections">{{range .Panels}}<a href="#reference-{{.ID}}">{{.Title}}</a>{{end}}</nav>
+{{range .Panels}}
+<section class="discover-panel" id="reference-{{.ID}}" tabindex="-1" aria-label="{{.Title}}">
+  <h2>{{.Title}}</h2>
+  <p class="meta" style="padding:0">{{.Summary}}</p>
+  {{range .Blocks}}<div class="block-label">{{.Label}}</div><pre>{{.Body}}</pre>{{end}}
+  <dl>
+  {{range .Rows}}<dt>{{if .Keys}}{{range $i, $k := .Keys}}{{if $i}}+{{end}}<kbd>{{$k}}</kbd>{{end}}{{else}}{{.Term}}{{end}}</dt>
+  <dd>{{.Detail}}{{if .Note}}<small>{{.Note}}</small>{{end}}</dd>
+  {{end}}
+  </dl>
+  <p class="meta" style="padding:0">{{.Source}}</p>
+</section>
+{{end}}
+{{else}}
+<p class="meta" id="discover-none">Nothing in the reference matches “{{.Q}}”. A search matches an entry's term, its explanation and its caveat, plus each section's title and code samples. Try collaborator, insertion point, append-only, or mod.</p>
+{{end}}
+</div>
+</div>

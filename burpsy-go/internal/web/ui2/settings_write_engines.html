@@ -1,0 +1,16 @@
+<div id="settings-engines">
+{{if .tls}}
+<p class="meta">TLS interception: <strong>{{if .tls.Enabled}}on{{else}}off{{end}}</strong> · CA {{if .tls.HasCA}}loaded{{else}}not loaded{{end}}{{if .tls.CADir}} · {{.tls.CADir}}{{end}}</p>
+<form hx-post="/ui2/settings/write/engines/confirm" hx-target="#settings-engines" hx-swap="outerHTML" style="display:inline">
+<input type="hidden" name="op" value="interception">{{if not .tls.Enabled}}<input type="hidden" name="enabled" value="on">{{end}}
+<button>{{if .tls.Enabled}}Review switching interception off{{else}}Review switching interception on{{end}}</button></form>
+{{else}}<p class="meta">TLS interception cannot be switched on this instance (no TLS policy or CA directory is configured; start burpsy with -ca-dir).</p>{{end}}
+{{if .dom}}
+<p class="meta">DOM engine: <strong>{{.dom.Engine}}</strong> · DOM checks {{if .dom.DOMChecks}}on{{else}}off{{end}}</p>
+<form hx-post="/ui2/settings/write/engines/confirm" hx-target="#settings-engines" hx-swap="outerHTML">
+<input type="hidden" name="op" value="dom">
+<label>Engine <input type="text" name="engine" size="40" placeholder="chrome, ws://127.0.0.1:9222/…, or off" autocomplete="off"></label>
+<button>Review and set</button>
+<p class="meta">"chrome" launches and discovers a browser; a ws:// CDP endpoint must be on this machine. A browser path is accepted only as the -dom flag at startup.</p></form>
+{{else}}<p class="meta">This process has no switchable DOM engine; restart with -dom to use one.</p>{{end}}
+</div>

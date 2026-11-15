@@ -1,0 +1,16 @@
+<div id="settings-backup">
+{{if .unwired}}<p class="meta">This instance has no project database, so backup settings cannot be saved; start burpsy with -db to persist the project.</p>{{else}}
+<p class="meta">{{if .interval_minutes}}every {{.interval_minutes}} min{{else}}off{{end}} · dir={{if .dir}}{{.dir}}{{else}}{{.effective_dir}} (beside the live database){{end}} · retention={{.retention}} · delete on clean shutdown={{.delete_on_shutdown}}</p>
+<details><summary>Edit automatic backup</summary>
+<form hx-post="/ui2/settings/write/backup/confirm" hx-target="#settings-backup" hx-swap="outerHTML">
+<input type="hidden" name="op" value="set">
+<p><label>Interval in minutes (0 = off) <input type="text" name="interval_minutes" value="{{.interval_minutes}}" size="6"></label></p>
+<p><label>Directory (blank = beside the live database) <input type="text" name="dir" value="{{.dir}}" size="34"></label></p>
+<p><label>Retention (snapshots to keep; 0 = default, negative = keep all) <input type="text" name="retention" value="{{.retention}}" size="6"></label></p>
+<p><label><input type="checkbox" name="delete_on_shutdown" value="1"{{if .delete_on_shutdown}} checked{{end}}> Delete automatic backups on a clean shutdown</label></p>
+<p><button>Review and save</button></p>
+<p class="meta">The save is whole-document: every field above is written, and the settings are re-read at confirm so a change made after your review refuses the save.</p>
+</form>
+</details>
+{{end}}
+</div>

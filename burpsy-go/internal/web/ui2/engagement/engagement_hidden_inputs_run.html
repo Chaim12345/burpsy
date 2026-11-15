@@ -1,0 +1,16 @@
+<div id="hidden-run" class="hidden-run"{{if eq (printf "%v" .state) "running"}} hx-get="/ui2/engagement/hidden-inputs?task={{.task}}&amp;frag=run" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+<h3>Run {{.task}} {{with .state}}<span class="badge">{{.}}</span>{{end}}</h3>
+{{if .error}}<p class="meta" role="alert">{{.error}}</p>{{else}}
+<p class="meta brk">{{.target}} · exchange {{.exchange_id}} · {{.summary}}</p>
+{{with .result}}
+<p class="meta">{{.requests_sent}} of {{.request_budget}} requests sent{{with .reason}} · {{.}}{{end}}</p>
+<table>
+<thead><tr><th scope="col">Kind</th><th scope="col">Name</th><th scope="col">Confidence</th><th scope="col">Evidence</th></tr></thead>
+<tbody>
+{{range .inputs}}<tr><td>{{.kind}}</td><td>{{.name}}</td><td>{{.confidence}}</td><td title="{{.evidence}}">{{.evidence}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">No hidden inputs confirmed.</td></tr>{{end}}
+</tbody>
+</table>
+{{else}}<p class="meta">Running - results appear here when the run finishes.</p>{{end}}
+{{end}}
+</div>

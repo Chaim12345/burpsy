@@ -1,0 +1,64 @@
+<style>
+.xa-group { margin:6px 0; display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+details.xa-group { display:block; }
+.xa-inline { display:inline-flex; flex-wrap:wrap; gap:4px; margin:0; }
+.xa-copy { white-space:nowrap; }
+.xa-sw { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+table.xa-kv td, table.xa-kv th { white-space:normal; max-width:none; }
+table.xa-kv tbody tr { cursor:auto; }
+.xa-sections details { margin:6px 0; }
+</style>
+<div class="xa" id="xa-menu" data-exchange="{{.ID}}">
+<p class="meta brk">Actions for #{{.ID}} {{.Method}} {{.URL}}</p>
+<div class="xa-group"><strong>Send to</strong>
+{{if .HasRequest}}
+  <a class="btn" href="/ui2/repeater?msg_id={{.MsgID}}">Repeater</a>
+  <a class="btn" href="/ui2/intruder?msg_id={{.MsgID}}">Intruder</a>
+  <a class="btn" href="/ui2/comparer?msg_id={{.MsgID}}&amp;slot=a">Comparer A</a>
+  <a class="btn" href="/ui2/comparer?msg_id={{.MsgID}}&amp;slot=b">Comparer B</a>
+  <a class="btn" href="/ui2/decoder?msg_id={{.MsgID}}">Decoder</a>
+  <a class="btn" href="/ui2/sequencer?msg_id={{.MsgID}}">Sequencer</a>
+{{else}}<span class="meta">no request to send</span>{{end}}
+</div>
+<div class="xa-group"><strong>Copy</strong>
+  <span class="xa-copy">URL <button type="button" class="btn copy-btn" data-copy="{{.URL}}">Copy</button></span>
+  <span class="xa-copy">exchange id <button type="button" class="btn copy-btn" data-copy="{{.ID}}">Copy</button></span>
+  {{if .Curl}}<span class="xa-copy">curl <button type="button" class="btn copy-btn" data-copy="{{.Curl}}">Copy</button></span>
+  <span class="xa-copy">sqlmap <button type="button" class="btn copy-btn" data-copy="{{.Sqlmap}}">Copy</button></span>{{end}}
+  {{if .CopyNote}}<p class="meta">{{.CopyNote}}</p>{{end}}
+</div>
+<div class="xa-group"><strong>Highlight</strong> <span class="meta">now: {{if .Highlight}}{{.Highlight}}{{else}}none{{end}}</span>
+  <form hx-post="/ui2/exchange/{{.ID}}/annotate" method="post" action="/ui2/exchange/{{.ID}}/annotate" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline">
+  {{range .Colours}}<button type="submit" name="highlight" value="{{.}}" aria-label="Highlight {{.}}"><span class="xa-sw" style="background:{{.}}"></span>{{.}}</button> {{end}}
+  <button type="submit" name="highlight" value="none" aria-label="Clear highlight">clear</button>
+  </form>
+</div>
+<details class="xa-group"><summary><strong>Comment</strong>{{if .Notes}} <span class="meta">(has a comment)</span>{{end}}</summary>
+  <form hx-post="/ui2/exchange/{{.ID}}/annotate" method="post" action="/ui2/exchange/{{.ID}}/annotate" hx-target="#xa-out" hx-swap="innerHTML">
+  <textarea name="notes" rows="3" style="width:100%" aria-label="Comment on exchange {{.ID}} (empty removes it)">{{.Notes}}</textarea>
+  <button type="submit">Save comment</button> <span class="meta">An empty comment removes it.</span>
+  </form>
+</details>
+<div class="xa-group"><strong>Keep</strong>
+  <form hx-post="/ui2/exchange/{{.ID}}/organizer" method="post" action="/ui2/exchange/{{.ID}}/organizer" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Add to Organizer</button></form>
+</div>
+<details class="xa-group"><summary><strong>Record an issue</strong></summary>
+  <form hx-post="/ui2/exchange/{{.ID}}/issue" method="post" action="/ui2/exchange/{{.ID}}/issue" hx-target="#xa-out" hx-swap="innerHTML">
+  <p><input type="text" name="name" aria-label="Issue name" placeholder="issue name, as it should read in the report" style="width:100%"></p>
+  <p><label>Severity <select name="severity"><option value="high">high</option><option value="medium">medium</option><option value="low" selected>low</option><option value="info">info</option></select></label></p>
+  <textarea name="description" rows="3" style="width:100%" aria-label="Description (optional)" placeholder="description (optional)"></textarea>
+  <button type="submit">Record issue</button>
+  </form>
+</details>
+<div class="xa-group"><strong>Target</strong> <span class="meta">each opens a review first</span>
+  <form hx-post="/ui2/exchange/{{.ID}}/scope.confirm" method="post" action="/ui2/exchange/{{.ID}}/scope.confirm" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Add host to scope…</button></form>
+  <form hx-post="/ui2/exchange/{{.ID}}/audit.confirm" method="post" action="/ui2/exchange/{{.ID}}/audit.confirm" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Audit exchange…</button></form>
+  <form hx-post="/ui2/exchange/{{.ID}}/crawl-branch.confirm" method="post" action="/ui2/exchange/{{.ID}}/crawl-branch.confirm" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Crawl this branch…</button></form>
+  <form hx-post="/ui2/exchange/{{.ID}}/crawl-host.confirm" method="post" action="/ui2/exchange/{{.ID}}/crawl-host.confirm" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Crawl this host…</button></form>
+</div>
+<div class="xa-group"><strong>Browser</strong>
+  <form hx-post="/ui2/exchange/{{.ID}}/browser" method="post" action="/ui2/exchange/{{.ID}}/browser" hx-target="#xa-out" hx-swap="innerHTML" class="xa-inline"><button type="submit">Open URL in burpsy browser</button></form>
+  {{if .HasResponse}}<a class="btn" href="/api/exchange/in-browser/{{.ID}}" target="_blank" rel="noopener">Show response in browser</a>{{end}}
+</div>
+<div id="xa-out" aria-live="polite"></div>
+</div>

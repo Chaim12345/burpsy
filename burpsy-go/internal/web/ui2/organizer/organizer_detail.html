@@ -1,0 +1,46 @@
+<section id="org-detail" aria-label="Saved item detail">
+<h3>Item #{{.item.ID}}: {{if .item.Title}}{{.item.Title}}{{else}}(blank title){{end}}</h3>
+<p class="meta">Exchange #{{.item.Exchange}}{{if .item.Resolved}} · {{.item.Method}} {{.item.Host}}:{{.item.Port}}{{.item.Path}} · {{if .item.Status}}HTTP {{.item.Status}}{{else}}no response{{end}}{{if .item.Mime}} · {{.item.Mime}}{{end}} · tool {{.item.Tool}} · {{.scope}}{{else}} · no longer captured, so its request and response are gone; the item and its note stay{{end}} · collection {{.collection_name}} · workflow {{.workflow}} · highlight {{.item.Highlight}}</p>
+<p class="org-bar">Exchange id #{{.item.Exchange}} <button type="button" class="btn copy-btn" data-copy="{{.item.Exchange}}" aria-label="Copy exchange id">Copy</button>
+{{if .item.Note}} · Note <button type="button" class="btn copy-btn" data-copy="{{.item.Note}}" aria-label="Copy note">Copy</button>{{end}}
+{{with .history_href}} · <a class="btn" href="{{.}}">Show in history</a>{{end}}</p>
+
+{{if .item.Resolved}}
+<h3>Request
+<span class="pane-toggle">{{if .req_pretty}}<span class="pt-on">Pretty</span> <a class="btn" href="{{.req_raw_href}}" hx-get="{{.req_raw_href}}" hx-target="#rows" hx-swap="outerHTML">Raw</a>{{else}}<a class="btn" href="{{.req_pretty_href}}" hx-get="{{.req_pretty_href}}" hx-target="#rows" hx-swap="outerHTML">Pretty</a> <span class="pt-on">Raw</span>{{end}}</span>
+{{with .request}}{{if .Kind}}<span class="badge">{{.Kind}}</span>{{end}}{{end}}</h3>
+{{with .request}}{{if .Note}}<p class="meta" role="note">{{.Note}}</p>{{end}}<pre class="msg">{{.Highlighted}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response
+<span class="pane-toggle">{{if .resp_pretty}}<span class="pt-on">Pretty</span> <a class="btn" href="{{.resp_raw_href}}" hx-get="{{.resp_raw_href}}" hx-target="#rows" hx-swap="outerHTML">Raw</a>{{else}}<a class="btn" href="{{.resp_pretty_href}}" hx-get="{{.resp_pretty_href}}" hx-target="#rows" hx-swap="outerHTML">Pretty</a> <span class="pt-on">Raw</span>{{end}}</span>
+{{with .response}}{{if .Kind}}<span class="badge">{{.Kind}}</span>{{end}}{{end}}</h3>
+{{with .response}}{{if .Note}}<p class="meta" role="note">{{.Note}}</p>{{end}}<pre class="msg">{{.Highlighted}}</pre>{{else}}<p class="meta">No response recorded for this exchange.</p>{{end}}
+{{end}}
+
+<h4>Title, highlight and investigation note</h4>
+<form hx-post="/ui2/organizer/annotate/confirm" method="post" action="/ui2/organizer/annotate/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="annotate"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.base}}">
+<p><label>Title (at most 512 UTF-8 bytes, kept verbatim)<br><input type="text" name="title" value="{{.item.Title}}"></label></p>
+<p><label>Investigation note (at most 4096 UTF-8 bytes, kept verbatim)<br><textarea name="note" rows="4">{{.item.Note}}</textarea></label></p>
+<fieldset><legend>Highlight (current: {{.item.Highlight}})</legend>
+{{range .highlights}}<label><input type="radio" name="highlight" value="{{.}}"{{if eq . $.item.Highlight}} checked{{end}} required> <span class="org-hl" style="background:{{if eq . "none"}}transparent{{else}}{{.}}{{end}}"></span> {{.}}</label> {{end}}
+</fieldset>
+<button>Review title, highlight and note</button> <button type="reset">Revert edits</button></form>
+
+<h4>Workflow status</h4>
+<form hx-post="/ui2/organizer/status/confirm" method="post" action="/ui2/organizer/status/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="status"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.base}}">
+<fieldset><legend>Workflow status (your decision, not the HTTP status; current: {{.workflow}})</legend>
+{{range .workflows}}<label><input type="radio" name="status" value="{{.}}"{{if eq . $.workflow}} checked{{end}} required> {{.}}</label> {{end}}
+</fieldset><button>Review workflow status</button> <button type="reset">Revert edits</button></form>
+
+<h4>Move, copy or delete this saved item</h4>
+<form hx-post="/ui2/organizer/items/confirm" method="post" action="/ui2/organizer/items/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.base}}">
+<fieldset><legend>Destination (current: {{.collection_name}})</legend>
+<label><input type="radio" name="collection_id" value="0" required> Inbox</label>
+{{range .collections}}<label><input type="radio" name="collection_id" value="{{.ID}}"> {{.Name}}</label> {{end}}
+</fieldset><button name="op" value="move">Review move to destination</button> <button name="op" value="copy">Review copy to destination</button></form>
+<form hx-post="/ui2/organizer/items/confirm" method="post" action="/ui2/organizer/items/confirm" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="op" value="delete"><input type="hidden" name="item_id" value="{{.item.ID}}"><input type="hidden" name="form_base" value="{{.base}}"><input type="hidden" name="collection_id" value="">
+<button>Review delete saved item</button> <span class="meta">Deletes only this Organizer item; its exchange and history stay.</span></form>
+</section>

@@ -1,0 +1,19 @@
+<div class="msg-review">
+{{if .Error}}
+<p class="meta"><strong>Not fetched: {{.Error}}</strong></p>
+{{else}}
+<p><strong>Review before fetching:</strong> this sends one gRPC server-reflection request to the target below and decodes exchange #{{.ID}}'s {{if eq .Side "req"}}request{{else}}response{{end}} body ({{.BodyLen}} bytes) locally with the schema it returns. The body itself is not sent.</p>
+<pre class="msg">POST /api/protobuf/reflect-decode
+target:  {{.Target}}
+service: {{.Service}}
+tls:     {{.TLS}}
+message: {{if .Message}}{{.Message}}{{else}}(the schema's default){{end}}</pre>
+<p class="meta">The scope check runs before the dial and a refusal sends nothing. No session or jar credentials are attached. Names the target serves are marked as target-supplied.</p>
+<form method="post" action="{{.RunHref}}" hx-post="{{.RunHref}}" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="review_id" value="{{.ReviewID}}">
+  <input type="hidden" name="token" value="{{.Token}}">
+  <button disabled data-arm-on-load title="arming…">Fetch and decode</button>
+</form>
+{{end}}
+<p class="meta"><a href="{{.BackHref}}" hx-get="{{.BackHref}}" hx-target="#detail" hx-swap="innerHTML">back to the exchange</a> (a review expires on its own)</p>
+</div>

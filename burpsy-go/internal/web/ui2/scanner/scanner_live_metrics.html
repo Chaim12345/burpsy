@@ -1,0 +1,16 @@
+<div id="livemetrics" aria-live="polite">
+{{if not .v.Wired}}<p class="meta sc-warn">{{if .v.Hint}}{{.v.Hint}}{{else}}Live active audit is not available on this server.{{end}}</p>{{else}}
+<dl class="sc-dl meta">
+<dt>State</dt><dd id="live-state"><strong>{{if .v.Enabled}}on{{else}}off{{end}}</strong> · source {{.source}}{{if .v.Config}} · configuration {{.v.Config}}{{end}}{{if .v.Pool}} · pool {{.v.Pool}}{{end}}{{if .v.Query}} · filtered to {{.v.Query}}{{end}}</dd>
+<dt>Exchanges swept</dt><dd>{{.v.Swept}}</dd>
+<dt>Findings</dt><dd>{{.v.Findings}}</dd>
+<dt>Backlog</dt><dd>{{.v.Behind}} not swept yet{{if .v.Behind}} · behind {{.behind_for}}{{end}}{{if .v.BatchLimit}} · sweeping {{.v.BatchLimit}}/tick{{end}}</dd>
+<dt>Stalled</dt><dd>{{if .stalled}}waiting on #{{.stalled}}{{else}}no{{end}}{{if .v.Skipped}} · {{.v.Skipped}} given up on{{end}}</dd>
+<dt>Gated (not this source)</dt><dd>{{.v.RefusedSource}}</dd>
+<dt>Second chance</dt><dd>{{.v.Retried}} taken back</dd>
+<dt>Ledger-refused</dt><dd>{{.v.Collapsed}} already covered{{if .v.LedgerResets}} · {{.v.LedgerResets}} ledger reset(s){{end}}</dd>
+</dl>
+<p class="meta">{{if .gaps}}a floor, not a total: {{.gaps}}{{else}}complete - the sweep is caught up, nothing skipped and nothing waiting{{end}}
+· <a href="/ui2/scanner/live" hx-get="/ui2/scanner/live" hx-target="#livemetrics" hx-swap="outerHTML">refresh</a></p>
+{{end}}
+</div>

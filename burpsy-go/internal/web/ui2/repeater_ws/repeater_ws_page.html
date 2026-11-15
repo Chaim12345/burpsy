@@ -1,0 +1,86 @@
+<div id="rows" style="padding:0 14px 14px">
+{{template "repeater_ws_tools"}}
+<h3>WebSocket Repeater</h3>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="status">{{.Note}}</p>{{end}}
+<form id="ws-form" method="post" action="/ui2/repeater/ws/send" hx-post="/ui2/repeater/ws/send" hx-target="#rows" hx-swap="outerHTML">
+  <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px">
+    <label>Connection
+      <select name="mode" aria-label="Connection mode">
+        <option value="new" {{if eq .Form.Mode "new"}}selected{{end}}>New connection (to Target)</option>
+        <option value="clone" {{if eq .Form.Mode "clone"}}selected{{end}}>Clone connection (same handshake)</option>
+        <option value="attach" {{if eq .Form.Mode "attach"}}selected{{end}}>Attach to live connection</option>
+      </select></label>
+    <label>WebSocket ID <input type="text" name="socket" value="{{.Form.Socket}}" size="6" inputmode="numeric" aria-label="WebSocket ID (for clone or attach)"></label>
+    <label>Direction
+      <select name="direction" aria-label="Direction">
+        <option value="server" {{if eq .Form.Direction "server"}}selected{{end}}>To server</option>
+        <option value="client" {{if eq .Form.Direction "client"}}selected{{end}}>To client (attach only)</option>
+      </select></label>
+    <label>Opcode
+      <select name="opcode" aria-label="WebSocket opcode">
+        <option value="text" {{if eq .Form.Opcode "text"}}selected{{end}}>text</option>
+        <option value="binary" {{if eq .Form.Opcode "binary"}}selected{{end}}>binary</option>
+      </select></label>
+  </div>
+  {{with .Conn}}<p class="meta">WebSocket #{{.Exchange}}: {{if .TLS}}wss{{else}}ws{{end}}://{{.Host}}:{{.Port}}{{.Path}} · {{if .Live}}<strong>live</strong> through the proxy (attach available){{else}}closed (clone opens a new connection with its handshake){{end}}</p>{{end}}
+  <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px">
+    <input type="text" name="target" value="{{.Form.Target}}" placeholder="ws://host:port" aria-label="Target for a new connection (ws:// or wss://)" style="flex:2; min-width:180px">
+    <input type="text" name="path" value="{{.Form.Path}}" placeholder="/path" aria-label="Path for a new connection" style="flex:1; min-width:100px">
+  </div>
+  <textarea name="payload" rows="8" style="width:100%; font-family:ui-monospace,monospace" aria-label="Frame payload">{{.Form.Payload}}</textarea>
+  <details {{if .Form.EditHandshake}}open{{end}} style="margin:6px 0">
+    <summary>Negotiation request (handshake)</summary>
+    <label><input type="checkbox" name="edit_handshake" {{if .Form.EditHandshake}}checked{{end}}> Dial with this edited handshake (new or clone; attach ignores it)</label>
+    <textarea name="handshake" rows="8" style="width:100%; font-family:ui-monospace,monospace" aria-label="Handshake request">{{.Form.Handshake}}</textarea>
+  </details>
+  <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0">
+    <button type="submit">Send frame</button>
+    <button type="button" hx-get="/ui2/repeater/ws" hx-include="#ws-form" hx-vals='{"preview":"1"}' hx-target="#rows" hx-swap="outerHTML">Preview handshake</button>
+    {{if .Form.Payload}}<a class="btn" href="/ui2/decoder?input={{.Form.Payload}}">Payload to Decoder</a>
+    <a class="btn" href="/ui2/comparer?a={{.Form.Payload}}">Payload to Comparer</a>{{end}}
+  </div>
+</form>
+
+{{with .Sent}}
+<h3>Reply <span class="badge">{{.Handshake}}</span> <span class="badge">{{.ElapsedMs}} ms</span>
+  <a class="btn" href="/ui2/repeater/ws?exchange={{.ExchangeID}}">recorded as WebSocket #{{.ExchangeID}}</a></h3>
+<table aria-label="Reply frames">
+<thead><tr><th scope="col">#</th><th scope="col">Opcode</th><th scope="col">Len</th><th scope="col">Payload</th></tr></thead>
+<tbody>
+{{range $i, $m := .Messages}}<tr><td>{{$i}}</td><td>{{$m.Opcode}}</td><td>{{$m.Len}}</td><td class="brk" style="white-space:pre-wrap">{{$m.Payload}}</td></tr>
+{{else}}<tr><td colspan="4" class="meta">The target sent no frames back.</td></tr>{{end}}
+</tbody>
+</table>
+{{if .ClosedByPeer}}<p class="meta">Closed by the peer{{if .CloseCode}}: {{.CloseCode}} {{.CloseReason}}{{end}}</p>{{end}}
+{{end}}
+{{with .Attached}}
+<p class="meta" role="status">Frame injected into WebSocket #{{.Socket}} as message {{.MessageID}} ({{.Direction}}, {{.Len}} bytes). Replies arrive in the connection's frames below.</p>
+{{end}}
+
+{{with .Frame}}
+<h3>Loaded frame #{{.ID}} <span class="badge">{{.Direction}}</span> <span class="badge">{{.Opcode}}</span> <span class="badge">{{.Len}} bytes</span></h3>
+<pre class="msg">{{.Text}}</pre>
+<details><summary>Hex</summary><pre class="msg">{{.Hex}}</pre></details>
+{{end}}
+
+{{if .Form.Socket}}
+<h3>Frames on WebSocket #{{.Form.Socket}} <a class="btn" href="/ui2/repeater/ws?exchange={{.Form.Socket}}&amp;mode={{.Form.Mode}}" hx-get="/ui2/repeater/ws?exchange={{.Form.Socket}}&amp;mode={{.Form.Mode}}" hx-target="#rows" hx-swap="outerHTML">refresh</a></h3>
+<table aria-label="Connection frames">
+<thead><tr><th scope="col">ID</th><th scope="col">Dir</th><th scope="col">Opcode</th><th scope="col">Len</th><th scope="col">Payload</th><th scope="col">Edit</th></tr></thead>
+<tbody>
+{{range .Frames}}<tr><td>{{.ID}}</td><td>{{.Direction}}</td><td>{{.Opcode}}</td><td>{{.Len}}</td><td>{{.Preview}}</td><td><a href="/ui2/repeater/ws?frame={{.ID}}">load</a></td></tr>
+{{else}}<tr><td colspan="6" class="meta">No frames on this connection.</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+
+<h3>Connections</h3>
+<table aria-label="WebSocket connections">
+<thead><tr><th scope="col">ID</th><th scope="col">URL</th><th scope="col">Live</th><th scope="col">Open</th></tr></thead>
+<tbody>
+{{range .Connections}}<tr><td>{{.Exchange}}</td><td>{{if .TLS}}wss{{else}}ws{{end}}://{{.Host}}:{{.Port}}{{.Path}}</td><td>{{if .Live}}live{{else}}—{{end}}</td><td><a href="/ui2/repeater/ws?exchange={{.Exchange}}">use</a></td></tr>
+{{else}}<tr><td colspan="4" class="meta">No WebSocket connections captured yet; a new connection needs only a Target.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

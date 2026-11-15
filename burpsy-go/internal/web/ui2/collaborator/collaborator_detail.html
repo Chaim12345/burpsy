@@ -1,0 +1,28 @@
+<div class="note collab-detail" data-collab-detail="{{.ID}}">
+{{if .Error}}
+<p class="alert" role="alert" style="color:#c00">Interaction #{{.ID}}: {{.Error}}</p>
+{{else}}
+<h3>Interaction #{{.ID}} — {{.TypeUpper}} from <code>{{.ClientIP}}</code></h3>
+<table>
+<tbody>
+<tr><th scope="row">Correlation ID</th><td class="brk" style="white-space:normal"><code>{{.CorrelationID}}</code></td></tr>
+<tr><th scope="row">Interaction ID</th><td class="brk" style="white-space:normal"><code>{{.InteractionID}}</code></td></tr>
+<tr><th scope="row">Client IP</th><td><code>{{.ClientIP}}</code></td></tr>
+<tr><th scope="row">IP means</th><td style="white-space:normal">{{.ClientIPMeans}}</td></tr>
+<tr><th scope="row">Time</th><td>{{.Time}}</td></tr>
+{{if .QType}}<tr><th scope="row">Query type</th><td>{{.QType}}</td></tr>{{end}}
+<tr><th scope="row">Payload</th><td class="brk" style="white-space:normal"><code>{{if .Payload}}{{.Payload}}{{else}}—{{end}}</code></td></tr>
+</tbody>
+</table>
+<div class="row" style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0">
+  <label>Highlight <select data-collab-hl aria-label="Highlight colour for interaction {{.ID}}">
+    <option value="">none</option><option>red</option><option>orange</option><option>yellow</option><option>green</option><option>cyan</option><option>blue</option><option>pink</option><option>magenta</option><option>gray</option>
+  </select></label>
+  <input type="text" data-collab-comment aria-label="Comment for interaction {{.ID}}" placeholder="comment (kept in this browser)">
+</div>
+<h4>Request</h4>
+{{if .RawRequest}}<pre class="msg">{{.RawRequest}}</pre>{{else}}<p class="meta">No request body — DNS interactions carry a query, not a request.</p>{{end}}
+{{if .RawResponse}}<h4>Response</h4><pre class="msg">{{.RawResponse}}</pre>{{end}}
+{{end}}
+<p><a class="btn" href="/ui2/collaborator">Back to Collaborator</a></p>
+</div>

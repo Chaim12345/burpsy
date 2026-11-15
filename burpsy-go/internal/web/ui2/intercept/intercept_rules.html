@@ -1,0 +1,40 @@
+<div id="irules">
+<p class="meta"><a href="/ui2/intercept">&larr; Intercept queue</a> · Rule lists:
+{{range .Dirs}} <a href="/ui2/intercept/rules?dir={{.Name}}"{{if eq .Name $.Dir.Name}} aria-current="page"{{end}}>{{.Title}}</a>{{end}}</p>
+<h3>{{.Dir.Title}} interception rules</h3>
+{{if .Note}}<p class="meta" role="status" id="irules-note"><strong>{{.Note}}</strong></p>{{end}}
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Base}}
+<form id="irules-form" method="post" action="/ui2/intercept/rules/edit" hx-post="/ui2/intercept/rules/edit" hx-target="#irules" hx-swap="outerHTML">
+<input type="hidden" name="dir" value="{{.Dir.Name}}">
+<input type="hidden" name="form_base" value="{{.Base}}">
+<input type="hidden" name="n" value="{{.N}}">
+<p><label><input type="checkbox" name="active" value="on"{{if .Active}} checked{{end}}> Hold {{.Dir.Noun}}s matching these rules (list on)</label></p>
+<p class="meta">This list is {{.Describe}}. Each rule combines with the rules above it using its AND/OR; Don't-intercept rules let a match through. Edits here are a draft until you review and save them.</p>
+<p><button type="submit" formaction="/ui2/intercept/rules/confirm" hx-post="/ui2/intercept/rules/confirm">Review and save…</button>
+<button type="submit" name="edit" value="add">Add rule</button></p>
+<div style="overflow-x:auto">
+<table class="irules-t">
+<thead><tr><th scope="col">#</th><th scope="col">On</th><th scope="col">Combine</th><th scope="col">Action</th><th scope="col">Field</th><th scope="col">Header/cookie</th><th scope="col">Match</th><th scope="col">Kind</th><th scope="col">Comment</th><th scope="col">Order</th></tr></thead>
+<tbody>
+{{range $row := .Rules}}{{$i := $row.Index}}
+<tr>
+<td>{{$row.Num}}</td>
+<td><input type="checkbox" name="enabled_{{$i}}" value="on"{{if $row.Enabled}} checked{{end}} aria-label="Rule {{$row.Num}} enabled"></td>
+<td><select name="op_{{$i}}" aria-label="Combine rule {{$row.Num}} with the rules above"><option value="or"{{if eq $row.Op "or"}} selected{{end}}>OR</option><option value="and"{{if eq $row.Op "and"}} selected{{end}}>AND</option></select></td>
+<td><select name="action_{{$i}}" aria-label="Action for rule {{$row.Num}}"><option value="hold"{{if eq $row.Action "hold"}} selected{{end}}>Do intercept</option><option value="pass"{{if eq $row.Action "pass"}} selected{{end}}>Don't intercept</option></select></td>
+<td><select name="field_{{$i}}" aria-label="Field for rule {{$row.Num}}">{{range $.Fields}}<option value="{{.Value}}"{{if eq .Value $row.Field}} selected{{end}}>{{.Label}}{{if not .Applies}} (never in a {{$.Dir.Noun}}){{end}}</option>{{end}}</select></td>
+<td><input type="text" name="member_{{$i}}" value="{{$row.Member}}" placeholder="{{if $row.MemberLabel}}{{$row.MemberLabel}}{{else}}header/cookie fields only{{end}}" aria-label="Header or cookie name for rule {{$row.Num}}" size="12"></td>
+<td><input type="text" name="match_{{$i}}" value="{{$row.Match}}" aria-label="Match pattern for rule {{$row.Num}}" size="18"></td>
+<td><select name="category_{{$i}}" aria-label="Match kind for rule {{$row.Num}}"><option value="regex"{{if eq $row.Category "regex"}} selected{{end}}>Regex</option><option value="literal"{{if eq $row.Category "literal"}} selected{{end}}>Literal</option></select></td>
+<td><input type="text" name="comment_{{$i}}" value="{{$row.Comment}}" aria-label="Comment for rule {{$row.Num}}" size="12"></td>
+<td style="white-space:nowrap"><button type="submit" name="edit" value="up-{{$i}}" aria-label="Move rule {{$row.Num}} up"{{if eq $i 0}} disabled{{end}}>↑</button><button type="submit" name="edit" value="down-{{$i}}" aria-label="Move rule {{$row.Num}} down"{{if $row.Last}} disabled{{end}}>↓</button><button type="submit" name="edit" value="delete-{{$i}}" aria-label="Remove rule {{$row.Num}}">Remove</button></td>
+</tr>
+{{else}}<tr><td colspan="10" class="meta">No rules: while the list is on, every {{.Dir.Noun}} is held.</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+<p class="meta">The header/cookie name is used only by the four header and cookie fields and is ignored for the rest. The first rule's AND/OR is ignored.</p>
+</form>
+{{else}}<p><a href="/ui2/intercept/rules?dir={{.Dir.Name}}">Reload the {{.Dir.Noun}} list</a></p>{{end}}
+</div>

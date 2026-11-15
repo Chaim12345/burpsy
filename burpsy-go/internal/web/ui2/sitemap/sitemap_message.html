@@ -1,0 +1,3 @@
+{{with .D}}<h3>#{{.ID}} {{.Method}} {{.Host}}:{{.Port}}{{.Path}} → {{.Status}}</h3>
+<p class="meta">{{.Mime}} · {{.ResponseLen}} bytes · {{.DurationMs}} ms</p>{{end}}
+{{template "message_views.html" .Views}}

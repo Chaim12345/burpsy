@@ -1,0 +1,19 @@
+{{if .Error}}<p class="meta" role="alert"><strong>Not applied: {{.Error}}</strong></p>{{end}}
+{{if .Done}}<p class="meta" role="status"><strong>{{.Done}}</strong></p>{{end}}
+{{if .Token}}
+<div class="review-sheet" data-review="1">
+<p><strong>Review before applying:</strong> {{.Title}}</p>
+{{range .Consequences}}<p class="meta">{{.}}</p>{{end}}
+<p class="meta">The exact call{{if .Gated}}, bound by a one-time confirmation token{{else}}, held on the server and sent verbatim{{end}}:</p>
+<pre class="brk review-call">{{.Method}} {{.Path}}{{if .Body}}
+{{.Body}}{{end}}</pre>
+<form hx-post="{{.RunURL}}" method="post" action="{{.RunURL}}" hx-target="{{.Target}}" hx-swap="{{.Swap}}">
+{{if .ReviewID}}<input type="hidden" name="review_id" value="{{.ReviewID}}">{{end}}
+<input type="hidden" name="token" value="{{.Token}}">
+{{range .Fields}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+{{end}}<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="font-weight:700">Confirm</button>
+</form>
+<p class="meta">This confirmation is one-time and expires on its own if you leave it.</p>
+</div>
+{{end}}
+{{if .CancelURL}}<p class="meta"><a href="{{.CancelURL}}" hx-get="{{.CancelURL}}" hx-target="{{.CancelTarget}}" hx-swap="{{if eq .CancelTarget "#rows"}}outerHTML{{else}}innerHTML{{end}}">{{if .Token}}cancel{{else}}back{{end}}</a></p>{{end}}

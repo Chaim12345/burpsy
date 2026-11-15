@@ -1,0 +1,36 @@
+<div class="sm-analyzer">
+{{if not .Host}}<p class="meta">Nothing analysed yet. Choose Target analyzer on a host or branch in the site map, or name one here.</p>
+<form class="sm-filter" action="/ui2/sitemap" method="get">
+<input type="hidden" name="view" value="analyzer">
+<input type="text" name="host" placeholder="host" aria-label="Host to analyse" required>
+<input type="text" name="path" placeholder="/branch (optional)" aria-label="Branch path">
+<button type="submit">Analyse</button>
+</form>
+{{else}}
+<h3>Target analyzer: {{.Host}}{{.Path}}</h3>
+<p class="meta">Counts over the content already captured for this host or branch. A URL is dynamic when a captured request to it carried a query or form parameter, and static otherwise — its response may still be generated.</p>
+{{if .Error}}<p class="meta" role="alert"><strong>{{.Error}}</strong></p>{{else}}
+<p><a class="btn" href="{{.Save}}" download>Save report</a></p>
+<nav class="sm-tabs" aria-label="Target analyzer">{{range .Tabs}}<a class="btn{{if .Checked}} sm-on{{end}}" href="{{.Value}}"{{if .Checked}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>
+{{with .Report}}
+{{if eq $.Tab "summary"}}<table><thead><tr><th scope="col">Measure</th><th scope="col">Count</th></tr></thead><tbody>
+<tr><td>Dynamic URLs</td><td>{{.Summary.DynamicURLs}}</td></tr>
+<tr><td>Static URLs</td><td>{{.Summary.StaticURLs}}</td></tr>
+<tr><td>Parameters</td><td>{{.Summary.Parameters}}</td></tr>
+<tr><td>Unique parameter names</td><td>{{.Summary.UniqueParameterNames}}</td></tr>
+</tbody></table>{{end}}
+{{if eq $.Tab "dynamic"}}{{if .Dynamic}}<table><thead><tr><th scope="col">URL</th><th scope="col">Methods</th><th scope="col">Parameters</th><th scope="col">Requests</th></tr></thead><tbody>
+{{range .Dynamic}}<tr><td title="{{.URL}}"><code>{{.URL}}</code></td><td>{{range $i, $m := .Methods}}{{if $i}}, {{end}}{{$m}}{{end}}</td><td>{{range $i, $p := .Params}}{{if $i}}, {{end}}{{$p}}{{end}}</td><td>{{.Requests}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="meta">No dynamic URLs: no captured request here carried a parameter.</p>{{end}}{{end}}
+{{if eq $.Tab "static"}}{{if .Static}}<table><thead><tr><th scope="col">URL</th><th scope="col">Methods</th><th scope="col">Requests</th></tr></thead><tbody>
+{{range .Static}}<tr><td title="{{.URL}}"><code>{{.URL}}</code></td><td>{{range $i, $m := .Methods}}{{if $i}}, {{end}}{{$m}}{{end}}</td><td>{{.Requests}}</td></tr>{{end}}
+</tbody></table>{{else}}<p class="meta">No static URLs: every captured URL here took parameters.</p>{{end}}{{end}}
+{{end}}
+{{if eq .Tab "parameters"}}{{if .Params}}<table><thead><tr><th scope="col">Parameter</th><th scope="col">URLs</th></tr></thead><tbody>
+{{range .Params}}<tr{{if .Sel}} class="selected"{{end}}><td><a href="{{.URL}}"><code>{{.P.Name}}</code></a></td><td><span class="badge">{{.P.URLCount}}</span></td></tr>{{end}}
+</tbody></table>
+{{with .Selected}}<h3>URLs taking {{.Name}}</h3><ul>{{range .URLs}}<li><code>{{.}}</code></li>{{end}}</ul>{{else}}<p class="meta">Select a parameter to list the URLs that take it.</p>{{end}}
+{{else}}<p class="meta">No parameters: no captured request here carried a query or form parameter.</p>{{end}}{{end}}
+{{end}}
+{{end}}
+</div>

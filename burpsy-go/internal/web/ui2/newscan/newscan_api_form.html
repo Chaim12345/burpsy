@@ -1,0 +1,44 @@
+<form id="newscan-api" method="post" hx-post="/ui2/newscan/api/check" hx-target="#apicheck" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+<p class="meta" style="padding:0">Sends the endpoints an API definition describes, instead of discovering them by crawling. The document's own examples, defaults and enums become the parameter values where it supplies them; elsewhere this build invents visible placeholders and says how many.</p>
+<p><label for="api-definition"><strong>API definition</strong></label> <small>OpenAPI 3.x, Swagger 2.0 or a Postman Collection (v2.x), JSON or YAML — paste, load a file, or fetch from a URL</small><br>
+<textarea id="api-definition" name="definition" rows="8" style="width:100%; font:12px/1.4 ui-monospace, monospace" spellcheck="false" hx-post="/ui2/newscan/api/check" hx-trigger="keyup changed delay:700ms, change" hx-target="#apicheck" hx-swap="innerHTML" placeholder="openapi: &quot;3.0.3&quot;&#10;info: {title: Petstore, version: &quot;1.0&quot;}&#10;servers: [{url: https://api.example.com/v1}]&#10;paths:&#10;  /pets:&#10;    get:&#10;      responses: {&quot;200&quot;: {description: ok}}"></textarea></p>
+<p><label>Load from file <input type="file" id="api-definition-file" name="definition_file" accept=".json,.yaml,.yml,application/json,text/yaml" hx-post="/ui2/newscan/api/check" hx-trigger="change" hx-target="#apicheck" hx-swap="innerHTML"></label></p>
+<details style="margin:6px 0"><summary>Load from URL</summary>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px 12px; margin-top:6px">
+<label>Definition URL<br><input type="text" name="fetch_url" style="width:100%" placeholder="https://api.example.com/openapi.json"></label>
+<label>Add auth<br><select name="fetch_auth_type" style="width:100%"><option value="none">None</option><option value="basic">Basic</option><option value="bearer">Bearer token</option><option value="oauth2_client_credentials">OAuth 2.0 client credentials</option></select></label>
+<label>Username (Basic)<br><input type="text" name="fetch_username" autocomplete="off" style="width:100%"></label>
+<label>Password (Basic)<br><input type="password" name="fetch_password" autocomplete="off" style="width:100%"></label>
+<label>Token (Bearer)<br><input type="password" name="fetch_token" autocomplete="off" style="width:100%"></label>
+<label>Token URL (OAuth)<br><input type="text" name="fetch_token_url" style="width:100%" placeholder="https://auth.example.com/oauth/token"></label>
+<label>Client ID (OAuth)<br><input type="text" name="fetch_client_id" autocomplete="off" style="width:100%"></label>
+<label>Client secret (OAuth)<br><input type="password" name="fetch_client_secret" autocomplete="off" style="width:100%"></label>
+<label>Scope (OAuth, optional)<br><input type="text" name="fetch_scope" style="width:100%"></label>
+</div>
+<p class="meta" style="padding:0">Fetched once through the scope check (the token URL too): an out-of-scope URL is refused, not contacted. Redirects are not followed, the fetch is not recorded in history, and the credential is used for this fetch only.</p>
+<button type="button" hx-post="/ui2/newscan/api/fetch" hx-target="#apifetch" hx-swap="innerHTML">Fetch definition</button>
+<div id="apifetch" aria-live="polite"></div>
+</details>
+<p><label>Base URL <small>(optional; overrides the document's servers[0], required when it declares none)</small><br><input type="text" id="api-base" name="base_url" style="width:100%" placeholder="https://api.example.com/v1" hx-post="/ui2/newscan/api/check" hx-trigger="keyup changed delay:700ms" hx-target="#apicheck" hx-swap="innerHTML"></label></p>
+<p><label>Filter parameters <input type="search" name="param_filter" placeholder="endpoint, location, name or value" hx-post="/ui2/newscan/api/check" hx-trigger="keyup changed delay:400ms, search" hx-target="#apicheck" hx-swap="innerHTML"></label></p>
+<div id="apicheck" aria-live="polite">{{template "newscan_api_check.html" .api_check}}</div>
+<fieldset style="margin:8px 0; min-width:0"><legend>Authentication method</legend>
+<label style="display:block"><input type="radio" name="auth_type" value="none" checked> None <small>— send only the headers the document declares</small></label>
+<label style="display:block"><input type="radio" name="auth_type" value="basic"> Basic <small>— Authorization: Basic with a username and password</small></label>
+<label style="display:block"><input type="radio" name="auth_type" value="bearer"> Bearer <small>— Authorization: Bearer with a token</small></label>
+<label style="display:block"><input type="radio" name="auth_type" value="header"> Header <small>— any one header, by name and value</small></label>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:6px 12px">
+<label>Username (Basic)<br><input type="text" name="auth_username" autocomplete="off" style="width:100%"></label>
+<label>Password (Basic)<br><input type="password" name="auth_password" autocomplete="new-password" style="width:100%"></label>
+<label>Token (Bearer)<br><input type="password" name="auth_token" autocomplete="new-password" style="width:100%"></label>
+<label>Header name<br><input type="text" name="auth_name" value="Authorization" autocomplete="off" style="width:100%"></label>
+<label>Header value<br><input type="password" name="auth_value" autocomplete="new-password" style="width:100%"></label>
+</div>
+<p class="meta" style="padding:0">Added to every request this scan sends and carried into its audit; it replaces a header of the same name the document declares. It is not stored with the scan's settings and is never shown back on this page.</p>
+</fieldset>
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:6px 12px">
+<label>Max requests <small>(empty = one per endpoint)</small><br><input type="number" name="max_requests" min="1" style="width:100%"></label>
+<label style="align-self:end"><input type="checkbox" name="audit" value="on" checked> Audit the endpoints once they have been fetched</label>
+</div>
+<p><button type="button" hx-post="/ui2/newscan/api/confirm" hx-target="#newscan-review" hx-swap="innerHTML">Review API scan</button></p>
+</form>

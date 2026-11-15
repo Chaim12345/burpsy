@@ -1,0 +1,28 @@
+{{define "extensions_tabs"}}
+<style>
+.ext-t th, .ext-t td { white-space:normal; overflow-wrap:anywhere; max-width:none; vertical-align:top; }
+.ext-t tbody tr { cursor:default; }
+.ext-tabs { display:flex; gap:6px; flex-wrap:wrap; padding:8px 14px 0; }
+.ext-tabs a.on { background:var(--sel); }
+.ext-metrics { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; padding:6px 14px; }
+.ext-metrics div { border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+.ext-metrics b { display:block; font-size:16px; }
+.ext-metrics span { color:var(--muted); font-size:11px; }
+.ext-bad { color:#c00; }
+.ext-sec { padding:0 14px; }
+.ext-row-actions form { display:inline; }
+.ext-console pre { max-height:35vh; }
+@media (max-width:640px) {
+  .ext-cards thead { display:none; }
+  .ext-cards, .ext-cards tbody, .ext-cards tr { display:block; }
+  .ext-cards tr { border-bottom:2px solid var(--line); padding:6px 8px; }
+  .ext-cards td { display:grid; grid-template-columns:100px minmax(0,1fr); border:0; padding:2px 4px; }
+  .ext-cards td::before { content:attr(data-label); color:var(--muted); font-weight:600; }
+}
+</style>
+<nav class="ext-tabs" aria-label="Extender">
+  <a class="btn {{if eq . "installed"}}on{{end}}" href="/ui2/extensions">Installed</a>
+  <a class="btn {{if eq . "options"}}on{{end}}" href="/ui2/extensions/options">Options</a>
+  <a class="btn {{if eq . "apis"}}on{{end}}" href="/ui2/extensions/apis">APIs</a>
+</nav>
+{{end}}

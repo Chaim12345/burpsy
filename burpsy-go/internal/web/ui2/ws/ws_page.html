@@ -1,0 +1,68 @@
+<div id="rows">
+<style>
+.ws-metrics { display:flex; flex-wrap:wrap; gap:8px; padding:6px 14px; }
+.ws-metric { border:1px solid var(--line); border-radius:6px; padding:4px 12px; min-width:110px; }
+.ws-metric strong { display:block; font-size:18px; }
+.ws-bar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; padding:6px 14px; }
+.ws-split { display:flex; align-items:flex-start; }
+.ws-list { flex:3; min-width:0; }
+#ws-detail { flex:2; min-width:0; position:sticky; top:0; max-height:calc(100vh - 60px); overflow:auto; border-left:1px solid var(--line); padding:6px 12px; }
+.ws-actions { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.ws-detail dl { display:grid; grid-template-columns:110px minmax(0,1fr); gap:2px 8px; margin:6px 0; }
+.ws-detail dd { margin:0; overflow-wrap:anywhere; }
+.ws-detail dt { color:var(--muted); }
+.ws-sent { color:#06c; } .ws-recv { color:#080; }
+@media (max-width:640px) {
+  .ws-split { display:block; }
+  #ws-detail { position:static; max-height:none; border-left:0; border-top:1px solid var(--line); }
+  table.ws-t td:nth-child(2), table.ws-t th:nth-child(2),
+  table.ws-t td:nth-child(n+6), table.ws-t th:nth-child(n+6) { display:none; }
+  table.ws-conn td:nth-child(n+4), table.ws-conn th:nth-child(n+4) { display:none; }
+}
+</style>
+<p class="meta phone-hint">A cut-off table cell expands in place when tapped; tap it again to collapse.</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+<div class="ws-metrics" aria-label="WebSocket totals">
+<div class="ws-metric"><span class="meta">Connections</span><strong>{{len .Connections}}</strong></div>
+<div class="ws-metric"><span class="meta">Frames</span><strong>{{.Frames}}</strong></div>
+<div class="ws-metric"><span class="meta">Sent</span><strong>{{.Sent}}</strong><span class="meta">client → server</span></div>
+<div class="ws-metric"><span class="meta">Received</span><strong>{{.Received}}</strong><span class="meta">server → client</span></div>
+</div>
+<h3>Connections{{if .Selected}} <span class="meta">showing frames of #{{.Selected.Exchange}} -
+<a href="/ui2/ws?direction={{.P.Direction}}&amp;opcode={{.P.Opcode}}&amp;payload={{.P.Payload}}" hx-get="/ui2/ws?direction={{.P.Direction}}&amp;opcode={{.P.Opcode}}&amp;payload={{.P.Payload}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">clear selection</a></span>{{end}}</h3>
+<table class="ws-conn">
+<thead><tr><th scope="col">WS id</th><th scope="col">URL</th><th scope="col">Frames</th><th scope="col">Sent</th><th scope="col">Recv</th><th scope="col">Live</th><th scope="col">Last</th></tr></thead>
+<tbody>
+{{range .Connections}}
+<tr class="{{if .Selected}}selected{{end}}"><td><a href="/ui2/ws?exchange={{.Exchange}}" hx-get="/ui2/ws?exchange={{.Exchange}}&amp;direction={{$.P.Direction}}&amp;opcode={{$.P.Opcode}}&amp;payload={{$.P.Payload}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" aria-pressed="{{if .Selected}}true{{else}}false{{end}}">#{{.Exchange}}</a></td><td title="{{if .TLS}}wss{{else}}ws{{end}}://{{.Host}}:{{.Port}}{{.Path}}">{{if .TLS}}wss{{else}}ws{{end}}://{{.Host}}:{{.Port}}{{.Path}}</td><td>{{.Messages}}</td><td>{{.Sent}}</td><td>{{.Received}}</td><td>{{if .Live}}live{{else}}—{{end}}</td><td>{{.Age}}</td></tr>
+{{else}}<tr><td colspan="7" class="meta">No WebSocket connections relayed.</td></tr>{{end}}
+</tbody>
+</table>
+<h3>Frames <span class="meta">{{len .Rows}} shown of {{.Total}} stored</span></h3>
+<form id="ws-filter" class="ws-bar" hx-get="/ui2/ws" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true" hx-trigger="submit, change">
+{{if .P.Exchange}}<input type="hidden" name="exchange" value="{{.P.Exchange}}">{{end}}
+<select name="direction" aria-label="Filter by direction"><option value="">Both directions</option>
+<option value="client_to_server"{{if eq .P.Direction "client_to_server"}} selected{{end}}>Sent</option>
+<option value="server_to_client"{{if eq .P.Direction "server_to_client"}} selected{{end}}>Received</option></select>
+<select name="opcode" aria-label="Filter by opcode"><option value="">Any opcode</option>
+<option value="text"{{if eq .P.Opcode "text"}} selected{{end}}>text</option><option value="binary"{{if eq .P.Opcode "binary"}} selected{{end}}>binary</option>
+<option value="ping"{{if eq .P.Opcode "ping"}} selected{{end}}>ping</option><option value="pong"{{if eq .P.Opcode "pong"}} selected{{end}}>pong</option>
+<option value="close"{{if eq .P.Opcode "close"}} selected{{end}}>close</option></select>
+<input type="search" name="payload" value="{{.P.Payload}}" aria-label="Filter frames by payload text" placeholder="payload contains…">
+<button type="submit">Filter</button>
+{{if .HasFilter}}<a class="btn" href="/ui2/ws{{if .P.Exchange}}?exchange={{.P.Exchange}}{{end}}" hx-get="/ui2/ws{{if .P.Exchange}}?exchange={{.P.Exchange}}{{end}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true">clear filters</a>{{end}}
+</form>
+<div class="ws-split">
+<div class="ws-list">
+<table class="ws-t">
+<thead><tr><th scope="col">#</th><th scope="col">URL</th><th scope="col">Dir</th><th scope="col">Opcode</th><th scope="col">Length</th><th scope="col">Edited</th><th scope="col">Notes</th><th scope="col">TLS</th><th scope="col">Listener port</th><th scope="col">WS id</th><th scope="col">Age</th></tr></thead>
+<tbody id="rows-body">
+{{range .Rows}}
+<tr class="{{if .Opened}}selected{{end}}" data-id="{{.ID}}" hx-get="/ui2/ws/frame/{{.ID}}" hx-target="#ws-detail" hx-swap="innerHTML" hx-push-url="false"><td>{{.ID}}</td><td title="{{.URL}}">{{if .URL}}{{.URL}}{{else}}—{{end}}</td><td title="{{.Direction}}">{{if .Sent}}<span class="ws-sent">→ sent</span>{{else}}<span class="ws-recv">← recv</span>{{end}}</td><td><code>{{.Opcode}}</code></td><td>{{.Len}}{{if .Truncated}} <span class="badge">truncated</span>{{end}}</td><td>{{if .Edited}}edited{{else}}—{{end}}</td><td title="{{.Note}}">{{if .Note}}{{.Note}}{{else}}—{{end}}</td><td>{{if .TLS}}TLS{{else}}—{{end}}</td><td>{{if .ListenerPort}}{{.ListenerPort}}{{else}}—{{end}}</td><td>#{{.SocketID}}</td><td>{{.Age}}</td></tr>
+{{else}}<tr><td colspan="11" class="meta">{{if .HasFilter}}No frames match the filters.{{else if .P.Exchange}}No frames on this connection.{{else}}No frames.{{end}}</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+<div id="ws-detail" role="region" aria-label="Selected frame" aria-live="polite">{{if .FrameView}}{{template "ws_frame.html" .FrameView}}{{else if .Selected}}<p class="meta">Select a frame, or <a href="/ui2/ws/handshake/{{.Selected.Exchange}}" hx-get="/ui2/ws/handshake/{{.Selected.Exchange}}" hx-target="#ws-detail" hx-swap="innerHTML">view the handshake of #{{.Selected.Exchange}}</a>.</p>{{else}}<p class="meta">Select a frame to read its payload, or a connection to narrow the table.</p>{{end}}</div>
+</div>
+</div>

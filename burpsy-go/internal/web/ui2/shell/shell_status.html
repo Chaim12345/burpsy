@@ -1,0 +1,4 @@
+<span class="sb-item">{{if .stats_error}}stats unavailable: {{.stats_error}}{{else}}stored {{.stored}} · {{.exchanges}} exchanges · {{.messages}} messages{{end}}</span>
+<span class="sb-item">proxy {{if .proxy_bind}}{{.proxy_bind}}{{else}}not bound{{end}}</span>
+<span class="sb-item"><a href="/ui2/scope">scope</a>: {{.scope}}</span>
+<span class="sb-item">CA: {{if .ca_configured}}{{.ca_subject}} (until {{.ca_not_after}}) <a href="/ca.crt" download="burpsy-ca.crt">ca.crt</a>{{else}}off (TLS interception disabled){{end}}</span>

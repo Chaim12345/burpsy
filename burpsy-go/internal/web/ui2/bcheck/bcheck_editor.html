@@ -1,0 +1,23 @@
+<div id="bchecks">
+<h3>{{.Heading}}</h3>
+<p class="meta"><a href="/ui2/bchecks">back to custom scan checks</a> · New from:{{range .Templates}} <a href="/ui2/bchecks/editor?template={{.ID}}">{{.Label}}</a>{{end}}</p>
+<form method="post" action="/ui2/bchecks/validate" style="padding:0 14px">
+<input type="hidden" name="editing" value="{{.Editing}}">
+<input type="hidden" name="heading" value="{{.Heading}}">
+{{if .ReadOnly}}<input type="hidden" name="readonly" value="1"><input type="hidden" name="from" value="{{.From}}">{{end}}
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+<textarea name="source" rows="20" spellcheck="false" aria-label="BCheck source" style="width:100%; font-family:ui-monospace,monospace"{{if .ReadOnly}} readonly{{end}}>{{.Source}}</textarea>
+<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0">
+<button type="submit" formaction="/ui2/bchecks/validate" hx-post="/ui2/bchecks/validate" hx-target="#bcheck-validation" hx-swap="outerHTML">Validate</button>
+{{if .ReadOnly}}<span class="meta">Loaded from {{.From}}: edit the file and Reload to change it.</span>
+{{else}}<button type="submit" formaction="/ui2/bchecks/review/save" hx-post="/ui2/bchecks/review/save" hx-target="#bcheck-review" hx-swap="innerHTML">Review save to corpus</button>{{end}}
+</div>
+{{template "bcheck_validation.html" .}}
+<div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0">
+<input type="text" name="exchange_ids" value="{{.IDs}}" inputmode="numeric" aria-label="Test against exchanges (ids)" placeholder="Exchange ids to test against, e.g. 3, 7, 12" style="flex:1; min-width:200px">
+<button type="submit" formaction="/ui2/bchecks/review/test" hx-post="/ui2/bchecks/review/test" hx-target="#bcheck-review" hx-swap="innerHTML">Review test run</button>
+</div>
+<p class="meta">An active check sends its probes to each exchange's target through the scope gate; nothing is filed. Save and Run test each show a review first.</p>
+</form>
+<div id="bcheck-review"></div>
+</div>

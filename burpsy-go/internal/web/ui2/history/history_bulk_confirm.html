@@ -1,0 +1,17 @@
+<div class="hreview" data-review="1">
+<h3>Review: {{.title}}</h3>
+{{if .items}}<table>
+<thead><tr><th scope="col">#</th><th scope="col">Method</th><th scope="col">URL</th><th scope="col">Status</th></tr></thead>
+<tbody>{{range .items}}<tr><td>{{.ID}}</td><td>{{.Method}}</td><td class="brk" title="{{.URL}}">{{.URL}}</td><td>{{.Status}}</td></tr>{{end}}</tbody>
+</table>{{end}}
+{{if .hosts}}<p>Hosts:</p><ul>{{range .hosts}}<li class="brk">{{.}}</li>{{end}}</ul>{{end}}
+<p class="meta">The exact call{{if gt (len .calls) 1}}s{{end}} this confirmation binds:</p>
+<pre class="calls">{{range .calls}}{{.}}
+{{end}}</pre>
+{{range .consequences}}<p class="meta">{{.}}</p>{{end}}
+<form hx-post="/ui2/history/bulk/{{.run}}" hx-target="#detail" hx-swap="innerHTML" method="post" action="/ui2/history/bulk/{{.run}}">
+{{range .hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+{{end}}<button disabled data-arm-on-load title="loading…">{{.button}}</button>
+</form>
+<p class="meta">To cancel, select another row or action; the review expires with the confirmation window.</p>
+</div>

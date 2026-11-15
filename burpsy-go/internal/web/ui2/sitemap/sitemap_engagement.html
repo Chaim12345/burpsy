@@ -1,0 +1,20 @@
+<div class="sm-eng">
+<form class="sm-filter" action="/ui2/sitemap" method="get" hx-get="/ui2/sitemap" hx-target="#sm-root" hx-swap="outerHTML" hx-push-url="true">
+<input type="hidden" name="view" value="engagement">
+{{if .Host}}<input type="hidden" name="host" value="{{.Host}}">{{end}}
+<fieldset><legend>Search</legend>{{range .Kinds}}<label><input type="radio" name="kind" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>{{end}}</fieldset>
+<input type="search" name="q" value="{{.Q}}" placeholder="URL to find references to… (Find references only)" aria-label="Engagement search target URL" title="For Find references: the URL to look for in href/src/action attributes. Ignored by the other two searches." autocomplete="off">
+<button type="submit">Search</button>
+</form>
+{{if .Host}}<p class="meta">Searching host <strong>{{.Host}}</strong> only. <a href="{{.AllHosts}}">Search every host</a></p>{{end}}
+{{if .Hint}}<p class="meta">{{.Hint}}</p>
+{{else if .Error}}<p class="meta" role="alert"><strong>The search failed: {{.Error}}</strong></p>
+{{else}}
+<p class="meta">{{.Result.Matches}} match(es){{if .Result.Truncated}} · showing first {{len .Result.Rows}}{{end}}{{if .Result.Rows}} · <a class="btn" href="{{.CSV}}" download>Export CSV</a>{{end}}</p>
+{{if .Result.Rows}}<table class="sm-eng-t"><thead><tr><th scope="col">Exchange</th><th scope="col">Host</th><th scope="col">Path</th><th scope="col">Match</th></tr></thead><tbody>
+{{range .Result.Rows}}<tr hx-get="/ui2/sitemap/message?id={{.ExchangeID}}" hx-target="#sm-msg" hx-swap="innerHTML" tabindex="0"><td>#{{.ExchangeID}}</td><td>{{.Host}}{{if and (ne .Port 80) (ne .Port 443)}}:{{.Port}}{{end}}</td><td title="{{.Path}}">{{.Path}}</td><td title="{{.Snippet}}"><code>{{.Snippet}}</code></td></tr>{{end}}
+</tbody></table>
+<div id="sm-msg"></div>
+{{else}}<p class="meta">No matches in the captured responses. The site map searches what has been captured — run traffic through the proxy or a crawl first.</p>{{end}}
+{{end}}
+</div>

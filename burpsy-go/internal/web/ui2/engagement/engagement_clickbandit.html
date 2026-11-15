@@ -1,0 +1,8 @@
+<div id="rows" style="padding:8px 14px; max-width:960px">
+<h3>Clickbandit</h3>
+<p class="meta">Paste this script into the developer console of the target page in your own browser to record a clickjacking proof of concept. It is shown as text and never runs in this console.</p>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{else}}
+<p><button type="button" class="btn copy-btn" data-copy="{{.script}}">Copy</button> <span class="meta">{{len .script}} bytes</span></p>
+<pre id="clickbandit-script" style="max-height:65vh">{{.script}}</pre>
+{{end}}
+</div>

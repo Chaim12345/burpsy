@@ -1,0 +1,136 @@
+<style>
+.msg-opts { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; font-size:12px; margin:4px 0 8px; }
+.msg-opts select { max-width:180px; }
+.msg-grid { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; }
+.msg-panes { flex:1 1 340px; min-width:0; }
+.msg-insp { flex:0 1 300px; min-width:0; border:1px solid var(--line); border-radius:6px; padding:4px 8px; font-size:12px; }
+.msg-insp summary { cursor:pointer; font-weight:600; margin:4px 0; }
+.msg-insp .kv { display:grid; grid-template-columns:minmax(70px,35%) minmax(0,1fr) auto; gap:4px; align-items:start; padding:2px 0; border-bottom:1px solid var(--line); }
+.msg-insp dt { color:var(--muted); overflow-wrap:anywhere; }
+.msg-insp dd { margin:0; overflow-wrap:anywhere; }
+.msg-insp .copy-btn { padding:0 6px; font-size:11px; }
+.pane-toggle { display:inline-flex; flex-wrap:wrap; gap:4px; }
+pre.msg-hex { white-space:pre; word-break:normal; overflow-x:auto; }
+.hx-off { color:var(--muted); }
+.hx-asc { color:#a40; }
+iframe.msg-render { width:100%; height:45vh; border:1px solid var(--line); border-radius:6px; background:#fff; }
+.msg-tok { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; }
+.msg-tok code.brk { display:block; }
+ul.pb { list-style:none; padding-left:14px; margin:2px 0; font:12px/1.4 ui-monospace, monospace; }
+ul.pb > li { overflow-wrap:anywhere; }
+.msg-form { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; }
+.msg-form textarea { width:100%; min-height:6em; font:12px ui-monospace, monospace; }
+.msg-form input[type=text] { max-width:100%; }
+.gql-ok { color:#080; } .gql-bad { color:#c00; }
+</style>
+<form class="msg-opts" method="get" action="{{.State.Base}}" hx-get="{{.State.Base}}" hx-target="{{.Target}}" hx-swap="innerHTML" hx-trigger="change" aria-label="Message display options">
+  <input type="hidden" name="view_req" value="{{.State.ViewReq}}">
+  <input type="hidden" name="view_resp" value="{{.State.ViewResp}}">
+  {{if .State.HexReq}}<input type="hidden" name="hex_req" value="{{.State.HexReq}}">{{end}}
+  {{if .State.HexResp}}<input type="hidden" name="hex_resp" value="{{.State.HexResp}}">{{end}}
+  <label>Body charset <select name="charset">{{range .Charsets}}<option value="{{.Value}}"{{if eq .Value $.State.Charset}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+  <label><input type="checkbox" name="nonprint" value="1"{{if .State.NonPrint}} checked{{end}}> Show non-printing</label>
+  <label><input type="checkbox" name="hide" value="1"{{if .State.Hide}} checked{{end}}> Hide uninteresting headers</label>
+  <label><input type="checkbox" name="inspector" value="1"{{if .State.Inspector}} checked{{end}}> Inspector</label>
+  <noscript><button>Apply</button></noscript>
+</form>
+<div class="msg-grid">
+<div class="msg-panes">
+{{template "message_pane" .Req}}
+{{template "message_pane" .Resp}}
+</div>
+{{if .Inspector}}
+<aside class="msg-insp" aria-label="Inspector">
+<h3>Inspector</h3>
+{{range .Inspector}}
+<details open><summary>{{.Title}} ({{len .Rows}})</summary>
+{{if .Note}}<p class="meta" role="note">{{.Note}}</p>{{end}}
+{{if .Rows}}<dl>{{range .Rows}}<div class="kv"><dt>{{.Name}}</dt><dd><code>{{.Value}}</code>{{if .Note}} <span class="meta">{{.Note}}</span>{{end}}</dd><button type="button" class="btn copy-btn" data-copy="{{.Value}}" aria-label="Copy {{.Name}}">Copy</button></div>{{end}}</dl>{{else if not .Note}}<p class="meta">none</p>{{end}}
+</details>
+{{end}}
+</aside>
+{{end}}
+</div>
+
+{{define "message_pane"}}
+<section class="msg-pane" data-side="{{.Side}}" data-view="{{.View}}">
+<h3>{{.Label}}
+  {{if .Tabs}}<span class="pane-toggle" role="tablist">{{range .Tabs}}{{if .Active}}<span role="tab" aria-selected="true" class="pt-on">{{.Label}}</span>{{else}}<a class="btn" role="tab" href="{{.Href}}" hx-get="{{.Href}}" hx-target="#detail" hx-swap="innerHTML">{{.Label}}</a>{{end}}{{end}}</span>{{end}}
+  {{if .Text}}{{if .Text.Kind}}<span class="badge">{{.Text.Kind}}</span>{{end}}{{end}}
+</h3>
+{{range .Notes}}<p class="meta" role="note">{{.}}</p>{{end}}
+{{if .Empty}}<p class="meta">No {{lower .Label}} bytes recorded for this exchange.</p>
+{{else if .Text}}{{if .Text.Note}}<p class="meta" role="note">{{.Text.Note}}</p>{{end}}<pre class="msg">{{.Text.Highlighted}}</pre>
+{{else if .Hex}}{{with .Hex}}
+<p class="meta">Hex: bytes {{.From}}–{{.To}} of {{.Total}} · page {{.Page}} of {{.Pages}}
+  {{if .PrevHref}}<a class="btn" href="{{.PrevHref}}" hx-get="{{.PrevHref}}" hx-target="#detail" hx-swap="innerHTML">Previous</a>{{end}}
+  {{if .NextHref}}<a class="btn" href="{{.NextHref}}" hx-get="{{.NextHref}}" hx-target="#detail" hx-swap="innerHTML">Next</a>{{end}}</p>
+<pre class="msg msg-hex" aria-label="Offset, hex and ASCII columns">{{range .Rows}}<span class="hx-off">{{.Offset}}</span>  {{.Hex}}  <span class="hx-asc">{{.ASCII}}</span>
+{{end}}</pre>
+{{end}}
+{{else if .Render}}
+<iframe class="msg-render" sandbox="" src="{{.Render}}" referrerpolicy="no-referrer" loading="lazy" title="Rendered response (sandboxed: no scripts, no forms, no network)"></iframe>
+<p class="meta">Rendered in a sandbox: scripts, forms, navigation and network loads are blocked, so the page may look incomplete. <a href="{{.Render}}" target="_blank" rel="noopener noreferrer">Open the sandboxed render alone</a></p>
+{{else if .JWT}}{{with .JWT}}
+<p class="meta">{{len .Tokens}} JSON Web Token(s) found. Decoded only: burpsy does not verify signatures, so nothing here says a token is valid.{{if .Truncated}} The body was searched only in its first 128 KiB.{{end}}</p>
+{{range .Tokens}}
+<div class="msg-tok">
+  <p class="meta">alg <strong>{{.Alg}}</strong> · found in {{range $i, $l := .Locations}}{{if $i}}, {{end}}{{$l}}{{end}}
+    <button type="button" class="btn copy-btn" data-copy="{{.Token}}">Copy</button></p>
+  <p class="meta">Header</p><pre class="msg">{{.Header}}</pre>
+  <p class="meta">Payload{{if .PayloadNote}} — {{.PayloadNote}}{{end}}</p><pre class="msg">{{.Payload}}</pre>
+  {{if .Times}}<p class="meta">{{range .Times}}{{.Claim}} = {{.Value}} ({{.When}}) {{end}}</p>{{end}}
+  <p class="meta">Signature (verbatim, not verified)</p><pre class="msg brk">{{.Signature}}</pre>
+</div>
+{{end}}
+{{end}}
+{{else if .GraphQL}}{{with .GraphQL}}
+<p class="meta">GraphQL carried in the {{.Source}}. Validated by POST /api/repeater/graphql-validate (a local parse; nothing is sent).</p>
+{{range .Ops}}
+<div class="msg-tok">
+  <p class="meta">{{if .OperationName}}operation <strong>{{.OperationName}}</strong> · {{end}}{{if .ValidateErr}}not validated: {{.ValidateErr}}{{else if .Valid}}<span class="gql-ok">parses</span>{{else}}<span class="gql-bad">does not parse</span>{{end}}{{if .Pretty}} · pretty-printed (comments are not shown; Raw has the exact text){{end}}</p>
+  {{range .Errors}}<p class="meta gql-bad">{{.}}</p>{{end}}
+  <p class="meta">Query</p><pre class="msg">{{.Query}}</pre>
+  {{if or .Variables .VariablesErr}}<p class="meta">Variables{{if .VariablesErr}} — {{.VariablesErr}}{{end}}</p><pre class="msg">{{.Variables}}</pre>{{end}}
+  {{if .Extensions}}<p class="meta">Extensions</p><pre class="msg">{{.Extensions}}</pre>{{end}}
+</div>
+{{end}}
+{{end}}
+{{else if .Protobuf}}{{$pane := .}}{{with .Protobuf}}
+{{if .Note}}<p class="meta" role="note">{{.Note}}</p>{{end}}
+{{if .Error}}<p class="meta"><strong>Not decoded: {{.Error}}</strong></p>{{else}}
+<p class="meta">{{if .GRPC}}gRPC-framed{{else}}Bare protobuf{{end}} body, {{len .Frames}} frame(s){{if .Message}}, read as <strong>{{.Message}}</strong>{{end}}.
+  {{if eq .SchemaSource "reflection"}}<strong>Field names come from the target's own reflection answer ({{range $i, $f := .SchemaFiles}}{{if $i}}, {{end}}{{$f}}{{end}}) — target-supplied, not operator-verified.</strong>{{else if .Message}}Names come from the .proto you supplied.{{else}}No schema: fields are numbered, not named.{{end}}</p>
+{{if .Messages}}<p class="meta">Messages in the schema: {{range $i, $m := .Messages}}{{if $i}}, {{end}}{{$m}}{{end}}</p>{{end}}
+{{range $i, $f := .Frames}}
+<p class="meta">Frame {{$i}}{{if $f.Compressed}} · compressed{{end}}{{if $f.Trailer}} · trailer{{end}}{{if $f.Error}} · not protobuf: {{$f.Error}}{{end}}</p>
+{{if $f.Text}}<pre class="msg">{{$f.Text}}</pre>{{end}}
+{{if $f.Fields}}{{template "message_pb_fields" $f.Fields}}{{end}}
+{{end}}
+{{end}}
+<details class="msg-form"><summary>Decode with a .proto schema</summary>
+<form method="post" enctype="multipart/form-data" action="{{$pane.SchemaPost}}" hx-post="{{$pane.SchemaPost}}" hx-encoding="multipart/form-data" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="side" value="{{$pane.Side}}">
+  <label>.proto file <input type="file" name="proto_file" accept=".proto,text/plain"></label>
+  <label>or paste it <textarea name="proto" spellcheck="false" aria-label=".proto source"></textarea></label>
+  <label>Message (optional) <input type="text" name="message" placeholder="pkg.Message"></label>
+  <button>Decode</button> <span class="meta">A local transform: nothing is sent.</span>
+</form>
+</details>
+<details class="msg-form"><summary>Fetch the schema by gRPC server reflection (sends a request)</summary>
+<form method="post" action="{{$pane.ReflectPost}}" hx-post="{{$pane.ReflectPost}}" hx-target="#detail" hx-swap="innerHTML">
+  <input type="hidden" name="side" value="{{$pane.Side}}">
+  <label>Target <input type="text" name="target" value="{{.ReflectTarget}}" required></label>
+  <label>Service <input type="text" name="service" placeholder="pkg.Service" required></label>
+  <label><input type="checkbox" name="tls" value="1"{{if .ReflectTLS}} checked{{end}}> TLS</label>
+  <label>Message (optional) <input type="text" name="message" placeholder="pkg.Message"></label>
+  <button>Review the fetch</button>
+  <span class="meta">Reviewed before anything is sent; scope is checked before the dial and no session credentials ride along.</span>
+</form>
+</details>
+{{end}}
+{{end}}
+</section>
+{{end}}
+
+{{define "message_pb_fields"}}<ul class="pb">{{range .}}<li><span class="hl-num">#{{.Number}}</span>{{if .Name}} <strong>{{.Name}}</strong>{{end}}{{if .Type}} <span class="meta">{{.Type}}</span>{{end}} <span class="hl-punct">{{.Wire}}</span> {{if not .Children}}{{.Value}}{{end}}{{if .Children}}{{template "message_pb_fields" .Children}}{{end}}</li>{{end}}</ul>{{end}}

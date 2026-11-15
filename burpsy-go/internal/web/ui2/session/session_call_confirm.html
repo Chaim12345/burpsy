@@ -1,0 +1,17 @@
+{{define "session_call_review_inner"}}
+<p><strong>Review before applying:</strong> {{.summary}}</p>
+{{if .consequence}}<p class="meta">{{.consequence}}</p>{{end}}
+<details open><summary>exact call(s) the one-time confirmation covers (credential values withheld in this view)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:40vh; overflow:auto">{{.preview}}</pre>
+</details>
+<form {{if .banner}}hx-target="#session-prompts" hx-swap="innerHTML"{{else}}hx-target="#rows" hx-swap="outerHTML"{{end}} hx-post="/ui2/session/call/run" method="post" action="/ui2/session/call/run">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="nonce" value="{{.nonce}}">
+<input type="hidden" name="banner" value="{{if .banner}}1{{end}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and apply</button>
+</form>
+{{end}}
+{{if .banner}}<div class="session-prompt-review" data-review="1">{{template "session_call_review_inner" .}}
+<p class="meta"><a href="/ui2/session/prompts" hx-get="/ui2/session/prompts" hx-target="#session-prompts" hx-swap="innerHTML">cancel</a></p></div>
+{{else}}<div id="rows" data-review="1">{{template "session_call_review_inner" .}}
+<p class="meta"><a href="/ui2/session" hx-get="/ui2/session" hx-target="#rows" hx-swap="outerHTML">cancel</a> (the pending review expires with the confirmation window on its own)</p></div>{{end}}

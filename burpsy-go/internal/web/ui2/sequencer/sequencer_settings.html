@@ -1,0 +1,16 @@
+{{define "sequencer_settings"}}<section id="seq-settings" aria-label="Analysis settings">
+<h3>Analysis settings</h3>
+<p class="meta">Which tests an analysis runs, and whether tokens are base64-decoded first. Saved with the project; a change applies to the next analysis - Redo analysis re-runs the last sample under it.</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">{{.Error}}</p>{{end}}
+{{if .Note}}<p class="meta" role="status">{{.Note}}</p>{{end}}
+{{if not .Unavailable}}
+<form hx-post="/ui2/sequencer/settings/confirm" method="post" action="/ui2/sequencer/settings/confirm" hx-target="#seq-settings" hx-swap="outerHTML">
+<div role="group" aria-label="Tests an analysis runs">
+{{range .Rows}}<div><label><input type="checkbox" name="on_{{.Key}}" value="1" {{if .On}}checked{{end}} {{if .Locked}}disabled{{end}}> {{.Name}} <span class="meta">{{.Key}}</span>{{if .Locked}} <span class="meta">- always runs: the base characterisation the other tests are read against</span>{{end}}</label></div>
+{{end}}
+<div><label><input type="checkbox" name="b64" value="1" {{if .Base64}}checked{{end}}> Base64-decode before analyzing <span class="meta">token_handling.base_64_decode_before_analyzing</span></label></div>
+</div>
+<div class="seq-row"><button type="submit">Review settings change</button></div>
+</form>
+{{end}}
+</section>{{end}}

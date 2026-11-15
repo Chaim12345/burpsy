@@ -1,0 +1,13 @@
+<div class="newscan-sheet" style="border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin:10px 0">
+{{if .error}}<p role="alert" style="color:#c00"><strong>Not started: {{.error}}</strong></p>
+{{else}}{{with .result}}<h3 style="margin-top:0">{{if eq $.what "audit"}}Audit started{{else if eq $.what "api"}}{{if .audit}}API scan started{{else}}API sweep started{{end}}{{else}}Scan started{{end}}</h3>
+<p>task <strong>{{.task_id}}</strong>{{if .kind}} · kind {{.kind}}{{end}}{{if .state}} · state {{.state}}{{end}}{{if .config_name}} · configuration {{.config_name}}{{end}}</p>
+{{if eq $.what "crawl"}}<p class="meta" style="padding:0">{{len .seeds}} seed(s){{if .live_seen_used}}, {{.live_seen_used}} from live capture{{end}}.</p>
+{{with .out_of_scope_seeds}}<p class="meta" style="padding:0"><strong>Started without {{len .}} out-of-scope URL(s):</strong></p><ul>{{range .}}<li><code class="brk">{{.url}}</code> — {{.reason}}</li>{{end}}</ul>{{end}}
+{{with .config_unapplied_keys}}<p class="meta" style="padding:0">Configuration keys this engine did not apply: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</p>{{end}}{{end}}
+{{if eq $.what "audit"}}<p class="meta" style="padding:0">{{.count}} exchange(s) audited{{if .duplicates_dropped}}; {{.duplicates_dropped}} repeated id(s) dropped{{end}}.</p>
+{{with .unapplied}}<p class="meta" style="padding:0">Configuration settings not applied: {{range $i, $k := .}}{{if $i}}, {{end}}{{$k}}{{end}}</p>{{end}}{{end}}
+{{if eq $.what "api"}}{{with .definition}}<p class="meta" style="padding:0">{{len .operations}} endpoint(s) against <code class="brk">{{.base_url}}</code>{{if .placeholder_values}} ({{.placeholder_note}}){{end}}.</p>{{end}}{{end}}
+<p>{{if ne $.what "audit"}}<a href="/ui2/scanner/crawl-watch?task={{.task_id}}" hx-get="/ui2/scanner/crawl-watch?task={{.task_id}}" hx-target="#newscan-watch" hx-swap="innerHTML">watch this scan</a> · {{end}}<a href="/ui2/dashboard">dashboard</a></p>
+<div id="newscan-watch"></div>{{end}}{{end}}
+</div>

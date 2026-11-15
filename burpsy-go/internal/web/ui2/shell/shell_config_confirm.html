@@ -1,0 +1,21 @@
+<div id="rows" data-review="1">
+{{if .error}}<p class="meta" role="alert"><strong>Not applied: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/shell/config" hx-get="/ui2/shell/config" hx-target="#rows" hx-swap="outerHTML">back to import / export</a></p>{{else}}
+<p><strong>Review before importing.</strong> Scope decides where the proxy and every tool may send traffic; the sections below are replaced wholesale.</p>
+<table><thead><tr><th scope="col">Replaced section</th><th scope="col">Change</th></tr></thead><tbody>
+{{range .applied}}<tr><td>{{.Name}}</td><td class="brk">{{.Detail}}</td></tr>{{end}}
+</tbody></table>
+<table><thead><tr><th scope="col">Untouched section</th><th scope="col">Why</th></tr></thead><tbody>
+{{range .untouched}}<tr><td>{{.Name}}</td><td>{{.Detail}}</td></tr>{{end}}
+{{range .coverage.Omitted}}<tr><td>{{.}}</td><td>not carried by configuration bundles</td></tr>{{end}}
+</tbody></table>
+<p class="meta">The exact call this one-time confirmation covers:</p>
+<pre class="brk">{{.preview}}</pre>
+<form hx-post="/ui2/shell/config/import-run" hx-target="#rows" hx-swap="outerHTML" method="post" action="/ui2/shell/config/import-run">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="bundle" value="{{.bundle}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and import</button>
+</form>
+<p class="meta"><a href="/ui2/shell/config" hx-get="/ui2/shell/config" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

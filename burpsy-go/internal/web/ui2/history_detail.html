@@ -1,0 +1,6 @@
+<h3>#{{.ID}} {{.Method}} {{.Host}}:{{.Port}}{{.Path}} → {{.Status}}</h3>
+<p class="meta">{{.Mime}} · {{.ResponseLen}} bytes · {{.DurationMs}} ms</p>
+<p class="xa-entry"><a class="btn" href="/ui2/exchange/{{.ID}}" target="_blank" rel="noopener">Open in window</a></p>
+<details class="xa-details" hx-get="/ui2/exchange/{{.ID}}/menu" hx-trigger="toggle once" hx-target="find .xa-body" hx-swap="innerHTML"><summary class="btn">Actions</summary>
+<div class="xa-body"><p class="meta">loading actions… (<a href="/ui2/exchange/{{.ID}}">open the exchange page</a> if they do not appear)</p></div></details>
+{{template "message_views.html" .Views}}

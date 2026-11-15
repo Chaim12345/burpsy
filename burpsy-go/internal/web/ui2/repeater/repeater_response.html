@@ -1,0 +1,44 @@
+{{$base := printf "/ui2/repeater?tab=%d&h=%d" .TabID .Hist}}{{$view := "pretty"}}{{if .Raw}}{{$view = "raw"}}{{end}}{{$diff := ""}}{{if .Diff}}{{$diff = "1"}}{{end}}
+<h3>Response
+  <span class="badge" id="rp-status">{{if .Status}}{{.Status}}{{else}}no status{{end}}</span>
+  <span class="badge">{{.DurationMs}} ms</span>
+  {{if .HasExchange}}<a class="btn" href="/ui2/history/{{.ExchangeID}}">stored exchange #{{.ExchangeID}}</a>{{end}}
+  <span class="meta">sent {{.SentAt}}{{if .GroupMode}} by a group send ({{.GroupMode}}){{end}}</span>
+</h3>
+<div class="rp-row">
+  <span class="pane-toggle">{{if .Raw}}<a class="btn" href="{{$base}}&hop={{.Hop}}&diff={{$diff}}&view_resp=pretty" hx-get="{{$base}}&hop={{.Hop}}&diff={{$diff}}&view_resp=pretty" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">Pretty</a> <span class="pt-on">Raw</span>{{else}}<span class="pt-on">Pretty</span> <a class="btn" href="{{$base}}&hop={{.Hop}}&diff={{$diff}}&view_resp=raw" hx-get="{{$base}}&hop={{.Hop}}&diff={{$diff}}&view_resp=raw" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">Raw</a>{{end}}</span>
+  {{if .DiffAvailable}}{{if .Diff}}<a class="btn" id="rp-diff-off" href="{{$base}}&view_resp={{$view}}" hx-get="{{$base}}&view_resp={{$view}}" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">Hide changes</a>{{else}}<a class="btn" id="rp-diff-on" href="{{$base}}&diff=1&view_resp={{$view}}" hx-get="{{$base}}&diff=1&view_resp={{$view}}" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">Highlight changes vs previous send</a>{{end}}{{end}}
+</div>
+{{if .H2Conn}}<p class="meta">HTTP/2 connection: {{.H2Conn}}</p>{{end}}
+{{if .Unpacked}}<p class="meta">shown unpacked from {{.Unpacked}} - the stored response is the bytes that arrived</p>{{end}}
+{{if .UnpackError}}<p class="meta">shown packed: {{.UnpackError}}</p>{{end}}
+{{if .Binary}}<p class="meta">the body is not UTF-8 - the text below is lossy; the console's binary views show the exact bytes</p>{{end}}
+
+{{with .Redirects}}
+<details open id="rp-redirects"><summary>Redirect chain <span class="meta">policy {{if .Mode}}{{.Mode}}{{else}}standing{{end}} · {{.Sent}} sent · final status {{.FinalStatus}}{{if not .Complete}} · stopped while still redirecting{{end}}</span></summary>
+{{if .Error}}<p class="meta rp-err">{{.Error}}</p>{{end}}
+<table>
+  <thead><tr><th>#</th><th>From</th><th>Status</th><th>Location</th><th>Followed</th><th>Protocol</th><th>Why not</th><th>Bytes</th><th>Show</th></tr></thead>
+  <tbody>
+    <tr{{if eq $.Hop 0}} class="selected"{{end}}><td>0</td><td colspan="7">the request as written</td><td>{{if eq $.Hop 0}}shown{{else}}<a class="btn" href="{{$base}}&hop=0&view_resp={{$view}}" hx-get="{{$base}}&hop=0&view_resp={{$view}}" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">show</a>{{end}}</td></tr>
+    {{range .Hops}}<tr{{if .Selected}} class="selected"{{end}}><td>{{.N}}</td><td>{{.From}}</td><td>{{.Status}}</td><td>{{.Location}}{{if and .To (ne .To .Location)}} <span class="meta">→ {{.To}}</span>{{end}}</td><td>{{if .Followed}}yes{{else}}no{{end}}</td><td>{{.Protocol}}</td><td>{{.Reason}}</td><td>{{if .Followed}}{{.Bytes}}{{end}}</td><td>{{if .Selected}}shown{{else if and .Followed .Bytes}}<a class="btn rp-hop" href="{{$base}}&hop={{.N}}&view_resp={{$view}}" hx-get="{{$base}}&hop={{.N}}&view_resp={{$view}}" hx-select="#rp-response" hx-target="#rp-response" hx-swap="outerHTML">show</a>{{end}}</td></tr>{{end}}
+  </tbody>
+</table>
+</details>
+{{end}}
+
+{{with .HopRequest}}<h3>Hop {{$.Hop}} request</h3><pre class="msg">{{.Highlighted}}</pre>{{end}}
+{{if .Diff}}
+  {{if .DiffIdentical}}<p class="meta" id="rp-diff-same">identical to the previous send</p>
+  {{else}}<p class="meta">changes against the previous send: <span class="d-add">added</span>, <span class="d-del">removed</span></p>
+  <pre class="msg rp-diff" id="rp-diff">{{range .DiffSegs}}<span class="d-{{.Kind}}">{{.Text}}</span>{{end}}</pre>{{end}}
+  {{if .DiffNote}}<p class="meta">{{.DiffNote}}</p>{{end}}
+{{else}}
+{{if .Pane.Kind}}<span class="badge">{{.Pane.Kind}}</span>{{end}}{{if .Pane.Note}}<p class="meta">{{.Pane.Note}}</p>{{end}}
+<pre class="msg" id="rp-response-body">{{.Pane.Highlighted}}</pre>
+{{end}}
+
+<details id="rp-inspector"><summary>Inspector</summary>
+  <h4>Request</h4>{{range .ReqInspector}}{{template "repeater_inspector.html" .}}{{end}}
+  <h4>Response</h4>{{range .RespInspector}}{{template "repeater_inspector.html" .}}{{end}}
+</details>

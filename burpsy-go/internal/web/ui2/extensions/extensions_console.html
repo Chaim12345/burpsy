@@ -1,0 +1,15 @@
+<div id="ext-console" class="ext-console"{{if .Live}} hx-get="{{.SelfURL}}" hx-trigger="every 3s" hx-swap="outerHTML"{{end}}>
+{{if .Error}}<p class="meta" role="alert"><strong>Could not read the consoles: {{.Error}}</strong></p>{{else}}
+<h3 class="ext-sec">Output console {{if .OutputDropped}}<span class="badge">{{.OutputDropped}} older dropped</span>{{end}}</h3>
+<p class="meta">What the plugin logged, plus this host's own notes. The last {{.Bound}} lines per stream are kept; showing up to {{if .Limit}}{{.Limit}}{{else}}all retained{{end}}. {{if .Live}}Live: refreshes every 3s · <a href="{{.ToggleURL}}" hx-get="{{.ToggleURL}}" hx-target="#ext-console" hx-swap="outerHTML">pause</a>{{else}}Paused · <a href="{{.ToggleURL}}" hx-get="{{.ToggleURL}}" hx-target="#ext-console" hx-swap="outerHTML">resume live refresh</a>{{end}}</p>
+{{if .Output}}<table class="ext-t ext-cards"><thead><tr><th scope="col">Time</th><th scope="col">From</th><th scope="col">Line</th></tr></thead><tbody>
+{{range .Output}}<tr><td data-label="Time">{{.Time}}</td><td data-label="From"><span class="badge">{{.Source}}</span></td><td data-label="Line"><code>{{.Text}}</code></td></tr>{{end}}
+</tbody></table>{{else}}<p class="meta">Nothing on the output console.</p>{{end}}
+<h3 class="ext-sec">Error console {{if .ErrorDropped}}<span class="badge">{{.ErrorDropped}} older dropped</span>{{end}}</h3>
+<p class="meta">Anything on stderr, every protocol violation, and this host's failure notes — kept apart by the From column.</p>
+{{if .Errors}}<table class="ext-t ext-cards"><thead><tr><th scope="col">Time</th><th scope="col">From</th><th scope="col">Line</th></tr></thead><tbody>
+{{range .Errors}}<tr><td data-label="Time">{{.Time}}</td><td data-label="From"><span class="badge">{{.Source}}</span></td><td data-label="Line"><code>{{.Text}}</code></td></tr>{{end}}
+</tbody></table>{{else}}<p class="meta">Nothing on the error console.</p>{{end}}
+{{if .Truncated}}<p class="meta">{{.Truncated}} line(s) were cut at the per-line byte bound; a cut line is marked in place.</p>{{end}}
+{{end}}
+</div>

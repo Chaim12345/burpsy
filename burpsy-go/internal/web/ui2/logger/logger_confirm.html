@@ -1,0 +1,52 @@
+<div id="rows">
+{{if .error}}<p class="meta"><strong>Not applied: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/logger" hx-get="/ui2/logger" hx-target="#rows" hx-swap="outerHTML">back to logger</a></p>{{else}}
+{{if eq .kind "capture"}}
+<p><strong>Review before changing capture:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">Turning capture {{if .on}}on{{else}}off{{end}} for <strong>{{.tool}}</strong>: {{if .on}}its next requests are recorded again{{else}}its next requests are sent and deliberately not recorded - the not-captured counters keep the count honest{{end}}.</p>
+{{else if eq .kind "clear"}}
+<p><strong>Review before clearing the tool log:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">Every recorded request ({{.count}} entries) is discarded, with its comments and highlights. Proxy history and the stored exchanges are untouched. This cannot be undone.</p>
+{{else if eq .kind "scope"}}
+<p><strong>Review before adding to scope:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">Adds an include rule for <strong>{{.host}}</strong> (from log entry #{{.id}}). Scope decides where burpsy's senders may reach and persists with the project. Nothing is sent.</p>
+{{else if eq .kind "annotate"}}
+<p><strong>Review before annotating log entry #{{.id}}:</strong> <span class="meta">{{.preview}}</span></p>
+{{else}}
+<p><strong>Review before changing the capture filter:</strong> <span class="meta">{{.preview}}</span></p>
+<p class="meta">{{if .clear}}Clearing the filter records every captured request again. The recorded log itself is not touched - this is not a log delete.{{else}}The filter decides what gets recorded: rows it refuses are not recorded, and the filtered counter keeps the count honest.{{end}}{{if .capacity}} The row limit changes from {{.cur_capacity}} to {{.capacity}}; a lower limit drops the oldest rows now.{{end}}</p>
+{{end}}
+<details open><summary>exact body (what the token binds, in full)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.full_body}}</pre>
+</details>
+<p class="meta">This confirmation is one-time and covers exactly the call above.</p>
+{{$run := "filter-run"}}{{if eq .kind "capture"}}{{$run = "capture-run"}}{{else if eq .kind "clear"}}{{$run = "clear-run"}}{{else if eq .kind "scope"}}{{$run = "scope-run"}}{{else if eq .kind "annotate"}}{{$run = "annotate-run"}}{{end}}
+<form hx-post="/ui2/logger/{{$run}}" method="post" action="/ui2/logger/{{$run}}" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+{{range $k, $vs := .view}}{{range $vs}}<input type="hidden" name="{{$k}}" value="{{.}}">
+{{end}}{{end}}{{if not .view.search}}<input type="hidden" name="search" value="{{.search}}">{{end}}
+{{if eq .kind "capture"}}
+<input type="hidden" name="tool" value="{{.tool}}">
+<input type="hidden" name="on" value="{{.on}}">
+{{else if eq .kind "scope"}}
+<input type="hidden" name="id" value="{{.id}}">
+{{else if eq .kind "annotate"}}
+<input type="hidden" name="id" value="{{.id}}">
+<input type="hidden" name="comment" value="{{.comment}}">
+<input type="hidden" name="highlight" value="{{.highlight}}">
+{{else if eq .kind "filter"}}
+{{if .clear}}<input type="hidden" name="clear" value="1">{{end}}
+{{range .status}}<input type="hidden" name="status" value="{{.}}">{{end}}
+<input type="hidden" name="term" value="{{.term}}">
+{{if .regex}}<input type="hidden" name="regex" value="on">{{end}}
+{{if .case}}<input type="hidden" name="case" value="on">{{end}}
+{{if .negate}}<input type="hidden" name="negate" value="on">{{end}}
+{{if .scope_only}}<input type="hidden" name="scope_only" value="on">{{end}}
+<input type="hidden" name="mime" value="{{.mime}}">
+{{if .capacity}}<input type="hidden" name="capacity" value="{{.capacity}}">{{end}}
+{{end}}
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">{{if eq .kind "capture"}}Confirm capture change{{else if eq .kind "clear"}}Confirm clear log{{else if eq .kind "scope"}}Confirm add to scope{{else if eq .kind "annotate"}}Confirm annotation{{else if .clear}}Confirm filter clear{{else}}Confirm filter{{end}}</button>
+</form>
+<p class="meta"><a href="/ui2/logger" hx-get="/ui2/logger" hx-target="#rows" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

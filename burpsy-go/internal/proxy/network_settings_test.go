@@ -32,7 +32,7 @@ func TestAnInterimResponseIsReadPastWhenTheSettingIsOn(t *testing.T) {
 		peer.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"))
 	}()
 
-	got, _, err := readHTTPResponseSkippingInterim(client, true)
+	got, _, err := readHTTPResponseSkippingInterim(client, "GET", true)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestA101IsNeverSkipped(t *testing.T) {
 		peer.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
 	}()
 
-	got, _, err := readHTTPResponseSkippingInterim(client, true)
+	got, _, err := readHTTPResponseSkippingInterim(client, "GET", true)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestTheSettingOffReturnsTheInterimHeadVerbatim(t *testing.T) {
 		peer.Write([]byte("HTTP/1.1 100 Continue\r\n\r\n"))
 	}()
 
-	got, _, err := readHTTPResponseSkippingInterim(client, false)
+	got, _, err := readHTTPResponseSkippingInterim(client, "GET", false)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestInterimHeadsAreBounded(t *testing.T) {
 		}
 	}()
 
-	_, _, err := readHTTPResponseSkippingInterim(client, true)
+	_, _, err := readHTTPResponseSkippingInterim(client, "GET", true)
 	if err == nil {
 		t.Fatal("an endless stream of interim heads was accepted; a peer keeping the connection " +
 			"busy for nothing must be bounded")

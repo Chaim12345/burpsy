@@ -1,0 +1,16 @@
+<div id="rows" data-review="1">
+{{if .error}}<p><strong>Not saved: {{.error}}</strong></p>{{else}}
+{{if eq .change.Op "delete"}}<h3>Review item delete</h3>
+<p>Item #{{.change.Before.ID}}: <span style="overflow-wrap:anywhere">{{if .change.Before.Title}}{{.change.Before.Title}}{{else}}(blank title){{end}}</span></p>
+<p>Only this saved Organizer item is removed. Its exchange and history stay; every collection and every other item stays. No request is sent. The one-time confirmation binds this change and the full stored item snapshot; a changed or removed item is refused.</p>
+{{else}}<h3>Review item {{.change.Op}}</h3>
+<p>Item #{{.change.Before.ID}}: <span style="overflow-wrap:anywhere">{{if .change.Before.Title}}{{.change.Before.Title}}{{else}}(blank title){{end}}</span></p>
+{{if eq .change.Op "move"}}<p>Move to: <strong>{{.dest_name}}</strong></p>
+<p>Only this saved item's collection changes. Its title, note, highlight, workflow status and traffic stay unchanged; no request is sent. The one-time confirmation binds this change, the full stored item snapshot and the destination's name; a changed or removed item, or a renamed or deleted destination, is refused.</p>
+{{else}}<p>Copy to: <strong>{{.dest_name}}</strong></p>
+<p>A duplicate with a fresh id is saved in the destination; the source item stays unchanged. Title, note, highlight and workflow status copy from the reviewed item; no request is sent. The one-time confirmation binds this change, the full stored item snapshot and the destination's name; a changed or removed item, or a renamed or deleted destination, is refused.</p>
+{{end}}{{end}}
+<form hx-post="/ui2/organizer/items/run" method="post" action="/ui2/organizer/items/run" hx-target="#rows" hx-swap="outerHTML"><input type="hidden" name="review_id" value="{{.review_id}}"><input type="hidden" name="token" value="{{.token}}"><button disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm item {{.change.Op}}</button></form>
+{{end}}
+<p><a href="/ui2/organizer" hx-get="/ui2/organizer" hx-target="#rows" hx-swap="outerHTML">cancel</a> (pending reviews expire after the confirmation window)</p>
+</div>

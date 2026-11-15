@@ -75,7 +75,7 @@ for (const viewport of VIEWPORTS) {
     const sample = async (theme: "dark" | "light") => {
       await pinTheme(page, theme);
       await page.goto("about:blank");
-      await page.goto(`/#${ROUTES[0]!.id}`);
+      await page.goto(`/legacy/#${ROUTES[0]!.id}`);
       await expect(page.locator("main h1")).toBeVisible();
       return page.evaluate(() => {
         const style = getComputedStyle(document.body);

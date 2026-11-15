@@ -1,0 +1,8 @@
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+{{if .rule}}
+<p class="meta">Grep - Extract rule:</p>
+<pre class="msg">{{.rule}}</pre>
+<button type="button" class="btn copy-btn" data-copy="{{.rule}}">Copy rule</button>
+{{if .preview}}<p class="meta">Extracts exactly the selected text here: <code>{{.preview}}</code></p>{{end}}
+{{if .warning}}<p class="meta" role="alert">{{.warning}}</p>{{end}}
+{{end}}

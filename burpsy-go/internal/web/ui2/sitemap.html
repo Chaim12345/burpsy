@@ -1,0 +1,8 @@
+<div id="rows" class="sm-rows"{{if .OOB}} hx-swap-oob="true"{{end}}>
+{{if .Note}}<p class="meta" role="alert"><strong>Not applied: {{.Note}}</strong></p>{{end}}
+{{if .Done}}<p class="meta"><strong>{{.Done}}</strong></p>{{end}}
+<p class="meta">{{if .Narrowed}}{{.Shown}} of {{.Tree.Nodes}} nodes{{else}}{{.Tree.Nodes}} nodes{{end}} · {{.Tree.Exchanges}} exchanges · {{.Tree.Synced}} synced{{if .Tree.InFlight}} · {{.Tree.InFlight}} in flight{{end}}</p>
+{{if .Rows}}<ul class="sm-tree-list" role="tree" aria-label="Site map">{{range .Rows}}{{template "sitemap_row" .}}{{end}}</ul>
+{{else if .Narrowed}}<p class="meta">No path matches this filter. Relax the filter, or clear it to see the whole map.</p>
+{{else}}<p class="meta">Site map is empty — capture some traffic first. Point a client at the proxy to start building the map.</p>{{end}}
+</div>

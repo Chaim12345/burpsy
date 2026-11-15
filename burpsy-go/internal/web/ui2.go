@@ -1,0 +1,584 @@
+package web
+
+import (
+	"embed"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+)
+
+// The /ui2/ console: server-rendered HTML with a vendored htmx client (ui2/htmx.min.js,
+// ui2/sse.min.js). The React SPA at / stays the default; this slice exists to prove the
+// server-driven shape against the same JSON model — one page per view, fragments swapped
+// by htmx, no build step, no framework runtime in the browser.
+//
+//go:embed ui2
+var ui2FS embed.FS
+
+// ui2TemplateFiles lists every template: ui2/*.html plus one level of per-domain directories.
+// Template names are file basenames, so basenames must be unique across domains.
+func ui2TemplateFiles() []string {
+	var out []string
+	for _, pat := range []string{"ui2/*.html", "ui2/*/*.html"} {
+		m, err := fs.Glob(ui2FS, pat)
+		if err != nil {
+			panic(err)
+		}
+		out = append(out, m...)
+	}
+	return out
+}
+
+// ui2Templates is every server-rendered fragment, parsed once at package init. text/template
+// would work too; html/template is chosen because message bytes are attacker-controlled and
+// land in these pages — auto-escaping is not optional here.
+var ui2Templates = template.Must(template.New("ui2").Funcs(template.FuncMap{
+	"lower": strings.ToLower,
+	// urlquery percent-encodes a site-map node key for a non-URL attribute (hx-post),
+	// where html/template applies no contextual URL escaping and a raw NUL in the
+	// attribute value would reach the browser and be replaced with U+FFFD.
+	"urlquery": url.QueryEscape,
+	"until":    func(n int) []int { return make([]int, n) },
+	// ms renders an epoch-millis JSON number (decoded as float64) as a wall-clock time;
+	// unknown shapes render empty rather than a bogus zero date.
+	"ms": func(v any) string {
+		f, ok := v.(float64)
+		if !ok {
+			return ""
+		}
+		return time.UnixMilli(int64(f)).Format("2006-01-02 15:04:05")
+	},
+}).ParseFS(ui2FS, ui2TemplateFiles()...))
+
+// ui2Error is the model for error.html.
+type ui2Error struct{ Message string }
+
+// ui2StatusString2 renders a *int status the way rows do ("—" when nil).
+func ui2StatusString2(s *int) string {
+	if s == nil {
+		return "—"
+	}
+	return strconv.Itoa(*s)
+}
+
+// ui2Page is the per-request model for the layout wrapper.
+type ui2Page struct {
+	Title string
+	View  string // "history" | "issues"
+	Body  template.HTML
+}
+
+// ui2HistoryParams is the query state the history view round-trips through the URL, so a
+// filtered/paged view is bookmarkable and htmx swaps carry the same state.
+type ui2HistoryParams struct {
+	Q      string // burpsy-query filter (same DSL as /api/history?q=)
+	Search string // substring search over method/host/path/status
+	Offset int    // server-side page offset, newest first
+	Limit  int    // page size (default 100)
+	F      ui2HistoryFilters
+}
+
+const ui2DefaultPageSize = 100
+const ui2MaxPageSize = 500
+
+func parseUI2HistoryParams(r *http.Request) ui2HistoryParams {
+	q := r.URL.Query()
+	p := ui2HistoryParams{
+		Q:      strings.TrimSpace(q.Get("q")),
+		Search: strings.TrimSpace(q.Get("search")),
+		Limit:  ui2DefaultPageSize,
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
+		p.Offset = n
+	}
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		if n > ui2MaxPageSize {
+			n = ui2MaxPageSize
+		}
+		p.Limit = n
+	}
+	p.F = parseUI2HistoryFilters(q)
+	return p
+}
+
+// ui2Row is one history row as the template sees it. Kept separate from ExchangeView so the
+// template never needs to know the wire shape, and so the fields rendered are exactly the
+// fields computed — no payloads.
+type ui2Row struct {
+	ID          uint64
+	Method      string
+	Host        string
+	Port        uint16
+	Path        string
+	Status      string // "—" when no response yet
+	Mime        string
+	ResponseLen string
+	DurationMs  uint64
+	StartedMs   uint64
+	Highlight   string
+	Selected    bool
+	Ext         string
+	Params      int
+	Listener    uint16
+	Comment     string
+	Title       string
+	Extract     []ui2ExtractCell
+}
+
+func ui2StatusString(s *uint16) string {
+	if s == nil {
+		return "—"
+	}
+	return strconv.Itoa(int(*s))
+}
+
+// ui2HistoryRows is the fragment model for the rows swap target.
+type ui2HistoryRows struct {
+	Rows       []ui2Row
+	Total      int
+	Matched    int
+	Offset     int
+	Limit      int
+	NextOffset int // -1 when this page reached the end
+	Q          string
+	Search     string
+	HasMore    bool
+	// HxVals is the sentinel row's hx-vals attribute, precomputed as JSON: quoting the filter
+	// and search strings inline broke the attribute's JSON (and dropped the filter from the
+	// next page) whenever they contained a double quote.
+	HxVals string
+	// Extractors names the saved extractor columns, in order; each row's Extract follows it.
+	Extractors []string
+}
+
+// handleUI2 is the /ui2/ subtree root: the shell page with the history view embedded.
+func (s *Server) handleUI2(w http.ResponseWriter, r *http.Request) {
+	page := ui2Page{Title: "burpsy /ui2/ — History", View: "history"}
+	p := ui2HistoryParams{Limit: ui2DefaultPageSize}
+	page.Body = s.ui2HistoryToolbar(p) + s.renderUI2HistoryRows(r, p)
+	if err := ui2Templates.ExecuteTemplate(w, "layout.html", page); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleUI2History serves GET /ui2/history: the full shell on a plain navigation, or just the
+// rows fragment when htmx asks (HX-Request). The shell embeds the first page so a cold load
+// needs one request.
+func (s *Server) handleUI2History(w http.ResponseWriter, r *http.Request) {
+	p := parseUI2HistoryParams(r)
+	appendMode := r.Header.Get("HX-Request") == "true" && r.URL.Query().Get("offset") != ""
+	body := s.renderUI2HistoryRows(r, p)
+	if appendMode {
+		// Infinite-scroll append: emit only the <tr> rows (plus the next sentinel), so the
+		// htmx beforeend swap grows the tbody without replacing the block the user scrolls.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(s.renderUI2HistoryRowsAppend(r, p)))
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if _, err := w.Write([]byte(body)); err != nil {
+			return
+		}
+		return
+	}
+	page := ui2Page{Title: "burpsy /ui2/ — History", View: "history", Body: s.ui2HistoryToolbar(p) + body}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "layout.html", page); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// renderUI2HistoryRows computes one page of history rows and renders the rows fragment.
+// Server-side paging: the store hands index rows only (no bodies), the filter applies before
+// the page slice, so cost is O(total rows) for the scan and O(page) for the render — the
+// property that keeps a 200k-row capture responsive.
+func (s *Server) renderUI2HistoryRows(r *http.Request, p ui2HistoryParams) template.HTML {
+	var sb strings.Builder
+	_ = ui2Templates.ExecuteTemplate(&sb, "history_rows.html", s.ui2HistoryPage(r, p))
+	return template.HTML(sb.String()) //nolint:gosec // html/template auto-escapes every field
+}
+
+// ui2HistoryPage computes one page of history rows into the fragment model. Server-side
+// paging: the store hands index rows only (no bodies), the filter applies before the page
+// slice, so cost is O(total rows) for the scan and O(page) for the render — the property
+// that keeps a 200k-row capture responsive. Shared by the full fragment and the
+// infinite-scroll append so the two cannot disagree about which rows a page holds.
+func (s *Server) ui2HistoryPage(r *http.Request, p ui2HistoryParams) ui2HistoryRows {
+	matched, all, err := s.ui2HistoryMatched(p)
+	if err != nil {
+		// The DSL error is rendered by the JSON API with caret art; here a plain
+		// message in the rows fragment is what the operator sees inline.
+		return ui2HistoryRows{
+			Rows: nil, Total: all, Matched: 0, Offset: 0, Limit: p.Limit,
+			NextOffset: -1, Q: p.Q, Search: p.Search, HasMore: false,
+			HxVals: ui2HistoryHxVals(-1, p),
+		}
+	}
+	total := len(matched)
+	end := p.Offset + p.Limit
+	if end > total {
+		end = total
+	}
+	next := -1
+	if end < total {
+		next = end
+	}
+	rows := make([]ui2Row, 0, max(end-p.Offset, 0))
+	if p.Offset < total {
+		for _, ex := range matched[p.Offset:end] {
+			v := exchangeView(ex)
+			rows = append(rows, ui2Row{
+				ID:          uint64(v.ID),
+				Method:      v.Method,
+				Host:        v.Host,
+				Port:        v.Port,
+				Path:        v.Path,
+				Status:      ui2StatusString(v.Status),
+				Mime:        v.Mime,
+				ResponseLen: strconv.Itoa(v.ResponseLen),
+				DurationMs:  v.DurationMs,
+				StartedMs:   v.StartedMs,
+				Highlight:   v.Highlight,
+				Ext:         ui2PathExt(v.Path),
+				Params:      v.RequestParams,
+				Listener:    v.ListenerPort,
+				Comment:     ptrString(v.Notes),
+				Title:       v.Title,
+			})
+		}
+	}
+	names := s.ui2HistoryExtractColumns(rows)
+	return ui2HistoryRows{
+		Extractors: names,
+		Rows:       rows, Total: all, Matched: total, Offset: p.Offset, Limit: p.Limit,
+		NextOffset: next, Q: p.Q, Search: p.Search, HasMore: next >= 0,
+		HxVals: ui2HistoryHxVals(next, p),
+	}
+}
+
+// ui2HistoryHxVals is the sentinel row's hx-vals payload: JSON with the filter and search
+// strings properly encoded, so any operator text round-trips into the next page request.
+func ui2HistoryHxVals(next int, p ui2HistoryParams) string {
+	m := map[string]any{"offset": next, "limit": p.Limit, "q": p.Q, "search": p.Search}
+	for k, v := range p.F.values() {
+		m[k] = v
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// renderUI2HistoryRowsAppend renders just the <tr> elements for one page plus the next
+// sentinel row, for the infinite-scroll beforeend swap. It shares the page computation with
+// the full fragment so the two cannot disagree about which rows a page holds.
+func (s *Server) renderUI2HistoryRowsAppend(r *http.Request, p ui2HistoryParams) template.HTML {
+	var sb strings.Builder
+	_ = ui2Templates.ExecuteTemplate(&sb, "history_rows_append.html", s.ui2HistoryPage(r, p))
+	return template.HTML(sb.String()) //nolint:gosec // html/template auto-escapes every field
+}
+
+// handleUI2HistoryDetail serves GET /ui2/history/{id}: the request/response panes for one
+// exchange. Message bytes are read here, one message at a time, never in the list. The views
+// (Pretty/Raw/Hex/Render/JWT/GraphQL/Protobuf), Inspector and display options are query state,
+// built in ui2_message_views.go; nothing here writes the store.
+func (s *Server) handleUI2HistoryDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid exchange ID", http.StatusBadRequest)
+		return
+	}
+	s.ui2RenderDetail(w, r, id, nil)
+}
+
+// requestMessageForExchange resolves an exchange's request bytes when the exchange's own
+// Request pointer is nil (the restored-project case). It never guesses an id: the request
+// index is the only authority, and when nothing resolves the pane says so — an honest
+// empty pane beats fabricated bytes.
+func requestMessageForExchange(st *core.TrafficStore, ex *core.Exchange) []byte {
+	if st == nil || ex == nil {
+		return nil
+	}
+	if ex.Request != nil {
+		if msg, err := st.Get(*ex.Request); err == nil {
+			return msg.Raw()
+		}
+		return nil
+	}
+	return nil
+}
+
+// ui2Detail is the model for one exchange's request/response pane.
+type ui2Detail struct {
+	ID          uint64
+	Method      string
+	Host        string
+	Port        uint16
+	Path        string
+	Status      string
+	Mime        string
+	ResponseLen int
+	DurationMs  uint64
+	Request     string
+	Response    string
+	// Views is the rendered panes, Inspector and display options (ui2_message_views.go).
+	Views ui2MsgViews
+}
+
+// ui2IssueGroup is one grouped issue (same issue name + host) for the issues tree.
+type ui2IssueGroup struct {
+	Name       string
+	Severity   string
+	Confidence string
+	Host       string
+	Count      int // occurrences
+	FalsePos   bool
+	IDs        []uint64
+	FirstID    uint64
+}
+
+// ui2IssuesModel is the issues page fragment model.
+type ui2IssuesModel struct {
+	Groups   []ui2IssueGroup
+	Total    int
+	Severity map[string]int // lower-cased severity -> count
+	// Filter is the view filter (ui2_issues.go); Shown counts the findings it admitted.
+	Filter            ui2IssueFilter
+	Shown             int
+	SeverityOptions   []string
+	ConfidenceOptions []string
+}
+
+// handleUI2Issues serves GET /ui2/issues: the shell with the grouped issues list, or the
+// groups fragment alone for an htmx swap.
+func (s *Server) handleUI2Issues(w http.ResponseWriter, r *http.Request) {
+	body := s.renderUI2IssuesFiltered(parseUI2IssueFilter(r))
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+		return
+	}
+	page := ui2Page{Title: "burpsy /ui2/ — Issues", View: "issues", Body: body}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "layout.html", page); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// renderUI2Issues groups findings by (issue name, host) — the same merge the store already
+// does per target, rolled up one level for display — and renders the groups fragment.
+// Evidence lives one click deep (the detail route), so the list payload stays flat.
+func (s *Server) renderUI2Issues() template.HTML {
+	return s.renderUI2IssuesFiltered(ui2IssueFilter{})
+}
+
+// renderUI2IssuesFiltered is renderUI2Issues with the list's view filter applied.
+func (s *Server) renderUI2IssuesFiltered(filter ui2IssueFilter) template.HTML {
+	findings := s.findings.All()
+	// Same skip as handleIssues: no findings means no occurrence resolution, so the
+	// whole-history snapshot would be built for an empty render.
+	var idx exchangeIndex
+	if len(findings) > 0 {
+		idx = s.exchangeIndexFor(findings)
+	}
+	type key struct{ name, host string }
+	order := make([]key, 0, len(findings))
+	groups := map[key]*ui2IssueGroup{}
+	sev := map[string]int{}
+	shown := 0
+	for _, f := range findings {
+		if s.isolatedAgainst(f, &idx) {
+			continue
+		}
+		v := s.issueView(f, &idx, true)
+		name := f.Name
+		if v.IssueName != nil && *v.IssueName != "" {
+			name = *v.IssueName
+		}
+		if !filter.admits(v, name) {
+			continue
+		}
+		shown++
+		k := key{name: name, host: v.Host}
+		g, ok := groups[k]
+		if !ok {
+			g = &ui2IssueGroup{Name: name, Severity: v.Severity, Confidence: v.Confidence, Host: v.Host, FirstID: v.ID}
+			groups[k] = g
+			order = append(order, k)
+		}
+		g.Count += len(v.Occurrences)
+		if g.Count == 0 {
+			g.Count = v.TimesSeen
+		}
+		g.FalsePos = g.FalsePos || v.FalsePositive
+		g.IDs = append(g.IDs, v.ID)
+		if !v.FalsePositive {
+			sev[strings.ToLower(v.Severity)]++
+		}
+	}
+	out := ui2IssuesModel{Groups: make([]ui2IssueGroup, 0, len(order)), Total: len(findings), Severity: sev,
+		Filter: filter, Shown: shown, SeverityOptions: ui2SeverityOptions, ConfidenceOptions: ui2ConfidenceOptions}
+	for _, k := range order {
+		out.Groups = append(out.Groups, *groups[k])
+	}
+	var sb strings.Builder
+	_ = ui2Templates.ExecuteTemplate(&sb, "issue_groups.html", out)
+	return template.HTML(sb.String()) //nolint:gosec // html/template auto-escapes every field
+}
+
+// handleUI2IssueDetail serves GET /ui2/issues/{id}: one finding with its evidence excerpt,
+// occurrences (exchange ids + paths) and the advisory detail — the pane the list omits.
+func (s *Server) handleUI2IssueDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	model, ok := s.ui2IssueDetailModel(id)
+	if !ok {
+		http.Error(w, "Issue not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "issue_detail.html", model); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// handleUI2AdvisoryDetail serves GET /ui2/advisories/{typeIndex}: one catalogue definition
+// rendered as an HTML fragment for the detail pane. The JSON /api/advisories/{typeIndex} shape
+// stays the API contract; this route is the console's rendering of it. Paragraphs come from
+// advisory.PlainParagraphs (plain text, auto-escaped) — never the raw catalogue HTML.
+func (s *Server) handleUI2AdvisoryDetail(w http.ResponseWriter, r *http.Request) {
+	segment := r.PathValue("typeIndex")
+	index, err := strconv.ParseUint(segment, 16, 32)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Type index %q is not a hexadecimal issue type index", segment),
+			http.StatusNotFound)
+		return
+	}
+	if s.advisories == nil {
+		http.Error(w, "No issue-definition catalogue is loaded", http.StatusNotFound)
+		return
+	}
+	def, ok := s.advisories.ByIndex(int(index))
+	if !ok {
+		http.Error(w, fmt.Sprintf("No issue definition with type index %s", segment), http.StatusNotFound)
+		return
+	}
+	v := advisoryDetailView(def)
+	model := ui2AdvisoryDetail{
+		TypeIndex:   v.TypeIndex,
+		Name:        v.Name,
+		Severity:    v.TypicalSeverity,
+		Description: v.DescriptionParagraphs,
+		Remediation: v.RemediationParagraphs,
+	}
+	// Disclose index collisions: a tap on a shadowed row lands here, and the pane's
+	// identity must name the shadow rather than let the row's name stand for this detail.
+	for _, d := range s.advisories.ShadowedByIndex() {
+		if d.TypeIndex == int(index) {
+			model.Shadows = append(model.Shadows, d.Name)
+		}
+	}
+	for _, ref := range v.References {
+		model.References = append(model.References, ui2AdvisoryLink(ref))
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := ui2Templates.ExecuteTemplate(w, "advisory_detail.html", model); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+	}
+}
+
+// ui2AdvisoryDetail is the model for one catalogue definition's detail pane.
+type ui2AdvisoryDetail struct {
+	TypeIndex   string
+	Name        string
+	Severity    string
+	Description []string
+	Remediation []string
+	References  []ui2AdvisoryLink
+	Shadows     []string
+}
+
+type ui2AdvisoryLink struct {
+	Title string
+	URL   string
+}
+
+// ui2IssueDetail is the model for one issue's detail pane.
+type ui2IssueDetail struct {
+	ID            uint64
+	CheckName     string
+	Severity      string
+	Confidence    string
+	Host          string
+	Param         string
+	Evidence      string
+	TimesSeen     int
+	FalsePositive bool
+	Comment       string
+	Source        string
+	Detail        string
+	Remediation   string
+	Occurrences   []ui2Occurrence
+	// Triage state and the action forms' inputs (ui2_issues.go).
+	Name               string
+	Location           string
+	SeverityOverride   string
+	OriginalSeverity   string
+	ConfidenceOverride string
+	OriginalConfidence string
+	Triage             *core.TriageNote
+	SeverityOptions    []string
+	ConfidenceOptions  []string
+	Done               string // outcome of a reviewed action, rendered above the detail
+	Note               string // refusal of a reviewed action
+}
+
+type ui2Occurrence struct {
+	ExchangeID uint64
+	Path       string
+}
+
+func ptrString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// serveUI2Asset serves one vendored static file from the embedded ui2 tree. The name is
+// allowlisted, not taken from the path: anything else 404s, so no request can make the
+// handler read outside the embedded set.
+func serveUI2Asset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/ui2/")
+	switch name {
+	case "htmx.min.js", "sse.min.js", "app.js":
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	sub, err := fs.Sub(ui2FS, "ui2")
+	if err != nil {
+		http.Error(w, "ui2 unavailable", http.StatusInternalServerError)
+		return
+	}
+	data, err := fs.ReadFile(sub, name)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	// #nosec G705 -- data is a vendored, embedded, allowlisted JS file, never request input.
+	_, _ = w.Write(data)
+}

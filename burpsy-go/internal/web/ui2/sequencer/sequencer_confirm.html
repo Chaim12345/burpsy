@@ -1,0 +1,26 @@
+<div id="seq" class="seq">
+{{if .error}}<p class="meta"><strong>Not started: {{.error}}</strong></p>
+<p class="meta"><a href="/ui2/sequencer" hx-get="/ui2/sequencer" hx-target="#seq" hx-swap="outerHTML">back to sequencer</a></p>{{else}}
+<p><strong>Review before starting:</strong> <span class="meta">{{.preview}}</span></p>
+<details open><summary>exact body (what the token binds, in full)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.full_body}}</pre>
+</details>
+<p class="meta">A capture sends the reviewed request repeatedly against the target - the most request-hungry action in the tool. This confirmation is one-time and covers exactly the call above.</p>
+<form hx-post="/ui2/sequencer/capture/run" method="post" action="/ui2/sequencer/capture/run" hx-target="#seq" hx-swap="outerHTML">
+<input type="hidden" name="token" value="{{.token}}">
+{{with .start}}<input type="hidden" name="target" value="{{.Target}}">
+<input type="hidden" name="protocol" value="{{.Protocol}}">
+<input type="hidden" name="count" value="{{.Count}}">
+<input type="hidden" name="delay_ms" value="{{.DelayMs}}">
+<input type="hidden" name="threads" value="{{.Threads}}">
+<input type="hidden" name="kind" value="{{.Kind}}">
+<input type="hidden" name="name" value="{{.Name}}">
+<input type="hidden" name="pattern" value="{{.Pattern}}">
+<input type="hidden" name="deviates" value="{{.Deviates}}">
+{{if .Auto}}<input type="hidden" name="auto" value="1">{{end}}
+<textarea name="request" hidden aria-hidden="true">{{.Request}}</textarea>{{end}}
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation" style="color:#c00; font-weight:700">Confirm and start</button>
+</form>
+<p class="meta"><a href="/ui2/sequencer" hx-get="/ui2/sequencer" hx-target="#seq" hx-swap="outerHTML">cancel</a></p>
+{{end}}
+</div>

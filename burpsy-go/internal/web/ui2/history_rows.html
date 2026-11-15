@@ -1,0 +1,18 @@
+<div id="rows">
+<p class="meta">{{.Matched}} of {{.Total}} rows{{if .Q}} · filter <code>{{.Q}}</code>{{end}}{{if .Search}} · search <code>{{.Search}}</code>{{end}} · page {{.Offset}}–{{if .HasMore}}{{.NextOffset}}{{else}}{{.Matched}}{{end}}</p>
+<table class="wide-t hist-t">
+<thead><tr><th scope="col" class="c-id">#</th><th scope="col" class="c-method">Method</th><th scope="col" class="c-host">Host</th><th scope="col" class="c-path">Path</th><th scope="col" class="c-status">Status</th><th scope="col" class="c-mime">MIME</th><th scope="col" class="c-len">Length</th><th scope="col" class="c-time">Time</th><th scope="col" class="c-ext">Ext</th><th scope="col" class="c-params">Params</th><th scope="col" class="c-listener">Listener</th><th scope="col" class="c-comment">Comment</th><th scope="col" class="c-title">Title</th>{{range $i, $n := .Extractors}}<th scope="col" class="c-x{{$i}}">{{$n}}</th>{{end}}</tr></thead>
+<tbody id="rows-body">
+{{range .Rows}}
+{{template "history_row" .}}
+{{else}}
+<tr><td colspan="{{.ColSpan}}" class="meta">No rows match.</td></tr>
+{{end}}
+{{if .HasMore}}
+<tr class="sentinel-row" data-offset="{{.NextOffset}}"><td colspan="{{.ColSpan}}" class="meta"
+     hx-get="/ui2/history" hx-vals='{{.HxVals}}'
+     hx-target="#rows-body" hx-swap="beforeend" hx-trigger="intersect once" hx-push-url="false">loading more…</td></tr>
+{{end}}
+</tbody>
+</table>
+</div>

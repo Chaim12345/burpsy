@@ -1,0 +1,44 @@
+<section aria-label="Configuration detail" id="scan-config-detail">
+<h4>{{if .read_only}}Viewing{{else}}Editing{{end}} {{.name}} {{if .read_only}}<span class="badge">shipped (read-only)</span>{{else}}<span class="badge">saved</span>{{end}}
+<a class="btn" href="/ui2/scanner/library" hx-get="/ui2/scanner/library" hx-target="#rows" hx-swap="outerHTML">close</a></h4>
+{{if .read_only}}<p class="meta">burpsy ships this configuration, so it is read-only: save a copy of it above under your own name and edit that.</p>{{end}}
+<form class="sc-inline" action="/ui2/scanner/library" method="get" hx-get="/ui2/scanner/library" hx-target="#rows" hx-swap="outerHTML">
+<input type="hidden" name="open" value="{{.name}}">
+<label>Search issue types <input type="search" name="q" value="{{.q}}" placeholder="name, or a type index like 0x00100200"></label>
+<label>Show <select name="filter">{{range .filters}}<option value="{{.value}}"{{if .selected}} selected{{end}}>{{.label}}</option>{{end}}</select></label>
+<button>Search</button>
+</form>
+<p class="meta" role="status">{{.running}} of {{.total}} issue types run · {{.methods_off}} detection method(s) switched off · {{.shown}} shown. Searching reloads the list; review unsaved ticks first. Rows not shown keep their saved state.</p>
+<form id="scan-detail-form" hx-post="/ui2/scanner/review" hx-target="#detailreview" hx-swap="innerHTML" method="post">
+<input type="hidden" name="op" value="lib-edit">
+<input type="hidden" name="name" value="{{.name}}">
+<h4>Issue selection</h4>
+<label class="sc-sw"><input type="checkbox" name="only_selected"{{if .only_selected}} checked{{end}}{{if .read_only}} disabled{{end}}> Run only the selected issue types</label>
+<p class="sc-hint">{{if .only_selected}}Only the ticked issue types run (Burp's "scan only selected issues"). Switching this off clears the selection.{{else}}Every issue type runs except the ones unticked below. Unticking a detection method withholds that method's probes for its issue type.{{end}}</p>
+<div class="sc-scroll" role="region" aria-label="Issue types" tabindex="0">
+<table class="sc-wrap"><thead><tr><th scope="col">Issue type</th><th scope="col">Type index</th><th scope="col">Detection methods</th></tr></thead>
+<tbody>
+{{$ro := .read_only}}
+{{range .rows}}<tr><td><input type="hidden" name="shown" value="{{.index}}"><label class="sc-sw"><input type="checkbox" name="run_{{.index}}"{{if .runs}} checked{{end}}{{if $ro}} disabled{{end}}> {{.name}}</label></td>
+<td class="meta">{{.hex}}</td>
+<td>{{$idx := .index}}{{range .methods}}<label class="sc-sw"><input type="checkbox" name="m_{{$idx}}" value="{{.name}}"{{if .on}} checked{{end}}{{if $ro}} disabled{{end}}> {{.name}}{{if not .implemented}} <span class="sc-hint">(not run here)</span>{{end}}</label>{{else}}<span class="meta">selected by type alone</span>{{end}}</td></tr>
+{{else}}<tr><td colspan="3" class="meta">No issue type matches this search and filter.</td></tr>{{end}}
+</tbody></table>
+</div>
+<h4>Parameter exemptions</h4>
+<p class="sc-hint">Matched by parameter name, case-insensitively, wherever the parameter appears. One name per line.</p>
+<p><label for="skip-all">Skip all tests for these parameters</label><br>
+<textarea id="skip-all" name="skip_all" rows="3" spellcheck="false"{{if .read_only}} disabled{{end}}>{{.skip_all}}</textarea></p>
+<p><label for="skip-ss">Skip server-side injection tests for these parameters</label><br>
+<textarea id="skip-ss" name="skip_server_side" rows="3" spellcheck="false"{{if .read_only}} disabled{{end}}>{{.skip_server_side}}</textarea></p>
+{{if not .read_only}}<button>Review changes</button>{{end}}
+</form>
+<div id="detailreview"></div>
+<h4>Declined from the imported selection</h4>
+{{if .declines}}<table class="sc-wrap"><thead><tr><th scope="col">Issue type</th><th scope="col">Method</th><th scope="col">Reason</th></tr></thead>
+<tbody>{{range .declines}}<tr><td>{{.issue}}</td><td>{{if .method}}{{.method}}{{else}}<span class="meta">the whole issue type</span>{{end}}</td><td>{{.reason}}</td></tr>{{end}}</tbody></table>
+{{else}}<p class="meta">None: everything this configuration's selection names is acted on as written.</p>{{end}}
+<h4>Run overrides, redirects, timeouts and JavaScript analysis</h4>
+<p class="meta">Set by importing a Burp configuration file, not editable here (the library write does not accept them). "Not overridden" means the run uses the engagement's own setting.</p>
+<dl class="sc-dl meta">{{range .summary}}<dt>{{.label}}</dt><dd>{{.value}}</dd>{{end}}</dl>
+</section>

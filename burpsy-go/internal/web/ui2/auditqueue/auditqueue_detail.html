@@ -1,0 +1,30 @@
+{{with .Item}}
+<h3>Seq {{.Seq}} - exchange #{{.ExchangeID}} <span class="badge">{{.Label}}</span></h3>
+<p class="meta">{{.Method}} {{.URL}} · {{.Progress}} · {{.Attempts}} attempt(s){{with .Timing}} · {{.}}{{end}}{{with .Note}} · {{.}}{{end}}</p>
+{{end}}
+<div class="aq-actions">
+<form method="post" action="/ui2/auditqueue/action/confirm" hx-post="/ui2/auditqueue/action/confirm" hx-target="#aq-detail" hx-swap="innerHTML" style="display:inline">
+  <input type="hidden" name="op" value="again"><input type="hidden" name="id" value="{{.ID}}">
+  <button type="submit">Audit again…</button>
+</form>
+<form method="post" action="/ui2/auditqueue/action/confirm" hx-post="/ui2/auditqueue/action/confirm" hx-target="#aq-detail" hx-swap="innerHTML" style="display:inline">
+  <input type="hidden" name="op" value="cancel"><input type="hidden" name="id" value="{{.ID}}">
+  <button type="submit"{{if ne .Item.State "pending"}} disabled title="This item is {{.Item.Label}}, so it cannot be cancelled"{{else}} title="Stop auditing this exchange and nothing else"{{end}}>Cancel…</button>
+</form>
+<a class="btn" href="/ui2/history/{{.ID}}">In history</a>
+</div>
+{{if .Item.Points}}
+<details><summary>{{len .Item.Points}} insertion point(s){{if .Item.PointKinds}} - enumerated for {{range $i, $k := .Item.PointKinds}}{{if $i}}, {{end}}{{$k}}{{end}}{{end}}</summary>
+<ul class="meta">{{range .Item.Points}}<li><code>{{.Kind}}/{{.Name}}</code>: {{.Status}}{{with .Detail}} - {{.}}{{end}}</li>{{end}}</ul>
+</details>
+{{else}}<p class="meta">No insertion points were recorded for this item.</p>{{end}}
+{{if .HasEx}}
+<h3>Request</h3>
+{{if .ReqPane.Note}}<p class="meta" role="note">{{.ReqPane.Note}}</p>{{end}}
+{{if .Request}}<pre class="msg">{{.ReqPane.Highlighted}}</pre>{{else}}<p class="meta">No request bytes recorded for this exchange.</p>{{end}}
+<h3>Response</h3>
+{{if .RespPane.Note}}<p class="meta" role="note">{{.RespPane.Note}}</p>{{end}}
+{{if .Response}}<pre class="msg">{{.RespPane.Highlighted}}</pre>{{else}}<p class="meta">No response was captured for this exchange.</p>{{end}}
+{{else}}
+<p class="meta">Exchange #{{.ID}} is no longer in the store - its bytes cannot be shown.</p>
+{{end}}

@@ -1,0 +1,27 @@
+<div id="rows" style="padding:8px 14px; max-width:960px">
+<h3>Guess hidden inputs</h3>
+<p class="meta">Guesses query parameters, cookies and headers the application accepts but the captured exchange never mentions (Param Miner's "Guess params"). Every guess is a request to the exchange's target, so a run is reviewed before it starts.</p>
+<form id="hidden-inputs-form" hx-post="/ui2/engagement/hidden-inputs/confirm" method="post" action="/ui2/engagement/hidden-inputs/confirm" hx-target="#rows" hx-swap="outerHTML">
+<p class="meta" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:0">
+<label>Exchange id <input type="text" name="exchange_id" inputmode="numeric" size="8" value="{{.exchange_id}}" placeholder="e.g. 42" aria-label="Exchange id"></label>
+{{$wl := .wordlist}}
+{{range .kinds}}<label><input type="checkbox" name="kinds" value="{{.}}" checked> {{.}}{{with index $wl .}} ({{.}} names){{end}}</label>{{end}}
+<label><input type="checkbox" name="cache_buster" value="on" checked> cache buster</label>
+<label>Budget <input type="number" name="max_requests" min="1" max="5000" style="width:90px" placeholder="{{.default_budget}}" aria-label="Request budget (1-5000)"></label>
+<button type="submit">Review guessing run</button>
+</p>
+</form>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+{{if .run}}{{template "engagement_hidden_inputs_run.html" .run}}{{end}}
+<h3>Runs</h3>
+{{if .list_error}}<p class="meta" role="alert">{{.list_error}}</p>{{end}}
+<table>
+<thead><tr><th scope="col">Task</th><th scope="col">Exchange</th><th scope="col">Target</th><th scope="col">State</th><th scope="col">Found</th><th scope="col"></th></tr></thead>
+<tbody>
+{{range .runs}}
+<tr><td>{{.task_id}}</td><td>{{.exchange_id}}</td><td>{{.target}}</td><td>{{.state}}</td><td>{{len .finding_ids}}</td>
+<td><a href="/ui2/engagement/hidden-inputs?task={{.task_id}}" hx-get="/ui2/engagement/hidden-inputs?task={{.task_id}}" hx-target="#rows" hx-swap="outerHTML">view</a></td></tr>
+{{else}}<tr><td colspan="6" class="meta">No guessing runs yet.</td></tr>{{end}}
+</tbody>
+</table>
+</div>

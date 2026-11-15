@@ -1,0 +1,16 @@
+<div class="sc-review" data-review="1">
+{{if .error}}<p class="meta sc-err" role="alert"><strong>Not applied: {{.error}}</strong></p>{{else}}
+<p><strong>Review: {{.title}}</strong></p>
+<details open><summary>exact call (what the confirmation binds)</summary>
+<pre class="brk">{{.projection}}</pre>
+</details>
+{{range .consequences}}<p class="meta">{{.}}</p>{{end}}
+<p class="meta">{{if .gated}}The confirmation gate minted a one-time token bound to exactly this call.{{else}}This review is one-time and expires with the confirmation window; the run sends exactly the call above.{{end}} Nothing has been sent yet.</p>
+<form hx-post="/ui2/scanner/review-run" hx-target="#rows" hx-swap="outerHTML" method="post">
+<input type="hidden" name="review_id" value="{{.review_id}}">
+<input type="hidden" name="token" value="{{.token}}">
+<input type="hidden" name="page" value="{{.page}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and apply</button>
+</form>
+{{end}}
+</div>

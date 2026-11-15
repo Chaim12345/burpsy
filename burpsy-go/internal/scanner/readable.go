@@ -62,6 +62,19 @@ func readableResponse(raw []byte) (out []byte, undecodable bool) {
 	return rebuildHead(head, drop, len(body), body), undecodable
 }
 
+// ReadableBody is readableResponse's body for a raw response (head and body as the wire carried
+// them): chunk framing removed, a gzip/deflate encoding decoded, and whatever cannot be undone left as
+// it was. It is exported for the access-control verdict (internal/web /api/authz/test), which compares
+// what the application sent each identity: read raw, a chunk boundary or a compression difference is a
+// "different body", and an empty collection behind gzip is opaque bytes rather than no data.
+func ReadableBody(raw []byte) []byte {
+	readable, _ := readableResponse(raw)
+	if _, body, ok := splitHeadAndBody(readable); ok {
+		return body
+	}
+	return nil
+}
+
 // readableBody is readableResponse's body alone, for the readers that never look at the head.
 func readableBody(msg *core.StoredMessage) []byte {
 	raw, _ := readableResponse(msg.Raw())

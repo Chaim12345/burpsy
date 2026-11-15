@@ -1,0 +1,17 @@
+<div id="rows" class="newscan" style="padding:0 14px 40px; max-width:1100px">
+<h3>New scan</h3>
+<p class="meta" style="padding-left:0">Select the type of scan to run. Nothing launches on the first click: every launch shows the exact call for review first, and a started scan registers as a task on the <a href="/ui2/dashboard">dashboard</a>.</p>
+<div role="tablist" aria-label="Scan type" style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px">
+{{range .kinds}}<a role="tab" aria-selected="{{if .Active}}true{{else}}false{{end}}" class="btn{{if .Active}} active{{end}}" style="white-space:normal; max-width:250px{{if .Active}}; background:var(--sel); border-color:var(--accent){{end}}" href="/ui2/newscan?kind={{.ID}}" hx-get="/ui2/newscan?kind={{.ID}}" hx-target="#rows" hx-swap="outerHTML" hx-push-url="true"><strong>{{.Title}}</strong><br><small>{{.Detail}}</small></a>{{end}}
+</div>
+{{if .crawling}}{{template "newscan_crawl_form.html" .}}{{else if eq .kind "audit"}}{{template "newscan_audit_form.html" .}}{{else}}{{template "newscan_api_form.html" .}}{{end}}
+<div id="newscan-review" aria-live="polite"></div>
+{{if .crawling}}{{template "newscan_logins.html" .logins}}{{end}}
+<h3>Recent crawls and API scans</h3>
+<div style="overflow-x:auto"><table>
+<thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">State</th><th scope="col">Seeds</th></tr></thead>
+<tbody>
+{{with .crawls}}{{range .crawls}}<tr><td>{{.task_id}}</td><td>{{.kind}}</td><td>{{.state}}</td><td>{{range $i, $s := .seeds}}{{if $i}}, {{end}}{{$s}}{{end}}</td></tr>{{else}}<tr><td colspan="4" class="meta">No crawl or API scan is retained yet.</td></tr>{{end}}{{end}}
+</tbody>
+</table></div>
+</div>

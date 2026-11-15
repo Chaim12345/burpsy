@@ -1,0 +1,13 @@
+<div class="search-preview-body" data-message="{{.MessageID}}">
+<h3>Message #{{.MessageID}} <span class="badge">{{.Direction}}</span>
+{{if .ExchangeID}} <a class="btn" href="/ui2/history/{{.ExchangeID}}" hx-get="/ui2/history/{{.ExchangeID}}" hx-target="#search-preview" hx-swap="innerHTML">Exchange #{{.ExchangeID}}</a>{{end}}</h3>
+{{if .Count}}<p class="meta" id="search-match-count">{{.Count}} {{if eq .Count 1}}match{{else}}matches{{end}} in this exchange{{if lt (len .Excerpts) .Count}} — {{len .Excerpts}} shown in context{{if gt .Shown (len .Excerpts)}} of {{.Shown}} recorded for this message{{end}}{{end}}{{if .Dropped}} · {{.Dropped}} offset(s) outside the message ignored{{end}}</p>
+{{else}}<p class="meta">No match in this message — listed by the negative filter.</p>{{end}}
+{{if .Excerpts}}
+<h3>Matches in context</h3>
+{{range .Excerpts}}<pre class="msg search-excerpt" data-offset="{{.Offset}}">{{if .Leading}}…{{end}}{{range .Segments}}{{if .Hit}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}{{if .Trailing}}…{{end}}</pre>
+{{end}}{{end}}
+<h3>Message (raw){{if .Pane.Kind}} <span class="badge">{{.Pane.Kind}}</span>{{end}}</h3>
+{{if .Pane.Note}}<p class="meta" role="note">{{.Pane.Note}}</p>{{end}}
+{{if .Empty}}<p class="meta">This message is empty.</p>{{else}}<pre class="msg">{{.Pane.Highlighted}}</pre>{{end}}
+</div>

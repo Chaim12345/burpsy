@@ -1,0 +1,7 @@
+{{define "history_row"}}<tr hx-get="/ui2/history/{{.ID}}" hx-target="#detail" hx-swap="innerHTML" hx-push-url="false"
+    hx-trigger="click[!shiftKey&&!ctrlKey&&!metaKey&&!target.classList.contains('selbox')]" data-id="{{.ID}}">
+  <td class="c-id"><input type="checkbox" class="selbox" aria-label="select exchange {{.ID}}"> <span class="rid">{{.ID}}</span></td><td class="c-method">{{.Method}}</td><td class="c-host">{{.Host}}:{{.Port}}</td><td class="c-path" title="{{.Path}}">{{.Path}}</td>
+  <td class="c-status">{{.Status}}</td><td class="c-mime">{{.Mime}}</td><td class="c-len">{{.ResponseLen}}</td><td class="c-time">{{.DurationMs}} ms</td>
+  <td class="c-ext">{{.Ext}}</td><td class="c-params">{{if lt .Params 0}}?{{else}}{{.Params}}{{end}}</td><td class="c-listener">{{if .Listener}}{{.Listener}}{{end}}</td><td class="c-comment" title="{{.Comment}}">{{.Comment}}</td><td class="c-title" title="{{.Title}}">{{.Title}}</td>
+  {{- range $i, $c := .Extract}}<td class="c-x{{$i}}"{{if not $c.Null}} title="{{$c.Value}}"{{end}}>{{if $c.Null}}<span class="meta">—</span>{{else}}{{$c.Value}}{{end}}</td>{{end}}
+</tr>{{end}}

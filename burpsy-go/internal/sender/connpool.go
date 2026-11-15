@@ -458,7 +458,7 @@ func (s *Sender) exchangePooled(
 			return false
 		}
 	}
-	resp, capped, rerr := readResponse(pc.br, settings.Continue.Understand100, streaming, hook)
+	resp, capped, rerr := readResponse(pc.br, requestMethod(raw), settings.Continue.Understand100, streaming, hook)
 	fired := stop()
 	if rerr != nil {
 		err = fmt.Errorf("read failed: %w", explainCancellation(ctx, rerr))

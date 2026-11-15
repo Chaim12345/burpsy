@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
@@ -104,10 +103,10 @@ func classifyFraming(head []byte) string {
 	// head carrying a malformed line (a CRLF-split field) frames by whatever its well-formed
 	// framing fields say, and the name must agree with the read (burpsy-react-ui-0vzb.24).
 	te, cl := httputil.ResponseFraming(head)
-	if strings.EqualFold(te, "chunked") {
+	if httputil.TransferCodingIsChunked(te) {
 		return framingChunked
 	}
-	if cl != "" {
+	if cl != "" && te == "" {
 		return framingContentLength
 	}
 	return framingEOF

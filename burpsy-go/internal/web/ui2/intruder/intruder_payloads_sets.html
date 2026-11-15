@@ -1,0 +1,121 @@
+<fieldset id="intruder-payloads"><legend>Payloads</legend>
+{{if .error}}<p class="meta" role="alert" style="color:#c00">{{.error}}</p>{{end}}
+<p class="meta">Sniper and battering ram use payload set 1 only; pitchfork and cluster bomb use one set per position, in order.</p>
+<input type="hidden" name="set_count" value="{{.set_count}}">
+<datalist id="intruder-wordlists">{{range .wordlists}}<option value="{{.ref}}">{{.name}} ({{.lines}} payloads)</option>{{end}}</datalist>
+{{range $s := .sets}}
+<fieldset id="intruder-set-{{$s.Index}}"><legend>Payload set {{$s.Num}}</legend>
+<input type="hidden" name="{{$s.P}}seen" value="{{$s.Type}}">
+<label>Payload type
+  <select name="{{$s.P}}type" hx-post="/ui2/intruder/payloads" hx-trigger="change" hx-target="#intruder-payloads" hx-swap="outerHTML">
+  {{range $.types}}<option value="{{.Value}}"{{if eq .Value $s.Type}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select>
+</label>
+<button type="submit" name="op" value="type" formaction="/ui2/intruder/payloads" hx-post="/ui2/intruder/payloads" hx-target="#intruder-payloads" hx-swap="outerHTML" title="Show the fields of the chosen type">Apply type</button>
+{{if gt $.set_count 1}}<button type="submit" name="op" value="remove_set:{{$s.Index}}" formaction="/ui2/intruder/payloads" hx-post="/ui2/intruder/payloads" hx-target="#intruder-payloads" hx-swap="outerHTML">Remove set {{$s.Num}}</button>{{end}}
+<div>
+{{if eq $s.Type "list"}}
+  <textarea name="{{$s.P}}items" rows="5" placeholder="one payload per line" aria-label="Payload set {{$s.Num}} items, one per line">{{index $s.F "items"}}</textarea>
+{{else if eq $s.Type "numbers"}}
+  <label>From <input type="text" name="{{$s.P}}from" value="{{index $s.F "from"}}" size="8"></label>
+  <label>To <input type="text" name="{{$s.P}}to" value="{{index $s.F "to"}}" size="8"></label>
+  <label>Step <input type="text" name="{{$s.P}}step" value="{{index $s.F "step"}}" size="6"></label>
+{{else if eq $s.Type "file"}}
+  <label>Wordlist or path <input type="text" class="wide" name="{{$s.P}}filename" value="{{index $s.F "filename"}}" list="intruder-wordlists" placeholder="builtin:… or a file on the server"></label>
+  <label>Upload <input type="file" name="upload_file_{{$s.Index}}" form="intruder-upload" aria-label="Wordlist file for payload set {{$s.Num}}"></label>
+  <button type="submit" form="intruder-upload" name="upload_set" value="{{$s.Index}}">Upload wordlist</button>
+{{else if eq $s.Type "brute_force"}}
+  <label>Character set <input type="text" name="{{$s.P}}charset" value="{{index $s.F "charset"}}"></label>
+  <label>Min length <input type="text" name="{{$s.P}}min_len" value="{{index $s.F "min_len"}}" size="4"></label>
+  <label>Max length <input type="text" name="{{$s.P}}max_len" value="{{index $s.F "max_len"}}" size="4"></label>
+{{else if eq $s.Type "dates"}}
+  <label>From <input type="text" name="{{$s.P}}from" value="{{index $s.F "from"}}" size="10"></label>
+  <label>To <input type="text" name="{{$s.P}}to" value="{{index $s.F "to"}}" size="10"></label>
+  <label>Step (days) <input type="text" name="{{$s.P}}step" value="{{index $s.F "step"}}" size="4"></label>
+  <label>Format <input type="text" name="{{$s.P}}format" value="{{index $s.F "format"}}" size="12"></label>
+{{else if eq $s.Type "custom_iterator"}}
+  <p class="meta">One line per position, items comma-separated; every combination is generated.</p>
+  <textarea name="{{$s.P}}positions" rows="4" aria-label="Custom iterator positions">{{index $s.F "positions"}}</textarea>
+  <label>Separator <input type="text" name="{{$s.P}}separator" value="{{index $s.F "separator"}}" size="4"></label>
+{{else if eq $s.Type "null"}}
+  <label>Number of null payloads <input type="text" name="{{$s.P}}count" value="{{index $s.F "count"}}" size="6"></label>
+{{else if eq $s.Type "char_substitution"}}
+  <textarea name="{{$s.P}}words" rows="3" placeholder="one word per line" aria-label="Words to substitute">{{index $s.F "words"}}</textarea>
+  <textarea name="{{$s.P}}subs" rows="3" placeholder="a=4 (one character=replacement per line)" aria-label="Substitutions">{{index $s.F "subs"}}</textarea>
+  <label>Max per word <input type="text" name="{{$s.P}}max_per_word" value="{{index $s.F "max_per_word"}}" size="6" placeholder="no cap"></label>
+{{else if eq $s.Type "case_modification"}}
+  <textarea name="{{$s.P}}words" rows="3" placeholder="one word per line" aria-label="Words to case-modify">{{index $s.F "words"}}</textarea>
+  <label><input type="checkbox" name="{{$s.P}}lower"{{if eq (index $s.F "lower") "on"}} checked{{end}}> lower</label>
+  <label><input type="checkbox" name="{{$s.P}}upper"{{if eq (index $s.F "upper") "on"}} checked{{end}}> UPPER</label>
+  <label><input type="checkbox" name="{{$s.P}}capitalize"{{if eq (index $s.F "capitalize") "on"}} checked{{end}}> Capitalize</label>
+{{else if eq $s.Type "illegal_unicode"}}
+  <label>Characters <input type="text" name="{{$s.P}}chars" value="{{index $s.F "chars"}}" size="8"></label>
+  <label><input type="checkbox" name="{{$s.P}}overlong2"{{if eq (index $s.F "overlong2") "on"}} checked{{end}}> 2-byte overlong</label>
+  <label><input type="checkbox" name="{{$s.P}}overlong3"{{if eq (index $s.F "overlong3") "on"}} checked{{end}}> 3-byte</label>
+  <label><input type="checkbox" name="{{$s.P}}overlong4"{{if eq (index $s.F "overlong4") "on"}} checked{{end}}> 4-byte</label>
+  <label><input type="checkbox" name="{{$s.P}}percent_encode"{{if eq (index $s.F "percent_encode") "on"}} checked{{end}}> percent-encode</label>
+{{else if eq $s.Type "character_blocks"}}
+  <label>Characters <input type="text" name="{{$s.P}}chars" value="{{index $s.F "chars"}}" size="8"></label>
+  <label>Min length <input type="text" name="{{$s.P}}min_len" value="{{index $s.F "min_len"}}" size="5"></label>
+  <label>Max length <input type="text" name="{{$s.P}}max_len" value="{{index $s.F "max_len"}}" size="5"></label>
+  <label>Step <input type="text" name="{{$s.P}}step" value="{{index $s.F "step"}}" size="4"></label>
+{{else if eq $s.Type "character_frobber"}}
+  <label>Base value <input type="text" class="wide" name="{{$s.P}}base" value="{{index $s.F "base"}}"></label>
+  <label>Alphabet <input type="text" name="{{$s.P}}chars" value="{{index $s.F "chars"}}" placeholder="printable ASCII"></label>
+{{else if eq $s.Type "bit_flipper"}}
+  <label>Base value <input type="text" class="wide" name="{{$s.P}}base" value="{{index $s.F "base"}}"></label>
+{{else if eq $s.Type "username"}}
+  <textarea name="{{$s.P}}names" rows="4" placeholder="one full name per line" aria-label="Names">{{index $s.F "names"}}</textarea>
+{{else if eq $s.Type "ecb_shuffler"}}
+  <label>Ciphertext sample <input type="text" class="wide" name="{{$s.P}}sample" value="{{index $s.F "sample"}}"></label>
+  <label>Encoding <select name="{{$s.P}}encoding">
+    <option value="base64"{{if eq (index $s.F "encoding") "base64"}} selected{{end}}>base64</option>
+    <option value="hex"{{if eq (index $s.F "encoding") "hex"}} selected{{end}}>hex</option></select></label>
+  <label>Block size <input type="text" name="{{$s.P}}block_size" value="{{index $s.F "block_size"}}" size="4"></label>
+{{else if eq $s.Type "copy_other"}}
+  <label>Copy the payload of position <input type="text" name="{{$s.P}}position" value="{{index $s.F "position"}}" size="4"></label>
+{{else if eq $s.Type "recursive_grep"}}
+  <label>Initial payload <input type="text" name="{{$s.P}}initial" value="{{index $s.F "initial"}}"></label>
+  <label>Extract (regex) <input type="text" class="wide" name="{{$s.P}}extract_re" value="{{index $s.F "extract_re"}}"></label>
+  <label><input type="checkbox" name="{{$s.P}}stop_duplicate"{{if eq (index $s.F "stop_duplicate") "on"}} checked{{end}}> stop if a duplicate payload is found</label>
+{{else if eq $s.Type "collaborator"}}
+  <label>Number of payloads <input type="text" name="{{$s.P}}count" value="{{index $s.F "count"}}" size="5"></label>
+  <label><input type="checkbox" name="{{$s.P}}include_location"{{if eq (index $s.F "include_location") "on"}} checked{{end}}> include server location</label>
+{{else if eq $s.Type "plugin"}}
+  <label>Generator <select name="{{$s.P}}plugin">
+    <option value="">{{if $.generators}}Choose a generator…{{else}}No loaded plugin registers a payload generator{{end}}</option>
+    {{range $.generators}}<option value="{{.Value}}"{{if eq .Value (index $s.F "plugin")}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select></label>
+{{end}}
+</div>
+{{if $s.Note}}<p class="meta" role="status">{{$s.Note}}</p>{{end}}
+</fieldset>
+{{end}}
+{{if .can_add_set}}<button type="submit" name="op" value="add_set" formaction="/ui2/intruder/payloads" hx-post="/ui2/intruder/payloads" hx-target="#intruder-payloads" hx-swap="outerHTML">Add payload set</button>{{end}}
+
+<fieldset id="intruder-processing"><legend>Payload processing</legend>
+<input type="hidden" name="rule_count" value="{{.rule_count}}">
+{{range $r := .rules}}
+<div class="intruder-rule">
+  <span class="meta">{{$r.Num}}</span>
+  <select name="{{$r.P}}kind" aria-label="Rule {{$r.Num}} operation" hx-post="/ui2/intruder/payloads" hx-trigger="change" hx-target="#intruder-payloads" hx-swap="outerHTML">
+  {{range $.rule_kinds}}<option value="{{.Value}}"{{if eq .Value $r.Kind}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select>
+  {{if or (eq $r.Kind "add_prefix") (eq $r.Kind "add_suffix")}}<input type="text" name="{{$r.P}}text" value="{{index $r.F "text"}}" placeholder="text" aria-label="Rule {{$r.Num}} text">{{end}}
+  {{if or (eq $r.Kind "replace") (eq $r.Kind "skip_if_matches")}}<input type="text" name="{{$r.P}}pattern" value="{{index $r.F "pattern"}}" placeholder="regex pattern" aria-label="Rule {{$r.Num}} pattern">{{end}}
+  {{if eq $r.Kind "replace"}}<input type="text" name="{{$r.P}}replace" value="{{index $r.F "replace"}}" placeholder="replacement ($1 for a group)" aria-label="Rule {{$r.Num}} replacement">
+  <label><input type="checkbox" name="{{$r.P}}all"{{if eq (index $r.F "all") "on"}} checked{{end}}> every match</label>{{end}}
+  {{if or (eq $r.Kind "encode") (eq $r.Kind "decode")}}<select name="{{$r.P}}layer" aria-label="Rule {{$r.Num}} codec">{{range $.layers}}<option value="{{.}}"{{if eq . (index $r.F "layer")}} selected{{end}}>{{.}}</option>{{end}}</select>{{end}}
+  {{if eq $r.Kind "hash"}}<select name="{{$r.P}}algorithm" aria-label="Rule {{$r.Num}} algorithm">{{range $.hashes}}<option value="{{.}}"{{if eq . (index $r.F "algorithm")}} selected{{end}}>{{.}}</option>{{end}}</select>{{end}}
+  {{if eq $r.Kind "normalize"}}<select name="{{$r.P}}form" aria-label="Rule {{$r.Num}} normalization form">{{range $.forms}}<option value="{{.}}"{{if eq . (index $r.F "form")}} selected{{end}}>{{.}}</option>{{end}}</select>{{end}}
+  {{if eq $r.Kind "plugin"}}<select name="{{$r.P}}plugin" aria-label="Rule {{$r.Num}} plugin processor">
+    <option value="">{{if $.processors}}Choose a processor…{{else}}No loaded plugin registers a payload processor{{end}}</option>
+    {{range $.processors}}<option value="{{.Value}}"{{if eq .Value (index $r.F "plugin")}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select>{{end}}
+  <button type="submit" name="op" value="remove_rule:{{$r.Index}}" formaction="/ui2/intruder/payloads" hx-post="/ui2/intruder/payloads" hx-target="#intruder-payloads" hx-swap="outerHTML" aria-label="Remove rule {{$r.Num}}">Remove</button>
+</div>
+{{else}}<p class="meta">No processing rules: payloads are sent as generated.</p>{{end}}
+{{if .can_add_rule}}<button type="submit" name="op" value="add_rule" formaction="/ui2/intruder/payloads" hx-post="/ui2/intruder/payloads" hx-target="#intruder-payloads" hx-swap="outerHTML">Add rule</button>{{end}}
+<label>URL-encode these characters <input type="text" name="url_encode" value="{{.url_encode}}" size="16" aria-label="Characters to URL-encode in every payload"></label>
+</fieldset>
+</fieldset>

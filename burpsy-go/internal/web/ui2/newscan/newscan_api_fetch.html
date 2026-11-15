@@ -1,0 +1,4 @@
+{{if .error}}<p role="alert" style="color:#c00"><strong>The definition was not fetched:</strong> {{.error}}</p>
+{{else}}{{with .result}}<p role="status"><strong>Fetched</strong> {{.bytes}} bytes ({{.format}}{{if .content_type}}, {{.content_type}}{{end}}) from <code class="brk">{{.url}}</code>, status {{.status}}{{if .token_fetched}} · an OAuth token was obtained for this fetch and not kept{{end}}.</p>
+{{if not .scannable}}<p class="meta" style="padding:0"><strong>This build's API scan cannot read this document.</strong> {{.note}}</p>{{end}}{{end}}
+{{with .definition}}<textarea id="api-definition" hx-swap-oob="true" name="definition" rows="8" style="width:100%; font:12px/1.4 ui-monospace, monospace" spellcheck="false" hx-post="/ui2/newscan/api/check" hx-trigger="load, keyup changed delay:700ms, change" hx-target="#apicheck" hx-swap="innerHTML">{{.}}</textarea>{{end}}{{end}}

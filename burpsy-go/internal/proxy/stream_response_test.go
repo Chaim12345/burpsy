@@ -222,23 +222,23 @@ func TestTextEventStreamSwitchAdmitsAFramedEventStream(t *testing.T) {
 
 	// Switch off (the shipped default): a framed response is buffered whatever its content type.
 	srv.config.Streaming().SetResponseHandling(true, false, false)
-	if srv.streamsResponse("host", framedSSE) {
+	if srv.streamsResponse("GET", "host", framedSSE) {
 		t.Error("a framed text/event-stream streamed with the switch off; a Content-Length says where the response ends, so it must take the buffered path")
 	}
 
 	// Switch on: the framed event stream now streams, but an ordinary framed response still does not —
 	// the switch is for text/event-stream alone, not for every framed response.
 	srv.config.Streaming().SetResponseHandling(true, false, true)
-	if !srv.streamsResponse("host", framedSSE) {
+	if !srv.streamsResponse("GET", "host", framedSSE) {
 		t.Error("a framed text/event-stream did not stream with the switch on, which is the one thing the switch exists to do")
 	}
-	if srv.streamsResponse("host", framedHTML) {
+	if srv.streamsResponse("GET", "host", framedHTML) {
 		t.Error("an ordinary framed response streamed because the switch was on; the switch must admit text/event-stream alone")
 	}
 
 	// Framing-based streaming is independent of the switch: a chunked response is open-ended on its
 	// framing and streams with the switch in either position.
-	if !srv.streamsResponse("host", chunked) {
+	if !srv.streamsResponse("GET", "host", chunked) {
 		t.Error("a chunked response stopped streaming; its open-endedness is a property of its framing, not of the switch")
 	}
 }

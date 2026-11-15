@@ -92,15 +92,25 @@ const (
 	changeIntercept
 	// changeOrganizer is a saved item added, edited or removed.
 	changeOrganizer
-	// changeSession is a session-rule event: a rule was added or edited, or — the one an operator
-	// is actively waiting on — a browser-recovery prompt became pending or was resolved. The
-	// console refetches the pending-prompt list on it, which is how the modal appears and
+	// changeSession is Session-page movement: a browser-recovery prompt became pending, was
+	// resolved, or expired unanswered, or a rule, jar or trace state the page renders moved.
+	// The console refetches the pending-prompt list on it, which is how the modal appears and
 	// dismisses without a poll.
 	changeSession
 	// changeDomInvader is a DOM-auditor change (burpsy-react-ui-wl94): a reported source/sink hit, a
 	// canary change, or the switch. The console refetches the hit list on it, so a flow the operator's
 	// browser just found appears without a poll.
 	changeDomInvader
+	// changeProxy is the response-modification option set moving: a flag flipped, or one of the
+	// outcome counters incremented on the relay paths. Only real movement announces - an option
+	// set nobody toggles and traffic no rule touches stays silent, so the Proxy page is not
+	// refetched on every proxied response.
+	changeProxy
+	// changeScope is an engagement-scope edit: a rule added, removed, toggled or replaced, or
+	// the drop switch thrown - from any surface, not just the page. The core scope watcher
+	// filters edits that change nothing (a removal of an absent rule), so only real movement
+	// announces.
+	changeScope
 	changeKindCount
 )
 
@@ -116,6 +126,8 @@ var changeKindNames = [changeKindCount]string{
 	changeOrganizer:  "organizer",
 	changeSession:    "session",
 	changeDomInvader: "dominvader",
+	changeProxy:      "proxy",
+	changeScope:      "scope",
 }
 
 func (k changeKind) String() string {

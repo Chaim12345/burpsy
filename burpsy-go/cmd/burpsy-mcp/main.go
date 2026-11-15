@@ -23,6 +23,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/buildinfo"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,6 +44,7 @@ func main() {
 	noNotify := flag.Bool("no-notifications", false,
 		"do not push task completion and High/Critical issues as notifications/message")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	only := flag.String("only", "", "comma-separated tool names to publish (default: all); burpsy_confirm and burpsy_task_status always stay")
 	flag.Parse()
 
 	if *showVersion {
@@ -59,6 +61,7 @@ func main() {
 		Surface:         mcp.Surface(*surface),
 		SyncWindow:      *syncWindow,
 		NoNotifications: *noNotify,
+		Only:            splitOnly(*only),
 	})
 	if err != nil {
 		fatal(err)
@@ -96,4 +99,15 @@ func version() string { return buildinfo.String() }
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "burpsy-mcp: %v\n", err)
 	os.Exit(1)
+}
+
+// splitOnly reads the -only flag: comma-separated names, blanks dropped; nil for an empty flag.
+func splitOnly(v string) []string {
+	var out []string
+	for _, n := range strings.Split(v, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
 }

@@ -1,0 +1,10 @@
+<fieldset class="xss-route"><legend>Route {{.number}}</legend>
+<div class="sc-knobs">
+{{range .fields}}<label>{{.label}} <input type="text" name="{{.name}}" size="24" value="{{.value}}"></label>
+{{end}}
+<label>sink <select name="{{.prefix}}sink"><option value="">innerHTML family (default)</option>{{range .sinks}}<option value="{{.name}}"{{if .selected}} selected{{end}}>{{.name}}</option>{{end}}</select></label>
+</div>
+<label class="sc-sw"><input type="checkbox" name="{{.prefix}}level_from_path"{{if .level_from_path}} checked{{end}}> Level text comes from the URL path</label>
+<label class="sc-sw"><input type="checkbox" name="{{.prefix}}click_trigger"{{if .click_trigger}} checked{{end}}> Click the submit selector to trigger</label>
+<label class="sc-sw"><input type="checkbox" name="{{.prefix}}remove"> Remove this route</label>
+</fieldset>

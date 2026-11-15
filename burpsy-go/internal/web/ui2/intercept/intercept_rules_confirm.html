@@ -1,0 +1,23 @@
+<div id="irules" data-review="1">
+<h3>Review the {{.Dir.Title}} rule list before saving</h3>
+<p>List {{if .Active}}<strong>on</strong>{{else}}<strong>off</strong>{{end}} · {{len .Rules}} rule(s):</p>
+<div style="overflow-x:auto">
+<table class="irules-t">
+<thead><tr><th scope="col">#</th><th scope="col">On</th><th scope="col">Combine</th><th scope="col">Action</th><th scope="col">Field</th><th scope="col">Match</th><th scope="col">Kind</th><th scope="col">Comment</th></tr></thead>
+<tbody>
+{{range .Rules}}<tr><td>{{.Num}}</td><td>{{if .Enabled}}on{{else}}off{{end}}</td><td>{{if eq .Index 0}}—{{else if eq .Op "and"}}AND{{else}}OR{{end}}</td><td>{{if eq .Action "pass"}}Don't intercept{{else}}Do intercept{{end}}</td><td>{{.FieldLabel}}{{if .Member}}: {{.Member}}{{end}}</td><td style="overflow-wrap:anywhere">{{.Match}}</td><td>{{.Category}}</td><td style="overflow-wrap:anywhere">{{.Comment}}</td></tr>
+{{else}}<tr><td colspan="8" class="meta">No rules.</td></tr>{{end}}
+</tbody>
+</table>
+</div>
+<details open><summary>exact call (what saving sends)</summary>
+<pre class="meta" style="white-space:pre-wrap; word-break:break-word; max-height:50vh; overflow:auto">{{.Call}}</pre>
+</details>
+{{range .Consequences}}<p class="meta">{{.}}</p>{{end}}
+<form method="post" action="/ui2/intercept/rules/run" hx-post="/ui2/intercept/rules/run" hx-target="#irules" hx-swap="outerHTML">
+<input type="hidden" name="review_id" value="{{.ReviewID}}">
+<input type="hidden" name="token" value="{{.Token}}">
+<button type="submit" disabled data-arm-on-load title="Armed once the page has bound this confirmation">Confirm and save</button>
+</form>
+<p class="meta"><a href="/ui2/intercept/rules?dir={{.Dir.Name}}">cancel</a> (the pending review expires with the confirmation window on its own)</p>
+</div>

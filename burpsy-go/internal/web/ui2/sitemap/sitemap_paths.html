@@ -1,0 +1,23 @@
+<div class="sm-paths">
+{{if .Error}}<p class="meta" role="alert">{{.Error}}</p>
+{{else if not .Any}}<p class="meta"><strong>No crawl has run.</strong> Crawl paths show how the crawler reached each page, so there is nothing to show until a crawl has run. Start one from a site-map node's actions.</p>
+{{else}}
+<nav class="sm-tabs" aria-label="Crawl runs">{{range .Runs}}<a class="btn{{if and $.Run (eq .ID $.Run.TaskID)}} sm-on{{end}}" href="{{.URL}}">Run #{{.ID}} · {{.State}}{{if not .Has}} · no fetches{{end}}</a>{{end}}</nav>
+{{if not .Run}}<p class="meta">{{if .Running}}<strong>The crawl has not fetched anything yet.</strong> Paths appear as pages are fetched; an empty view here means not-yet, not that the target is empty.{{else}}<strong>The crawl fetched nothing.</strong> No request was completed, so there is no path to draw.{{end}}</p>
+{{else}}
+<p class="meta">Run #{{.Run.TaskID}} · {{.Placed}} fetches · {{.SeedCount}} seed(s){{if .OrphanRows}} · {{len .OrphanRows}} whose referring page this run did not retain{{end}}</p>
+<div class="sm-path-list">{{range .SeedRows}}{{template "sitemap_path_row" .}}{{end}}</div>
+{{if .OrphanRows}}<h3>Reached from a page this run did not retain</h3>
+<p class="meta">Refused, dropped at a limit, or excluded by the retention query. The request was still made.</p>
+<div class="sm-path-list">{{range .OrphanRows}}{{template "sitemap_path_row" .}}{{end}}</div>{{end}}
+{{end}}
+{{end}}
+</div>
+{{define "sitemap_path_row"}}<div class="sm-path-row" style="padding-left:{{.Indent}}px">
+{{if .Seed}}<span class="badge" title="A seed: the crawl started here">seed</span>{{else}}<span class="meta" style="padding:0">↳</span>{{end}}
+<span class="badge">{{if eq .N.F.Status 0}}no status{{else}}{{.N.F.Status}}{{end}}</span>
+<code title="{{.N.F.URL}}">{{if ne .N.F.Method "GET"}}{{.N.F.Method}} {{end}}{{.N.Label}}</code>
+{{if .N.F.LinkText}}<span class="meta" style="padding:0">“{{.N.F.LinkText}}”</span>{{end}}
+{{if .N.F.DuplicateOf}}<span class="badge" title="Same contents as {{.N.F.DuplicateOf}}, so its links were not queued again">duplicate</span>{{end}}
+{{if .N.F.Excluded}}<span class="badge" title="Captured and scanned, but the retention query did not match, so it was not traversed">not traversed</span>{{end}}
+</div>{{end}}

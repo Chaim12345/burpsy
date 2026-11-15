@@ -1,0 +1,69 @@
+{{define "nav"}}
+<nav aria-label="Tools">
+  <details class="menu"><summary class="{{if eq .View "config"}}active{{end}}">File</summary>
+    <div class="menu-list" role="menu">
+      <a role="menuitem" href="/api/report/html" target="_blank" rel="noopener">Export report (HTML)</a>
+      <a role="menuitem" href="/api/report/json" download="burpsy-report.json">Export report (JSON)</a>
+      <a role="menuitem" href="/api/report/sarif" download="burpsy-report.sarif">Export report (SARIF)</a>
+      <a role="menuitem" href="/api/config/export" download="burpsy-config.json">Export configuration (partial)</a>
+      <a role="menuitem" href="/ui2/shell/config">Import configuration…</a>
+      <a role="menuitem" href="/ui2/shell/config#ca" title="offered there only when TLS interception has a CA">Download CA certificate…</a>
+    </div>
+  </details>
+  <details class="menu"><summary class="{{if eq .View "project"}}active{{end}}">Project</summary>
+    <div class="menu-list" role="menu">
+      <a role="menuitem" href="/ui2/shell/project">Project file &amp; rename…</a>
+      <a role="menuitem" href="/ui2/shell/project">Save copy…</a>
+      <a role="menuitem" href="/ui2/shell/project">Open, create or switch project…</a>
+    </div>
+  </details>
+  <a href="/ui2/dashboard" class="{{if eq .View "dashboard"}}active{{end}}">Dashboard</a>
+  <a href="/ui2/sitemap" class="{{if eq .View "sitemap"}}active{{end}}">Site map</a>
+  <a href="/ui2/discovery" class="{{if eq .View "discovery"}}active{{end}}">Discovery</a>
+  <a href="/ui2/dominvader" class="{{if eq .View "dominvader"}}active{{end}}">DOM auditor</a>
+  <a href="/ui2/scope" class="{{if eq .View "scope"}}active{{end}}">Scope</a>
+  <a href="/ui2/newscan" class="{{if eq .View "newscan"}}active{{end}}">New scan</a>
+  <a href="/ui2/scanner" class="{{if eq .View "scanner"}}active{{end}}">Scanner</a>
+  <a href="/ui2/scanner/config" class="{{if eq .View "scanconfig"}}active{{end}}">Scan config</a>
+  <a href="/ui2/scanner/library" class="{{if eq .View "scanlibrary"}}active{{end}}">Scan library</a>
+  <a href="/ui2/bchecks" class="{{if eq .View "bchecks"}}active{{end}}">BChecks</a>
+  <a href="/ui2/issues" class="{{if eq .View "issues"}}active{{end}}">Issues</a>
+  <a href="/ui2/issues/report" class="{{if eq .View "issuereport"}}active{{end}}">Report</a>
+  <a href="/ui2/issues/consolidation" class="{{if eq .View "issueconsolidation"}}active{{end}}">Consolidation</a>
+  <a href="/ui2/auditqueue" class="{{if eq .View "auditqueue"}}active{{end}}">Audit queue</a>
+  <a href="/ui2/advisories" class="{{if eq .View "advisories"}}active{{end}}">Definitions</a>
+  <a href="/ui2/intercept" class="{{if eq .View "intercept"}}active{{end}}">Intercept</a>
+  <a href="/ui2/intercept/rules" class="{{if eq .View "intercept_rules"}}active{{end}}">Intercept rules</a>
+  <a href="/ui2/history" class="{{if eq .View "history"}}active{{end}}">History</a>
+  <a href="/ui2/history/extractors" class="{{if eq .View "extractors"}}active{{end}}">Extractors</a>
+  <a href="/ui2/ws" class="{{if eq .View "ws"}}active{{end}}">WS</a>
+  <a href="/ui2/intruder" class="{{if eq .View "intruder"}}active{{end}}">Intruder</a>
+  <a href="/ui2/repeater" class="{{if eq .View "repeater"}}active{{end}}">Repeater</a>
+  <a href="/ui2/repeater/ws" class="{{if eq .View "repeater-ws"}}active{{end}}">WS Repeater</a>
+  <a href="/ui2/repeater/h2" class="{{if eq .View "repeater-h2"}}active{{end}}">HTTP/2 list</a>
+  <a href="/ui2/repeater/graphql" class="{{if eq .View "repeater-gql"}}active{{end}}">GraphQL</a>
+  <a href="/ui2/proxy" class="{{if eq .View "proxy"}}active{{end}}">Proxy</a>
+  <a href="/ui2/proxy/listeners" class="{{if eq .View "proxy-listeners"}}active{{end}}">Listeners</a>
+  <a href="/ui2/proxy/options" class="{{if eq .View "proxy-options"}}active{{end}}">Proxy options</a>
+  <a href="/ui2/proxy/match-replace" class="{{if eq .View "match-replace"}}active{{end}}">Match &amp; Replace</a>
+  <a href="/ui2/sequencer" class="{{if eq .View "sequencer"}}active{{end}}">Sequencer</a>
+  <a href="/ui2/collaborator" class="{{if eq .View "collaborator"}}active{{end}}">Collaborator</a>
+  <a href="/ui2/authz" class="{{if eq .View "authz"}}active{{end}}">Access control</a>
+  <a href="/ui2/engagement/csrf" class="{{if eq .View "csrf"}}active{{end}}">CSRF PoC</a>
+  <a href="/ui2/engagement/hidden-inputs" class="{{if eq .View "hidden-inputs"}}active{{end}}">Hidden inputs</a>
+  <a href="/ui2/engagement/clickbandit" class="{{if eq .View "clickbandit"}}active{{end}}">Clickbandit</a>
+  <a href="/ui2/decoder" class="{{if eq .View "decoder"}}active{{end}}">Decoder</a>
+  <a href="/ui2/comparer" class="{{if eq .View "comparer"}}active{{end}}">Comparer</a>
+  <a href="/ui2/logger" class="{{if eq .View "logger"}}active{{end}}">Logger</a>
+  <a href="/ui2/organizer" class="{{if eq .View "organizer"}}active{{end}}">Organizer</a>
+  <a href="/ui2/session" class="{{if eq .View "session"}}active{{end}}">Session</a>
+  <a href="/ui2/session/editor" class="{{if eq .View "session-editor"}}active{{end}}">Session rules</a>
+  <a href="/ui2/extensions" class="{{if eq .View "extensions"}}active{{end}}">Extensions</a>
+  <a href="/ui2/search" class="{{if eq .View "search"}}active{{end}}">Search</a>
+  <a href="/ui2/discover" class="{{if eq .View "discover"}}active{{end}}">Discover</a>
+  <a href="/ui2/extensions/options" class="{{if eq .View "extensions-options"}}active{{end}}">Ext. options</a>
+  <a href="/ui2/extensions/apis" class="{{if eq .View "extensions-apis"}}active{{end}}">Ext. APIs</a>
+  <a href="/ui2/settings" class="{{if eq .View "settings"}}active{{end}}">Settings</a>
+  <a href="/legacy/" title="the original React console">old UI</a>
+</nav>
+{{end}}

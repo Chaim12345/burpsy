@@ -1,0 +1,83 @@
+<div id="rows" class="search-page">
+<style>
+.search-page { padding:8px 12px; }
+.search-page form { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:flex-end; margin-bottom:8px; }
+.search-page fieldset { border:1px solid var(--line); border-radius:6px; padding:4px 8px; margin:0; min-width:0; }
+.search-page legend { color:var(--muted); font-size:12px; }
+.search-page label { white-space:nowrap; margin-right:8px; display:inline-block; }
+.search-page .search-term { flex:1 1 280px; display:flex; flex-direction:column; gap:2px; }
+.search-page .search-term input { width:100%; }
+.search-results-grid { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:12px; }
+#search-preview { min-width:0; }
+.search-page mark { background:#fd5; color:#111; }
+@media (max-width:640px) {
+  .search-results-grid { grid-template-columns:minmax(0,1fr); }
+  table.search-t td:nth-child(5), table.search-t th:nth-child(5),
+  table.search-t td:nth-child(6), table.search-t th:nth-child(6),
+  table.search-t td:nth-child(7), table.search-t th:nth-child(7) { display:none; }
+}
+</style>
+<form action="/ui2/search" method="get" hx-get="/ui2/search" hx-target="#search-results" hx-select="#search-results" hx-swap="outerHTML" hx-push-url="true" role="search" aria-label="Search across tools">
+  <div class="search-term">
+    <label for="search-q">Search for</label>
+    <input type="search" id="search-q" name="q" value="{{.Form.Q}}" placeholder="text or pattern" autocomplete="off" autofocus>
+    <small class="meta">Regular expressions use Go's syntax — the scan runs on the server over stored traffic; nothing is sent to the target.</small>
+  </div>
+  <fieldset>
+    <legend>Options</legend>
+    <label><input type="checkbox" name="case" value="1"{{if .Form.Case}} checked{{end}}> Case sensitive</label>
+    <label><input type="checkbox" name="regex" value="1"{{if .Form.Regex}} checked{{end}}> Regular expression</label>
+    <label><input type="checkbox" name="negate" value="1"{{if .Form.Negate}} checked{{end}}> Negative matches</label>
+    <label><input type="checkbox" name="in_scope" value="1"{{if .Form.InScope}} checked{{end}}> In scope only</label>
+  </fieldset>
+  <fieldset>
+    <legend>Where</legend>
+    <label>Location <select name="location" aria-label="Location">
+      <option value="both"{{if eq .Form.Location "both"}} selected{{end}}>Request and response</option>
+      <option value="request"{{if eq .Form.Location "request"}} selected{{end}}>Request only</option>
+      <option value="response"{{if eq .Form.Location "response"}} selected{{end}}>Response only</option>
+    </select></label>
+    <label>Within <select name="within" aria-label="Within">
+      <option value="both"{{if eq .Form.Within "both"}} selected{{end}}>Headers and body</option>
+      <option value="headers"{{if eq .Form.Within "headers"}} selected{{end}}>Headers only</option>
+      <option value="body"{{if eq .Form.Within "body"}} selected{{end}}>Body only</option>
+    </select></label>
+  </fieldset>
+  <fieldset id="search-tools">
+    <legend>Tools to search</legend>
+    {{if .ToolsError}}<span class="meta" role="alert">Could not load the tool list: {{.ToolsError}}</span>
+    {{else}}{{range .Tools}}<label><input type="checkbox" name="tool" value="{{.ID}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>{{end}}{{end}}
+  </fieldset>
+  <label>Rows <select name="limit" aria-label="Maximum result rows">{{$lim := .Limit}}{{range .Limits}}<option value="{{.}}"{{if eq . $lim}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+  <button type="submit">Search</button>
+</form>
+<div id="search-results">
+<p class="meta" id="search-scope">{{.Scope}}{{if not .ToolsError}}{{if not .Form.Tools}} · no tools checked, so every tool the store keeps is searched{{end}}{{end}}</p>
+{{if .Error}}<p class="meta" role="alert" style="color:#c00">The search did not run: {{.Error}}</p>
+{{else if not .Searched}}<p class="meta" id="search-empty">No search yet. Set the options and press Search.</p>
+{{else if not .Rows}}<p class="meta" id="search-none">{{if .Form.Negate}}Everything matched: no exchange among the {{.Scanned}} examined is missing the term.{{else if eq .Scanned 0}}No exchanges matched the selected tools or scope, so nothing was examined.{{else}}No matches: {{.Scanned}} exchanges were examined and none contains the term.{{end}}</p>
+{{else}}
+<p class="meta" id="search-summary">{{.Returned}} {{if eq .Returned 1}}item{{else}}items{{end}} of {{.Scanned}} examined{{if .Truncated}} · <span class="badge">stopped at the limit — more traffic was not examined; raise Rows to see more</span>{{end}}</p>
+<div class="search-results-grid">
+<div>
+<table class="search-t">
+<thead><tr><th scope="col">#</th><th scope="col">Source</th><th scope="col">Host</th><th scope="col">URL</th><th scope="col">Status</th><th scope="col">Length</th><th scope="col">Time</th><th scope="col">Matches</th></tr></thead>
+<tbody id="rows-body">
+{{range .Rows}}<tr data-id="{{.ID}}"{{if .PreviewURL}} hx-get="{{.PreviewURL}}" hx-target="#search-preview" hx-swap="innerHTML" hx-trigger="click[!event.target.closest('a')]"{{end}}>
+<td><a href="/ui2/history/{{.ID}}" hx-get="/ui2/history/{{.ID}}" hx-target="#search-preview" hx-swap="innerHTML" title="Open exchange #{{.ID}} (request and response)">{{.ID}}</a></td>
+<td>{{.Source}}{{if .Organizer}} · organizer{{end}}</td>
+<td>{{.Host}}</td>
+<td title="{{.Method}} {{.Path}}">{{.Method}} {{.Path}}</td>
+<td>{{.Status}}</td>
+<td>{{.ResponseLen}}</td>
+<td>{{.Started}}</td>
+<td>{{.Matches}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+</div>
+<div id="search-preview" role="region" aria-label="Matched message preview" aria-live="polite"><p class="meta">Pick a result to read the message it matched in.</p></div>
+</div>
+{{end}}
+</div>
+</div>
